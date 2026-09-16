@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import ExcelJS from 'exceljs';
 
 // Runs against an already started, seeded, disposable MOCK test environment.
 // All business mutations are made through UI; HTTP helpers are deliberately absent.
@@ -132,4 +133,62 @@ test('производственный цикл через интерфейс и
   await expect(page.locator('tr').filter({ hasText: 'FinancialClosing' })).toContainText('CREATE');
   await expect(page.locator('tr').filter({ hasText: 'SdoCase' })).toContainText('CALCULATE');
   await screen('audit');
+});
+
+// Isolated regression test for the Admin fix (main.tsx: Admin() lifted its Excel-import
+// preview/selected/scale state up to App() props, mirroring the earlier Materials fix), kept
+// independent of the workflow test above on purpose: Admin is a nested function of App,
+// recreated (and remounted by React, wiping its own useState) on every App re-render. A fresh,
+// minimal login straight to /admin means this verification doesn't depend on unrelated steps
+// elsewhere in the app (e.g. the inspection-accept flow in the workflow test above).
+test('Admin: импорт Excel переживает перерендер App', async ({ page }, info) => {
+  if (!process.env.MOCK_LOGIN_KEY) throw new Error('Set MOCK_LOGIN_KEY for a disposable test environment');
+  const suffix = Date.now().toString();
+  // Built with the same library the backend uses to parse it (apps/backend/src/importer.ts),
+  // so this is a genuine workbook, not a fake buffer: sheet name and header row must match
+  // what parseWorkbook() looks for (source 'ГПО', columns УКО/Объект/адрес/стоимость).
+  const buildImportWorkbook = async () => {
+    const wb = new ExcelJS.Workbook();
+    const sheet = wb.addWorksheet('ГПО');
+    sheet.addRow(['УКО', 'Объект', 'Полный адрес объекта', 'Стоимость объекта']);
+    sheet.addRow([`QA-IMPORT-${suffix}`, `Импорт ${suffix}`, 'Москва, Импортная ул., 1', 5]);
+    return Buffer.from(await wb.xlsx.writeBuffer());
+  };
+  const dialog = () => page.getByRole('dialog');
+  const save = async () => { await dialog().getByRole('button', { name: 'Сохранить', exact: true }).click(); await expect(dialog()).toHaveCount(0); };
+  const tab = async (label: string) => { await page.getByRole('tab', { name: label, exact: true }).click(); };
+  const screen = async (label: string) => {
+    await expect(page.locator('main')).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 2)).toBeTruthy();
+    await page.screenshot({ path: info.outputPath(`${label}.png`), fullPage: true });
+  };
+  await page.goto('/');
+  // antd Select renders a hidden search <input role="combobox"> overlapped by a
+  // .ant-select-selection-item span showing the current value; a direct click on
+  // the combobox role is intercepted by that span. Click the visible selector
+  // container instead, matching what a real user's pointer actually hits.
+  await page.locator('.login .ant-select-selector').click();
+  await page.getByText('Администратор', { exact: true }).click();
+  await page.getByLabel('Тестовый ключ').fill(process.env.MOCK_LOGIN_KEY);
+  await page.getByRole('button', { name: 'Войти', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Куда смотреть сегодня' })).toBeVisible();
+  await page.getByRole('link', { name: 'Администрирование', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'История действий' })).toBeVisible();
+  // Upload → select a row, then force a real App-level re-render on the SAME /admin route (a
+  // query invalidation from an unrelated mutation, not navigation — that's what actually
+  // remounted the buggy nested component before the fix), then confirm the Excel import
+  // preview and selection survived.
+  await tab('Импорт Excel');
+  await page.locator('.ant-tabs-tabpane-active input[type=file]').setInputFiles({ name: `import-${suffix}.xlsx`, mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: await buildImportWorkbook() });
+  await expect(page.getByText(/строк готовы к выбору/)).toBeVisible();
+  await page.locator('.ant-tabs-tabpane-active tbody tr').first().getByRole('checkbox').click();
+  const importButton = page.getByRole('button', { name: 'Импортировать выбранные', exact: true });
+  await expect(importButton).toBeEnabled();
+  await tab('Пороги риска');
+  await page.getByRole('button', { name: 'Изменить пороги', exact: true }).click();
+  await save();
+  await tab('Импорт Excel');
+  await expect(page.getByText(/строк готовы к выбору/)).toBeVisible();
+  await expect(importButton).toBeEnabled();
+  await screen('admin-import');
 });
