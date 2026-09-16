@@ -11,7 +11,7 @@ ENV NODE_ENV=test BIND_HOST=0.0.0.0
 COPY --from=build --chown=node:node /app /app
 USER node
 EXPOSE 3001
-CMD ["node", "--import", "tsx", "apps/backend/src/main.ts"]
+CMD ["/bin/sh", "-c", "node --import tsx scripts/migrate.ts && node --import tsx apps/backend/src/main.ts"]
 FROM caddy:2-alpine AS web
 COPY --from=build /app/dist/frontend /srv
 COPY infra/Caddyfile /etc/caddy/Caddyfile
