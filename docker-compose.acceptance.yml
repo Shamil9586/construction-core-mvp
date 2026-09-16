@@ -1,0 +1,27 @@
+# Add to the primary Compose file. Uses a separate disposable database.
+# No published DB port, no reference to the application's pgdata volume.
+services:
+  acceptance-db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: construction_test
+      POSTGRES_USER: acceptance
+      POSTGRES_PASSWORD: ${ACCEPTANCE_DB_PASSWORD:?Set ACCEPTANCE_DB_PASSWORD}
+      TZ: UTC
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U acceptance -d construction_test"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+    profiles: [acceptance]
+  acceptance-tests:
+    build: {context: ., dockerfile: infra/Dockerfile, target: api}
+    environment:
+      E2E_DATABASE_URL: postgres://acceptance:${ACCEPTANCE_DB_PASSWORD}@acceptance-db:5432/construction_test
+      TZ: UTC
+    command: ["node", "--import", "tsx", "--test", "--test-concurrency=1", "tests/domain.test.ts", "tests/crypto.test.ts", "tests/import.test.ts", "tests/bitrix-contract.test.ts", "tests/acceptance.test.ts", "tests/workflow.test.ts"]
+    depends_on:
+      acceptance-db: {condition: service_healthy}
+    profiles: [acceptance]

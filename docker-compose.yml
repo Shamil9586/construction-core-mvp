@@ -1,0 +1,70 @@
+name: construction-core-test
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: construction
+      POSTGRES_USER: construction
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U construction -d construction"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  migrate:
+    build: {context: ., dockerfile: infra/Dockerfile, target: api}
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://construction:${POSTGRES_PASSWORD}@db:5432/construction
+      DB_MODE: postgres
+      TZ: UTC
+    command: ["node", "--import", "tsx", "scripts/migrate.ts"]
+    depends_on:
+      db: {condition: service_healthy}
+  api:
+    build: {context: ., dockerfile: infra/Dockerfile, target: api}
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://construction:${POSTGRES_PASSWORD}@db:5432/construction
+      DB_MODE: postgres
+      TZ: UTC
+      BIND_HOST: 0.0.0.0
+      TRUST_PROXY_HOPS: "1"
+      PORT: 3001
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    healthcheck:
+      test: ["CMD", "node", "scripts/healthcheck.mjs"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+  worker:
+    build: {context: ., dockerfile: infra/Dockerfile, target: api}
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://construction:${POSTGRES_PASSWORD}@db:5432/construction
+      DB_MODE: postgres
+      TZ: UTC
+    command: ["node", "--import", "tsx", "scripts/risk-worker.ts"]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+    restart: unless-stopped
+  web:
+    build: {context: ., dockerfile: infra/Dockerfile, target: web}
+    environment:
+      APP_HOST: ${APP_HOST:-localhost}
+      BITRIX_FRAME_ORIGIN: ${BITRIX_FRAME_ORIGIN:-https://invalid.example}
+    ports: ["443:443", "80:80"]
+    volumes: ["caddydata:/data", "caddyconfig:/config"]
+    depends_on:
+      api: {condition: service_healthy}
+    restart: unless-stopped
+volumes:
+  pgdata:
+  caddydata:
+  caddyconfig:
