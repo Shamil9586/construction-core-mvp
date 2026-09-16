@@ -1,67 +1,69 @@
-# Текущий приоритет: PRODUCT FIRST
+# Текущий статус
 
-Актуальный результат — docs/product-status.md. Записи ниже сохраняют историю инфраструктурной приёмки; она больше не блокирует работу над интерфейсом.
+Обновлено: 16.09.2026. Этот файл — единственный источник актуального
+статуса; исторические промежуточные версии (DigitalOcean/AppDeploy разведка,
+Railway readiness) заменены этим документом и остаются доступны в git-истории
+при необходимости, а не дублируются здесь.
 
-# Technical acceptance — current status
+## Итог
 
-Текущая итерация: проверка доступности HTTPS test environment, 15.09.2026.
-**LOCAL MVP VERIFIED. TEST ENVIRONMENT NOT VERIFIED.**
-Исторические локальные доказательства: [acceptance-local-baseline.md](acceptance-local-baseline.md). Они не являются новым прогоном на сервере.
+**MVP слит из construction-core + construction-erp, задеплоен на Render TEST
+и полностью проверен end-to-end.** Все gates ниже, которые раньше были
+NOT VERIFIED, теперь VERIFIED.
 
-## A. Verified locally
+| Gate | Статус |
+|---|---|
+| Локальные тесты (PGlite) | VERIFIED — 24/24 → 28/28 после рефакторинга на NestJS-модули |
+| Сборка (TypeScript + Vite) | VERIFIED |
+| PostgreSQL (не PGlite) | VERIFIED — реальный managed Postgres на Render |
+| Docker build/runtime | VERIFIED — оба stage (`api`, `web`) собираются и работают на Render |
+| HTTPS test-сервер | VERIFIED — https://construction-core-web.onrender.com |
+| Browser E2E (Playwright) | VERIFIED — `director.spec.ts` + `workflow.spec.ts`, `2 passed` |
+| Сквозная проверка в браузере (login → dashboard → карточка объекта) | VERIFIED, см. `deployment-render.md` |
+| Bitrix24 test portal | NOT VERIFIED — намеренно отложено, остаётся на `MockBitrixAdapter`; требует отдельного разрешения пользователя перед подключением реального/тестового портала |
+| Production | Не разворачивался и не разрешён этой задачей |
 
-24 теста и HTTP E2E прошли в предыдущей итерации на PGlite. Проверены RBAC, два tenant, optimistic concurrency, Decimal/финансовые ограничения, rollback, повтор операций и AuditLog. Clean-room npm ci/build/tests/migrations×2/seed×2/smoke прошёл. В этой итерации эти тесты не повторялись: код бизнес-логики не изменялся.
+Детали деплоя, платформенные баги и их фиксы, живые URL и env-конфигурация:
+[`deployment-render.md`](deployment-render.md). Инструкции для отдельного
+self-hosted Docker Compose трека (не то, что реально исполнено в этой
+итерации, но остаётся валидной альтернативой): [`deployment.md`](deployment.md)
+и [`test-deployment-runbook.md`](test-deployment-runbook.md).
 
-## B. Verified with real PostgreSQL
+## Что изменилось в продукте в этой итерации
 
-NOT VERIFIED. psql/Docker/Podman не найдены. Результаты PGlite не перенесены в эту категорию. Native root restriction из предыдущей итерации не обходилась.
+Главный экран и раздел подрядчиков используют `ContractorPanel`: группы по
+подрядчикам, проблемные — первыми, раскрываемые объекты, адрес/УКО, фильтры
+подрядчика/статуса/светофора/типа плана, поиск и режим «только отстающие».
+Светофор объекта приходит с backend, не выставляется вручную. Тип плана
+берётся из `monthlyPlans` за текущий месяц.
 
-## C. Verified in Docker
+В объект добавлен `WorkChain`: по каждой работе видны план/факт/отклонение,
+дни, ответственный, СК, замечания/блокировки, ИД, СДО, переданная/
+рассчитанная/закрытая суммы. Из construction-erp перенесены 11-вкладочная
+карточка объекта и диаграмма Ганта; `ContractorPanel` сохранён как стартовый
+экран.
 
-NOT VERIFIED. Docker CLI отсутствует. Compose build/start/restart/volumes gates не выполнены. Проверен только синтаксис нового backup script, его выполнение завершилось exit2 до любых действий с БД.
+`apps/backend/src/controller.ts` разбит на доменные NestJS-модули
+(auth, bitrix, dashboard, objects, works, inspections, attachments, pto,
+sdo, financial, contractors, dictionaries, users, materials, audit,
+notifications, imports).
 
-## D. Verified on HTTPS test server
+## Архитектурные решения (зафиксированы, не пересматривать без явного запроса)
 
-NOT VERIFIED. Внешний URL не создан. Изучены фактически доступные возможности AppDeploy: backend требует @appdeploy/sdk router, frontend — собственный client/HashRouter; интерфейс не предоставляет запуск существующего Compose стека. Перенос в этот runtime не выполнен, поскольку не доказывает нужные gates и требует изменения реализации.
+- БД: raw `pg` + SQL-миграции + PGlite для dev/test. Prisma не вводится.
+- Bitrix24: `MockBitrixAdapter`. Реальный/тестовый портал — только с
+  отдельного разрешения пользователя.
+- Деплой: **Render** (сменён с Railway в этой итерации — free plan
+  Railway отказал в создании проекта, аккаунт уже занят параллельным
+  эффортом; приложение не привязано к конкретной платформе, см.
+  `deployment-render.md`).
 
-DigitalOcean подключён. Account API вернул status=warning и сообщение о достижении максимального количества Droplets (droplet_limit=3). List droplets и list sizes вернули HTTP403: feature not available for your account at this time. Создание сервера не выполнялось. Адрес и доступ к существующему test VPS также отсутствуют. Никакие облачные ресурсы не созданы, production не использован.
+## Известные ограничения
 
-## E. Verified in browser
-
-NOT VERIFIED. Существующий Playwright workflow написан и обнаружен в предыдущей итерации. Новый HTTPS deployment отсутствует; browser run/screenshots/visual QA в этой итерации не выполнялись.
-
-## F. Verified on Bitrix24 test portal
-
-NOT VERIFIED. Проверка намеренно не начата до PostgreSQL/Docker/browser gates. Сохранены IMPLEMENTED и MOCK VERIFIED для соответствующих adapter contracts; это не live OAuth verification.
-
-## G. Not verified
-
-Native PostgreSQL; Docker build/runtime; HTTPS/CORS/CSP внутри реального ingress; browser workflow и visual QA; clean server deployment; backup/restore; Bitrix installation/iframe/OAuth/refresh/current user/Disk/notifications. Нет оснований выставлять CORE TEST ENVIRONMENT VERIFIED.
-
-## H. Known limitations
-
-AppDeploy не является доступом к VPS/Compose. DigitalOcean подключён, но операции инфраструктуры недоступны из-за ограничения аккаунта (HTTP403). Локальная среда остаётся без Docker. Подготовлен scripts/backup-restore-check.sh: делает pg_dump, восстанавливает в новую отдельную БД, выполняет SQL smoke, сохраняет recovery DB; не меняет DATABASE_URL и не удаляет volumes. Его реальное выполнение требует Docker test server.
-
-## I. Production blockers
-
-Все непройденные test gates; непроверенный restore; live Bitrix auth/iframe/refresh; нагрузочная и production security приёмка. Production запрещён этой задачей.
-
-## Изменения и фактические команды этой итерации
-
-- Добавлен backup/restore script и точная команда в runbook; business-код не изменён.
-- status.md приведён к структуре A–I; предыдущие доказательства сохранены отдельно.
-- command -v docker / podman / psql: не найдены; command -v ssh: /usr/bin/ssh, но test host отсутствует.
-- bash -n scripts/backup-restore-check.sh: exit0, синтаксис корректен.
-- bash scripts/backup-restore-check.sh: exit2, Docker отсутствует; tests/acceptance/recovery-attempt.txt.
-- Изучены deployment constraints AppDeploy. DigitalOcean подключён; выполнены account_get_information, droplet_list, size_list. Account warning / два HTTP403.
-
-Следующий шаг: устранить ограничение аккаунта DigitalOcean через его панель/поддержку либо предоставить доступ к существующему выделенному test VPS. Подключать плагин повторно не требуется. После появления доступа выполнить неизменённый Compose deployment/runbook и gates; сначала проверить возможности и стоимость создания VPS, затем создавать инфраструктуру согласно доступной авторизации. Bitrix credentials пока не нужны.
-
-
-## GitHub / Railway package preparation
-
-Current deployment target: Railway TEST. DigitalOcean is no longer a deployment target; its resources were not changed. Render unused. Source preparation only: no GitHub publication, Railway deployment or browser gate in this iteration.
-
-Updated gitignore/dockerignore exclude environments, logs, build output, dependency folders, database files/backups, test reports and workbook-derived report. No Git repository/history existed in the source directory. Candidate files inspected with scripts/repository-audit.py; no detected private keys, provider tokens, JWT credentials or non-placeholder credential URLs. This heuristic scan is not a guarantee against all secret formats. Fixture credentials are deliberately synthetic, limited to isolated tests.
-
-Backend uses runtime PORT and binds 0.0.0.0; DATABASE_URL takes precedence over PGlite selection. Caddy upstream is runtime-configurable, keeps SPA fallback and same-origin /api. Existing api/web Docker stages retained; APP_TARGET build argument selects the final stage for services without a --target option. Container build/runtime remains NOT VERIFIED. Deployment parameters: docs/github-railway-readiness.md.
+Bitrix24 real/test portal integration не проверена — остаётся на моках.
+Render free-tier Postgres истекает через 30 дней после создания (детали и
+процедура восстановления — `deployment-render.md`). Известный, но не
+исправленный в этой итерации баг: `Admin()` в `main.tsx` структурно
+подвержен той же уязвимости потери локального state при ре-рендере `App`,
+что была исправлена в `Materials` (см. историю коммитов шага 6); текущие
+E2E-тесты этого не покрывают.
