@@ -1,30 +1,27 @@
-# Текущая продуктовая итерация
-
-Главная страница: подрядчики → объекты → план/факт → СК/ИД/СДО → закрытие. Карточка объекта показывает причины и стадии по каждой работе, ниже доступны существующие формы рабочего процесса.
-
-См. docs/product-status.md для фактических результатов и docs/github-railway-readiness.md для публикации этого проекта. Не подменять им другую кодовую базу construction-erp-mvp без отдельного решения. Архив исходников не содержит node_modules, build output, логов, .env или Excel-отчёта. Старые ссылки на локальные evidence logs ниже относятся к рабочей среде и не входят в GitHub-пакет.
-
 # Контур строительства — Bitrix24 production core MVP
 
-Рабочий вертикальный сценарий: объект → физический факт → СК → замечания → допуск → ПТО/ИД → СДО → финансовое закрытие → Dashboard.
+Рабочий вертикальный сценарий: объект → физический факт → СК → замечания → допуск → ПТО/ИД → СДО → финансовое закрытие → Dashboard. Главная страница: подрядчики → объекты → план/факт → СК/ИД/СДО → закрытие; карточка объекта показывает причины и стадии по каждой работе.
 
-Техническая приёмка 15.09.2026: **24 теста прошли**, чистая установка на PGlite воспроизведена. PostgreSQL/Docker/browser ещё не подтверждены. Точные статусы — `docs/status.md`; серверная процедура — `docs/test-deployment-runbook.md`.
+Полный и актуальный статус — единственный источник истины: [`docs/status.md`](docs/status.md). Ниже — сокращённая выжимка, синхронизированная с ним; при расхождении верить `docs/status.md`.
 
 ## Фактический статус
 
-IMPLEMENTED AND VERIFIED LOCALLY:
-- npm install, TypeScript typecheck, Vite production build.
-- NestJS API и Vite frontend запущены; HTTP smoke проверяет также прокси frontend → API.
-- PostgreSQL SQL migrations и seed выполнены на PGlite; повторный запуск проверяется тестом.
-- 10 объектов, 8 подрядчиков, 5 РП, 60 работ.
-- Автоматизированный HTTP E2E проходит весь производственный сценарий с разными ролями.
-- Backend RBAC, составные tenant-FK, optimistic concurrency, аудит, блокировки, атомарное закрытие и idempotency проверены тестами.
+MVP слит из construction-core + construction-erp, задеплоен на Render TEST и полностью проверен end-to-end:
 
-REQUIRES BITRIX24 TEST PORTAL VERIFICATION:
-- Установка, iframe launch, OAuth refresh и реальные вызовы REST.
-- Проверка Origin POST-запросов портала, CSP, iframe/sessionStorage, тарифных scopes.
+| Gate | Статус |
+|---|---|
+| Локальные тесты (PGlite) | VERIFIED — 28/28 на `main`; на ветке `hardening/core-2.0` — 31/31 (regression-сетка + decision log, см. ниже) |
+| Сборка (TypeScript + Vite) | VERIFIED |
+| PostgreSQL (не PGlite), Docker build/runtime, HTTPS test-сервер | VERIFIED на Render — https://construction-core-web.onrender.com |
+| Browser E2E (Playwright) | VERIFIED — `director.spec.ts` + `workflow.spec.ts` |
+| Bitrix24 test portal | NOT VERIFIED — намеренно отложено, остаётся на `MockBitrixAdapter`; требует отдельного разрешения перед подключением реального/тестового портала |
+| Production | Не разворачивался и не разрешён |
 
-НЕ ПРОВЕРЕНО: Docker build/Compose и обычный PostgreSQL process, внешнее HTTPS-развёртывание, визуальный browser E2E. Здесь нет Docker, native PostgreSQL не может запуститься от доступного системного пользователя, удалённый браузер блокирует localhost. Полный Definition of Done пока не достигнут. Это не готовое production-развёртывание.
+Детали деплоя, платформенные баги и фиксы — [`docs/deployment-render.md`](docs/deployment-render.md).
+
+## Core 2.0 hardening (ветка `hardening/core-2.0`)
+
+Отдельная задача поверх этого статуса — сопоставление критических бизнес-сценариев с reference-реализацией `construction-erp-mvp` (без переноса её кода: Core остаётся на raw `pg` + SQL-миграциях + PGlite), regression-сетка и business decision log. Документы: [`docs/core-2.0-regression-map.md`](docs/core-2.0-regression-map.md), [`docs/domain-parity-core-erp.md`](docs/domain-parity-core-erp.md), [`docs/decision-log-core-2.0.md`](docs/decision-log-core-2.0.md). Ветка не смёржена в `main`, ожидает отдельного review.
 
 ## Быстрый локальный запуск (PGlite, Node.js 24)
 
@@ -90,4 +87,4 @@ Caddy получает TLS-сертификат для вашего DNS-имен
 
 `python scripts/clean-room.py` создаёт новую временную копию без node_modules/БД, выполняет npm ci, build, tests, migrations ×2, seed ×2 и HTTP smoke на PGlite. Журнал — tests/acceptance/clean-room.json. Ничего не удаляет в рабочем проекте.
 
-`npm run test:browser -- --list` только обнаруживает тест. Полный запуск: `BROWSER_BASE_URL=https://your-test-host MOCK_LOGIN_KEY=your-test-key npm run test:browser`, после установки Chromium. Использовать отдельную mock/test среду. Подробности и изолированный PostgreSQL Compose gate — в runbook.
+Полный запуск браузерных тестов: `BROWSER_BASE_URL=https://your-test-host MOCK_LOGIN_KEY=your-test-key npm run test:browser`, после установки Chromium. Использовать отдельную mock/test среду. Уже выполнялся и проходит (`director.spec.ts` + `workflow.spec.ts`, см. `docs/status.md`). Подробности и изолированный PostgreSQL Compose gate — в runbook.
