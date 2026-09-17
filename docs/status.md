@@ -62,8 +62,20 @@ notifications, imports).
 
 Bitrix24 real/test portal integration не проверена — остаётся на моках.
 Render free-tier Postgres истекает через 30 дней после создания (детали и
-процедура восстановления — `deployment-render.md`). Известный, но не
-исправленный в этой итерации баг: `Admin()` в `main.tsx` структурно
-подвержен той же уязвимости потери локального state при ре-рендере `App`,
-что была исправлена в `Materials` (см. историю коммитов шага 6); текущие
-E2E-тесты этого не покрывают.
+процедура восстановления — `deployment-render.md`). `Admin()` в `main.tsx`
+подвергался той же уязвимости потери локального state при ре-рендере `App`,
+что и `Materials` — исправлено (state поднят в `App`, regression-тест
+добавлен), коммит `fix: lift Admin's Excel-import state to App to survive
+re-renders`.
+
+## Core 2.0 hardening (ветка `hardening/core-2.0`, main не изменён)
+
+Отдельная задача поверх этого статуса: сопоставление критических бизнес-
+сценариев с reference-реализацией `construction-erp-mvp` (без переноса кода
+ERP — Core остаётся на raw pg/SQL/PGlite), business decision log и
+regression-сетка. Документы: `core-2.0-regression-map.md`,
+`domain-parity-core-erp.md`, `decision-log-core-2.0.md`. Локальный набор
+тестов на этой ветке — 31/31 (28 существовавших + 3 новых регрессионных,
+без изменения архитектуры; production-код изменён в одном месте — сигнал
+`isOverperformed`, см. decision log п.3). Ветка не смёржена в `main` —
+ожидает отдельного review.
