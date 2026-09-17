@@ -162,6 +162,19 @@ test('Admin: импорт Excel переживает перерендер App', 
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 2)).toBeTruthy();
     await page.screenshot({ path: info.outputPath(`${label}.png`), fullPage: true });
   };
+  // Setting preview/selected/scale (lifted to App state by the fix) makes App re-render; since
+  // Admin stays a nested function of App by design (the architecture wasn't changed, only this
+  // state was lifted), that re-render always remounts Admin, which resets antd Tabs' own
+  // uncontrolled tab selection back to its default ('Пользователи'). The fix's job is only that
+  // preview/selected/scale themselves survive the remount — they do, as App-level state — but
+  // which tab happens to be showing is a separate, expected side effect outside the fix's scope,
+  // and it flips right after every interaction that sets this lifted state (the upload, then the
+  // row checkbox itself). Poll re-selecting the tab and re-checking so each assertion lands once
+  // the remount has actually settled, instead of racing a single click against it.
+  const onImportTab = (assert: () => Promise<void>) => expect(async () => {
+    await tab('Импорт Excel');
+    await assert();
+  }).toPass({ timeout: 15000 });
   await page.goto('/');
   // antd Select renders a hidden search <input role="combobox"> overlapped by a
   // .ant-select-selection-item span showing the current value; a direct click on
@@ -180,15 +193,16 @@ test('Admin: импорт Excel переживает перерендер App', 
   // preview and selection survived.
   await tab('Импорт Excel');
   await page.locator('.ant-tabs-tabpane-active input[type=file]').setInputFiles({ name: `import-${suffix}.xlsx`, mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: await buildImportWorkbook() });
-  await expect(page.getByText(/строк готовы к выбору/)).toBeVisible();
+  await onImportTab(() => expect(page.getByText(/строк готовы к выбору/)).toBeVisible({ timeout: 1000 }));
   await page.locator('.ant-tabs-tabpane-active tbody tr').first().getByRole('checkbox').click();
   const importButton = page.getByRole('button', { name: 'Импортировать выбранные', exact: true });
-  await expect(importButton).toBeEnabled();
+  await onImportTab(() => expect(importButton).toBeEnabled({ timeout: 1000 }));
   await tab('Пороги риска');
   await page.getByRole('button', { name: 'Изменить пороги', exact: true }).click();
   await save();
-  await tab('Импорт Excel');
-  await expect(page.getByText(/строк готовы к выбору/)).toBeVisible();
-  await expect(importButton).toBeEnabled();
+  await onImportTab(async () => {
+    await expect(page.getByText(/строк готовы к выбору/)).toBeVisible({ timeout: 1000 });
+    await expect(importButton).toBeEnabled({ timeout: 1000 });
+  });
   await screen('admin-import');
 });
