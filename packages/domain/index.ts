@@ -31,6 +31,10 @@ export const hasPermission = (role: Role, p: Permission) => grants[role]?.includ
 export const defaultRisk = { yellowVariance: -5, redVariance: -15, staleDays: 7, ptoDays: 5, sdoDays: 10, escalateTechnicalDays: 3, escalateDirectorDays: 7 };
 export class ProgressCalculationService {
     calculate(actual: any, planned: any) { return new Decimal(planned).gt(0) ? Decimal.min(100, Decimal.max(0, new Decimal(actual).div(planned).mul(100))).toNumber() : null; }
+    // Core 2.0 decision log, п.3: явный сигнал "факт превышает план", отдельный от
+    // calculate() (который намеренно клампит в [0,100] для светофора/UI) — не хранится
+    // в БД, вычисляется транзиентно там же, где и остальные производные поля прогресса.
+    isOverperformed(actual: any, planned: any) { return new Decimal(planned).gt(0) && new Decimal(actual).gt(planned); }
 }
 const day = (v: any) => new Date(v).getTime() / 86400000;
 export class ScheduleStatusService {
