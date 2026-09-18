@@ -58,4 +58,12 @@ export class ObjectsController {
     contractorId: string,
     @Body()
     b: any) { return this.service.removeContractor(await authenticate(r), V.uuid.parse(id), V.uuid.parse(contractorId), V.version.parse(b.version)); }
+    @Post('objects/:id/edit')
+    async editObject(
+    @Req()
+    r: any,
+    @Param('id')
+    id: string,
+    @Body()
+    b: any) { return this.service.editObject(await authenticate(r), V.uuid.parse(id), V.objectEditDto.parse(b)); }
 }

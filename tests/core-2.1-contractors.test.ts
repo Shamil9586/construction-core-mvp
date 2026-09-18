@@ -156,7 +156,32 @@ test('Core 2.1: contractor management (assign/remove/reassign), active read mode
         assert.ok(objAfterReassign.contractorIds.includes(target.id), 'reassigned contractor back in active projection');
         assert.ok((await req(`objects?contractorId=${target.id}`)).some((x: any) => x.id === o.id), 'contractorId filter includes object again after reassign');
 
-        console.log('CORE 2.1 VERIFIED (partial): assign, remove (+active-work guard, +404 repeat), reassign, CONTRACTOR_VIEWER work-access ripple');
+        // --- Object Edit: restricted whitelist ---
+        const objectBefore = (await req(`objects/${o.id}`)).object;
+        const edited = await req(`objects/${o.id}/edit`, { name: 'Core 2.1 объект (переименован)', address: 'Тестовая, 21а', customerName: 'ООО Заказчик', plannedFinishDate: dt(90), projectManagerId: pm.id, version: objectBefore.version });
+        assert.equal(edited.name, 'Core 2.1 объект (переименован)');
+        assert.equal(edited.address, 'Тестовая, 21а');
+        assert.equal(edited.plannedFinishDate, dt(90));
+        assert.equal(edited.version, objectBefore.version + 1);
+
+        // contractValue/status are not in the whitelist — .strict() rejects them outright
+        await req(`objects/${o.id}/edit`, { name: edited.name, address: edited.address, customerName: edited.customerName, plannedFinishDate: edited.plannedFinishDate, projectManagerId: pm.id, version: edited.version, contractValue: '1' }, 400);
+        await req(`objects/${o.id}/edit`, { name: edited.name, address: edited.address, customerName: edited.customerName, plannedFinishDate: edited.plannedFinishDate, projectManagerId: pm.id, version: edited.version, status: 'ARCHIVED' }, 400);
+
+        // PROJECT_MANAGER cannot reassign projectManagerId, even on their own object
+        const users = await req('users');
+        const otherPm = users.find((u: any) => u.role === 'PROJECT_MANAGER' && u.id !== pm.id);
+        await req(`objects/${o.id}/edit`, { name: edited.name, address: edited.address, customerName: edited.customerName, plannedFinishDate: edited.plannedFinishDate, projectManagerId: otherPm.id, version: edited.version }, 400);
+
+        // TECHNICAL_DIRECTOR can reassign it
+        await login('TECHNICAL_DIRECTOR');
+        const reassignedPm = await req(`objects/${o.id}/edit`, { name: edited.name, address: edited.address, customerName: edited.customerName, plannedFinishDate: edited.plannedFinishDate, projectManagerId: otherPm.id, version: edited.version });
+        assert.equal(reassignedPm.projectManagerId, otherPm.id);
+
+        // Stale version -> 409 (checkVersion, same convention as every other mutating endpoint)
+        await req(`objects/${o.id}/edit`, { name: edited.name, address: edited.address, customerName: edited.customerName, plannedFinishDate: edited.plannedFinishDate, projectManagerId: otherPm.id, version: edited.version }, 409);
+
+        console.log('CORE 2.1 VERIFIED: assign, remove (+active-work guard, +404 repeat), reassign, CONTRACTOR_VIEWER work-access ripple, active read model, restricted Object Edit');
     }
     finally {
         await app.close();
