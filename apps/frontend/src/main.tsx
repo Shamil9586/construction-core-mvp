@@ -176,6 +176,9 @@ function App() {
         // отфильтрованные на клиенте по этому объекту — новых прав не требуется.
         const materialsQ = useQuery({ queryKey: ['materials'], queryFn: () => api('materials'), enabled: !!actor });
         const auditQ = useQuery({ queryKey: ['audit'], queryFn: () => api('audit'), enabled: !!actor });
+        // Active object↔contractor relations (id+version, needed to remove one) — a
+        // dedicated object-scoped endpoint, same shape as GET /objects/:id/works.
+        const contractorsQ = useQuery({ queryKey: ['object-contractors', id], queryFn: () => api(`objects/${id}/contractors`), enabled: !!actor });
         const objectMaterialBatches = (materialsQ.data?.batches ?? []).filter((b: any) => b.objectId === id);
         const relatedHistoryIds = new Set<string>([
             id!,
@@ -199,7 +202,10 @@ function App() {
                 <Descriptions.Item label="Плановое завершение">{date(o.plannedFinishDate)}</Descriptions.Item>
                 <Descriptions.Item label="Сумма договора">{money(o.contractValue)}</Descriptions.Item>
                 <Descriptions.Item label="Физ. готовность" span={2}><Progress percent={Math.round(o.actualProgress ?? 0)} style={{ maxWidth: 320 }}/></Descriptions.Item>
-                <Descriptions.Item label="Субподрядчики" span={2}>{o.contractors.length ? o.contractors.map((c: string) => <Tag key={c}>{c}</Tag>) : <small>не определены</small>}</Descriptions.Item>
+                <Descriptions.Item label="Субподрядчики" span={2}><Space direction="vertical" style={{ width: '100%' }}>
+                  <Space wrap>{(contractorsQ.data ?? []).length ? contractorsQ.data.map((rel: any) => <Tag key={rel.id} closable={can('PROJECT_MANAGER', 'TECHNICAL_DIRECTOR')} onClose={() => mutate(`objects/${id}/contractors/${rel.contractorId}/remove`, { version: rel.version }).catch(() => { })}>{rel.contractorName}</Tag>) : <small>не назначены</small>}</Space>
+                  {can('PROJECT_MANAGER', 'TECHNICAL_DIRECTOR') && <Button size="small" onClick={() => actionForm('Добавить подрядчика', `objects/${id}/contractors`, [{ name: 'contractorId', label: 'Субподрядчик', options: opts(d.contractors.filter((c: any) => !(contractorsQ.data ?? []).some((rel: any) => rel.contractorId === c.id))) }])}>Добавить подрядчика</Button>}
+                </Space></Descriptions.Item>
               </Descriptions></Card> },
             { key: 'production', label: 'Производство', children: <>{can('PROJECT_MANAGER', 'TECHNICAL_DIRECTOR') && <Button onClick={() => newWork(id)}>Добавить работу</Button>}{worksTable(works)}</> },
             { key: 'schedule', label: 'График', children: gantt(works) },
