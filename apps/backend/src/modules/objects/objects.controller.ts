@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Param, Body, Req, Inject } from '@nestjs/common';
+import { Controller, Get, Post, Param, Body, Query, Req, Inject } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { pool } from '../../db';
 import { ProductionService } from '../../service';
@@ -13,7 +13,9 @@ export class ObjectsController {
     @Get('objects')
     async objects(
     @Req()
-    r: any) { return (await this.read.snapshot(await authenticate(r))).objects; }
+    r: any,
+    @Query('contractorId')
+    contractorId?: string) { const a = await authenticate(r); return (await this.read.snapshot(a, contractorId ? { contractorId: V.uuid.parse(contractorId) } : {})).objects; }
     @Get('objects/:id')
     async object(
     @Req()

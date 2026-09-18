@@ -102,6 +102,16 @@ test('Core 2.1: contractor management (assign/remove/reassign), active read mode
         const workAfterRemove = await req(`works/${work.id}`);
         assert.equal(workAfterRemove.contractorId, target.id, 'historical work retains its contractor after soft-remove');
 
+        // objectList.contractors/contractorIds — active object_contractors only, not works-derived
+        let afterRemoveList = await req('objects');
+        let objAfterRemove = afterRemoveList.find((x: any) => x.id === o.id);
+        assert.ok(!objAfterRemove.contractorIds.includes(target.id), 'removed contractor absent from active projection');
+        assert.ok(objAfterRemove.contractorIds.includes(placeholder.id) && objAfterRemove.contractorIds.includes(target2.id), 'still-active contractors remain in projection');
+
+        // ?contractorId= filter reflects the same active-only semantics
+        assert.ok(!(await req(`objects?contractorId=${target.id}`)).some((x: any) => x.id === o.id), 'contractorId filter excludes object after remove');
+        assert.ok((await req(`objects?contractorId=${target2.id}`)).some((x: any) => x.id === o.id), 'contractorId filter still includes object for a contractor that remains active');
+
         // --- AFTER remove: CONTRACTOR_VIEWER (target) loses access on every one of the same paths ---
         await login('CONTRACTOR_VIEWER');
         await req(`objects/${o.id}`, undefined, 403);
@@ -139,6 +149,12 @@ test('Core 2.1: contractor management (assign/remove/reassign), active read mode
 
         const workAfterReassign = await req(`works/${work.id}`);
         assert.equal(workAfterReassign.contractorId, target.id, 'works.contractor_id unaffected by the whole remove/reassign cycle');
+
+        // Active projection and filter both reflect the reassignment
+        const afterReassignList = await req('objects');
+        const objAfterReassign = afterReassignList.find((x: any) => x.id === o.id);
+        assert.ok(objAfterReassign.contractorIds.includes(target.id), 'reassigned contractor back in active projection');
+        assert.ok((await req(`objects?contractorId=${target.id}`)).some((x: any) => x.id === o.id), 'contractorId filter includes object again after reassign');
 
         console.log('CORE 2.1 VERIFIED (partial): assign, remove (+active-work guard, +404 repeat), reassign, CONTRACTOR_VIEWER work-access ripple');
     }
