@@ -40,4 +40,14 @@ export class ObjectsController {
     id: string,
     @Body()
     b: any) { return this.service.assignContractor(await authenticate(r), V.uuid.parse(id), V.objectContractorDto.parse(b).contractorId); }
+    @Post('objects/:id/contractors/:contractorId/remove')
+    async removeContractor(
+    @Req()
+    r: any,
+    @Param('id')
+    id: string,
+    @Param('contractorId')
+    contractorId: string,
+    @Body()
+    b: any) { return this.service.removeContractor(await authenticate(r), V.uuid.parse(id), V.uuid.parse(contractorId), V.version.parse(b.version)); }
 }

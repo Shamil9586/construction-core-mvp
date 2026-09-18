@@ -35,10 +35,15 @@ test('Core 2.1: contractor management (assign/remove/reassign), active read mode
     const dt = (delta: number) => new Date(Date.now() + delta * 86400000).toISOString().slice(0, 10);
     try {
         const pm = await login('PROJECT_MANAGER');
-        const seedContractors = await req('contractors');
+        const seedContractors = await req('contractors'), dict = await req('dictionaries');
         const placeholder = seedContractors[0];
         await login('ADMIN');
         const target = await req('contractors', { name: 'Core 2.1 target contractor ' + randomUUID() });
+        const target2 = await req('contractors', { name: 'Core 2.1 blocked-remove contractor ' + randomUUID() });
+        // bitrixUserId '0' sorts before seed's CONTRACTOR_VIEWER ('9') in auth/mock's
+        // ORDER BY bitrix_user_id LIMIT 1, so login('CONTRACTOR_VIEWER') below picks this
+        // user — tied to `target` — instead of the seeded demo contractor viewer.
+        await req('users', { bitrixUserId: '0', name: 'Core 2.1 CONTRACTOR_VIEWER', role: 'CONTRACTOR_VIEWER', contractorId: target.id });
         await login('PROJECT_MANAGER');
         const o = await req('objects', { externalCode: 'C21-' + randomUUID(), name: 'Core 2.1 объект', address: 'Тестовая, 21', organizationName: 'ООО Тест', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [placeholder.id] });
 
@@ -61,7 +66,81 @@ test('Core 2.1: contractor management (assign/remove/reassign), active read mode
         // Unknown/foreign object id -> 404 through objectAccess/scoped (same path as tenant isolation elsewhere)
         await req(`objects/${randomUUID()}/contractors`, { contractorId: target.id }, 404);
 
-        console.log('CORE 2.1 VERIFIED (partial): assign, duplicate-active-400, RBAC, unknown-object-404');
+        // Second active relation, used only to prove the active-work removal guard.
+        const relation2 = await req(`objects/${o.id}/contractors`, { contractorId: target2.id });
+
+        // Work for `target`, driven to COMPLETED — its historical presence must not
+        // block removing `target`'s assignment, and must survive the remove untouched.
+        const work = await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: target.id, responsibleUserId: pm.id, name: 'Core 2.1 работа подрядчика', unit: 'т', plannedQuantity: 10, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '100000' });
+        const completedWork = await req(`works/${work.id}/progress`, { totalQuantity: 10, version: work.version, comment: 'Завершено для теста remove' });
+        assert.equal(completedWork.status, 'COMPLETED');
+
+        // Work for `target2` left ACTIVE (not COMPLETED) — its presence must block removal.
+        const blockingWork = await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: target2.id, responsibleUserId: pm.id, name: 'Core 2.1 незавершённая работа', unit: 'т', plannedQuantity: 10, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '100000' });
+        await req(`works/${blockingWork.id}/progress`, { totalQuantity: 5, version: blockingWork.version, comment: 'В процессе' });
+
+        // --- BEFORE remove: CONTRACTOR_VIEWER (tied to `target`) has full access on every work read path ---
+        await login('CONTRACTOR_VIEWER');
+        await req(`objects/${o.id}`);
+        await req(`objects/${o.id}/works`);
+        await req(`works/${work.id}`);
+        await req(`works/${work.id}/progress`);
+        await req(`works/${work.id}/transition`);
+        let snap = await req('snapshot');
+        assert.ok(snap.objects.some((x: any) => x.id === o.id), 'object visible before remove');
+        assert.ok(snap.works.some((w: any) => w.id === work.id), 'work visible before remove');
+        await login('PROJECT_MANAGER');
+
+        // --- Active-work guard blocks target2; target (only a COMPLETED work) can be removed ---
+        await req(`objects/${o.id}/contractors/${target2.id}/remove`, { version: relation2.version }, 400);
+        const removed = await req(`objects/${o.id}/contractors/${target.id}/remove`, { version: relation.version });
+        assert.ok(removed.removedAt);
+        assert.equal(removed.removedBy, pm.id);
+
+        // works.contractor_id must be unchanged by the remove (checked via PM, whose own
+        // access is via project_manager_id and unaffected by the contractor removal)
+        const workAfterRemove = await req(`works/${work.id}`);
+        assert.equal(workAfterRemove.contractorId, target.id, 'historical work retains its contractor after soft-remove');
+
+        // --- AFTER remove: CONTRACTOR_VIEWER (target) loses access on every one of the same paths ---
+        await login('CONTRACTOR_VIEWER');
+        await req(`objects/${o.id}`, undefined, 403);
+        await req(`objects/${o.id}/works`, undefined, 403);
+        await req(`works/${work.id}`, undefined, 403);
+        await req(`works/${work.id}/progress`, undefined, 403);
+        await req(`works/${work.id}/transition`, undefined, 403);
+        snap = await req('snapshot');
+        assert.ok(!snap.objects.some((x: any) => x.id === o.id), 'object hidden from snapshot after remove');
+        assert.ok(!snap.works.some((w: any) => w.id === work.id), 'work hidden from snapshot after remove');
+        await login('PROJECT_MANAGER');
+
+        // --- Repeat remove of an already-removed relation -> 404 with a distinct message; history untouched ---
+        const repeat = await req(`objects/${o.id}/contractors/${target.id}/remove`, { version: removed.version }, 404);
+        assert.match(repeat.message, /Активное назначение подрядчика не найдено/);
+        const genericNotFound = await req(`objects/${randomUUID()}`, undefined, 404);
+        assert.match(genericNotFound.message, /Запись не найдена/);
+        assert.notEqual(repeat.message, genericNotFound.message);
+
+        // --- Reassign: creates a NEW active relation; the removed row stays as permanent history ---
+        const reassigned = await req(`objects/${o.id}/contractors`, { contractorId: target.id });
+        assert.notEqual(reassigned.id, relation.id, 'reassign creates a new relation row, not resurrecting the old one');
+        assert.equal(reassigned.removedAt, null);
+
+        await login('CONTRACTOR_VIEWER');
+        await req(`objects/${o.id}`);
+        await req(`objects/${o.id}/works`);
+        await req(`works/${work.id}`);
+        await req(`works/${work.id}/progress`);
+        await req(`works/${work.id}/transition`);
+        snap = await req('snapshot');
+        assert.ok(snap.objects.some((x: any) => x.id === o.id), 'object visible again after reassign');
+        assert.ok(snap.works.some((w: any) => w.id === work.id), 'work visible again after reassign');
+        await login('PROJECT_MANAGER');
+
+        const workAfterReassign = await req(`works/${work.id}`);
+        assert.equal(workAfterReassign.contractorId, target.id, 'works.contractor_id unaffected by the whole remove/reassign cycle');
+
+        console.log('CORE 2.1 VERIFIED (partial): assign, remove (+active-work guard, +404 repeat), reassign, CONTRACTOR_VIEWER work-access ripple');
     }
     finally {
         await app.close();

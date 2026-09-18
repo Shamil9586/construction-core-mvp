@@ -8,7 +8,7 @@ export class ReadService {
     async snapshot(a: Actor) {
         requirePermission(a, P.OBJECT_VIEW);
         const t = a.tenantId;
-        const objectFilter = a.role === 'PROJECT_MANAGER' ? ' AND o.project_manager_id=$2' : a.role === 'CONTRACTOR_VIEWER' ? ' AND EXISTS(SELECT 1 FROM object_contractors oc WHERE oc.tenant_id=o.tenant_id AND oc.object_id=o.id AND oc.contractor_id=$2)' : '';
+        const objectFilter = a.role === 'PROJECT_MANAGER' ? ' AND o.project_manager_id=$2' : a.role === 'CONTRACTOR_VIEWER' ? ' AND EXISTS(SELECT 1 FROM object_contractors oc WHERE oc.tenant_id=o.tenant_id AND oc.object_id=o.id AND oc.contractor_id=$2 AND oc.removed_at IS NULL)' : '';
         const objects = await rows(pool, 'SELECT o.*,u.name AS responsible FROM objects o JOIN users u ON u.tenant_id=o.tenant_id AND u.id=o.project_manager_id WHERE o.tenant_id=$1' + objectFilter + ' ORDER BY o.name', objectFilter ? [t, a.role === 'PROJECT_MANAGER' ? a.id : a.contractorId ?? null] : [t]);
         const ids = objects.map(o => o.id);
         const works = await rows(pool, `SELECT w.*,t.requires_inspection,t.requires_materials,t.category_id,c.name AS contractor,u.name AS responsible,(SELECT max(reported_at) FROM work_progress p WHERE p.tenant_id=w.tenant_id AND p.object_work_id=w.id) AS last_reported_at FROM works w JOIN work_types t ON t.id=w.work_type_id AND t.tenant_id=w.tenant_id JOIN contractors c ON c.id=w.contractor_id AND c.tenant_id=w.tenant_id JOIN users u ON u.id=w.responsible_user_id AND u.tenant_id=w.tenant_id WHERE w.tenant_id=$1 AND w.object_id=ANY($2::uuid[]) ${a.role === 'CONTRACTOR_VIEWER' ? 'AND w.contractor_id=$3' : ''} ORDER BY w.planned_start_date,w.name`, a.role === 'CONTRACTOR_VIEWER' ? [t, ids, a.contractorId ?? null] : [t, ids]);
