@@ -32,4 +32,12 @@ export class ObjectsController {
     r: any,
     @Param('id')
     id: string) { const a = await authenticate(r); await objectAccess(pool, a, V.uuid.parse(id)); return (await this.read.snapshot(a)).works.filter(w => w.objectId === id); }
+    @Post('objects/:id/contractors')
+    async assignContractor(
+    @Req()
+    r: any,
+    @Param('id')
+    id: string,
+    @Body()
+    b: any) { return this.service.assignContractor(await authenticate(r), V.uuid.parse(id), V.objectContractorDto.parse(b).contractorId); }
 }
