@@ -206,7 +206,13 @@ function App() {
                   <Space wrap>{(contractorsQ.data ?? []).length ? contractorsQ.data.map((rel: any) => <Tag key={rel.id} closable={can('PROJECT_MANAGER', 'TECHNICAL_DIRECTOR')} onClose={() => mutate(`objects/${id}/contractors/${rel.contractorId}/remove`, { version: rel.version }).catch(() => { })}>{rel.contractorName}</Tag>) : <small>не назначены</small>}</Space>
                   {can('PROJECT_MANAGER', 'TECHNICAL_DIRECTOR') && <Button size="small" onClick={() => actionForm('Добавить подрядчика', `objects/${id}/contractors`, [{ name: 'contractorId', label: 'Субподрядчик', options: opts(d.contractors.filter((c: any) => !(contractorsQ.data ?? []).some((rel: any) => rel.contractorId === c.id))) }])}>Добавить подрядчика</Button>}
                 </Space></Descriptions.Item>
-              </Descriptions></Card> },
+              </Descriptions>{can('PROJECT_MANAGER', 'TECHNICAL_DIRECTOR') && <Button style={{ marginTop: 12 }} onClick={() => actionForm('Редактировать объект', `objects/${id}/edit`, [
+                { name: 'name', label: 'Название', value: o.name },
+                { name: 'address', label: 'Адрес', value: o.address },
+                { name: 'customerName', label: 'Заказчик', value: o.customerName ?? '', optional: true },
+                { name: 'plannedFinishDate', label: 'Плановое завершение', type: 'date', value: o.plannedFinishDate },
+                ...(can('TECHNICAL_DIRECTOR') ? [{ name: 'projectManagerId', label: 'Руководитель проекта', options: opts(users.data?.filter((u: any) => u.role === 'PROJECT_MANAGER')), value: o.projectManagerId }] : []),
+              ], { version: o.version, ...(can('TECHNICAL_DIRECTOR') ? {} : { projectManagerId: o.projectManagerId }) })}>Редактировать объект</Button>}</Card> },
             { key: 'production', label: 'Производство', children: <>{can('PROJECT_MANAGER', 'TECHNICAL_DIRECTOR') && <Button onClick={() => newWork(id)}>Добавить работу</Button>}{worksTable(works)}</> },
             { key: 'schedule', label: 'График', children: gantt(works) },
             { key: 'sk', label: 'Строительный контроль', children: inspectionsView(objectInspections) },

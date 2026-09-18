@@ -49,3 +49,39 @@ test('Core 2.1: assign/remove contractor on object card, ContractorPanel members
   await panel.getByLabel('Субподрядчик', { exact: true }).selectOption({ label: addedName });
   await expect(panel.locator('.portfolio-object', { hasText: objectName })).toHaveCount(0);
 });
+
+// Core 2.1: restricted Object Edit — whitelisted fields only, no contractValue/status control.
+test('Core 2.1: restricted Object Edit form', async ({ page }, info) => {
+  if (!process.env.MOCK_LOGIN_KEY) throw Error('Set mock test key for seeded test deployment');
+  await page.goto('/');
+  await page.locator('.login .ant-select-selector').click();
+  await page.getByText('Администратор', { exact: true }).click();
+  await page.getByLabel('Тестовый ключ').fill(process.env.MOCK_LOGIN_KEY);
+  await page.getByRole('button', { name: 'Войти', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Куда смотреть сегодня' })).toBeVisible();
+
+  await page.getByRole('link', { name: 'Объекты', exact: true }).click();
+  const firstObjectLink = page.locator('.objects-grid .object-card h2').first();
+  await firstObjectLink.click();
+  const newName = 'Отредактированный объект ' + Date.now();
+
+  await page.getByRole('button', { name: 'Редактировать объект', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  // ADMIN passes the same can('TECHNICAL_DIRECTOR') check, so the РП field is present here.
+  await expect(dialog.getByLabel('Руководитель проекта', { exact: true })).toBeVisible();
+  await dialog.getByLabel('Название', { exact: true }).fill(newName);
+  await dialog.getByLabel('Адрес', { exact: true }).fill('Новый адрес, 1');
+  await dialog.getByRole('button', { name: 'Сохранить', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: newName, exact: true })).toBeVisible();
+  await expect(page.locator('.page-heading')).toContainText('Новый адрес, 1');
+  await page.screenshot({ path: info.outputPath('object-edited.png'), fullPage: true });
+
+  // contractValue and status are not editable through this form at all.
+  await page.getByRole('tab', { name: 'Обзор', exact: true }).click();
+  await page.getByRole('button', { name: 'Редактировать объект', exact: true }).click();
+  await expect(dialog.getByLabel('Сумма договора')).toHaveCount(0);
+  await expect(dialog.getByLabel('Статус')).toHaveCount(0);
+  await dialog.locator('.ant-modal-close').click();
+  await expect(dialog).toHaveCount(0);
+});
