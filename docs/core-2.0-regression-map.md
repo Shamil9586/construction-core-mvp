@@ -13,11 +13,13 @@ ERP: `docs/verification-report-2026-09-16.md`,
 
 Статусы: `covered` / `partial` / `missing` / `not applicable`.
 
-## ⚠️ Незакрытый stash (не относится к этой задаче)
+## Стэш `359b97c` — закрыт
 
-`stash@{0}` = `359b97c` — anti-flake доработка `tests/browser/workflow.spec.ts`
-для более раннего фикса `c4469f8` (Admin/Excel-import state lifting). Решение —
-за пользователем, вне scope Core 2.0 hardening.
+Anti-flake доработка `tests/browser/workflow.spec.ts` для более раннего фикса
+`c4469f8` (Admin/Excel-import state lifting) применена и зафиксирована
+коммитом `2fef5ca` (`test: anti-flake Admin/Excel-import browser test`),
+вошедшим в `main`. Production-поведение не менялось. Подтверждено:
+`git merge-base --is-ancestor 2fef5ca main` → да.
 
 ---
 
