@@ -9,7 +9,8 @@
 **Core 2.1 Final Post-Review Correction Pass завершён.**
 
 * branch: `feature/core-2.1`
-* HEAD: `9dd53eb`
+* последний substantive (non-docs) commit: `9dd53eb`; после него следуют
+  только docs-only коммиты этого файла — точный текущий HEAD см. `git log`
 * baseline checkpoint (review snapshot до этого прохода): `62bf5e2`
 * `main` не изменён, Core 2.1 в `main` не смёржен
 * baseline tag `core-2.1-before-implementation` не изменён
@@ -43,37 +44,53 @@ bypass, IDOR, SQL injection или обхода projectManagerId authorization �
 | Core 2.1 contractor tests на реальном PostgreSQL | PASS |
 | `createWork ↔ removeContractor` concurrency на реальном PostgreSQL | PASS |
 | `progress ↔ removeContractor` reactivation concurrency на реальном PostgreSQL | PASS |
-| Core 2.1 browser specs (`contractors.spec.ts`, изолированный прогон) | PASS — 2/2 |
-| Полный Playwright suite (`contractors.spec.ts` + `director.spec.ts` + `workflow.spec.ts`) | **FAIL** — см. ниже |
+| Core 2.1 targeted browser specs (`contractors.spec.ts`, изолированный прогон) | PASS — 2/2 |
+| Полный Playwright suite (`contractors.spec.ts` + `director.spec.ts` + `workflow.spec.ts`) | **FAIL** |
 
-### Известная проблема: `tests/browser/workflow.spec.ts:6`
+### Browser test stability: unresolved, separate gate
 
-Этот тест падает по таймауту (180000ms) **только** при прогоне в составе
-полного suite (после `contractors.spec.ts` и `director.spec.ts` в одном
-worker), и **не падает** при изолированном прогоне — в изоляции он проходит
-за 16–17 секунд как на `feature/core-2.1` (HEAD этого прохода), так и на
-baseline (`core-2.1-before-implementation`, commit `9a2e39c`, отдельный
-git worktree, отдельная свежая PostgreSQL база). Padение дважды
-воспроизведено на одной и той же строке (`workflow.spec.ts:23`, клик по
-табу «ПТО / документы» сразу после `page.goto(objectUrl)`, следующего за
-привязкой материала), что указывает на деградацию состояния/ресурсов при
-последовательном прогоне нескольких browser-тестов в одном worker (Vite
-dev-сервер, соединения с БД, накопленные тестовые данные), а не на
-логическую ошибку в production-коде: ни один из файлов, затронутых
+**Core 2.1 targeted browser specs: PASS 2/2. Full Playwright suite: FAIL.**
+
+Intermittent browser-test instability was observed with more than one
+failure signature, including workflow/navigation and login/mock-auth
+related symptoms. Current evidence does not establish a deterministic
+Core 2.1 production regression, but it also does not prove that every
+observed failure signature is baseline-equivalent. Browser stability
+remains a separate unresolved test-stability gate, not declared PASS or
+attributed with certainty to any single cause.
+
+Observed datapoints from this session (local embedded PostgreSQL, one
+worker, sequential runs — not an exhaustive or statistically-sized sample):
+
+* Full suite on `feature/core-2.1` (run 1): `workflow.spec.ts:6` FAIL —
+  180000ms timeout, stuck on a tab click (`workflow.spec.ts:23`,
+  «ПТО / документы») shortly after a `page.goto(objectUrl)` that follows
+  materials binding.
+* `workflow.spec.ts` alone (baseline, `core-2.1-before-implementation` /
+  `9a2e39c`, separate worktree + fresh DB): both tests in the file PASS,
+  ~16–22s total.
+* `workflow.spec.ts` alone on `feature/core-2.1`: the main test
+  (`workflow.spec.ts:6`) PASS (~16.7s), but the file's second test
+  (`Admin: импорт Excel переживает перерендер App`) FAIL — a different
+  symptom (login heading not visible after clicking «Войти», 15000ms
+  timeout) at a different line, unrelated to the run-1 failure above.
+* Full suite on `feature/core-2.1` (run 2, fresh DB): `workflow.spec.ts:6`
+  FAIL again, same line/signature as run 1.
+
+None of the failure lines above fall inside any file touched by the
 Core 2.1 corrective commits (`objects.controller.ts`, `service.ts`,
-`validation.ts`, `main.tsx`), не находится на пути логина, привязки
-материалов или вкладки «ПТО / документы». Отдельно при том же изолированном
-прогоне (`workflow.spec.ts` + Excel-import тест, без `contractors.spec.ts`)
-наблюдался ещё один, отличный по месту, кратковременный login-related
-таймаут — то есть общая картина указывает на нестабильность
-тестовой инфраструктуры/окружения при повторных запусках, а не на
-детерминированный, воспроизводимый в изоляции баг.
+`validation.ts`, `main.tsx`) — login, materials binding, the PTO tab, and
+the Admin Excel-import flow are all outside this pass's diff. That is
+suggestive, not conclusive: the sample size is small (2 full-suite runs,
+2 isolated runs) and the failure signature was not identical between
+observations, so equivalence to any previously-described baseline
+failure is not established either.
 
-**Не объявляется full Playwright PASS.** Этот файл не менялся и не
-чинился в рамках этого прохода (вне scope). Требуется отдельная
-test-stability задача с профилированием (в частности — почему повторный
-прогон в одном worker после других browser-тестов ведёт себя иначе, чем
-изолированный).
+**Not declared full Playwright PASS.** `workflow.spec.ts` was not modified
+in this pass (out of scope). This needs a dedicated test-stability
+investigation with a larger sample and profiling — in particular why
+sequential-run behavior differs from isolated runs, and whether the two
+distinct failure signatures observed share a root cause.
 
 ## Corrective commits этого прохода (`62bf5e2..HEAD`)
 
