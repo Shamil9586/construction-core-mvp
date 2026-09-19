@@ -51,6 +51,25 @@ test('Core 2.1: assign/remove contractor on object card, ContractorPanel members
   await page.getByRole('link', { name: 'Субподрядчики', exact: true }).click();
   await panel.getByLabel('Субподрядчик', { exact: true }).selectOption({ label: addedName });
   await expect(panel.locator('.portfolio-object', { hasText: objectName })).toHaveCount(0);
+
+  // Reassign — object rejoins that contractor's group
+  await page.getByRole('link', { name: objectName, exact: true }).first().click();
+  await page.getByRole('tab', { name: 'Обзор', exact: true }).click();
+  await page.getByRole('button', { name: 'Добавить подрядчика', exact: true }).click();
+  await dialog.getByLabel('Субподрядчик', { exact: true }).selectOption({ label: addedName });
+  await dialog.getByRole('button', { name: 'Сохранить', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(contractorTags().filter({ hasText: addedName })).toBeVisible();
+
+  // F4: object history shows ASSIGN, REMOVE and the reassign ASSIGN, in order (newest
+  // first, per the audit feed's own ordering) — a removed relation's history must not
+  // disappear once it's no longer an active relation.
+  await page.getByRole('tab', { name: 'История', exact: true }).click();
+  const historyItems = page.locator('.ant-timeline-item-content').filter({ hasText: 'ObjectContractor' });
+  await expect(historyItems).toHaveCount(3);
+  const historyActions = (await historyItems.allInnerTexts()).map(t => t.split(' · ')[0]);
+  expect(historyActions).toEqual(['ASSIGN', 'REMOVE', 'ASSIGN']);
+  await page.screenshot({ path: info.outputPath('object-contractor-history.png'), fullPage: true });
 });
 
 // Core 2.1: restricted Object Edit — whitelisted fields only, no contractValue/status control.
