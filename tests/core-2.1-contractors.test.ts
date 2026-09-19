@@ -53,10 +53,12 @@ test('Core 2.1: contractor management (assign/remove/reassign), active read mode
         assert.equal(relation.contractorId, target.id);
         assert.equal(relation.removedAt, null);
 
-        // Assign: duplicate active relation -> 400 (ensure()-based business-rule rejection,
-        // same convention as every other "already in this state" check in service.ts —
-        // e.g. "Пакет уже передан" — 409 is reserved for checkVersion()/raw DB conflicts)
-        await req(`objects/${o.id}/contractors`, { contractorId: target.id }, 400);
+        // Assign: duplicate active relation -> 409 (Conflict: the assignment already
+        // exists, same class of conflict as checkVersion()/raw DB unique-violation
+        // conflicts — a concurrent duplicate assign already hit the same status via
+        // the object_contractors_active_unique index + global 23505->409 mapping;
+        // this makes the sequential path consistent with that)
+        await req(`objects/${o.id}/contractors`, { contractorId: target.id }, 409);
 
         // RBAC: OBJECT_MANAGE_CONTRACTORS required, not OBJECT_EDIT/others
         await login('CONSTRUCTION_CONTROL');
