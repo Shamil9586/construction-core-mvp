@@ -203,7 +203,7 @@ function App() {
                 <Descriptions.Item label="Сумма договора">{money(o.contractValue)}</Descriptions.Item>
                 <Descriptions.Item label="Физ. готовность" span={2}><Progress percent={Math.round(o.actualProgress ?? 0)} style={{ maxWidth: 320 }}/></Descriptions.Item>
                 <Descriptions.Item label="Субподрядчики" span={2}><Space direction="vertical" style={{ width: '100%' }}>
-                  <Space wrap>{(contractorsQ.data ?? []).length ? contractorsQ.data.map((rel: any) => <Tag key={rel.id} closable={can('PROJECT_MANAGER', 'TECHNICAL_DIRECTOR')} onClose={() => mutate(`objects/${id}/contractors/${rel.contractorId}/remove`, { version: rel.version }).catch(() => { })}>{rel.contractorName}</Tag>) : <small>не назначены</small>}</Space>
+                  <Space wrap>{(contractorsQ.data ?? []).length ? contractorsQ.data.map((rel: any) => <Tag key={rel.id} closable={can('PROJECT_MANAGER', 'TECHNICAL_DIRECTOR')} onClose={() => mutate(`objects/${id}/contractors/${rel.contractorId}/remove`, { relationId: rel.id, version: rel.version }).catch(() => { })}>{rel.contractorName}</Tag>) : <small>не назначены</small>}</Space>
                   {can('PROJECT_MANAGER', 'TECHNICAL_DIRECTOR') && <Button size="small" onClick={() => actionForm('Добавить подрядчика', `objects/${id}/contractors`, [{ name: 'contractorId', label: 'Субподрядчик', options: opts(d.contractors.filter((c: any) => !(contractorsQ.data ?? []).some((rel: any) => rel.contractorId === c.id))) }])}>Добавить подрядчика</Button>}
                 </Space></Descriptions.Item>
               </Descriptions>{can('PROJECT_MANAGER', 'TECHNICAL_DIRECTOR') && <Button style={{ marginTop: 12 }} onClick={() => actionForm('Редактировать объект', `objects/${id}/edit`, [

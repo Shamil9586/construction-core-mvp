@@ -95,8 +95,8 @@ test('Core 2.1: contractor management (assign/remove/reassign), active read mode
 
         // --- Active-work guard blocks target2 (409, per docs/core-2.1-architecture-plan.md:95);
         // target (only a COMPLETED work) can be removed ---
-        await req(`objects/${o.id}/contractors/${target2.id}/remove`, { version: relation2.version }, 409);
-        const removed = await req(`objects/${o.id}/contractors/${target.id}/remove`, { version: relation.version });
+        await req(`objects/${o.id}/contractors/${target2.id}/remove`, { relationId: relation2.id, version: relation2.version }, 409);
+        const removed = await req(`objects/${o.id}/contractors/${target.id}/remove`, { relationId: relation.id, version: relation.version });
         assert.ok(removed.removedAt);
         assert.equal(removed.removedBy, pm.id);
 
@@ -128,7 +128,7 @@ test('Core 2.1: contractor management (assign/remove/reassign), active read mode
         await login('PROJECT_MANAGER');
 
         // --- Repeat remove of an already-removed relation -> 404 with a distinct message; history untouched ---
-        const repeat = await req(`objects/${o.id}/contractors/${target.id}/remove`, { version: removed.version }, 404);
+        const repeat = await req(`objects/${o.id}/contractors/${target.id}/remove`, { relationId: relation.id, version: removed.version }, 404);
         assert.match(repeat.message, /Активное назначение подрядчика не найдено/);
         const genericNotFound = await req(`objects/${randomUUID()}`, undefined, 404);
         assert.match(genericNotFound.message, /Запись не найдена/);
@@ -159,6 +159,31 @@ test('Core 2.1: contractor management (assign/remove/reassign), active read mode
         assert.ok(objAfterReassign.contractorIds.includes(target.id), 'reassigned contractor back in active projection');
         assert.ok((await req(`objects?contractorId=${target.id}`)).some((x: any) => x.id === o.id), 'contractorId filter includes object again after reassign');
 
+        // --- F1: stale remove (old relation A's id+version, post reassign to relation B)
+        // must not touch B. Remove addresses the relation by its own id, not just
+        // (objectId,contractorId), which is stable across a remove+reassign cycle. ---
+        assert.notEqual(reassigned.id, relation.id, 'sanity: B is a distinct relation from A');
+        const staleRemove = await req(`objects/${o.id}/contractors/${target.id}/remove`, { relationId: relation.id, version: relation.version }, 404);
+        assert.match(staleRemove.message, /Активное назначение подрядчика не найдено/);
+        let afterStaleRemove = (await req('objects')).find((x: any) => x.id === o.id);
+        assert.ok(afterStaleRemove.contractorIds.includes(target.id), 'B remains active after a stale remove addressed at A');
+        await login('CONTRACTOR_VIEWER');
+        await req(`objects/${o.id}`);
+        await req(`works/${work.id}`);
+        await login('PROJECT_MANAGER');
+
+        // Stale version against the correct CURRENT active relation (B) -> 409, not 404
+        await req(`objects/${o.id}/contractors/${target.id}/remove`, { relationId: reassigned.id, version: reassigned.version + 1 }, 409);
+
+        // Removing B by its own id+version succeeds, and access follows it
+        const removedB = await req(`objects/${o.id}/contractors/${target.id}/remove`, { relationId: reassigned.id, version: reassigned.version });
+        assert.ok(removedB.removedAt);
+        afterStaleRemove = (await req('objects')).find((x: any) => x.id === o.id);
+        assert.ok(!afterStaleRemove.contractorIds.includes(target.id), 'B absent from active projection after its own remove');
+        await login('CONTRACTOR_VIEWER');
+        await req(`objects/${o.id}`, undefined, 403);
+        await login('PROJECT_MANAGER');
+
         // --- Concurrency invariant: createWork vs removeContractor race on the same
         // object_contractors_active row (both take FOR UPDATE on it) — exactly one of
         // the two must win, and the loser's failure must be consistent with the
@@ -175,7 +200,7 @@ test('Core 2.1: contractor management (assign/remove/reassign), active read mode
         const fetchJson = (path: string, body: any) => fetch(base + '/' + path, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: JSON.stringify(body) }).then(async r => ({ status: r.status, data: await r.json() }));
         const [createResult, removeResult] = await Promise.all([
             fetchJson('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: target3.id, responsibleUserId: pm.id, name: 'Core 2.1 concurrency работа', unit: 'т', plannedQuantity: 1, plannedStartDate: dt(-1), plannedFinishDate: dt(10), estimatedCost: '1000' }),
-            fetchJson(`objects/${o.id}/contractors/${target3.id}/remove`, { version: relation3.version }),
+            fetchJson(`objects/${o.id}/contractors/${target3.id}/remove`, { relationId: relation3.id, version: relation3.version }),
         ]);
         const createOk = createResult.status === 201, removeOk = removeResult.status === 200;
         assert.notEqual(createOk, removeOk, 'exactly one of concurrent createWork/removeContractor must succeed, never both or neither: ' + JSON.stringify({ createResult, removeResult }));
