@@ -158,30 +158,45 @@ test('Core 2.1: contractor management (assign/remove/reassign), active read mode
         assert.ok(objAfterReassign.contractorIds.includes(target.id), 'reassigned contractor back in active projection');
         assert.ok((await req(`objects?contractorId=${target.id}`)).some((x: any) => x.id === o.id), 'contractorId filter includes object again after reassign');
 
-        // --- Object Edit: restricted whitelist ---
+        // --- Object Edit: restricted whitelist, partial (only version is required) ---
         const objectBefore = (await req(`objects/${o.id}`)).object;
-        const edited = await req(`objects/${o.id}/edit`, { name: 'Core 2.1 объект (переименован)', address: 'Тестовая, 21а', customerName: 'ООО Заказчик', plannedFinishDate: dt(90), projectManagerId: pm.id, version: objectBefore.version });
+
+        // projectManagerId's mere presence is gated for a non-privileged actor, not just
+        // a value change: PM resubmitting their own current id still gets 403.
+        await req(`objects/${o.id}/edit`, { name: objectBefore.name, projectManagerId: pm.id, version: objectBefore.version }, 403);
+
+        const edited = await req(`objects/${o.id}/edit`, { name: 'Core 2.1 объект (переименован)', address: 'Тестовая, 21а', customerName: 'ООО Заказчик', plannedFinishDate: dt(90), version: objectBefore.version });
         assert.equal(edited.name, 'Core 2.1 объект (переименован)');
         assert.equal(edited.address, 'Тестовая, 21а');
         assert.equal(edited.plannedFinishDate, dt(90));
+        assert.equal(edited.projectManagerId, pm.id, 'omitted projectManagerId leaves the existing PM unchanged');
         assert.equal(edited.version, objectBefore.version + 1);
 
-        // contractValue/status are not in the whitelist — .strict() rejects them outright
-        await req(`objects/${o.id}/edit`, { name: edited.name, address: edited.address, customerName: edited.customerName, plannedFinishDate: edited.plannedFinishDate, projectManagerId: pm.id, version: edited.version, contractValue: '1' }, 400);
-        await req(`objects/${o.id}/edit`, { name: edited.name, address: edited.address, customerName: edited.customerName, plannedFinishDate: edited.plannedFinishDate, projectManagerId: pm.id, version: edited.version, status: 'ARCHIVED' }, 400);
+        // Partial edit: a single field changes, every omitted field is preserved as-is
+        const partial = await req(`objects/${o.id}/edit`, { customerName: 'ООО Заказчик 2', version: edited.version });
+        assert.equal(partial.customerName, 'ООО Заказчик 2');
+        assert.equal(partial.name, edited.name, 'omitted name preserved by partial edit');
+        assert.equal(partial.address, edited.address, 'omitted address preserved by partial edit');
+        assert.equal(partial.plannedFinishDate, edited.plannedFinishDate, 'omitted plannedFinishDate preserved by partial edit');
 
-        // PROJECT_MANAGER cannot reassign projectManagerId, even on their own object
+        // contractValue/status are not in the whitelist — .strict() rejects them outright
+        await req(`objects/${o.id}/edit`, { name: partial.name, version: partial.version, contractValue: '1' }, 400);
+        await req(`objects/${o.id}/edit`, { name: partial.name, version: partial.version, status: 'ARCHIVED' }, 400);
+
+        // PROJECT_MANAGER cannot reassign projectManagerId, even on their own object —
+        // presence of the key is what's rejected (403), regardless of the value inside
         const users = await req('users');
         const otherPm = users.find((u: any) => u.role === 'PROJECT_MANAGER' && u.id !== pm.id);
-        await req(`objects/${o.id}/edit`, { name: edited.name, address: edited.address, customerName: edited.customerName, plannedFinishDate: edited.plannedFinishDate, projectManagerId: otherPm.id, version: edited.version }, 400);
+        await req(`objects/${o.id}/edit`, { projectManagerId: otherPm.id, version: partial.version }, 403);
 
         // TECHNICAL_DIRECTOR can reassign it
         await login('TECHNICAL_DIRECTOR');
-        const reassignedPm = await req(`objects/${o.id}/edit`, { name: edited.name, address: edited.address, customerName: edited.customerName, plannedFinishDate: edited.plannedFinishDate, projectManagerId: otherPm.id, version: edited.version });
+        const reassignedPm = await req(`objects/${o.id}/edit`, { projectManagerId: otherPm.id, version: partial.version });
         assert.equal(reassignedPm.projectManagerId, otherPm.id);
+        assert.equal(reassignedPm.name, partial.name, 'omitted fields preserved on a privileged partial edit too');
 
         // Stale version -> 409 (checkVersion, same convention as every other mutating endpoint)
-        await req(`objects/${o.id}/edit`, { name: edited.name, address: edited.address, customerName: edited.customerName, plannedFinishDate: edited.plannedFinishDate, projectManagerId: otherPm.id, version: edited.version }, 409);
+        await req(`objects/${o.id}/edit`, { projectManagerId: otherPm.id, version: partial.version }, 409);
 
         console.log('CORE 2.1 VERIFIED: assign, remove (+active-work guard, +404 repeat), reassign, CONTRACTOR_VIEWER work-access ripple, active read model, restricted Object Edit');
     }

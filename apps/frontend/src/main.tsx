@@ -212,7 +212,7 @@ function App() {
                 { name: 'customerName', label: 'Заказчик', value: o.customerName ?? '', optional: true },
                 { name: 'plannedFinishDate', label: 'Плановое завершение', type: 'date', value: o.plannedFinishDate },
                 ...(can('TECHNICAL_DIRECTOR') ? [{ name: 'projectManagerId', label: 'Руководитель проекта', options: opts(users.data?.filter((u: any) => u.role === 'PROJECT_MANAGER')), value: o.projectManagerId }] : []),
-              ], { version: o.version, ...(can('TECHNICAL_DIRECTOR') ? {} : { projectManagerId: o.projectManagerId }) })}>Редактировать объект</Button>}</Card> },
+              ], { version: o.version })}>Редактировать объект</Button>}</Card> },
             { key: 'production', label: 'Производство', children: <>{can('PROJECT_MANAGER', 'TECHNICAL_DIRECTOR') && <Button onClick={() => newWork(id)}>Добавить работу</Button>}{worksTable(works)}</> },
             { key: 'schedule', label: 'График', children: gantt(works) },
             { key: 'sk', label: 'Строительный контроль', children: inspectionsView(objectInspections) },
