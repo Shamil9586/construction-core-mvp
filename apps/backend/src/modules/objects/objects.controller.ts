@@ -57,7 +57,7 @@ export class ObjectsController {
     @Param('contractorId')
     contractorId: string,
     @Body()
-    b: any) { const dto = V.removeContractorDto.parse(b); return this.service.removeContractor(await authenticate(r), V.uuid.parse(id), V.uuid.parse(contractorId), dto.relationId, dto.version); }
+    b: any) { const a = await authenticate(r); const dto = V.removeContractorDto.parse(b); return this.service.removeContractor(a, V.uuid.parse(id), V.uuid.parse(contractorId), dto.relationId, dto.version); }
     @Post('objects/:id/edit')
     async editObject(
     @Req()
