@@ -100,10 +100,14 @@ test('Core 2.1: restricted Object Edit form', async ({ page }, info) => {
   await expect(dialog.getByLabel('Руководитель проекта', { exact: true })).toBeVisible();
   await dialog.getByLabel('Название', { exact: true }).fill(newName);
   await dialog.getByLabel('Адрес', { exact: true }).fill('Новый адрес, 1');
+  // F6: startDate is part of the restricted whitelist alongside the other fields.
+  await dialog.getByLabel('Дата начала', { exact: true }).fill('2000-01-01');
   await dialog.getByRole('button', { name: 'Сохранить', exact: true }).click();
   await expect(dialog).toHaveCount(0);
   await expect(page.getByRole('heading', { name: newName, exact: true })).toBeVisible();
   await expect(page.locator('.page-heading')).toContainText('Новый адрес, 1');
+  await page.getByRole('tab', { name: 'Обзор', exact: true }).click();
+  await expect(page.locator('.ant-descriptions-item-label', { hasText: 'Плановый старт' }).locator('xpath=following-sibling::td[1]')).toContainText('01.01.2000');
   await page.screenshot({ path: info.outputPath('object-edited.png'), fullPage: true });
 
   // contractValue and status are not editable through this form at all.
