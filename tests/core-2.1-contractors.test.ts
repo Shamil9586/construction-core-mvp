@@ -184,6 +184,25 @@ test('Core 2.1: contractor management (assign/remove/reassign), active read mode
         await req(`objects/${o.id}`, undefined, 403);
         await login('PROJECT_MANAGER');
 
+        // --- F2: progress() must not reactivate a COMPLETED work whose contractor
+        // was removed (target is fully removed from `o` at this point — relations
+        // A and B above were both removed). Correcting `work`'s fact downward would
+        // otherwise flip it back to ACTIVE with no active contractor assignment. ---
+        const beforeReactivationAttempt = await req(`works/${work.id}`);
+        assert.equal(beforeReactivationAttempt.status, 'COMPLETED');
+        const reactivationAttempt = await req(`works/${work.id}/progress`, { totalQuantity: 5, version: beforeReactivationAttempt.version, comment: 'Откат факта после снятия подрядчика' }, 409);
+        assert.match(reactivationAttempt.message, /Подрядчик больше не назначен на объект/);
+        const afterReactivationAttempt = await req(`works/${work.id}`);
+        assert.equal(afterReactivationAttempt.status, 'COMPLETED', 'work must remain COMPLETED — no partial reactivation');
+        assert.equal(afterReactivationAttempt.version, beforeReactivationAttempt.version, 'version must not advance on a rejected reactivation attempt');
+        assert.equal(afterReactivationAttempt.actualQuantity, beforeReactivationAttempt.actualQuantity, 'actual quantity must not partially change on a rejected reactivation attempt');
+
+        // Reassign the same contractor -> the same downward correction is now allowed
+        const relationC = await req(`objects/${o.id}/contractors`, { contractorId: target.id });
+        assert.equal(relationC.removedAt, null);
+        const reactivated = await req(`works/${work.id}/progress`, { totalQuantity: 5, version: afterReactivationAttempt.version, comment: 'Откат факта после повторного назначения подрядчика' });
+        assert.equal(reactivated.status, 'ACTIVE', 'reassigned contractor allows the work to become ACTIVE again');
+
         // --- Concurrency invariant: createWork vs removeContractor race on the same
         // object_contractors_active row (both take FOR UPDATE on it) — exactly one of
         // the two must win, and the loser's failure must be consistent with the
@@ -206,6 +225,34 @@ test('Core 2.1: contractor management (assign/remove/reassign), active read mode
         assert.notEqual(createOk, removeOk, 'exactly one of concurrent createWork/removeContractor must succeed, never both or neither: ' + JSON.stringify({ createResult, removeResult }));
         const raceObj = (await req('objects')).find((x: any) => x.id === o.id);
         assert.equal(raceObj.contractorIds.includes(target3.id), createOk, 'contractor active iff createWork won the race (removeContractor must then have lost, and vice versa)');
+
+        // --- F2 concurrency: progress() reactivating a COMPLETED work must serialize
+        // against a concurrent removeContractor on the same object_contractors_active
+        // row — exactly one of the two may win; progress must never reactivate a work
+        // for a contractor removeContractor has just removed, and vice versa. ---
+        await login('ADMIN');
+        const target6 = await req('contractors', { name: 'Core 2.1 progress-remove race contractor ' + randomUUID() });
+        await login('PROJECT_MANAGER');
+        const relation6 = await req(`objects/${o.id}/contractors`, { contractorId: target6.id });
+        const work6 = await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: target6.id, responsibleUserId: pm.id, name: 'Core 2.1 progress-remove race работа', unit: 'т', plannedQuantity: 10, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '1000' });
+        const work6Completed = await req(`works/${work6.id}/progress`, { totalQuantity: 10, version: work6.version, comment: 'Завершено для теста гонки progress/remove' });
+        assert.equal(work6Completed.status, 'COMPLETED');
+        const [progressRaceResult, removeRaceResult] = await Promise.all([
+            fetchJson(`works/${work6.id}/progress`, { totalQuantity: 5, version: work6Completed.version, comment: 'Откат факта в гонке с removeContractor' }),
+            fetchJson(`objects/${o.id}/contractors/${target6.id}/remove`, { relationId: relation6.id, version: relation6.version }),
+        ]);
+        const progressWon = progressRaceResult.status === 201 && removeRaceResult.status === 409;
+        const removeWonRace = progressRaceResult.status === 409 && removeRaceResult.status === 201;
+        assert.ok(progressWon || removeWonRace, 'progress/removeContractor race must resolve to exactly one business-correct outcome, never both/neither/500: ' + JSON.stringify({ progressRaceResult, removeRaceResult }));
+        const work6After = await req(`works/${work6.id}`);
+        const raceObj6 = (await req('objects')).find((x: any) => x.id === o.id);
+        if (progressWon) {
+            assert.equal(work6After.status, 'ACTIVE', 'work reactivated when progress wins the race');
+            assert.ok(raceObj6.contractorIds.includes(target6.id), 'contractor relation remains active — removeContractor lost the race');
+        } else {
+            assert.equal(work6After.status, 'COMPLETED', 'work remains COMPLETED (no partial reactivation) when removeContractor wins the race');
+            assert.ok(!raceObj6.contractorIds.includes(target6.id), 'contractor removed — removeContractor won the race');
+        }
 
         // --- Object Edit: restricted whitelist, partial (only version is required) ---
         const objectBefore = (await req(`objects/${o.id}`)).object;
