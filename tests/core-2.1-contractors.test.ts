@@ -205,8 +205,12 @@ test('Core 2.1: contractor management (assign/remove/reassign), active read mode
 
         // --- Concurrency invariant: createWork vs removeContractor race on the same
         // object_contractors_active row (both take FOR UPDATE on it) — exactly one of
-        // the two must win, and the loser's failure must be consistent with the
-        // winner's committed state (never "work exists for a removed contractor").
+        // the two must win, and the loser's failure must be a specific, expected
+        // business rejection, never a 500 and never "both succeeded"/"both failed".
+        // F3 corrective: a plain NestJS @Post has no @HttpCode override, so its
+        // default success status is 201, not 200 — removeContractor is no exception.
+        // The original `removeResult.status === 200` check made removeOk permanently
+        // false and reduced this test to "createWork always looks like it won".
         // Note: under DB_MODE=pglite, localPool()'s connect() holds a single global
         // mutex for a transaction's whole lifetime, so the two requests below are
         // already fully serialized before either query runs — this proves the
@@ -221,10 +225,18 @@ test('Core 2.1: contractor management (assign/remove/reassign), active read mode
             fetchJson('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: target3.id, responsibleUserId: pm.id, name: 'Core 2.1 concurrency работа', unit: 'т', plannedQuantity: 1, plannedStartDate: dt(-1), plannedFinishDate: dt(10), estimatedCost: '1000' }),
             fetchJson(`objects/${o.id}/contractors/${target3.id}/remove`, { relationId: relation3.id, version: relation3.version }),
         ]);
-        const createOk = createResult.status === 201, removeOk = removeResult.status === 200;
-        assert.notEqual(createOk, removeOk, 'exactly one of concurrent createWork/removeContractor must succeed, never both or neither: ' + JSON.stringify({ createResult, removeResult }));
+        const createWon = createResult.status === 201 && removeResult.status === 409;
+        const removeWon = createResult.status === 400 && removeResult.status === 201;
+        assert.ok(createWon || removeWon, 'race must resolve to exactly one business-correct outcome pair (create=201/remove=409 or create=400/remove=201), never both/neither/500: ' + JSON.stringify({ createResult, removeResult }));
         const raceObj = (await req('objects')).find((x: any) => x.id === o.id);
-        assert.equal(raceObj.contractorIds.includes(target3.id), createOk, 'contractor active iff createWork won the race (removeContractor must then have lost, and vice versa)');
+        if (createWon) {
+            assert.ok(raceObj.contractorIds.includes(target3.id), 'active relation remains when createWork wins the race');
+            const created = await req(`works/${createResult.data.id}`);
+            assert.ok(['PLANNED', 'ACTIVE'].includes(created.status), 'created work is PLANNED/ACTIVE when createWork wins the race');
+        } else {
+            assert.ok(!raceObj.contractorIds.includes(target3.id), 'relation removed when removeContractor wins the race');
+            assert.match(createResult.data.message, /Субподрядчик не назначен на объект/, 'createWork rejection message when removeContractor wins the race');
+        }
 
         // --- F2 concurrency: progress() reactivating a COMPLETED work must serialize
         // against a concurrent removeContractor on the same object_contractors_active
@@ -253,6 +265,24 @@ test('Core 2.1: contractor management (assign/remove/reassign), active read mode
             assert.equal(work6After.status, 'COMPLETED', 'work remains COMPLETED (no partial reactivation) when removeContractor wins the race');
             assert.ok(!raceObj6.contractorIds.includes(target6.id), 'contractor removed — removeContractor won the race');
         }
+
+        // --- F3: deterministic sequential coverage of both business outcomes. A fully
+        // controlled interleaving order isn't available without production test hooks,
+        // which are out of scope here — these prove each outcome the race above allows
+        // is individually reachable end-to-end through the real endpoints. ---
+        await login('ADMIN');
+        const target4 = await req('contractors', { name: 'Core 2.1 sequential remove-wins contractor ' + randomUUID() });
+        const target5 = await req('contractors', { name: 'Core 2.1 sequential create-wins contractor ' + randomUUID() });
+        await login('PROJECT_MANAGER');
+        // remove-wins order: remove completes first, createWork then sees no active relation
+        const relation4 = await req(`objects/${o.id}/contractors`, { contractorId: target4.id });
+        await req(`objects/${o.id}/contractors/${target4.id}/remove`, { relationId: relation4.id, version: relation4.version });
+        const removeWinsCreate = await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: target4.id, responsibleUserId: pm.id, name: 'Core 2.1 remove-wins order', unit: 'т', plannedQuantity: 1, plannedStartDate: dt(-1), plannedFinishDate: dt(10), estimatedCost: '1000' }, 400);
+        assert.match(removeWinsCreate.message, /Субподрядчик не назначен на объект/);
+        // create-wins order: createWork completes first, removeContractor then sees a blocking PLANNED work
+        const relation5 = await req(`objects/${o.id}/contractors`, { contractorId: target5.id });
+        await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: target5.id, responsibleUserId: pm.id, name: 'Core 2.1 create-wins order', unit: 'т', plannedQuantity: 1, plannedStartDate: dt(-1), plannedFinishDate: dt(10), estimatedCost: '1000' });
+        await req(`objects/${o.id}/contractors/${target5.id}/remove`, { relationId: relation5.id, version: relation5.version }, 409);
 
         // --- Object Edit: restricted whitelist, partial (only version is required) ---
         const objectBefore = (await req(`objects/${o.id}`)).object;
