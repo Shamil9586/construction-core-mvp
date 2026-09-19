@@ -93,8 +93,9 @@ test('Core 2.1: contractor management (assign/remove/reassign), active read mode
         assert.ok(snap.works.some((w: any) => w.id === work.id), 'work visible before remove');
         await login('PROJECT_MANAGER');
 
-        // --- Active-work guard blocks target2; target (only a COMPLETED work) can be removed ---
-        await req(`objects/${o.id}/contractors/${target2.id}/remove`, { version: relation2.version }, 400);
+        // --- Active-work guard blocks target2 (409, per docs/core-2.1-architecture-plan.md:95);
+        // target (only a COMPLETED work) can be removed ---
+        await req(`objects/${o.id}/contractors/${target2.id}/remove`, { version: relation2.version }, 409);
         const removed = await req(`objects/${o.id}/contractors/${target.id}/remove`, { version: relation.version });
         assert.ok(removed.removedAt);
         assert.equal(removed.removedBy, pm.id);
