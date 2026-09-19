@@ -158,6 +158,29 @@ test('Core 2.1: contractor management (assign/remove/reassign), active read mode
         assert.ok(objAfterReassign.contractorIds.includes(target.id), 'reassigned contractor back in active projection');
         assert.ok((await req(`objects?contractorId=${target.id}`)).some((x: any) => x.id === o.id), 'contractorId filter includes object again after reassign');
 
+        // --- Concurrency invariant: createWork vs removeContractor race on the same
+        // object_contractors_active row (both take FOR UPDATE on it) — exactly one of
+        // the two must win, and the loser's failure must be consistent with the
+        // winner's committed state (never "work exists for a removed contractor").
+        // Note: under DB_MODE=pglite, localPool()'s connect() holds a single global
+        // mutex for a transaction's whole lifetime, so the two requests below are
+        // already fully serialized before either query runs — this proves the
+        // end-state invariant either way, but only a real Postgres run
+        // (E2E_DATABASE_URL) exercises genuine concurrent-connection locking.
+        await login('ADMIN');
+        const target3 = await req('contractors', { name: 'Core 2.1 concurrency contractor ' + randomUUID() });
+        await login('PROJECT_MANAGER');
+        const relation3 = await req(`objects/${o.id}/contractors`, { contractorId: target3.id });
+        const fetchJson = (path: string, body: any) => fetch(base + '/' + path, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: JSON.stringify(body) }).then(async r => ({ status: r.status, data: await r.json() }));
+        const [createResult, removeResult] = await Promise.all([
+            fetchJson('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: target3.id, responsibleUserId: pm.id, name: 'Core 2.1 concurrency работа', unit: 'т', plannedQuantity: 1, plannedStartDate: dt(-1), plannedFinishDate: dt(10), estimatedCost: '1000' }),
+            fetchJson(`objects/${o.id}/contractors/${target3.id}/remove`, { version: relation3.version }),
+        ]);
+        const createOk = createResult.status === 201, removeOk = removeResult.status === 200;
+        assert.notEqual(createOk, removeOk, 'exactly one of concurrent createWork/removeContractor must succeed, never both or neither: ' + JSON.stringify({ createResult, removeResult }));
+        const raceObj = (await req('objects')).find((x: any) => x.id === o.id);
+        assert.equal(raceObj.contractorIds.includes(target3.id), createOk, 'contractor active iff createWork won the race (removeContractor must then have lost, and vice versa)');
+
         // --- Object Edit: restricted whitelist, partial (only version is required) ---
         const objectBefore = (await req(`objects/${o.id}`)).object;
 
