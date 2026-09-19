@@ -39,7 +39,7 @@ export class ObjectsController {
     @Req()
     r: any,
     @Param('id')
-    id: string) { const a = await authenticate(r); await objectAccess(pool, a, V.uuid.parse(id)); return rows(pool, 'SELECT oc.*,c.name AS contractor_name FROM object_contractors oc JOIN contractors c ON c.id=oc.contractor_id AND c.tenant_id=oc.tenant_id WHERE oc.tenant_id=$1 AND oc.object_id=$2 AND oc.removed_at IS NULL ORDER BY c.name', [a.tenantId, id]); }
+    id: string) { const a = await authenticate(r); await objectAccess(pool, a, V.uuid.parse(id)); return rows(pool, 'SELECT oc.*,c.name AS contractor_name FROM object_contractors_active oc JOIN contractors c ON c.id=oc.contractor_id AND c.tenant_id=oc.tenant_id WHERE oc.tenant_id=$1 AND oc.object_id=$2 ORDER BY c.name', [a.tenantId, id]); }
     @Post('objects/:id/contractors')
     async assignContractor(
     @Req()

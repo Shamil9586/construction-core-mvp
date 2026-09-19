@@ -26,7 +26,7 @@ export async function scoped(c: any, table: string, id: string, a: Actor, lock =
     throw Error('table'); const row = await one(c, `SELECT * FROM ${table} WHERE tenant_id=$1 AND id=$2 ${lock ? 'FOR UPDATE' : ''}`, [a.tenantId, id]); if (!row)
     throw new NotFoundException('Запись не найдена'); return row; }
 export async function objectAccess(c: any, a: Actor, objectId: string, write = false) { const o = await scoped(c, 'objects', objectId, a); if (a.role === 'PROJECT_MANAGER' && o.projectManagerId !== a.id)
-    throw new ForbiddenException('Объект закреплён за другим РП'); if (a.role === 'CONTRACTOR_VIEWER' && (!a.contractorId || !(await one(c, 'SELECT id FROM object_contractors WHERE tenant_id=$1 AND object_id=$2 AND contractor_id=$3 AND removed_at IS NULL', [a.tenantId, objectId, a.contractorId]))))
+    throw new ForbiddenException('Объект закреплён за другим РП'); if (a.role === 'CONTRACTOR_VIEWER' && (!a.contractorId || !(await one(c, 'SELECT id FROM object_contractors_active WHERE tenant_id=$1 AND object_id=$2 AND contractor_id=$3', [a.tenantId, objectId, a.contractorId]))))
     throw new ForbiddenException('Нет доступа к объекту'); return o; }
 export async function audit(c: any, a: Actor, entityType: string, entityId: string, action: string, oldValue: any, newValue: any, eventType?: string) { await insert(c, 'audit_logs', a.tenantId, { userId: a.id, entityType, entityId, action, oldValue: oldValue ? JSON.stringify(oldValue) : null, newValue: JSON.stringify(newValue) }); if (eventType) {
     const event = await insert(c, 'domain_events', a.tenantId, { eventType, entityId, payload: JSON.stringify({ actorId: a.id, entityType, entityId }) });

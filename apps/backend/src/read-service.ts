@@ -10,15 +10,16 @@ export class ReadService {
         const t = a.tenantId;
         const params: any[] = [t]; let objectFilter = '';
         if (a.role === 'PROJECT_MANAGER') { params.push(a.id); objectFilter += ` AND o.project_manager_id=$${params.length}`; }
-        if (a.role === 'CONTRACTOR_VIEWER') { params.push(a.contractorId ?? null); objectFilter += ` AND EXISTS(SELECT 1 FROM object_contractors oc WHERE oc.tenant_id=o.tenant_id AND oc.object_id=o.id AND oc.contractor_id=$${params.length} AND oc.removed_at IS NULL)`; }
-        if (filters.contractorId) { params.push(filters.contractorId); objectFilter += ` AND EXISTS(SELECT 1 FROM object_contractors oc2 WHERE oc2.tenant_id=o.tenant_id AND oc2.object_id=o.id AND oc2.contractor_id=$${params.length} AND oc2.removed_at IS NULL)`; }
+        if (a.role === 'CONTRACTOR_VIEWER') { params.push(a.contractorId ?? null); objectFilter += ` AND EXISTS(SELECT 1 FROM object_contractors_active oc WHERE oc.tenant_id=o.tenant_id AND oc.object_id=o.id AND oc.contractor_id=$${params.length})`; }
+        if (filters.contractorId) { params.push(filters.contractorId); objectFilter += ` AND EXISTS(SELECT 1 FROM object_contractors_active oc2 WHERE oc2.tenant_id=o.tenant_id AND oc2.object_id=o.id AND oc2.contractor_id=$${params.length})`; }
         const objects = await rows(pool, 'SELECT o.*,u.name AS responsible FROM objects o JOIN users u ON u.tenant_id=o.tenant_id AND u.id=o.project_manager_id WHERE o.tenant_id=$1' + objectFilter + ' ORDER BY o.name', params);
         const ids = objects.map(o => o.id);
-        // Active object_contractors (removed_at IS NULL) — current assignment, used for
-        // objectList.contractorIds/contractors below. Distinct from works.contractor_id
-        // (historical/actual attribution) and from CONTRACTOR_VIEWER's own-work filter
-        // above, which is unaffected by this and stays keyed off works directly.
-        const activeAssignments = await rows(pool, 'SELECT oc.object_id,oc.contractor_id,c.name AS contractor_name FROM object_contractors oc JOIN contractors c ON c.id=oc.contractor_id AND c.tenant_id=oc.tenant_id WHERE oc.tenant_id=$1 AND oc.object_id=ANY($2::uuid[]) AND oc.removed_at IS NULL', [t, ids]);
+        // Active object_contractors (object_contractors_active — единый read source,
+        // infra/005) — current assignment, used for objectList.contractorIds/
+        // contractors below. Distinct from works.contractor_id (historical/actual
+        // attribution) and from CONTRACTOR_VIEWER's own-work filter above, which is
+        // unaffected by this and stays keyed off works directly.
+        const activeAssignments = await rows(pool, 'SELECT oc.object_id,oc.contractor_id,c.name AS contractor_name FROM object_contractors_active oc JOIN contractors c ON c.id=oc.contractor_id AND c.tenant_id=oc.tenant_id WHERE oc.tenant_id=$1 AND oc.object_id=ANY($2::uuid[])', [t, ids]);
         const works = await rows(pool, `SELECT w.*,t.requires_inspection,t.requires_materials,t.category_id,c.name AS contractor,u.name AS responsible,(SELECT max(reported_at) FROM work_progress p WHERE p.tenant_id=w.tenant_id AND p.object_work_id=w.id) AS last_reported_at FROM works w JOIN work_types t ON t.id=w.work_type_id AND t.tenant_id=w.tenant_id JOIN contractors c ON c.id=w.contractor_id AND c.tenant_id=w.tenant_id JOIN users u ON u.id=w.responsible_user_id AND u.tenant_id=w.tenant_id WHERE w.tenant_id=$1 AND w.object_id=ANY($2::uuid[]) ${a.role === 'CONTRACTOR_VIEWER' ? 'AND w.contractor_id=$3' : ''} ORDER BY w.planned_start_date,w.name`, a.role === 'CONTRACTOR_VIEWER' ? [t, ids, a.contractorId ?? null] : [t, ids]);
         const inspections = await rows(pool, 'SELECT * FROM inspections WHERE tenant_id=$1 AND object_id=ANY($2::uuid[]) ORDER BY created_at DESC', [t, ids]);
         const issues = await rows(pool, 'SELECT x.*,i.object_id,i.object_work_id,u.name AS responsible FROM issues x JOIN inspections i ON i.id=x.inspection_id AND i.tenant_id=x.tenant_id JOIN users u ON u.id=x.responsible_user_id AND u.tenant_id=x.tenant_id WHERE x.tenant_id=$1 AND i.object_id=ANY($2::uuid[])', [t, ids]);
