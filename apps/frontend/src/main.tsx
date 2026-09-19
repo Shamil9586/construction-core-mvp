@@ -196,8 +196,9 @@ function App() {
         // this off currently-active relation ids would make removed-relation history
         // disappear again. audit_logs already stores the relation's objectId inside
         // oldValue/newValue (F4 corrective) — match on that instead, one source of
-        // truth (audit_logs), no new endpoint.
-        const objectHistory = (auditQ.data ?? []).filter((a: any) => relatedHistoryIds.has(a.entityId) || (a.entityType === 'ObjectContractor' && [a.oldValue, a.newValue].some((v: any) => { try { return v && JSON.parse(v).objectId === id; } catch { return false; } })));
+        // truth (audit_logs), no new endpoint. old_value/new_value are jsonb columns;
+        // the API already returns them parsed (pg auto-parses jsonb), not as strings.
+        const objectHistory = (auditQ.data ?? []).filter((a: any) => relatedHistoryIds.has(a.entityId) || (a.entityType === 'ObjectContractor' && [a.oldValue, a.newValue].some((v: any) => v?.objectId === id)));
         return <><Link to="/objects">← Все объекты</Link><div className="page-heading"><div><h1>{o.name}</h1><p>{o.externalCode} · {o.address}</p><p>РП: {o.responsible} · {o.contractors.join(', ')}</p></div><Health value={o.healthStatus}/></div><div className="kpi-grid">{[['Факт / план', pct(o.actualProgress) + ' / ' + pct(o.plannedProgress)], ['Стоимость', money(o.contractValue)], ['Закрыто', money(o.closed)], ['Потенциал', money(o.potential)]].map(([label, value]) => <Card key={label}><small>{label}</small><h2>{value}</h2></Card>)}</div><WorkChain data={d} works={works}/><Tabs activeKey={objectTab} onChange={setObjectTab} items={[
             { key: 'overview', label: 'Обзор', children: <Card><Descriptions column={2} size="small" bordered>
                 <Descriptions.Item label="Статус"><Status value={o.status}/></Descriptions.Item>

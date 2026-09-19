@@ -52,8 +52,13 @@ test('Core 2.1: assign/remove contractor on object card, ContractorPanel members
   await panel.getByLabel('Субподрядчик', { exact: true }).selectOption({ label: addedName });
   await expect(panel.locator('.portfolio-object', { hasText: objectName })).toHaveCount(0);
 
-  // Reassign — object rejoins that contractor's group
-  await page.getByRole('link', { name: objectName, exact: true }).first().click();
+  // Reassign — object rejoins that contractor's group. Navigate via the objects
+  // grid, not a link on the current page: the ContractorPanel is still filtered
+  // to `addedName`, and the object was just confirmed absent from that filtered
+  // view (line above) — there is no longer a link with objectName on this page.
+  await page.getByRole('link', { name: 'Объекты', exact: true }).click();
+  await page.locator('.objects-grid .object-card h2', { hasText: objectName }).click();
+  await expect(page.getByRole('heading', { name: objectName, exact: true })).toBeVisible();
   await page.getByRole('tab', { name: 'Обзор', exact: true }).click();
   await page.getByRole('button', { name: 'Добавить подрядчика', exact: true }).click();
   await dialog.getByLabel('Субподрядчик', { exact: true }).selectOption({ label: addedName });
