@@ -8,13 +8,18 @@ export const objectContractorDto = z.object({ contractorId: uuid }).strict();
 // but the relation `id` (and its version) are not. See removeContractor() in
 // service.ts.
 export const removeContractorDto = z.object({ relationId: uuid, version }).strict();
-// Core 2.1 restricted Object Edit whitelist (docs/core-2.1-architecture-plan.md):
-// name/address/customerName/plannedFinishDate/projectManagerId only. contractValue,
-// status and contractor assignments are deliberately absent — .strict() rejects them.
-// Partial: every field but version is optional — an omitted field is left unchanged
-// by editObject(), not cleared. projectManagerId's mere presence (any value, changed
-// or not) requires TECHNICAL_DIRECTOR/ADMIN; see editObject() in service.ts.
-export const objectEditDto = z.object({ name: text.optional(), address: text.optional(), customerName: text.optional(), plannedFinishDate: date.optional(), projectManagerId: uuid.optional(), version }).strict();
+// Core 2.1 restricted Object Edit whitelist (docs/core-2.1-architecture-plan.md,
+// F6 corrective — startDate was part of the originally approved whitelist and had
+// been incompletely carried into baseline docs/an earlier pass; restored here, not
+// new scope): name/address/customerName/startDate/plannedFinishDate/
+// projectManagerId only. contractValue, status and contractor assignments are
+// deliberately absent — .strict() rejects them. Partial: every field but version
+// is optional — an omitted field is left unchanged by editObject(), not cleared.
+// At least one editable field besides version is required (a version-only body is
+// a no-op edit, rejected rather than silently accepted). projectManagerId's mere
+// presence (any value, changed or not) requires TECHNICAL_DIRECTOR/ADMIN; see
+// editObject() in service.ts.
+export const objectEditDto = z.object({ name: text.optional(), address: text.optional(), customerName: text.optional(), startDate: date.optional(), plannedFinishDate: date.optional(), projectManagerId: uuid.optional(), version }).strict().refine(d => Object.keys(d).length > 1, 'Нужно изменить хотя бы одно поле');
 export const workDto = z.object({ objectId: uuid, workTypeId: uuid, contractorId: uuid, responsibleUserId: uuid, name: text, unit: text, plannedQuantity: qty.refine(v => Number(v) > 0), plannedStartDate: date, plannedFinishDate: date, estimatedCost: money }).strict();
 export const progressDto = z.object({ totalQuantity: qty, version, comment: text }).strict();
 export const issueDto = z.object({ title: text, description: text.optional(), severity: z.enum(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']), responsibleUserId: uuid, dueDate: date, version }).strict();

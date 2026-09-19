@@ -305,24 +305,50 @@ test('Core 2.1: contractor management (assign/remove/reassign), active read mode
         assert.equal(partial.address, edited.address, 'omitted address preserved by partial edit');
         assert.equal(partial.plannedFinishDate, edited.plannedFinishDate, 'omitted plannedFinishDate preserved by partial edit');
 
+        // --- F6: startDate is part of the restricted whitelist (an owner decision
+        // incompletely carried into baseline docs, not new scope) — partial edits on
+        // either date alone, or both together, must respect the merged
+        // effective-date invariant (effectivePlannedFinishDate >= effectiveStartDate). ---
+        const startDateOnly = await req(`objects/${o.id}/edit`, { startDate: dt(-3), version: partial.version });
+        assert.equal(startDateOnly.startDate, dt(-3));
+        assert.equal(startDateOnly.plannedFinishDate, partial.plannedFinishDate, 'omitted plannedFinishDate preserved when only startDate changes');
+
+        const finishDateOnly = await req(`objects/${o.id}/edit`, { plannedFinishDate: dt(95), version: startDateOnly.version });
+        assert.equal(finishDateOnly.plannedFinishDate, dt(95));
+        assert.equal(finishDateOnly.startDate, dt(-3), 'omitted startDate preserved when only plannedFinishDate changes');
+
+        const bothDates = await req(`objects/${o.id}/edit`, { startDate: dt(-2), plannedFinishDate: dt(100), version: finishDateOnly.version });
+        assert.equal(bothDates.startDate, dt(-2));
+        assert.equal(bothDates.plannedFinishDate, dt(100));
+
+        // New startDate later than the (omitted, existing) plannedFinishDate -> 400
+        await req(`objects/${o.id}/edit`, { startDate: dt(200), version: bothDates.version }, 400);
+        // New plannedFinishDate earlier than the (omitted, existing) startDate -> 400
+        await req(`objects/${o.id}/edit`, { plannedFinishDate: dt(-10), version: bothDates.version }, 400);
+        // A version-only body is a no-op edit — rejected, not silently accepted
+        await req(`objects/${o.id}/edit`, { version: bothDates.version }, 400);
+        // An unknown field is rejected by .strict(), same as contractValue/status below
+        await req(`objects/${o.id}/edit`, { name: bothDates.name, version: bothDates.version, unknownField: 'x' }, 400);
+
         // contractValue/status are not in the whitelist — .strict() rejects them outright
-        await req(`objects/${o.id}/edit`, { name: partial.name, version: partial.version, contractValue: '1' }, 400);
-        await req(`objects/${o.id}/edit`, { name: partial.name, version: partial.version, status: 'ARCHIVED' }, 400);
+        await req(`objects/${o.id}/edit`, { name: bothDates.name, version: bothDates.version, contractValue: '1' }, 400);
+        await req(`objects/${o.id}/edit`, { name: bothDates.name, version: bothDates.version, status: 'ARCHIVED' }, 400);
 
         // PROJECT_MANAGER cannot reassign projectManagerId, even on their own object —
         // presence of the key is what's rejected (403), regardless of the value inside
         const users = await req('users');
         const otherPm = users.find((u: any) => u.role === 'PROJECT_MANAGER' && u.id !== pm.id);
-        await req(`objects/${o.id}/edit`, { projectManagerId: otherPm.id, version: partial.version }, 403);
+        await req(`objects/${o.id}/edit`, { projectManagerId: otherPm.id, version: bothDates.version }, 403);
 
         // TECHNICAL_DIRECTOR can reassign it
         await login('TECHNICAL_DIRECTOR');
-        const reassignedPm = await req(`objects/${o.id}/edit`, { projectManagerId: otherPm.id, version: partial.version });
+        const reassignedPm = await req(`objects/${o.id}/edit`, { projectManagerId: otherPm.id, version: bothDates.version });
         assert.equal(reassignedPm.projectManagerId, otherPm.id);
-        assert.equal(reassignedPm.name, partial.name, 'omitted fields preserved on a privileged partial edit too');
+        assert.equal(reassignedPm.name, bothDates.name, 'omitted fields preserved on a privileged partial edit too');
+        assert.equal(reassignedPm.startDate, bothDates.startDate, 'omitted startDate preserved on a privileged partial edit too');
 
         // Stale version -> 409 (checkVersion, same convention as every other mutating endpoint)
-        await req(`objects/${o.id}/edit`, { projectManagerId: otherPm.id, version: partial.version }, 409);
+        await req(`objects/${o.id}/edit`, { projectManagerId: otherPm.id, version: bothDates.version }, 409);
 
         console.log('CORE 2.1 VERIFIED: assign, remove (+active-work guard, +404 repeat), reassign, CONTRACTOR_VIEWER work-access ripple, active read model, restricted Object Edit');
     }

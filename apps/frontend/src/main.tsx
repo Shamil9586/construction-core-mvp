@@ -217,6 +217,7 @@ function App() {
                 { name: 'name', label: 'Название', value: o.name },
                 { name: 'address', label: 'Адрес', value: o.address },
                 { name: 'customerName', label: 'Заказчик', value: o.customerName ?? '', optional: true },
+                { name: 'startDate', label: 'Дата начала', type: 'date', value: o.startDate },
                 { name: 'plannedFinishDate', label: 'Плановое завершение', type: 'date', value: o.plannedFinishDate },
                 ...(can('TECHNICAL_DIRECTOR') ? [{ name: 'projectManagerId', label: 'Руководитель проекта', options: opts(users.data?.filter((u: any) => u.role === 'PROJECT_MANAGER')), value: o.projectManagerId }] : []),
               ], { version: o.version })}>Редактировать объект</Button>}</Card> },
