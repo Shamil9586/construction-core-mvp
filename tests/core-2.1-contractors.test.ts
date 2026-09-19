@@ -19,7 +19,7 @@ test('Core 2.1: contractor management (assign/remove/reassign), active read mode
             throw Error('E2E database name must end with _test');
         process.env.DATABASE_URL = process.env.E2E_DATABASE_URL;
     }
-    const { pool } = await import('../apps/backend/src/db');
+    const { pool, insert, one } = await import('../apps/backend/src/db');
     const { seed } = await import('../scripts/seed');
     const { createApp } = await import('../apps/backend/src/main');
     const { migrate } = await import('../scripts/migrate');
@@ -349,6 +349,42 @@ test('Core 2.1: contractor management (assign/remove/reassign), active read mode
 
         // Stale version -> 409 (checkVersion, same convention as every other mutating endpoint)
         await req(`objects/${o.id}/edit`, { projectManagerId: otherPm.id, version: bothDates.version }, 409);
+
+        // --- F7: tenant isolation hardening. A random/unknown UUID (already covered
+        // above, e.g. the assign-to-unknown-object 404 case) only proves scoped()'s
+        // not-found path — it doesn't prove a REAL row belonging to a different
+        // tenant is rejected. Build a genuine second tenant with its own real
+        // object/contractor/relation and confirm every Core 2.1 contractor-management
+        // path denies it the same generic way (no tenant-B data leaked in the 404). ---
+        const tenantB = await one(pool, "INSERT INTO tenants(portal,member_id,name) VALUES($1,$2,$3) RETURNING *", ['core-2-1-tenant-b-' + randomUUID() + '.local', 'core-2-1-tenant-b-' + randomUUID(), 'Core 2.1 Tenant B']);
+        const pmB = await insert(pool, 'users', tenantB.id, { bitrixUserId: 'core-2-1-tenant-b-pm', name: 'Core 2.1 Tenant B PM', role: 'PROJECT_MANAGER' });
+        const contractorB = await insert(pool, 'contractors', tenantB.id, { name: 'Core 2.1 Tenant B contractor' });
+        const objectB = await insert(pool, 'objects', tenantB.id, { externalCode: 'B-' + randomUUID(), name: 'Core 2.1 Tenant B объект', address: 'Tenant B, 1', organizationName: 'Tenant B Org', projectManagerId: pmB.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000' });
+        const relationB = await insert(pool, 'object_contractors', tenantB.id, { objectId: objectB.id, contractorId: contractorB.id });
+
+        await login('PROJECT_MANAGER');
+        // assign onto a foreign-tenant object -> denied, same generic not-found as any other missing record
+        const assignCrossTenant = await req(`objects/${objectB.id}/contractors`, { contractorId: contractorB.id }, 404);
+        assert.match(assignCrossTenant.message, /Запись не найдена/);
+        // remove a foreign-tenant relation -> denied
+        const removeCrossTenant = await req(`objects/${objectB.id}/contractors/${contractorB.id}/remove`, { relationId: relationB.id, version: relationB.version }, 404);
+        assert.match(removeCrossTenant.message, /Запись не найдена/);
+        // edit a foreign-tenant object -> denied
+        const editCrossTenant = await req(`objects/${objectB.id}/edit`, { name: 'hijacked', version: objectB.version }, 404);
+        assert.match(editCrossTenant.message, /Запись не найдена/);
+
+        // relationId from tenant B cannot be reused against a REAL, active tenant-A
+        // object+contractor pair — removeContractor must not match across tenants,
+        // and tenant A's own active relation must survive the attempt untouched.
+        await login('ADMIN');
+        const contractorA7 = await req('contractors', { name: 'Core 2.1 tenant-isolation contractor A ' + randomUUID() });
+        await login('PROJECT_MANAGER');
+        const objectA7 = await req('objects', { externalCode: 'C21-TI-' + randomUUID(), name: 'Core 2.1 tenant-isolation объект A', address: 'Тестовая, 22', organizationName: 'ООО Тест', projectManagerId: pm.id, startDate: dt(-1), plannedFinishDate: dt(30), contractValue: '1', contractorIds: [placeholder.id] });
+        const relationA7 = await req(`objects/${objectA7.id}/contractors`, { contractorId: contractorA7.id });
+        const crossTenantRelationId = await req(`objects/${objectA7.id}/contractors/${contractorA7.id}/remove`, { relationId: relationB.id, version: relationA7.version }, 404);
+        assert.match(crossTenantRelationId.message, /Активное назначение подрядчика не найдено/);
+        const stillActive = (await req('objects')).find((x: any) => x.id === objectA7.id);
+        assert.ok(stillActive.contractorIds.includes(contractorA7.id), 'tenant A relation remains active after a cross-tenant relationId attempt');
 
         console.log('CORE 2.1 VERIFIED: assign, remove (+active-work guard, +404 repeat), reassign, CONTRACTOR_VIEWER work-access ripple, active read model, restricted Object Edit');
     }
