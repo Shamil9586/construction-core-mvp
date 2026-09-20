@@ -84,8 +84,24 @@ test('производственный цикл через интерфейс и
   await row('Защитный слой арматуры').getByRole('button', { name: 'Проверить устранение' }).click();
   await tab('Строительный контроль');
   await expect(row('Защитный слой арматуры')).toContainText('Закрыто');
+  const attachmentUpload = page.waitForResponse(response => {
+    const url = new URL(response.url());
+    return response.request().method() === 'POST' && url.pathname === '/api/attachments';
+  });
+  const photoAssociation = page.waitForResponse(response => {
+    const url = new URL(response.url());
+    return response.request().method() === 'POST' && /^\/api\/inspections\/[^/]+\/photos$/.test(url.pathname);
+  });
   await row('Армирование фундамента').locator('input[type=file]').setInputFiles(png);
-  await expect(page.getByText('Сохранено', { exact: true }).last()).toBeVisible();
+  const attachmentResponse = await attachmentUpload;
+  expect(attachmentResponse.status()).toBe(201);
+  const attachmentBody = await attachmentResponse.json();
+  expect(attachmentBody.id).toBeTruthy();
+  const photoResponse = await photoAssociation;
+  expect(photoResponse.status()).toBe(201);
+  const photoBody = await photoResponse.json();
+  expect(photoBody.attachmentId).toBe(attachmentBody.id);
+  expect(new URL(photoResponse.url()).pathname).toBe(`/api/inspections/${photoBody.inspectionId}/photos`);
   await tab('Строительный контроль');
   await row('Армирование фундамента').getByRole('button', { name: 'Принять', exact: true }).click();
   await tab('Строительный контроль');
