@@ -60,14 +60,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p ci-evidence
           ACTUAL="$(git rev-parse HEAD)"
-          printf 'expected=%s\nactual=%s\n' "$CANDIDATE_SHA" "$ACTUAL" | tee ci-evidence/git-identity.txt
           test "$ACTUAL" = "$CANDIDATE_SHA"
           test -z "$(git status --porcelain)"
           test -z "${E2E_BASE_URL:-}"
           test -z "${BROWSER_BASE_URL:-}"
           test -z "${PWDEBUG:-}"
+          EVIDENCE_DIR="$RUNNER_TEMP/core-2.1-ci-evidence"
+          mkdir -p "$EVIDENCE_DIR"
+          printf 'expected=%s\nactual=%s\n' "$CANDIDATE_SHA" "$ACTUAL" | tee "$EVIDENCE_DIR/git-identity.txt"
 
       - name: Set up Node 24
         uses: actions/setup-node@v4
@@ -85,6 +86,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          EVIDENCE_DIR="$RUNNER_TEMP/core-2.1-ci-evidence"
           {
             echo "OS:"
             uname -a
@@ -105,13 +107,14 @@ jobs:
             else
               echo "VITE_CACHE=ABSENT_BEFORE_RUN"
             fi
-          } | tee ci-evidence/environment.txt
+          } | tee "$EVIDENCE_DIR/environment.txt"
 
       - name: Verify fresh PostgreSQL UTF8
         shell: bash
         run: |
           set -euo pipefail
-          node <<'NODE' | tee ci-evidence/db-before.txt
+          EVIDENCE_DIR="$RUNNER_TEMP/core-2.1-ci-evidence"
+          node <<'NODE' | tee "$EVIDENCE_DIR/db-before.txt"
           const { Client } = require('pg');
           (async () => {
             const c = new Client({ connectionString: process.env.DATABASE_URL });
@@ -135,7 +138,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node <<'NODE' | tee ci-evidence/db-after-seed.txt
+          EVIDENCE_DIR="$RUNNER_TEMP/core-2.1-ci-evidence"
+          node <<'NODE' | tee "$EVIDENCE_DIR/db-after-seed.txt"
           const { Client } = require('pg');
           (async () => {
             const c = new Client({ connectionString: process.env.DATABASE_URL });
@@ -154,21 +158,23 @@ jobs:
         shell: bash
         env:
           DEBUG: pw:webserver
-          PLAYWRIGHT_HTML_OUTPUT_DIR: ci-evidence/playwright-report
+          PLAYWRIGHT_HTML_OUTPUT_DIR: ${{ runner.temp }}/core-2.1-ci-evidence/playwright-report
           PLAYWRIGHT_HTML_OPEN: never
-          PLAYWRIGHT_JUNIT_OUTPUT_NAME: ci-evidence/results.xml
+          PLAYWRIGHT_JUNIT_OUTPUT_NAME: ${{ runner.temp }}/core-2.1-ci-evidence/results.xml
         run: |
           set -uo pipefail
-          mkdir -p ci-evidence playwright-results
-          printf '%s\n' 'npx playwright test --workers=1 --retries=0 --trace=on --reporter=list,html,junit --output=playwright-results' > ci-evidence/exact-command.txt
+          EVIDENCE_DIR="$RUNNER_TEMP/core-2.1-ci-evidence"
+          PW_OUTPUT_DIR="$RUNNER_TEMP/core-2.1-playwright-results"
+          mkdir -p "$EVIDENCE_DIR" "$PW_OUTPUT_DIR"
+          printf '%s\n' 'npx playwright test --workers=1 --retries=0 --trace=on --reporter=list,html,junit --output=<RUNNER_TEMP>/core-2.1-playwright-results' > "$EVIDENCE_DIR/exact-command.txt"
           START="$(date +%s)"
           set +e
-          npx playwright test --workers=1 --retries=0 --trace=on --reporter=list,html,junit --output=playwright-results 2>&1 | tee ci-evidence/playwright-console.log
+          npx playwright test --workers=1 --retries=0 --trace=on --reporter=list,html,junit --output="$PW_OUTPUT_DIR" 2>&1 | tee "$EVIDENCE_DIR/playwright-console.log"
           PW_EXIT="${PIPESTATUS[0]}"
           set -e
           END="$(date +%s)"
-          printf '%s\n' "$PW_EXIT" > ci-evidence/playwright-exit-code.txt
-          printf '%s\n' "$((END-START))" > ci-evidence/playwright-duration-seconds.txt
+          printf '%s\n' "$PW_EXIT" > "$EVIDENCE_DIR/playwright-exit-code.txt"
+          printf '%s\n' "$((END-START))" > "$EVIDENCE_DIR/playwright-duration-seconds.txt"
           echo "exit_code=$PW_EXIT" >> "$GITHUB_OUTPUT"
           exit 0
 
@@ -180,9 +186,11 @@ jobs:
           set -euo pipefail
           python3 <<'PY'
           import os, xml.etree.ElementTree as ET
-          path = 'ci-evidence/results.xml'
+          evidence = os.path.join(os.environ['RUNNER_TEMP'], 'core-2.1-ci-evidence')
+          os.makedirs(evidence, exist_ok=True)
+          path = os.path.join(evidence, 'results.xml')
           out = os.environ['GITHUB_OUTPUT']
-          summary = 'ci-evidence/test-counts.txt'
+          summary = os.path.join(evidence, 'test-counts.txt')
           if not os.path.exists(path):
               values = dict(tests='UNKNOWN', failures='UNKNOWN', errors='UNKNOWN', skipped='UNKNOWN')
           else:
@@ -208,7 +216,10 @@ jobs:
           set -euo pipefail
           python3 <<'PY'
           import glob, json, os, zipfile
-          traces = sorted(glob.glob('playwright-results/**/trace.zip', recursive=True))
+          evidence = os.path.join(os.environ['RUNNER_TEMP'], 'core-2.1-ci-evidence')
+          results = os.path.join(os.environ['RUNNER_TEMP'], 'core-2.1-playwright-results')
+          os.makedirs(evidence, exist_ok=True)
+          traces = sorted(glob.glob(os.path.join(results, '**', 'trace.zip'), recursive=True))
           records = 0
           http429 = []
           parse_errors = []
@@ -217,7 +228,7 @@ jobs:
                   with zipfile.ZipFile(trace) as z:
                       members = [n for n in z.namelist() if n.endswith('.network')]
                       if not members:
-                          parse_errors.append(f'{trace}: no .network member')
+                          parse_errors.append(f'{os.path.basename(os.path.dirname(trace))}: no .network member')
                           continue
                       for member in members:
                           for lineno, raw in enumerate(z.read(member).decode('utf-8', errors='replace').splitlines(), 1):
@@ -225,8 +236,8 @@ jobs:
                                   continue
                               try:
                                   obj = json.loads(raw)
-                              except Exception as e:
-                                  parse_errors.append(f'{trace}:{member}:{lineno}: json parse error')
+                              except Exception:
+                                  parse_errors.append(f'{os.path.basename(os.path.dirname(trace))}:{member}:{lineno}: json parse error')
                                   continue
                               if obj.get('type') != 'resource-snapshot':
                                   continue
@@ -243,16 +254,17 @@ jobs:
                                       path = urlsplit(url).path
                                   except Exception:
                                       path = '[unparsed]'
-                                  http429.append({'trace': trace, 'member': member, 'line': lineno, 'method': req.get('method'), 'path': path})
+                                  http429.append({'test_dir': os.path.basename(os.path.dirname(trace)), 'member': member, 'line': lineno, 'method': req.get('method'), 'path': path})
               except Exception as e:
-                  parse_errors.append(f'{trace}: {type(e).__name__}')
+                  parse_errors.append(f'{os.path.basename(os.path.dirname(trace))}: {type(e).__name__}')
           if not traces or parse_errors:
               verdict = 'UNKNOWN'
           elif http429:
               verdict = 'YES'
           else:
               verdict = 'NO'
-          with open('ci-evidence/network-429-evidence.txt', 'w', encoding='utf-8') as f:
+          out_path = os.path.join(evidence, 'network-429-evidence.txt')
+          with open(out_path, 'w', encoding='utf-8') as f:
               f.write(f'trace_archives={len(traces)}\n')
               f.write(f'network_response_records={records}\n')
               f.write(f'parse_errors={len(parse_errors)}\n')
@@ -273,13 +285,15 @@ jobs:
         if: always()
         shell: bash
         run: |
+          EVIDENCE_DIR="$RUNNER_TEMP/core-2.1-ci-evidence"
+          mkdir -p "$EVIDENCE_DIR"
           {
             echo "HEAD=$(git rev-parse HEAD)"
             echo "status:"
             git status --porcelain
             echo "diff-check:"
             git diff --check
-          } | tee ci-evidence/git-final.txt
+          } | tee "$EVIDENCE_DIR/git-final.txt"
 
       - name: Decide independent Linux browser gate
         if: always()
@@ -294,6 +308,8 @@ jobs:
           TRACE_COUNT: ${{ steps.network.outputs.traces }}
         run: |
           set -euo pipefail
+          EVIDENCE_DIR="$RUNNER_TEMP/core-2.1-ci-evidence"
+          mkdir -p "$EVIDENCE_DIR"
           {
             echo "candidate=$CANDIDATE_SHA"
             echo "playwright_exit=${PW_EXIT:-UNKNOWN}"
@@ -303,7 +319,7 @@ jobs:
             echo "skipped=${SKIPPED:-UNKNOWN}"
             echo "trace_archives=${TRACE_COUNT:-UNKNOWN}"
             echo "429=${NETWORK_429:-UNKNOWN}"
-          } | tee ci-evidence/final-verdict.txt
+          } | tee "$EVIDENCE_DIR/final-verdict.txt"
 
           test "${PW_EXIT:-UNKNOWN}" = "0"
           test "${TESTS:-UNKNOWN}" = "5"
@@ -315,7 +331,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
           test -z "$(git status --porcelain)"
 
-          echo "INDEPENDENT LINUX FULL PLAYWRIGHT PASS" | tee -a ci-evidence/final-verdict.txt
+          echo "INDEPENDENT LINUX FULL PLAYWRIGHT PASS" | tee -a "$EVIDENCE_DIR/final-verdict.txt"
 
       - name: Upload Linux verification evidence
         if: always()
@@ -325,5 +341,5 @@ jobs:
           if-no-files-found: error
           retention-days: 14
           path: |
-            ci-evidence/
-            playwright-results/
+            ${{ runner.temp }}/core-2.1-ci-evidence/
+            ${{ runner.temp }}/core-2.1-playwright-results/
