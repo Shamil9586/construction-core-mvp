@@ -1,0 +1,58 @@
+name: Render TEST smoke 122425c
+
+on:
+  push:
+    branches:
+      - verification/bitrix-preflight-122425c
+    paths:
+      - .github/workflows/render-test-smoke-122425c.yml
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: Exact deployed candidate / HTTPS smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Verify Render TEST endpoints
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const checks = [
+            ['api-health', 'https://construction-core-mvpconstruction-core.onrender.com/health', async r => {
+              const j = await r.json();
+              if (j.status !== 'ok' || j.authMode !== 'mock' || j.databaseMode !== 'postgres') throw new Error('unexpected health payload: '+JSON.stringify(j));
+              return j;
+            }],
+            ['api-ready', 'https://construction-core-mvpconstruction-core.onrender.com/ready', async r => {
+              const j = await r.json();
+              if (j.status !== 'ready') throw new Error('unexpected ready payload: '+JSON.stringify(j));
+              return j;
+            }],
+            ['web-root', 'https://construction-core-web.onrender.com/', async r => {
+              const body = await r.text();
+              if (!body.includes('<div id="root"></div>')) throw new Error('frontend root marker missing');
+              return {htmlRoot:true,length:body.length};
+            }],
+            ['web-api-proxy', 'https://construction-core-web.onrender.com/api/health', async r => {
+              const j = await r.json();
+              if (j.status !== 'ok' || j.authMode !== 'mock' || j.databaseMode !== 'postgres') throw new Error('unexpected proxied health payload: '+JSON.stringify(j));
+              return j;
+            }],
+          ];
+          for (const [name,url,validate] of checks) {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 120000);
+            try {
+              const r = await fetch(url,{signal:controller.signal,redirect:'error'});
+              if (!r.ok) throw new Error(name+' HTTP '+r.status);
+              const payload = await validate(r);
+              console.log(name+' PASS '+JSON.stringify(payload));
+            } finally {
+              clearTimeout(timer);
+            }
+          }
+          NODE
