@@ -1,0 +1,61 @@
+name: Bitrix preflight verification
+
+on:
+  push:
+    branches:
+      - verification/bitrix-preflight-122425c
+    paths:
+      - .github/workflows/bitrix-preflight-verification.yml
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Exact 122425c / Node 24
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CANDIDATE_SHA: 122425cc7136af7b9f094007a31e82ee9e7cca6d
+      CI: "true"
+
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          ref: 122425cc7136af7b9f094007a31e82ee9e7cca6d
+          fetch-depth: 1
+
+      - name: Verify exact candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test -z "$(git status --porcelain)"
+          git diff --check
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Run simulated Bitrix contract tests
+        run: node --import tsx --test tests/bitrix-contract.test.ts
+
+      - name: Run full non-browser test suite
+        run: npm test
+
+      - name: Build TypeScript and frontend
+        run: npm run build
+
+      - name: Verify repository unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test -z "$(git status --porcelain)"
+          git diff --check
