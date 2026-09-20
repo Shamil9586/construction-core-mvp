@@ -145,6 +145,10 @@ export async function installBitrix(body: any) {
             await insert(c, 'bitrix_installations', tenant.id, data);
 
         let u = await one(c, 'SELECT * FROM users WHERE tenant_id=$1 AND bitrix_user_id=$2', [tenant.id, String(user.ID)]);
+        // Reinstall must not resurrect a deactivated internal account: fail closed and
+        // roll back rather than issue a session, reactivate or re-grant ADMIN.
+        if (u && u.isActive !== true)
+            throw new UnauthorizedException('Internal administrator account is deactivated');
         if (!u)
             u = await insert(c, 'users', tenant.id, { bitrixUserId: String(user.ID), name: [user.NAME, user.LAST_NAME].filter(Boolean).join(' '), role: 'ADMIN', email: user.EMAIL });
         await c.query('INSERT INTO risk_settings(tenant_id) VALUES($1) ON CONFLICT DO NOTHING', [tenant.id]);
