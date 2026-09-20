@@ -8,7 +8,11 @@ import { defineConfig } from '@playwright/test';
  * is crossed by a full suite run, and the limiter then answers 429 at whatever
  * request happens to be in flight. The E2E environment raises the limit
  * explicitly; the production default is deliberately left untouched.
+ *
+ * All three values are pinned here rather than inherited: a RATE_LIMIT_WINDOW_MS
+ * left over in the shell would otherwise change what the gate measures.
  */
+export const E2E_RATE_LIMIT_WINDOW_MS = '60000';
 export const E2E_RATE_LIMIT_MAX = '2000';
 export const E2E_AUTH_RATE_LIMIT_MAX = '200';
 const externalBaseURL = process.env.E2E_BASE_URL || process.env.BROWSER_BASE_URL;
@@ -20,7 +24,7 @@ export default defineConfig({
   // Against an external deployment the servers are not ours to start, and the
   // rate limit is that environment's configuration.
   webServer: externalBaseURL ? undefined : [
-    { command: 'node --import tsx apps/backend/src/main.ts', url: 'http://127.0.0.1:3001/health', reuseExistingServer: false, timeout: 120000, stdout: 'pipe', env: { RATE_LIMIT_MAX: E2E_RATE_LIMIT_MAX, AUTH_RATE_LIMIT_MAX: E2E_AUTH_RATE_LIMIT_MAX } },
+    { command: 'node --import tsx apps/backend/src/main.ts', url: 'http://127.0.0.1:3001/health', reuseExistingServer: false, timeout: 120000, stdout: 'pipe', env: { RATE_LIMIT_WINDOW_MS: E2E_RATE_LIMIT_WINDOW_MS, RATE_LIMIT_MAX: E2E_RATE_LIMIT_MAX, AUTH_RATE_LIMIT_MAX: E2E_AUTH_RATE_LIMIT_MAX } },
     { command: 'npm run dev:web', url: 'http://127.0.0.1:5173', reuseExistingServer: false, timeout: 120000 },
   ],
 });
