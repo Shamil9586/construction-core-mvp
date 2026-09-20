@@ -1,6 +1,5 @@
 import { BitrixUserProvider, OrganizationProvider, NotificationProvider, TaskProvider, FileStorageProvider } from '../../../packages/domain';
 import { BadRequestException, UnauthorizedException } from '@nestjs/common';
-import { timingSafeEqual } from 'node:crypto';
 import { pool, one, insert, transaction } from './db';
 import { encrypt, decrypt, session, sameSecret } from './security';
 export class MockBitrixAdapter implements BitrixUserProvider, OrganizationProvider, NotificationProvider, TaskProvider, FileStorageProvider {
@@ -33,23 +32,125 @@ export class RealBitrixAdapter implements BitrixUserProvider, OrganizationProvid
         return this.call(method, decrypt(row.encryptedAccessToken), params);
     } }
 }
-export async function bitrixLogin(body: any) { if (process.env.AUTH_MODE !== 'bitrix')
-    throw new UnauthorizedException('Bitrix mode disabled'); const portal = body.DOMAIN ?? body.auth?.domain; const token = body.AUTH_ID ?? body.auth?.access_token; if (portal !== process.env.BITRIX_PORTAL || !token)
-    throw new UnauthorizedException(); const adapter = new RealBitrixAdapter(portal); const current = await adapter.currentUser(token); const user = await one(pool, 'SELECT u.* FROM users u JOIN tenants t ON t.id=u.tenant_id WHERE t.portal=$1 AND u.bitrix_user_id=$2 AND u.is_active=true', [portal, String(current.ID)]); if (!user)
-    throw new UnauthorizedException('Пользователь должен быть назначен администратором приложения'); return session(user); }
-// Administrative install foundation: only the explicitly provisioned test portal/member/admin.
-// Refresh exchange binds submitted credentials to this application's client_id.
-export async function installBitrix(body: any) { if (process.env.AUTH_MODE !== 'bitrix')
-    throw new UnauthorizedException('Bitrix mode disabled'); const portal = body.DOMAIN ?? body.auth?.domain, refresh = body.REFRESH_ID ?? body.auth?.refresh_token; if (portal !== process.env.BITRIX_PORTAL || !refresh || !process.env.BITRIX_MEMBER_ID || !process.env.BITRIX_ADMIN_USER_ID)
-    throw new UnauthorizedException('Portal provisioning required'); const response = await fetch('https://oauth.bitrix.info/oauth/token/', { method: 'POST', body: new URLSearchParams({ grant_type: 'refresh_token', client_id: process.env.BITRIX_CLIENT_ID ?? '', client_secret: process.env.BITRIX_CLIENT_SECRET ?? '', refresh_token: refresh }), redirect: 'error', signal: AbortSignal.timeout(15000) }); const auth: any = await response.json(); if (!response.ok || auth.member_id !== process.env.BITRIX_MEMBER_ID || !auth.access_token || !auth.refresh_token)
-    throw new UnauthorizedException('Installation credentials not verified'); const user = await new RealBitrixAdapter(portal).currentUser(auth.access_token); if (String(user.ID) !== process.env.BITRIX_ADMIN_USER_ID)
-    throw new UnauthorizedException('Only configured app administrator can install'); return transaction(async (c) => { let tenant = await one(c, 'SELECT * FROM tenants WHERE member_id=$1', [auth.member_id]); if (!tenant)
-    tenant = await one(c, 'INSERT INTO tenants(portal,member_id,name) VALUES($1,$2,$3) RETURNING *', [portal, auth.member_id, 'Строительная компания']); if (tenant.portal !== portal)
-    throw new UnauthorizedException(); const data = { portal, memberId: auth.member_id, encryptedAccessToken: encrypt(auth.access_token), encryptedRefreshToken: encrypt(auth.refresh_token), expiresAt: new Date(Date.now() + Number(auth.expires_in) * 1000) }; const old = await one(c, 'SELECT * FROM bitrix_installations WHERE tenant_id=$1 FOR UPDATE', [tenant.id]); if (old)
-    await c.query('UPDATE bitrix_installations SET encrypted_access_token=$2,encrypted_refresh_token=$3,expires_at=$4,version=version+1 WHERE tenant_id=$1', [tenant.id, data.encryptedAccessToken, data.encryptedRefreshToken, data.expiresAt]);
-else
-    await insert(c, 'bitrix_installations', tenant.id, data); let u = await one(c, 'SELECT * FROM users WHERE tenant_id=$1 AND bitrix_user_id=$2', [tenant.id, String(user.ID)]); if (!u)
-    u = await insert(c, 'users', tenant.id, { bitrixUserId: String(user.ID), name: [user.NAME, user.LAST_NAME].filter(Boolean).join(' '), role: 'ADMIN', email: user.EMAIL }); await c.query('INSERT INTO risk_settings(tenant_id) VALUES($1) ON CONFLICT DO NOTHING', [tenant.id]); return session(u, c); }); }
+function requestField(body: any, flat: string, nested: string, trim = true): string | undefined {
+    const value = body?.[flat] ?? body?.auth?.[nested];
+    if (typeof value !== 'string') return undefined;
+    return trim ? value.trim() : value;
+}
+function encryptedSecretMatches(encrypted: string | null | undefined, incoming: string | null | undefined): boolean {
+    if (!encrypted || !incoming) return false;
+    try { return sameSecret(decrypt(encrypted), incoming); } catch { return false; }
+}
+export async function bitrixLogin(body: any) {
+    if (process.env.AUTH_MODE !== 'bitrix') throw new UnauthorizedException('Bitrix mode disabled');
+    const portal = requestField(body, 'DOMAIN', 'domain');
+    const token = requestField(body, 'AUTH_ID', 'access_token', false);
+    const memberId = requestField(body, 'member_id', 'member_id');
+    const applicationToken = requestField(body, 'APPLICATION_TOKEN', 'application_token', false);
+    if (portal !== process.env.BITRIX_PORTAL || !token || !memberId || !applicationToken)
+        throw new UnauthorizedException('Bitrix launch verification failed');
+    if (process.env.BITRIX_MEMBER_ID && memberId !== process.env.BITRIX_MEMBER_ID)
+        throw new UnauthorizedException('Bitrix member mismatch');
+    const tenant = await one(pool, 'SELECT * FROM tenants WHERE member_id=$1', [memberId]);
+    if (!tenant || tenant.portal !== portal)
+        throw new UnauthorizedException('Bitrix installation mismatch');
+    const installation = await one(pool, 'SELECT * FROM bitrix_installations WHERE tenant_id=$1', [tenant.id]);
+    if (!installation || installation.portal !== portal || installation.memberId !== memberId ||
+        !encryptedSecretMatches(installation.encryptedApplicationToken, applicationToken))
+        throw new UnauthorizedException('Bitrix application token mismatch');
+    const current = await new RealBitrixAdapter(portal).currentUser(token);
+    const user = await one(pool, 'SELECT * FROM users WHERE tenant_id=$1 AND bitrix_user_id=$2 AND is_active=true', [tenant.id, String(current.ID)]);
+    if (!user) throw new UnauthorizedException('Пользователь должен быть назначен администратором приложения');
+    return session(user);
+}
+// Wizard installation: the first fully verified request binds portal + member_id.
+// BITRIX_MEMBER_ID is an optional operator pin; when absent, OAuth member_id must
+// still match the member_id delivered by Bitrix in this same installation request.
+export async function installBitrix(body: any) {
+    if (process.env.AUTH_MODE !== 'bitrix') throw new UnauthorizedException('Bitrix mode disabled');
+    const portal = requestField(body, 'DOMAIN', 'domain');
+    const refresh = requestField(body, 'REFRESH_ID', 'refresh_token', false);
+    const memberId = requestField(body, 'member_id', 'member_id');
+    const applicationToken = requestField(body, 'APPLICATION_TOKEN', 'application_token', false);
+    if (portal !== process.env.BITRIX_PORTAL || !refresh || !memberId || !applicationToken ||
+        !process.env.BITRIX_ADMIN_USER_ID || !process.env.BITRIX_CLIENT_ID || !process.env.BITRIX_CLIENT_SECRET)
+        throw new UnauthorizedException('Portal provisioning required');
+    if (process.env.BITRIX_MEMBER_ID && memberId !== process.env.BITRIX_MEMBER_ID)
+        throw new UnauthorizedException('Bitrix member mismatch');
+
+    const knownByMember = await one(pool, 'SELECT * FROM tenants WHERE member_id=$1', [memberId]);
+    const knownByPortal = await one(pool, 'SELECT * FROM tenants WHERE portal=$1', [portal]);
+    if ((knownByMember && knownByMember.portal !== portal) ||
+        (knownByPortal && knownByPortal.memberId !== memberId) ||
+        (knownByMember && knownByPortal && knownByMember.id !== knownByPortal.id))
+        throw new UnauthorizedException('Bitrix portal/member binding mismatch');
+    const knownTenant = knownByMember ?? knownByPortal;
+    if (knownTenant) {
+        const knownInstallation = await one(pool, 'SELECT * FROM bitrix_installations WHERE tenant_id=$1', [knownTenant.id]);
+        if (knownInstallation?.encryptedApplicationToken &&
+            !encryptedSecretMatches(knownInstallation.encryptedApplicationToken, applicationToken))
+            throw new UnauthorizedException('Bitrix application token mismatch');
+    }
+
+    const response = await fetch('https://oauth.bitrix.info/oauth/token/', {
+        method: 'POST',
+        body: new URLSearchParams({
+            grant_type: 'refresh_token',
+            client_id: process.env.BITRIX_CLIENT_ID,
+            client_secret: process.env.BITRIX_CLIENT_SECRET,
+            refresh_token: refresh
+        }),
+        redirect: 'error',
+        signal: AbortSignal.timeout(15000)
+    });
+    const auth: any = await response.json();
+    const expiresIn = Number(auth.expires_in);
+    if (!response.ok || auth.member_id !== memberId ||
+        (process.env.BITRIX_MEMBER_ID && auth.member_id !== process.env.BITRIX_MEMBER_ID) ||
+        !auth.access_token || !auth.refresh_token || !Number.isFinite(expiresIn) || expiresIn <= 0)
+        throw new UnauthorizedException('Installation credentials not verified');
+    const user = await new RealBitrixAdapter(portal).currentUser(auth.access_token);
+    if (String(user.ID) !== process.env.BITRIX_ADMIN_USER_ID)
+        throw new UnauthorizedException('Only configured app administrator can install');
+
+    return transaction(async (c) => {
+        const byMember = await one(c, 'SELECT * FROM tenants WHERE member_id=$1 FOR UPDATE', [memberId]);
+        const byPortal = await one(c, 'SELECT * FROM tenants WHERE portal=$1 FOR UPDATE', [portal]);
+        if ((byMember && byMember.portal !== portal) ||
+            (byPortal && byPortal.memberId !== memberId) ||
+            (byMember && byPortal && byMember.id !== byPortal.id))
+            throw new UnauthorizedException('Bitrix portal/member binding mismatch');
+        let tenant = byMember ?? byPortal;
+        if (!tenant)
+            tenant = await one(c, 'INSERT INTO tenants(portal,member_id,name) VALUES($1,$2,$3) RETURNING *', [portal, memberId, 'Строительная компания']);
+
+        const old = await one(c, 'SELECT * FROM bitrix_installations WHERE tenant_id=$1 FOR UPDATE', [tenant.id]);
+        if (old && (old.portal !== portal || old.memberId !== memberId))
+            throw new UnauthorizedException('Bitrix installation mismatch');
+        if (old?.encryptedApplicationToken &&
+            !encryptedSecretMatches(old.encryptedApplicationToken, applicationToken))
+            throw new UnauthorizedException('Bitrix application token mismatch');
+
+        const data = {
+            portal,
+            memberId,
+            encryptedAccessToken: encrypt(auth.access_token),
+            encryptedRefreshToken: encrypt(auth.refresh_token),
+            encryptedApplicationToken: encrypt(applicationToken),
+            expiresAt: new Date(Date.now() + expiresIn * 1000)
+        };
+        if (old)
+            await c.query('UPDATE bitrix_installations SET encrypted_access_token=$2,encrypted_refresh_token=$3,encrypted_application_token=$4,expires_at=$5,version=version+1 WHERE tenant_id=$1', [tenant.id, data.encryptedAccessToken, data.encryptedRefreshToken, data.encryptedApplicationToken, data.expiresAt]);
+        else
+            await insert(c, 'bitrix_installations', tenant.id, data);
+
+        let u = await one(c, 'SELECT * FROM users WHERE tenant_id=$1 AND bitrix_user_id=$2', [tenant.id, String(user.ID)]);
+        if (!u)
+            u = await insert(c, 'users', tenant.id, { bitrixUserId: String(user.ID), name: [user.NAME, user.LAST_NAME].filter(Boolean).join(' '), role: 'ADMIN', email: user.EMAIL });
+        await c.query('INSERT INTO risk_settings(tenant_id) VALUES($1) ON CONFLICT DO NOTHING', [tenant.id]);
+        return session(u, c);
+    });
+}
 
 // Server-to-server ONAPPINSTALL webhook (Bitrix24 calls this URL directly when the
 // app is installed — separate from the browser-driven installBitrix()/bitrixLogin()
@@ -100,9 +201,5 @@ export async function verifyApplicationToken(memberId: string | undefined | null
     const tenant = await one(pool, 'SELECT * FROM tenants WHERE member_id=$1', [memberId]);
     if (!tenant) return false;
     const installation = await one(pool, 'SELECT * FROM bitrix_installations WHERE tenant_id=$1', [tenant.id]);
-    if (!installation?.encryptedApplicationToken) return false;
-    let stored: string;
-    try { stored = decrypt(installation.encryptedApplicationToken); } catch { return false; }
-    const a = Buffer.from(stored, 'utf8'), b = Buffer.from(incomingApplicationToken, 'utf8');
-    return a.length === b.length && timingSafeEqual(a, b);
+    return encryptedSecretMatches(installation?.encryptedApplicationToken, incomingApplicationToken);
 }

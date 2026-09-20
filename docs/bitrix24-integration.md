@@ -1,18 +1,26 @@
 # Bitrix24 integration foundation
 
-Проверка официальной документации: 14.09.2026. Реальный портал не подключался.
+Проверка официальной документации: 20.09.2026. Реальный портал не подключался.
 
 ## Способ встраивания
 
-Серверное локальное приложение с UI. Bitrix открывает HTTPS handler во frame и передаёт OAuth-параметры POST. Основной экран приложения появляется через штатный интерфейс приложения, без CRM-сущностей.
+Серверное локальное приложение с UI. Bitrix открывает HTTPS handler во frame: `DOMAIN` учитывается из query string, а OAuth/authorization поля (`AUTH_ID`, `REFRESH_ID`, `APPLICATION_TOKEN`, `member_id`) — из POST body. Основной экран приложения появляется через штатный интерфейс приложения, без CRM-сущностей.
 
 - Handler: `https://APP_HOST/api/auth/bitrix/launch`.
 - Initial installation path: `https://APP_HOST/api/auth/bitrix/install`.
 - Встроенный мастер, без режима API only. Реализован вызов `BX24.installFinish()` после сохранения токенов.
-- В `.env`: точные BITRIX_PORTAL, BITRIX_MEMBER_ID, BITRIX_CLIENT_ID, BITRIX_CLIENT_SECRET, BITRIX_ADMIN_USER_ID, TOKEN_ENCRYPTION_KEY (32 случайных байта в hex), AUTH_MODE=bitrix.
+- В `.env`: точные BITRIX_PORTAL, BITRIX_CLIENT_ID, BITRIX_CLIENT_SECRET, BITRIX_ADMIN_USER_ID, TOKEN_ENCRYPTION_KEY (32 случайных байта в hex), AUTH_MODE=bitrix. `BITRIX_MEMBER_ID` — optional security pin: его можно оставить пустым для первой полностью проверенной wizard-installation, после которой portal + member_id фиксируются в БД.
 - APP_ORIGIN — HTTPS origin приложения; BITRIX_FRAME_ORIGIN — HTTPS origin тестового портала.
 
-Установка обменивает refresh_token через фиксированный официальный OAuth endpoint, проверяет member_id и пользователя, шифрует токены AES-256-GCM. Обновление токенов блокирует строку installation и сохраняет новую пару. Refresh выполняется после expired_token, а не перед каждым запросом. Пользователь входа проверяется через user.current и должен быть назначен в собственной users-таблице. На frontend попадает только короткая opaque app session.
+Установка обменивает refresh_token через фиксированный официальный OAuth endpoint, требует совпадения incoming `member_id` с OAuth `member_id`, проверяет заранее заданного администратора, фиксирует portal + member_id и шифрует access/refresh/application token AES-256-GCM. Повторная установка не может незаметно заменить уже сохранённый `APPLICATION_TOKEN`; legacy-запись с NULL может заполнить его один раз только после полной OAuth/admin verification. Обновление токенов блокирует строку installation и сохраняет новую пару. Refresh выполняется после expired_token, а не перед каждым запросом. Пользователь входа проверяется через user.current и должен быть назначен в собственной users-таблице. На frontend попадает только короткая opaque app session.
+
+## Preflight hardening перед первым реальным порталом
+
+Browser-driven install/launch теперь проверяет `member_id` + `APPLICATION_TOKEN` до выдачи Construction Core session. Launch сначала сверяет portal/member/installation и timing-safe reference token, и только после этого вызывает `user.current`. Это защищает публичный handler независимо от дополнительной проверки HTTP Origin.
+
+`DOMAIN` для wizard handlers берётся из query string с fallback на прежний body-format; остальные auth-поля остаются в POST body. Это соответствует simplified OAuth flow server-side local application with UI.
+
+`BITRIX_INSTALL_WEBHOOK_ENABLED` остаётся `false`: server-to-server ONAPPINSTALL и event handlers не включаются этим проходом.
 
 ## Реально вызываемые методы
 
@@ -46,7 +54,7 @@ On-premise может использовать собственные домен
 
 1. Развернуть подготовленный стек с настоящим PostgreSQL и валидным HTTPS.
 2. Создать серверное локальное приложение с UI на тестовом портале и прописать оба handler.
-3. Задать секреты и точный member_id на сервере, перезапустить API.
+3. Задать секреты на сервере и перезапустить API. `BITRIX_MEMBER_ID` можно оставить пустым для первого verified bootstrap либо заранее задать как дополнительный pin.
 4. Пройти install, проверить encrypted storage, завершение мастера и повторный запуск.
 5. Проверить реальный Origin и поля POST. Некоторые конфигурации портала могут потребовать корректировки bootstrap-парсинга; не отключать проверки без замены проверенной защитой.
 6. Проверить роли двух сотрудников, refresh/rotation, разные tenants, CSP в iframe и sessionStorage. Назначить пользователей в разделе администратора.
@@ -75,8 +83,8 @@ On-premise может использовать собственные домен
 
 | FUNCTION | BITRIX API METHOD | SCOPE/PERMISSION | IMPLEMENTED | MOCK VERIFIED | REAL PORTAL VERIFIED |
 |---|---|---|---|---|---|
-| Installation | OAuth token + user.current + BX24.installFinish | client credentials, user; настроенный admin ID | Server flow + HTML wizard | Service flow yes; wizard browser no | No |
-| Current user / launch | user.current | user / user_brief / user_basic | Yes | Yes, simulated transport | No |
+| Installation | OAuth token + user.current + BX24.installFinish | client credentials, user; настроенный admin ID | Server flow + HTML wizard; member/application-token binding | Simulated service + HTTP query/body contract | No |
+| Current user / launch | user.current | user / user_brief / user_basic | Yes; guarded by portal/member/application-token | Yes, simulated transport + negative token/member cases | No |
 | Users | user.get | user; доступ сотрудника | Проверка ID при назначении, не массовая синхронизация | Dedicated user.get contract not covered | No |
 | Token refresh | oauth.bitrix.info/oauth/token/ | client_id/client_secret + refresh_token | AES-GCM, row lock, rotation | Yes, expired_token + storage + portal mismatch | No |
 | Departments | department.get | department | Provider, без sync в UI | Yes, method contract | No |
@@ -86,4 +94,4 @@ On-premise может использовать собственные домен
 | Tasks | tasks.task.add | task, права пользователя | Provider, auto-creation выключено | Yes, payload contract | No |
 | Events/webhooks | event.bind | app context + scope события | Не подключены | N/A | No |
 
-Исправлено: refresh сверяет member_id с installation, adapter не может использовать installation другого portal. Серверная схема рассчитана на cloud allowlist. Ограничения тарифа, фактические scopes, права папки/пользователя и REST quotas требуют тестового портала. Статус интеграционного foundation: IMPLEMENTED / REQUIRES TEST PORTAL VERIFICATION.
+Исправлено: refresh сверяет member_id с installation, adapter не может использовать installation другого portal; wizard install/launch дополнительно привязаны к portal + member_id + encrypted APPLICATION_TOKEN, а `DOMAIN` читается из фактического query-string handler request. Серверная схема рассчитана на cloud allowlist. Ограничения тарифа, фактические scopes, права папки/пользователя и REST quotas требуют тестового портала. Статус интеграционного foundation: IMPLEMENTED / REQUIRES TEST PORTAL VERIFICATION.
