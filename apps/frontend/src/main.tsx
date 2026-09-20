@@ -14,12 +14,12 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { AppstoreOutlined, ApartmentOutlined, TeamOutlined, BuildOutlined, CalendarOutlined, SafetyCertificateOutlined, FileDoneOutlined, CalculatorOutlined, WalletOutlined, DatabaseOutlined, SettingOutlined, ArrowRightOutlined } from '@ant-design/icons';
 import './style.css';
+import { parseResponse } from './http';
 import ContractorPanel, { WorkChain } from './ContractorPanel';
 import { Gantt, GanttTask } from './Gantt';
 const queryClient = new QueryClient();
 let token = sessionStorage.getItem('session') ?? '';
-async function api(path: string, body?: any) { const r = await fetch('/api/' + path, { method: body === undefined ? 'GET' : 'POST', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) }, body: body === undefined ? undefined : JSON.stringify(body) }); const data = await r.json(); if (!r.ok)
-    throw Error(data.message ?? 'Ошибка сервера'); return data; }
+async function api(path: string, body?: any) { const r = await fetch('/api/' + path, { method: body === undefined ? 'GET' : 'POST', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) }, body: body === undefined ? undefined : JSON.stringify(body) }); return parseResponse(r); }
 /**
  * Открыть бинарное вложение (фото приёмки) в новой вкладке. GET /attachments/:id
  * требует Authorization-заголовок (см. attachments.controller.ts), поэтому
