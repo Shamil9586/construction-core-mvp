@@ -87,6 +87,97 @@ async function readDirectory(tenantId: string, method: string, params: any, sani
     }
     return { records, truncated };
 }
+// Детерминированный порядок не зависит от того, как Bitrix разложил записи по
+// страницам: ID сравниваются численно, когда это возможно, и по кодовым единицам
+// иначе (localeCompare зависит от локали процесса и здесь неприменим).
+function compareIds(left: string, right: string) {
+    const leftNumber = Number(left), rightNumber = Number(right);
+    const leftIsNumber = left !== '' && Number.isFinite(leftNumber), rightIsNumber = right !== '' && Number.isFinite(rightNumber);
+    if (leftIsNumber && rightIsNumber && leftNumber !== rightNumber) return leftNumber - rightNumber;
+    if (leftIsNumber !== rightIsNumber) return leftIsNumber ? -1 : 1;
+    return left < right ? -1 : left > right ? 1 : 0;
+}
+const byId = (a: any, b: any) => compareIds(a.ID as string, b.ID as string);
+// Подразделения: сначала SORT (пустой — в конец), затем NAME, затем ID.
+function compareDepartments(a: any, b: any) {
+    if (a.SORT !== b.SORT) return a.SORT === null ? 1 : b.SORT === null ? -1 : (a.SORT as number) - (b.SORT as number);
+    if (a.NAME !== b.NAME) return a.NAME === null ? 1 : b.NAME === null ? -1 : (a.NAME as string) < (b.NAME as string) ? -1 : 1;
+    return byId(a, b);
+}
+const byKeys = (...keys: string[]) => (a: any, b: any) => { for (const key of keys) { const order = compareIds(a[key], b[key]); if (order) return order; } return 0; };
+const collect = (index: Map<string, string[]>, key: string, value: string) => { const list = index.get(key); if (list) list.push(value); else index.set(key, [value]); };
+// Цикл в графе PARENT означает, что дерево оргструктуры непредставимо. Обход идёт
+// по цепочке родителей (у подразделения не больше одного родителя), серый цвет —
+// узел текущей цепочки, чёрный — уже проверенный. Неизвестный родитель обрывает
+// цепочку и циклом не является: он уходит в диагностику, а не в ошибку.
+function assertAcyclic(departmentById: Map<string, any>) {
+    const checked = new Set<string>();
+    for (const start of departmentById.keys()) {
+        if (checked.has(start)) continue;
+        const chain = new Set<string>();
+        for (let current: string | undefined = start; current !== undefined && !checked.has(current);) {
+            if (chain.has(current))
+                throw new BadRequestException('Bitrix вернул циклическую структуру подразделений');
+            chain.add(current);
+            const parent = departmentById.get(current).PARENT as string | null;
+            current = parent !== null && departmentById.has(parent) ? parent : undefined;
+        }
+        for (const id of chain) checked.add(id);
+    }
+}
+// Проекция строится только из двух уже проверенных витрин и ничего не выдумывает:
+// неизвестная ссылка остаётся ссылкой и попадает в diagnostics, а не превращается
+// в фиктивное подразделение, в корень или в отброшенное членство. Никакого
+// «основного» подразделения не выводится, никакая роль Core не назначается.
+function projectOrganization(employeeRecords: Record<string, unknown>[], departmentRecords: Record<string, unknown>[]) {
+    const departmentById = new Map(departmentRecords.map(record => [record.ID as string, record]));
+    assertAcyclic(departmentById);
+    const knownEmployeeIds = new Set(employeeRecords.map(record => record.ID as string));
+    const members = new Map<string, string[]>(), children = new Map<string, string[]>();
+    const employeesWithoutDepartment: string[] = [];
+    const unknownEmployeeDepartmentRefs: { userId: string; departmentId: string }[] = [];
+    const departmentsWithUnknownParent: { departmentId: string; parentId: string }[] = [];
+    const departmentsWithUnknownHead: { departmentId: string; headUserId: string }[] = [];
+    let employeeDepartmentLinks = 0;
+    const employees = employeeRecords.map(record => {
+        const { UF_DEPARTMENT, ...employee } = record as any;
+        const ID = employee.ID as string;
+        // UF_DEPARTMENT может содержать несколько подразделений — сохраняются все.
+        const departmentIds = [...new Set((UF_DEPARTMENT as number[]).map(String))].sort(compareIds);
+        employeeDepartmentLinks += departmentIds.length;
+        if (!departmentIds.length) employeesWithoutDepartment.push(ID);
+        for (const departmentId of departmentIds)
+            if (departmentById.has(departmentId)) collect(members, departmentId, ID);
+            else unknownEmployeeDepartmentRefs.push({ userId: ID, departmentId });
+        return { ...employee, departmentIds };
+    }).sort(byId);
+    for (const record of departmentRecords) {
+        const ID = record.ID as string, parent = record.PARENT as string | null, head = record.UF_HEAD as string | null;
+        if (parent !== null)
+            if (departmentById.has(parent)) collect(children, parent, ID);
+            else departmentsWithUnknownParent.push({ departmentId: ID, parentId: parent });
+        if (head !== null && !knownEmployeeIds.has(head)) departmentsWithUnknownHead.push({ departmentId: ID, headUserId: head });
+    }
+    const departments = departmentRecords.map(record => ({
+        ...record,
+        employeeIds: (members.get(record.ID as string) ?? []).slice().sort(compareIds),
+        childrenIds: (children.get(record.ID as string) ?? []).slice().sort(compareIds)
+    })).sort(compareDepartments);
+    // Корень — только подразделение без PARENT. Неизвестный родитель корнем не делает.
+    const roots = departmentRecords.filter(record => record.PARENT === null).map(record => record.ID as string).sort(compareIds);
+    return {
+        employees,
+        departments,
+        roots,
+        diagnostics: {
+            employeesWithoutDepartment: employeesWithoutDepartment.sort(compareIds),
+            unknownEmployeeDepartmentRefs: unknownEmployeeDepartmentRefs.sort(byKeys('userId', 'departmentId')),
+            departmentsWithUnknownParent: departmentsWithUnknownParent.sort(byKeys('departmentId', 'parentId')),
+            departmentsWithUnknownHead: departmentsWithUnknownHead.sort(byKeys('departmentId', 'headUserId'))
+        },
+        counts: { employees: employees.length, departments: departments.length, roots: roots.length, employeeDepartmentLinks }
+    };
+}
 // Server-to-server ONAPPINSTALL webhook (не browser-flow из auth-модуля) — fail-closed
 // за BITRIX_INSTALL_WEBHOOK_ENABLED, см. bitrix.ts.
 @Controller()
@@ -111,4 +202,14 @@ export class BitrixController {
     async directoryDepartments(
     @Req()
     r: any) { const a = await directoryActor(r); const { records, truncated } = await readDirectory(a.tenantId, 'department.get', {}, sanitizeDepartment); return { departments: records, count: records.length, truncated }; }
+    // Оргструктура — производная проекция двух уже проверенных витрин, тоже только
+    // чтение. Обе витрины читаются тем же readDirectory напрямую, без внутренних
+    // HTTP-вызовов собственных маршрутов; сбой любой из них валит весь запрос,
+    // поэтому ни «только сотрудники», ни «только подразделения» вернуться не могут.
+    // truncated проброшен наружу сознательно: усечённая витрина дала бы ложные
+    // unknown-ссылки в diagnostics, и молча скрывать это нельзя.
+    @Get('bitrix/directory/org-structure')
+    async orgStructure(
+    @Req()
+    r: any) { const a = await directoryActor(r); const employees = await readDirectory(a.tenantId, 'user.get', { select: USER_SELECT }, sanitizeEmployee); const departments = await readDirectory(a.tenantId, 'department.get', {}, sanitizeDepartment); return { ...projectOrganization(employees.records, departments.records), truncated: { employees: employees.truncated, departments: departments.truncated } }; }
 }

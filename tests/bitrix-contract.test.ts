@@ -248,5 +248,147 @@ test('Bitrix provider contracts and installation/refresh with simulated transpor
    const log=logged.join('\n');for(const secret of [...secrets,...(await secretMaterial())])assert.ok(!log.includes(secret),secret);
    assert.ok(logged.some(l=>l.includes('/bitrix/directory/departments')));
   }finally{console.log=realLog;console.error=realError;departmentPages=[];departmentFailure=null;await app.close();}});
+ // Read-only organizational projection (GET /bitrix/directory/org-structure). It is derived
+ // from the two already verified directories through the same readDirectory helper - no
+ // internal HTTP call to our own routes - so every gate, the exact user.get select, the
+ // pagination, the malformed-record contract and the expired_token delegation carry over,
+ // and a failure of either directory has to fail the whole projection.
+ await t.test('Org structure projection is ADMIN-only, tenant-bound, deterministic, diagnostic and fail-closed',async()=>{
+  process.env.BITRIX_INSTALL_WEBHOOK_ENABLED='false';const app=await createApp();await app.listen(0,'127.0.0.1');const base=await app.getUrl();
+  const logged:string[]=[];const realLog=console.log,realError=console.error;const capture=(...a:any[])=>{logged.push(a.map(x=>typeof x==='string'?x:JSON.stringify(x)).join(' '));};
+  const get=(headers:Record<string,string>={},query='')=>originalFetch(base+'/bitrix/directory/org-structure'+query,{headers});
+  // Fixtures carry fields the projection must drop, so a leak is visible as a literal.
+  const emp=(id:string,departments:number[],active=true,extra:any={})=>({ID:id,NAME:'Имя'+id,LAST_NAME:'Фамилия'+id,SECOND_NAME:'',ACTIVE:active,WORK_POSITION:'Должность'+id,UF_DEPARTMENT:departments,EMAIL:'leak'+id+'@example.com',PERSONAL_MOBILE:'+70000000000',PERSONAL_PHOTO:'leak-photo',PERSONAL_BIRTHDAY:'1980-01-01',...extra});
+  const dep=(id:string,name:string,sort:number,parent:string|null,head:string|null)=>({ID:id,NAME:name,SORT:sort,PARENT:parent,UF_HEAD:head,CODE:'leak-code',XML_ID:'leak-xml',DESCRIPTION:'leak-description'});
+  // Two roots, a two-level nest, an employee in two departments, an inactive employee,
+  // an employee with no department, an unknown department ref, an unknown parent and an
+  // unknown head - every linkage and diagnostics rule in one fixture.
+  const e10=emp('10',[1]),e11=emp('11',[3,2,2],true,{SECOND_NAME:'Отчество11'}),e12=emp('12',[3],false),e13=emp('13',[]),e14=emp('14',[4,888]);
+  const employeesFixture=[e10,e11,e12,e13,e14];
+  const d1=dep('1','Компания',100,null,'10'),d2=dep('2','Производство',200,'1','11'),d3=dep('3','ПТО',300,'2',null),d4=dep('4','Филиал',100,null,'999'),d5=dep('5','Потерянный',400,'777',null);
+  const departmentsFixture=[d1,d2,d3,d4,d5];
+  const tenant=await one(pool,'SELECT * FROM tenants WHERE portal=$1',[process.env.BITRIX_PORTAL]);
+  const neighbour=await one(pool,'SELECT * FROM tenants WHERE member_id=$1',['neighbour-member-id']);
+  const admin=await bitrixLogin({DOMAIN:process.env.BITRIX_PORTAL,AUTH_ID:'org-launch',member_id:'acceptance-member',APPLICATION_TOKEN:'wizard-app-token'});assert.equal(admin.user.role,'ADMIN');
+  const engineer=await one(pool,'SELECT * FROM users WHERE tenant_id=$1 AND bitrix_user_id=$2',[tenant.id,'4242']);assert.equal(engineer.role,'PTO');
+  const engineerSession=await session(engineer);const adminHeaders={Authorization:'Bearer '+admin.token};
+  const countsBefore=await counts();const installationsBefore=await installations();
+  console.log=capture;console.error=capture;
+  try{
+   const secrets=[...(await secretMaterial()),admin.token,engineerSession.token];
+   // Same gate as both directories, and no Bitrix call escapes before it passes.
+   let before=directoryCalls.length;
+   for(const headers of [{},{Authorization:'Bearer not-a-real-session'}]){const denied=await get(headers);assert.equal(denied.status,401);await denied.text();}
+   const engineerCall=await get({Authorization:'Bearer '+engineerSession.token});assert.equal(engineerCall.status,403);await engineerCall.text();
+   process.env.AUTH_MODE='mock';const disabled=await get(adminHeaders);assert.equal(disabled.status,401);await disabled.text();process.env.AUTH_MODE='bitrix';
+   for(const query of ['?tenantId='+neighbour.id,'?portal=neighbour.bitrix24.com','?member_id=neighbour-member-id','?access_token=neighbour-access-token','?auth=neighbour-access-token','?start=1000','?select=EMAIL']){const injected=await get(adminHeaders,query);assert.equal(injected.status,400);await injected.text();}
+   const posted=await originalFetch(base+'/bitrix/directory/org-structure',{method:'POST',headers:{...adminHeaders,'Content-Type':'application/json'},body:JSON.stringify({tenantId:neighbour.id,auth:'neighbour-access-token'})});assert.equal(posted.status,404);await posted.text();
+   assert.equal(directoryCalls.length,before);
+   // The projection itself.
+   directoryPages=[employeesFixture];departmentPages=[departmentsFixture];before=directoryCalls.length;
+   const ok=await get(adminHeaders);assert.equal(ok.status,200);const text=await ok.text();const body=JSON.parse(text);
+   // Request contract: one user.get with the exact seven-field select, one department.get
+   // with nothing but a page offset, both on this tenant's installation token.
+   const orgCalls=directoryCalls.slice(before);const installed=await one(pool,'SELECT * FROM bitrix_installations WHERE tenant_id=$1',[tenant.id]);
+   assert.deepEqual(orgCalls.map(c=>c.method),['user.get','department.get']);
+   assert.deepEqual(orgCalls[0].select,USER_SELECT);
+   assert.deepEqual(Object.keys(orgCalls[0].params).sort(),['auth','select','start']);
+   assert.deepEqual(Object.keys(orgCalls[1].params).sort(),['auth','start']);
+   assert.equal(orgCalls[1].select,undefined);
+   assert.ok(orgCalls.every(c=>c.auth===decrypt(installed.encryptedAccessToken)));
+   assert.ok(directoryCalls.every(c=>c.auth!=='neighbour-access-token'));
+   assert.deepEqual(Object.keys(body).sort(),['counts','departments','diagnostics','employees','roots','truncated']);
+   // Employees: deterministic order, no UF_DEPARTMENT, no primary department inferred,
+   // duplicates collapsed, inactive employee kept, unknown ref kept rather than dropped.
+   assert.deepEqual(body.employees.map((e:any)=>e.ID),['10','11','12','13','14']);
+   assert.deepEqual(body.employees[0],{ID:'10',NAME:'Имя10',LAST_NAME:'Фамилия10',ACTIVE:true,WORK_POSITION:'Должность10',departmentIds:['1']});
+   assert.deepEqual(body.employees[1],{ID:'11',NAME:'Имя11',LAST_NAME:'Фамилия11',SECOND_NAME:'Отчество11',ACTIVE:true,WORK_POSITION:'Должность11',departmentIds:['2','3']});
+   assert.equal(body.employees[2].ACTIVE,false);assert.deepEqual(body.employees[2].departmentIds,['3']);
+   assert.deepEqual(body.employees[3].departmentIds,[]);
+   assert.deepEqual(body.employees[4].departmentIds,['4','888']);
+   for(const employee of body.employees)assert.ok(!('UF_DEPARTMENT' in employee));
+   // Departments: SORT, then NAME, then ID; head kept as a bare ID, never expanded.
+   assert.deepEqual(body.departments.map((d:any)=>d.ID),['1','4','2','3','5']);
+   const department=Object.fromEntries(body.departments.map((d:any)=>[d.ID,d]));
+   assert.deepEqual(department['1'],{ID:'1',NAME:'Компания',SORT:100,PARENT:null,UF_HEAD:'10',employeeIds:['10'],childrenIds:['2']});
+   assert.deepEqual(department['2'],{ID:'2',NAME:'Производство',SORT:200,PARENT:'1',UF_HEAD:'11',employeeIds:['11'],childrenIds:['3']});
+   assert.deepEqual(department['3'].employeeIds,['11','12']);assert.deepEqual(department['3'].childrenIds,[]);
+   assert.deepEqual(department['4'],{ID:'4',NAME:'Филиал',SORT:100,PARENT:null,UF_HEAD:'999',employeeIds:['14'],childrenIds:[]});
+   assert.deepEqual(department['5'],{ID:'5',NAME:'Потерянный',SORT:400,PARENT:'777',UF_HEAD:null,employeeIds:[],childrenIds:[]});
+   for(const record of body.departments)assert.ok(!('NAME' in record)||typeof record.NAME==='string'||record.NAME===null);
+   // Roots, and an unknown parent that is not silently promoted to one.
+   assert.deepEqual(body.roots,['1','4']);
+   // Membership is symmetric in both directions for every known department.
+   for(const employee of body.employees)for(const id of employee.departmentIds)if(department[id])assert.ok(department[id].employeeIds.includes(employee.ID),employee.ID+'->'+id);
+   for(const record of body.departments)for(const id of record.employeeIds)assert.ok(body.employees.find((e:any)=>e.ID===id).departmentIds.includes(record.ID),record.ID+'->'+id);
+   assert.deepEqual(body.diagnostics,{employeesWithoutDepartment:['13'],unknownEmployeeDepartmentRefs:[{userId:'14',departmentId:'888'}],departmentsWithUnknownParent:[{departmentId:'5',parentId:'777'}],departmentsWithUnknownHead:[{departmentId:'4',headUserId:'999'}]});
+   assert.deepEqual(body.counts,{employees:5,departments:5,roots:2,employeeDepartmentLinks:6});
+   assert.deepEqual(body.truncated,{employees:false,departments:false});
+   // Nothing missing is invented: no phantom department 888/777, no phantom employee 999.
+   assert.ok(!body.departments.some((d:any)=>d.ID==='888'||d.ID==='777'));
+   assert.ok(!body.employees.some((e:any)=>e.ID==='999'));
+   for(const leaked of ['leak10@example.com','+70000000000','leak-photo','1980-01-01','leak-code','leak-xml','leak-description','UF_DEPARTMENT','EMAIL','"next"','"total"','"time"'])assert.ok(!text.includes(leaked),leaked);
+   for(const secret of secrets)assert.ok(!text.includes(secret),secret);
+   // Determinism: the same records delivered in a different page split and a different
+   // order, with UF_DEPARTMENT written the other way round, must be byte-identical.
+   const filler=Array.from({length:50},(_,i)=>emp(String(1000+i),[1]));
+   const e11alt=emp('11',[2,3],true,{SECOND_NAME:'Отчество11'});
+   const firstOrder=[...employeesFixture,...filler],secondOrder=[...filler,e14,e13,e12,e11alt,e10];
+   directoryPages=[firstOrder.slice(0,50),firstOrder.slice(50)];departmentPages=[departmentsFixture];
+   const firstRun=await get(adminHeaders);assert.equal(firstRun.status,200);const firstText=await firstRun.text();
+   directoryPages=[secondOrder.slice(0,50),secondOrder.slice(50)];departmentPages=[[d5,d3,d2,d4,d1]];
+   const secondRun=await get(adminHeaders);assert.equal(secondRun.status,200);const secondText=await secondRun.text();
+   assert.equal(firstText,secondText);
+   assert.equal(JSON.parse(firstText).counts.employees,55);
+   // Truncation of either directory is surfaced, never hidden.
+   directoryPages=Array.from({length:41},(_,page)=>Array.from({length:50},(_,i)=>emp(String(page*50+i),[1])));departmentPages=[departmentsFixture];
+   const capped=await get(adminHeaders);assert.equal(capped.status,200);const cappedBody=await capped.json();
+   assert.deepEqual(cappedBody.truncated,{employees:true,departments:false});assert.equal(cappedBody.counts.employees,2000);
+   // A cycle in PARENT makes the tree unrepresentable: fail closed, no partial projection.
+   for(const [label,pages] of [['self-parent',[dep('1','A',100,'1',null)]],['two-node',[dep('1','A',100,'2',null),dep('2','B',200,'1',null)]],['three-node',[dep('1','A',100,'2',null),dep('2','B',200,'3',null),dep('3','C',300,'1',null)]],['cycle beside a valid root',[dep('9','Корень',10,null,null),dep('1','A',100,'2',null),dep('2','B',200,'1',null)]]] as [string,any[]][]){
+    directoryPages=[[e10]];departmentPages=[pages];
+    const cyclic=await get(adminHeaders);assert.equal(cyclic.status,400,label);const cyclicText=await cyclic.text();
+    for(const leaked of ['"employees"','"departments"','"roots"','"diagnostics"','"counts"','Имя10','Корень'])assert.ok(!cyclicText.includes(leaked),label+' / '+leaked);
+    for(const secret of secrets)assert.ok(!cyclicText.includes(secret),secret);
+   }
+   // An unknown parent is still not a cycle: it stays a diagnostic, not an error.
+   directoryPages=[[e10]];departmentPages=[[dep('1','A',100,'777',null)]];
+   const unknownParent=await get(adminHeaders);assert.equal(unknownParent.status,200);const unknownParentBody=await unknownParent.json();
+   assert.deepEqual(unknownParentBody.roots,[]);assert.deepEqual(unknownParentBody.diagnostics.departmentsWithUnknownParent,[{departmentId:'1',parentId:'777'}]);
+   // Either directory failing fails the whole projection - never employees-only or
+   // departments-only, and never a partial body.
+   directoryPages=[employeesFixture];departmentPages=[departmentsFixture];
+   directoryFailure={status:400,body:{error:'QUERY_LIMIT_EXCEEDED'}};
+   const userFailed=await get(adminHeaders);assert.equal(userFailed.status,400);const userFailedText=await userFailed.text();
+   for(const leaked of ['"employees"','"departments"','"roots"','Имя10','Компания'])assert.ok(!userFailedText.includes(leaked),leaked);
+   directoryFailure=null;
+   before=directoryCalls.length;departmentFailure={status:401,body:{error:'insufficient_scope'}};
+   const departmentFailed=await get(adminHeaders);assert.equal(departmentFailed.status,400);const departmentFailedText=await departmentFailed.text();
+   assert.deepEqual(directoryCalls.slice(before).map(c=>c.method),['user.get','department.get']);
+   for(const leaked of ['"employees"','"departments"','"roots"','Имя10','Компания'])assert.ok(!departmentFailedText.includes(leaked),leaked);
+   departmentFailure=null;
+   directoryPages=[[e10,{NAME:'Без ID'}] as any];departmentPages=[departmentsFixture];
+   const malformedUser=await get(adminHeaders);assert.equal(malformedUser.status,400);const malformedUserText=await malformedUser.text();
+   for(const leaked of ['"employees"','"roots"','Имя10'])assert.ok(!malformedUserText.includes(leaked),leaked);
+   directoryPages=[employeesFixture];departmentPages=[[d1,null] as any];
+   const malformedDepartment=await get(adminHeaders);assert.equal(malformedDepartment.status,400);const malformedDepartmentText=await malformedDepartment.text();
+   for(const leaked of ['"departments"','"roots"','Компания','Имя10'])assert.ok(!malformedDepartmentText.includes(leaked),leaked);
+   departmentFailure={status:200,body:{result:{ID:'1'}}};const nonArray=await get(adminHeaders);assert.equal(nonArray.status,400);await nonArray.text();departmentFailure=null;
+   // Not one of those reads, successful or failed, wrote anything.
+   assert.equal(await counts(),countsBefore);assert.equal(await installations(),installationsBefore);
+   // expired_token stays installedCall's business here too.
+   directoryPages=[employeesFixture];departmentPages=[departmentsFixture];
+   expiredTokens.add(decrypt(installed.encryptedAccessToken));const refreshesBefore=refreshes;
+   const rotated=await get(adminHeaders);assert.equal(rotated.status,200);const rotatedBody=await rotated.json();
+   assert.deepEqual(rotatedBody.counts,{employees:5,departments:5,roots:2,employeeDepartmentLinks:6});
+   assert.equal(refreshes,refreshesBefore+1);
+   const rotatedRow=await one(pool,'SELECT * FROM bitrix_installations WHERE tenant_id=$1',[tenant.id]);
+   assert.notEqual(rotatedRow.encryptedAccessToken,installed.encryptedAccessToken);
+   assert.equal(rotatedRow.encryptedApplicationToken,installed.encryptedApplicationToken);
+   assert.equal(rotatedRow.version,installed.version+1);
+   assert.equal(await counts(),countsBefore);
+   const log=logged.join('\n');for(const secret of [...secrets,...(await secretMaterial())])assert.ok(!log.includes(secret),secret);
+   assert.ok(logged.some(l=>l.includes('/bitrix/directory/org-structure')));
+  }finally{console.log=realLog;console.error=realError;directoryPages=[];departmentPages=[];directoryFailure=null;departmentFailure=null;await app.close();}});
  }finally{globalThis.fetch=originalFetch;delete process.env.BITRIX_MEMBER_ID;await pool.end();}
 });
