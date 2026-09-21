@@ -9,8 +9,19 @@ test('Bitrix provider contracts and installation/refresh with simulated transpor
  // directoryPages keyed by the start offset, and directoryCalls records the auth
  // token and offset of every REST request so the tests can prove which tenant's
  // installation token installedCall actually used.
- let directoryPages:any[][]=[];let directoryFailure:{status:number;body:any;start?:number}|null=null;const directoryCalls:{auth:string;start:number}[]=[];
- globalThis.fetch=async(input:any,init:any)=>{const url=String(input);if(url.startsWith('http://127.0.0.1:'))return originalFetch(input,init);calls.push({url,body:init.body});if(url==='https://oauth.bitrix.info/oauth/token/'){refreshes++;if(oauthFailure)return new Response(JSON.stringify(oauthFailure.body),{status:oauthFailure.status});return new Response(JSON.stringify({access_token:'access-'+refreshes,refresh_token:'refresh-'+refreshes,expires_in:3600,member_id:'acceptance-member'}));}const b=JSON.parse(init.body);if(expiredTokens.has(b.auth))return new Response(JSON.stringify({error:'expired_token'}),{status:401});if(url.endsWith('/user.get.json')){const start=Number(b.start??0);directoryCalls.push({auth:b.auth,start});if(directoryFailure&&(directoryFailure.start===undefined||directoryFailure.start===start))return new Response(JSON.stringify(directoryFailure.body),{status:directoryFailure.status});return new Response(JSON.stringify({result:directoryPages[start/50]??[],next:start+50,total:directoryPages.flat().length}));}return new Response(JSON.stringify({result:url.includes('user.current')?{ID:currentUserId,NAME:'Test Admin'}:true}));};
+ let directoryPages:any[][]=[];let departmentPages:any[][]=[];
+ let directoryFailure:{status:number;body:any;start?:number}|null=null;let departmentFailure:{status:number;body:any;start?:number}|null=null;
+ const directoryCalls:{method:string;auth:string;start:number;select:any;params:any}[]=[];
+ // Exactly the field allowlist the hardened endpoint must send to Bitrix, so the portal
+ // never even assembles e-mail, phones, photo or birthdate for Construction Core.
+ const USER_SELECT=['ID','NAME','LAST_NAME','SECOND_NAME','ACTIVE','WORK_POSITION','UF_DEPARTMENT'];
+ // Row census and secret material are shared by both directory subtests: a read-only
+ // endpoint must leave every table byte-identical and must never echo any token.
+ const WATCHED_TABLES=['tenants','users','sessions','bitrix_installations','audit_logs','domain_events','notifications','risk_settings','objects','works','contractors','import_reports'];
+ const counts=async()=>{const s:any={};for(const table of WATCHED_TABLES)s[table]=(await pool.query(`SELECT count(*)::int AS n FROM ${table}`)).rows[0].n;s.userRows=await rows(pool,'SELECT id,role,is_active,version FROM users ORDER BY id');return JSON.stringify(s);};
+ const installations=async()=>JSON.stringify(await rows(pool,'SELECT tenant_id,portal,member_id,encrypted_access_token,encrypted_refresh_token,encrypted_application_token,version FROM bitrix_installations ORDER BY tenant_id'));
+ const secretMaterial=async()=>{const material=[process.env.TOKEN_ENCRYPTION_KEY!,process.env.BITRIX_CLIENT_SECRET!];for(const row of await rows(pool,'SELECT encrypted_access_token,encrypted_refresh_token,encrypted_application_token FROM bitrix_installations'))for(const column of [row.encryptedAccessToken,row.encryptedRefreshToken,row.encryptedApplicationToken])if(column){material.push(column);try{material.push(decrypt(column));}catch{}}return material;};
+ globalThis.fetch=async(input:any,init:any)=>{const url=String(input);if(url.startsWith('http://127.0.0.1:'))return originalFetch(input,init);calls.push({url,body:init.body});if(url==='https://oauth.bitrix.info/oauth/token/'){refreshes++;if(oauthFailure)return new Response(JSON.stringify(oauthFailure.body),{status:oauthFailure.status});return new Response(JSON.stringify({access_token:'access-'+refreshes,refresh_token:'refresh-'+refreshes,expires_in:3600,member_id:'acceptance-member'}));}const b=JSON.parse(init.body);if(url.endsWith('/user.get.json')||url.endsWith('/department.get.json')){const method=url.endsWith('/user.get.json')?'user.get':'department.get';const start=Number(b.start??0);directoryCalls.push({method,auth:b.auth,start,select:b.select,params:b});if(expiredTokens.has(b.auth))return new Response(JSON.stringify({error:'expired_token'}),{status:401});const failure=method==='user.get'?directoryFailure:departmentFailure;if(failure&&(failure.start===undefined||failure.start===start))return new Response(JSON.stringify(failure.body),{status:failure.status});const pages=method==='user.get'?directoryPages:departmentPages;return new Response(JSON.stringify({result:pages[start/50]??[],next:start+50,total:pages.flat().length,time:{start:0,finish:1}}));}if(expiredTokens.has(b.auth))return new Response(JSON.stringify({error:'expired_token'}),{status:401});return new Response(JSON.stringify({result:url.includes('user.current')?{ID:currentUserId,NAME:'Test Admin'}:true}));};
  try{
  await t.test('Mock providers return explicit mock results',async()=>{const m=new MockBitrixAdapter();assert.equal((await m.currentUser('9')).ID,'9');assert.ok((await m.notify('','9','message')).mock);assert.ok((await m.createTask('','9','task')).mock);assert.ok((await m.upload('','','file')).mock);assert.equal((await m.departments()).length,1);});
  await t.test('Real adapter method names and payloads use simulated transport',async()=>{const r=new RealBitrixAdapter();await r.currentUser('test');await r.departments('test');await r.notify('test','9','text');await r.createTask('test','9','task');await r.upload('test','3','file.pdf','YWJj');assert.ok(calls.some(x=>x.url.endsWith('/im.notify.system.add.json')&&JSON.parse(x.body).USER_ID==='9'));assert.ok(calls.some(x=>x.url.endsWith('/tasks.task.add.json')&&JSON.parse(x.body).fields.RESPONSIBLE_ID===9));assert.ok(calls.some(x=>x.url.endsWith('/disk.folder.uploadfile.json')&&JSON.parse(x.body).fileContent[0]==='file.pdf'));assert.throws(()=>new RealBitrixAdapter('127.0.0.1'));});
@@ -56,9 +67,6 @@ test('Bitrix provider contracts and installation/refresh with simulated transpor
   process.env.BITRIX_INSTALL_WEBHOOK_ENABLED='false';const app=await createApp();await app.listen(0,'127.0.0.1');const base=await app.getUrl();
   const logged:string[]=[];const realLog=console.log,realError=console.error;const capture=(...a:any[])=>{logged.push(a.map(x=>typeof x==='string'?x:JSON.stringify(x)).join(' '));};
   const get=(headers:Record<string,string>={},query='')=>originalFetch(base+'/bitrix/directory/users'+query,{headers});
-  const watched=['tenants','users','sessions','bitrix_installations','audit_logs','domain_events','notifications','risk_settings','objects','works','contractors','import_reports'];
-  const counts=async()=>{const s:any={};for(const table of watched)s[table]=(await pool.query(`SELECT count(*)::int AS n FROM ${table}`)).rows[0].n;s.userRows=await rows(pool,'SELECT id,role,is_active,version FROM users ORDER BY id');return JSON.stringify(s);};
-  const installations=async()=>JSON.stringify(await rows(pool,'SELECT tenant_id,portal,member_id,encrypted_access_token,encrypted_refresh_token,encrypted_application_token,version FROM bitrix_installations ORDER BY tenant_id'));
   // Every raw record carries fields the endpoint must drop: e-mail, phones, city, custom UF_*.
   const raw=(i:number)=>({ID:String(i),NAME:'Имя'+i,LAST_NAME:'Фамилия'+i,SECOND_NAME:i%2?'Отчество'+i:'',ACTIVE:true,WORK_POSITION:'Прораб',UF_DEPARTMENT:[1,2],EMAIL:'leak'+i+'@example.com',PERSONAL_MOBILE:'+70000000000',WORK_PHONE:'495-000',PERSONAL_CITY:'Москва',UF_EMPLOYMENT_DATE:'2020-01-01',XML_ID:'leak-xml'});
   const page=(from:number,size:number)=>Array.from({length:size},(_,i)=>raw(from+i));
@@ -87,13 +95,15 @@ test('Bitrix provider contracts and installation/refresh with simulated transpor
    const ok=await get(adminHeaders);assert.equal(ok.status,200);const text=await ok.text();const body=JSON.parse(text);
    assert.equal(body.count,103);assert.equal(body.users.length,103);assert.equal(body.truncated,false);
    assert.deepEqual(directoryCalls.slice(before).map(c=>c.start),[0,50,100]);
+   // Request-side allowlist: exactly the seven fields, and no other parameter at all.
+   for(const call of directoryCalls.slice(before)){assert.equal(call.method,'user.get');assert.deepEqual(call.select,USER_SELECT);assert.deepEqual(Object.keys(call.params).sort(),['auth','select','start']);}
    const installed=await one(pool,'SELECT * FROM bitrix_installations WHERE tenant_id=$1',[tenant.id]);
    assert.ok(directoryCalls.slice(before).every(c=>c.auth===decrypt(installed.encryptedAccessToken)));
    assert.ok(directoryCalls.every(c=>c.auth!=='neighbour-access-token'));
    assert.deepEqual(body.users[0],{ID:'0',NAME:'Имя0',LAST_NAME:'Фамилия0',ACTIVE:true,WORK_POSITION:'Прораб',UF_DEPARTMENT:[1,2]});
    assert.deepEqual(body.users[1],{ID:'1',NAME:'Имя1',LAST_NAME:'Фамилия1',ACTIVE:true,WORK_POSITION:'Прораб',UF_DEPARTMENT:[1,2],SECOND_NAME:'Отчество1'});
    for(const leaked of ['leak0@example.com','+70000000000','495-000','PERSONAL_CITY','UF_EMPLOYMENT_DATE','XML_ID','EMAIL','WORK_PHONE','"next"','"total"'])assert.ok(!text.includes(leaked),leaked);
-   const secrets=[decrypt(installed.encryptedAccessToken),decrypt(installed.encryptedRefreshToken),decrypt(installed.encryptedApplicationToken),installed.encryptedAccessToken,installed.encryptedRefreshToken,installed.encryptedApplicationToken,'neighbour-access-token','neighbour-app-token',process.env.TOKEN_ENCRYPTION_KEY!,process.env.BITRIX_CLIENT_SECRET!,admin.token,engineerSession.token];
+   const secrets=[...(await secretMaterial()),admin.token,engineerSession.token];
    for(const secret of secrets)assert.ok(!text.includes(secret),secret);
    // The request guard bounds a portal that never stops returning full pages.
    directoryPages=Array.from({length:41},(_,p)=>page(p*50,50));before=directoryCalls.length;
@@ -116,8 +126,98 @@ test('Bitrix provider contracts and installation/refresh with simulated transpor
    assert.equal(rotatedRow.version,installed.version+1);
    // That refresh is the only state change: no row was inserted, updated or deleted anywhere else.
    assert.equal(await counts(),countsBefore);
+   // Every user.get request without exception - the paginated run, the capped run, both
+   // failure runs, the expired attempt and its post-refresh retry - carries that same
+   // select and never asks for a profile field.
+   const userGetCalls=directoryCalls.filter(c=>c.method==='user.get');assert.ok(userGetCalls.length>=45);
+   for(const call of userGetCalls){assert.deepEqual(call.select,USER_SELECT);for(const forbidden of ['EMAIL','PERSONAL_MOBILE','WORK_PHONE','PERSONAL_PHOTO','PERSONAL_BIRTHDAY','PERSONAL_CITY','PERSONAL_WWW','XML_ID','*','UF_*'])assert.ok(!call.select.includes(forbidden),forbidden);}
    const log=logged.join('\n');for(const secret of secrets)assert.ok(!log.includes(secret),secret);
    assert.ok(logged.some(l=>l.includes('/bitrix/directory/users')));
   }finally{console.log=realLog;console.error=realError;directoryPages=[];directoryFailure=null;await app.close();}});
+ // Read-only Bitrix department directory (GET /bitrix/directory/departments). The live
+ // application still holds only the user_brief scope, so department.get is exercised here
+ // against the simulated transport exclusively; a real portal would answer the very same
+ // call with a scope error, which the endpoint must surface rather than swallow.
+ await t.test('Department directory is read-only, ADMIN-only, tenant-bound, paginated, sanitized and fail-closed',async()=>{
+  process.env.BITRIX_INSTALL_WEBHOOK_ENABLED='false';const app=await createApp();await app.listen(0,'127.0.0.1');const base=await app.getUrl();
+  const logged:string[]=[];const realLog=console.log,realError=console.error;const capture=(...a:any[])=>{logged.push(a.map(x=>typeof x==='string'?x:JSON.stringify(x)).join(' '));};
+  const get=(headers:Record<string,string>={},query='')=>originalFetch(base+'/bitrix/directory/departments'+query,{headers});
+  // Every raw department carries fields the endpoint must drop, and deliberately ragged
+  // types for SORT/PARENT/UF_HEAD so the normalization rules are exercised, not assumed.
+  const rawDepartment=(i:number)=>({ID:String(i),NAME:'Отдел '+i,SORT:100+i,PARENT:i===0?undefined:'0',UF_HEAD:i%2?String(1000+i):0,CODE:'leak-code',XML_ID:'leak-xml',EMAIL:'dept'+i+'@example.com',PHONE:'+70000000000',IBLOCK_SECTION_ID:'leak-section',DESCRIPTION:'leak-description',UF_SECRET:'leak-uf'});
+  const ragged={ID:777,NAME:'   ',SORT:'не число',PARENT:'',UF_HEAD:null,DEPTH_LEVEL:3,ACTIVE:'Y'};
+  const departmentPage=(from:number,size:number)=>Array.from({length:size},(_,i)=>rawDepartment(from+i));
+  const tenant=await one(pool,'SELECT * FROM tenants WHERE portal=$1',[process.env.BITRIX_PORTAL]);
+  const neighbour=await one(pool,'SELECT * FROM tenants WHERE member_id=$1',['neighbour-member-id']);
+  const admin=await bitrixLogin({DOMAIN:process.env.BITRIX_PORTAL,AUTH_ID:'departments-launch',member_id:'acceptance-member',APPLICATION_TOKEN:'wizard-app-token'});assert.equal(admin.user.role,'ADMIN');
+  const engineer=await one(pool,'SELECT * FROM users WHERE tenant_id=$1 AND bitrix_user_id=$2',[tenant.id,'4242']);assert.equal(engineer.role,'PTO');
+  const engineerSession=await session(engineer);const adminHeaders={Authorization:'Bearer '+admin.token};
+  const countsBefore=await counts();const installationsBefore=await installations();
+  console.log=capture;console.error=capture;
+  try{
+   const secrets=[...(await secretMaterial()),admin.token,engineerSession.token];
+   // Identical gate to the employee directory: session, role, mode, and no request parameters.
+   const firstCall=directoryCalls.length;let before=directoryCalls.length;
+   for(const headers of [{},{Authorization:'Bearer not-a-real-session'}]){const denied=await get(headers);assert.equal(denied.status,401);await denied.text();}
+   const engineerCall=await get({Authorization:'Bearer '+engineerSession.token});assert.equal(engineerCall.status,403);await engineerCall.text();
+   process.env.AUTH_MODE='mock';const disabled=await get(adminHeaders);assert.equal(disabled.status,401);await disabled.text();process.env.AUTH_MODE='bitrix';
+   for(const query of ['?tenantId='+neighbour.id,'?portal=neighbour.bitrix24.com','?member_id=neighbour-member-id','?access_token=neighbour-access-token','?auth=neighbour-access-token','?start=1000']){const injected=await get(adminHeaders,query);assert.equal(injected.status,400);await injected.text();}
+   const posted=await originalFetch(base+'/bitrix/directory/departments',{method:'POST',headers:{...adminHeaders,'Content-Type':'application/json'},body:JSON.stringify({tenantId:neighbour.id,auth:'neighbour-access-token'})});assert.equal(posted.status,404);await posted.text();
+   assert.equal(directoryCalls.length,before);
+   // Full pagination 50 + 50 + 3, requested as department.get with this tenant's token only.
+   departmentPages=[departmentPage(0,50),departmentPage(50,50),[rawDepartment(100),rawDepartment(101),ragged]];before=directoryCalls.length;
+   const ok=await get(adminHeaders);assert.equal(ok.status,200);const text=await ok.text();const body=JSON.parse(text);
+   const paged=directoryCalls.slice(before);
+   assert.deepEqual(paged.map(c=>c.method),['department.get','department.get','department.get']);
+   assert.deepEqual(paged.map(c=>c.start),[0,50,100]);
+   const installed=await one(pool,'SELECT * FROM bitrix_installations WHERE tenant_id=$1',[tenant.id]);
+   assert.ok(paged.every(c=>c.auth===decrypt(installed.encryptedAccessToken)));
+   assert.ok(directoryCalls.every(c=>c.auth!=='neighbour-access-token'));
+   // department.get takes no select parameter: start is the only thing the endpoint sends.
+   for(const call of paged){assert.deepEqual(Object.keys(call.params).sort(),['auth','start']);assert.equal(call.select,undefined);}
+   assert.equal(body.count,103);assert.equal(body.departments.length,103);assert.equal(body.truncated,false);
+   assert.deepEqual(Object.keys(body).sort(),['count','departments','truncated']);
+   assert.deepEqual(body.departments[0],{ID:'0',NAME:'Отдел 0',SORT:100,PARENT:null,UF_HEAD:'0'});
+   assert.deepEqual(body.departments[1],{ID:'1',NAME:'Отдел 1',SORT:101,PARENT:'0',UF_HEAD:'1001'});
+   assert.deepEqual(body.departments[102],{ID:'777',NAME:null,SORT:null,PARENT:null,UF_HEAD:null});
+   for(const record of body.departments)assert.deepEqual(Object.keys(record).sort(),['ID','NAME','PARENT','SORT','UF_HEAD']);
+   for(const leaked of ['leak-code','leak-xml','leak-section','leak-description','leak-uf','dept0@example.com','+70000000000','DEPTH_LEVEL','ACTIVE','CODE','XML_ID','EMAIL','"next"','"total"','"time"'])assert.ok(!text.includes(leaked),leaked);
+   for(const secret of secrets)assert.ok(!text.includes(secret),secret);
+   // A portal that replays the same page adds no new ID and must stop the loop.
+   departmentPages=[departmentPage(0,50),departmentPage(0,50),departmentPage(100,50)];before=directoryCalls.length;
+   const replayed=await get(adminHeaders);assert.equal(replayed.status,200);const replayedBody=await replayed.json();
+   assert.equal(directoryCalls.length-before,2);assert.equal(replayedBody.count,50);assert.equal(replayedBody.truncated,false);
+   // The request ceiling bounds a portal that never stops returning full pages.
+   departmentPages=Array.from({length:41},(_,page)=>departmentPage(page*50,50));before=directoryCalls.length;
+   const capped=await get(adminHeaders);assert.equal(capped.status,200);const cappedBody=await capped.json();
+   assert.equal(directoryCalls.length-before,40);assert.equal(cappedBody.truncated,true);assert.equal(cappedBody.count,2000);
+   // Missing department scope is exactly what the live application would answer today:
+   // it must reach the caller as a failure, never as success or an empty list.
+   departmentPages=[departmentPage(0,50)];departmentFailure={status:401,body:{error:'insufficient_scope',error_description:'The request requires higher privileges than provided by the access token'}};
+   const scopeless=await get(adminHeaders);assert.equal(scopeless.status,400);const scopelessText=await scopeless.text();
+   assert.ok(!scopelessText.includes('departments'));assert.ok(!scopelessText.includes('Отдел 0'));
+   // Mid-pagination failure returns no partial page either.
+   departmentPages=[departmentPage(0,50),departmentPage(50,50)];departmentFailure={status:400,body:{error:'QUERY_LIMIT_EXCEEDED'},start:50};
+   const failed=await get(adminHeaders);assert.equal(failed.status,400);const failedText=await failed.text();assert.ok(!failedText.includes('Отдел 0'));
+   for(const secret of secrets)assert.ok(!failedText.includes(secret),secret);
+   departmentFailure={status:200,body:{result:{ID:'1',NAME:'Не массив'}}};const unexpected=await get(adminHeaders);assert.equal(unexpected.status,400);await unexpected.text();departmentFailure=null;
+   // Nothing at all was written by any of those reads, successful or failed.
+   assert.equal(await counts(),countsBefore);assert.equal(await installations(),installationsBefore);
+   // expired_token stays installedCall's business here too: no refresh logic in the controller.
+   departmentPages=[[rawDepartment(0),rawDepartment(1)]];expiredTokens.add(decrypt(installed.encryptedAccessToken));const refreshesBefore=refreshes;
+   const rotated=await get(adminHeaders);assert.equal(rotated.status,200);assert.equal((await rotated.json()).count,2);
+   assert.equal(refreshes,refreshesBefore+1);
+   const rotatedRow=await one(pool,'SELECT * FROM bitrix_installations WHERE tenant_id=$1',[tenant.id]);
+   assert.notEqual(rotatedRow.encryptedAccessToken,installed.encryptedAccessToken);
+   assert.equal(rotatedRow.encryptedApplicationToken,installed.encryptedApplicationToken);
+   assert.equal(rotatedRow.version,installed.version+1);
+   // That refresh is the only state change: no row was inserted, updated or deleted anywhere.
+   assert.equal(await counts(),countsBefore);
+   // Every department.get this endpoint issued asked for nothing but a page offset.
+   const departmentGetCalls=directoryCalls.slice(firstCall).filter(c=>c.method==='department.get');assert.ok(departmentGetCalls.length>=48);
+   assert.deepEqual(departmentGetCalls.filter(c=>c.select!==undefined||Object.keys(c.params).sort().join()!=='auth,start'),[]);
+   const log=logged.join('\n');for(const secret of [...secrets,...(await secretMaterial())])assert.ok(!log.includes(secret),secret);
+   assert.ok(logged.some(l=>l.includes('/bitrix/directory/departments')));
+  }finally{console.log=realLog;console.error=realError;departmentPages=[];departmentFailure=null;await app.close();}});
  }finally{globalThis.fetch=originalFetch;delete process.env.BITRIX_MEMBER_ID;await pool.end();}
 });
