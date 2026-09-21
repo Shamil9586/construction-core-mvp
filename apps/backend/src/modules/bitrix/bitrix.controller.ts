@@ -69,7 +69,13 @@ async function readDirectory(tenantId: string, method: string, params: any, sani
             throw new BadRequestException('Bitrix вернул неожиданный ответ ' + method);
         const known = seen.size;
         for (const raw of page) {
-            if (raw?.ID === undefined || raw?.ID === null) continue;
+            // Запись без пригодной идентичности — это малформед-ответ, а не запись,
+            // которую можно тихо пропустить: пропуск превратил бы испорченную страницу
+            // в частичный успех. Падает весь запрос, накопленное не возвращается.
+            // Необязательные поля (NAME, SORT, PARENT, UF_HEAD) сюда не относятся —
+            // их пустые и кривые значения по-прежнему нормализуются в null.
+            if (!raw || typeof raw !== 'object' || Array.isArray(raw) || raw.ID === undefined || raw.ID === null || raw.ID === '')
+                throw new BadRequestException('Bitrix вернул некорректную запись ' + method);
             const record = sanitize(raw);
             if (seen.has(record.ID as string)) continue;
             seen.add(record.ID as string);

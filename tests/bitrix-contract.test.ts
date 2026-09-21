@@ -114,6 +114,21 @@ test('Bitrix provider contracts and installation/refresh with simulated transpor
    const failed=await get(adminHeaders);assert.equal(failed.status,400);const failedText=await failed.text();assert.ok(!failedText.includes('Имя0'));
    for(const secret of secrets)assert.ok(!failedText.includes(secret),secret);
    directoryFailure={status:200,body:{result:{ID:'1'}}};const unexpected=await get(adminHeaders);assert.equal(unexpected.status,400);await unexpected.text();directoryFailure=null;
+   // A record without usable identity is a malformed response, not a record to skip:
+   // skipping would turn a corrupt page into a partial success. The whole request fails
+   // and nothing accumulated before it is returned.
+   for(const malformed of [{NAME:'Без ID'},{ID:null,NAME:'Null ID'},{ID:undefined,NAME:'Undefined ID'},{ID:'',NAME:'Пустой ID'},null,'строка',42,[raw(1)]]){
+    directoryPages=[[raw(0),malformed] as any];
+    const broken=await get(adminHeaders);assert.equal(broken.status,400);const brokenText=await broken.text();
+    assert.ok(!brokenText.includes('Имя0'),brokenText);assert.ok(!brokenText.includes('"users"'),brokenText);assert.ok(!brokenText.includes('"count"'),brokenText);
+    for(const secret of secrets)assert.ok(!brokenText.includes(secret),secret);
+   }
+   // A malformed record on a later page discards the valid first page too.
+   directoryPages=[page(0,50),[raw(50),{NAME:'Без ID на второй странице'}] as any];
+   const lateBroken=await get(adminHeaders);assert.equal(lateBroken.status,400);const lateBrokenText=await lateBroken.text();
+   for(const leaked of ['Имя0','Имя49','Имя50','"users"','"count"'])assert.ok(!lateBrokenText.includes(leaked),leaked);
+   for(const secret of secrets)assert.ok(!lateBrokenText.includes(secret),secret);
+   directoryPages=[];
    // Nothing at all was written while reading.
    assert.equal(await counts(),countsBefore);assert.equal(await installations(),installationsBefore);
    // expired_token stays installedCall's business: the endpoint neither sees nor rotates tokens.
@@ -179,6 +194,7 @@ test('Bitrix provider contracts and installation/refresh with simulated transpor
    assert.deepEqual(Object.keys(body).sort(),['count','departments','truncated']);
    assert.deepEqual(body.departments[0],{ID:'0',NAME:'Отдел 0',SORT:100,PARENT:null,UF_HEAD:'0'});
    assert.deepEqual(body.departments[1],{ID:'1',NAME:'Отдел 1',SORT:101,PARENT:'0',UF_HEAD:'1001'});
+   // Ragged optional fields are normalized, not treated as malformed: only identity fails closed.
    assert.deepEqual(body.departments[102],{ID:'777',NAME:null,SORT:null,PARENT:null,UF_HEAD:null});
    for(const record of body.departments)assert.deepEqual(Object.keys(record).sort(),['ID','NAME','PARENT','SORT','UF_HEAD']);
    for(const leaked of ['leak-code','leak-xml','leak-section','leak-description','leak-uf','dept0@example.com','+70000000000','DEPTH_LEVEL','ACTIVE','CODE','XML_ID','EMAIL','"next"','"total"','"time"'])assert.ok(!text.includes(leaked),leaked);
@@ -201,6 +217,19 @@ test('Bitrix provider contracts and installation/refresh with simulated transpor
    const failed=await get(adminHeaders);assert.equal(failed.status,400);const failedText=await failed.text();assert.ok(!failedText.includes('Отдел 0'));
    for(const secret of secrets)assert.ok(!failedText.includes(secret),secret);
    departmentFailure={status:200,body:{result:{ID:'1',NAME:'Не массив'}}};const unexpected=await get(adminHeaders);assert.equal(unexpected.status,400);await unexpected.text();departmentFailure=null;
+   // Identical malformed-record contract: no silent skip, no partial directory.
+   for(const malformed of [{NAME:'Без ID'},{ID:null,NAME:'Null ID'},{ID:undefined,NAME:'Undefined ID'},{ID:'',NAME:'Пустой ID'},null,'строка',42,[rawDepartment(1)]]){
+    departmentPages=[[rawDepartment(0),malformed] as any];
+    const broken=await get(adminHeaders);assert.equal(broken.status,400);const brokenText=await broken.text();
+    assert.ok(!brokenText.includes('Отдел 0'),brokenText);assert.ok(!brokenText.includes('"departments"'),brokenText);assert.ok(!brokenText.includes('"count"'),brokenText);
+    for(const secret of secrets)assert.ok(!brokenText.includes(secret),secret);
+   }
+   // A malformed record on a later page discards the valid first page too.
+   departmentPages=[departmentPage(0,50),[rawDepartment(50),{NAME:'Без ID на второй странице'}] as any];
+   const lateBroken=await get(adminHeaders);assert.equal(lateBroken.status,400);const lateBrokenText=await lateBroken.text();
+   for(const leaked of ['Отдел 0','Отдел 49','Отдел 50','"departments"','"count"'])assert.ok(!lateBrokenText.includes(leaked),leaked);
+   for(const secret of secrets)assert.ok(!lateBrokenText.includes(secret),secret);
+   departmentPages=[];
    // Nothing at all was written by any of those reads, successful or failed.
    assert.equal(await counts(),countsBefore);assert.equal(await installations(),installationsBefore);
    // expired_token stays installedCall's business here too: no refresh logic in the controller.
