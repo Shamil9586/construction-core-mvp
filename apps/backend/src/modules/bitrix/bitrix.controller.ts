@@ -57,13 +57,25 @@ async function directoryActor(r: any): Promise<Actor> {
 // Единственный путь к порталу — installedCall: он сам находит установку тенанта,
 // сам расшифровывает access token и сам владеет веткой expired_token/refresh.
 // Контроллер не видит токенов и не добавляет собственной логики обновления.
-async function readDirectory(tenantId: string, method: string, params: any, sanitize: (raw: any) => Record<string, unknown>) {
+//
+// strict — режим для оргструктуры. Плоские витрины /users и /departments имеют уже
+// проверенный на реальном портале контракт (усечение отдаётся флагом truncated,
+// полностраничный повтор считается концом выборки, дубликат — keep-first), и он
+// не меняется. Проекции же нужна доказанная полнота: неполный или неоднозначный
+// справочник породил бы ложные unknown-ссылки в diagnostics и мог бы спрятать
+// цикл или членство, поэтому в strict все три случая — отказ.
+async function readDirectory(tenantId: string, method: string, params: any, sanitize: (raw: any) => Record<string, unknown>, strict = false) {
     const adapter = new RealBitrixAdapter();
-    const seen = new Set<string>();
+    const seen = new Map<string, string>();
     const records: Record<string, unknown>[] = [];
     let truncated = false;
     for (let request = 0;; request++) {
-        if (request >= DIRECTORY_MAX_REQUESTS) { truncated = true; break; }
+        if (request >= DIRECTORY_MAX_REQUESTS) {
+            if (strict)
+                throw new BadRequestException('Bitrix не отдал справочник целиком: ' + method);
+            truncated = true;
+            break;
+        }
         const page = await adapter.installedCall(tenantId, method, { ...params, start: request * DIRECTORY_PAGE_SIZE });
         if (!Array.isArray(page))
             throw new BadRequestException('Bitrix вернул неожиданный ответ ' + method);
@@ -77,24 +89,40 @@ async function readDirectory(tenantId: string, method: string, params: any, sani
             if (!raw || typeof raw !== 'object' || Array.isArray(raw) || raw.ID === undefined || raw.ID === null || raw.ID === '')
                 throw new BadRequestException('Bitrix вернул некорректную запись ' + method);
             const record = sanitize(raw);
-            if (seen.has(record.ID as string)) continue;
-            seen.add(record.ID as string);
+            // Сравниваются уже нормализованные записи, поэтому ID 7 и "007" — один
+            // и тот же сотрудник. Совпадающий дубликат безвреден, расходящийся в
+            // strict означает, что портал отдал две разные версии одной записи и
+            // выбирать между ними (keep-first/keep-last) нельзя.
+            const fingerprint = strict ? JSON.stringify(record) : '';
+            const previous = seen.get(record.ID as string);
+            if (previous !== undefined) {
+                if (previous !== fingerprint)
+                    throw new BadRequestException('Bitrix вернул расходящиеся записи с одним идентификатором: ' + method);
+                continue;
+            }
+            seen.set(record.ID as string, fingerprint);
             records.push(record);
         }
-        // Bitrix сигнализирует об окончании неполной страницей; повтор тех же ID
-        // означает портал, игнорирующий start, и тоже обязан останавливать цикл.
-        if (page.length < DIRECTORY_PAGE_SIZE || seen.size === known) break;
+        // Bitrix сигнализирует об окончании неполной страницей.
+        if (page.length < DIRECTORY_PAGE_SIZE) break;
+        // Полная страница, не давшая ни одного нового ID: для плоских витрин это
+        // остановка (портал игнорирует start), для strict — недоказуемая полнота,
+        // ведь следующая страница могла содержать остаток справочника.
+        if (seen.size === known) {
+            if (strict)
+                throw new BadRequestException('Bitrix не продвинул пагинацию: ' + method);
+            break;
+        }
     }
     return { records, truncated };
 }
-// Детерминированный порядок не зависит от того, как Bitrix разложил записи по
-// страницам: ID сравниваются численно, когда это возможно, и по кодовым единицам
-// иначе (localeCompare зависит от локали процесса и здесь неприменим).
+// Детерминированный порядок не зависит ни от разбиения Bitrix на страницы, ни от
+// разрядности double: канонический ID — десятичная строка без ведущих нулей, поэтому
+// более короткая строка всегда меньше, а при равной длине достаточно сравнения по
+// кодовым единицам. Number() здесь неприменим (теряет точность на больших ID),
+// localeCompare — тоже (зависит от локали процесса).
 function compareIds(left: string, right: string) {
-    const leftNumber = Number(left), rightNumber = Number(right);
-    const leftIsNumber = left !== '' && Number.isFinite(leftNumber), rightIsNumber = right !== '' && Number.isFinite(rightNumber);
-    if (leftIsNumber && rightIsNumber && leftNumber !== rightNumber) return leftNumber - rightNumber;
-    if (leftIsNumber !== rightIsNumber) return leftIsNumber ? -1 : 1;
+    if (left.length !== right.length) return left.length - right.length;
     return left < right ? -1 : left > right ? 1 : 0;
 }
 const byId = (a: any, b: any) => compareIds(a.ID as string, b.ID as string);
@@ -106,6 +134,65 @@ function compareDepartments(a: any, b: any) {
 }
 const byKeys = (...keys: string[]) => (a: any, b: any) => { for (const key of keys) { const order = compareIds(a[key], b[key]); if (order) return order; } return 0; };
 const collect = (index: Map<string, string[]>, key: string, value: string) => { const list = index.get(key); if (list) list.push(value); else index.set(key, [value]); };
+// ——— Строгая нормализация только для пути оргструктуры ———
+// Плоские витрины /users и /departments сохраняют уже проверенный на реальном
+// портале мягкий контракт. Проекция же строит граф, поэтому идентификатор, статус
+// и ссылка обязаны быть однозначными: любое «почти подходящее» значение здесь
+// валит весь запрос, а не превращается молча в 0, false или null.
+//
+// Идентификатор: положительное целое числом либо десятичной строкой. Канонический
+// вид — десятичная строка без ведущих нулей. Длинные строковые ID не проходят через
+// Number() и остаются точными.
+const CANONICAL_ID = /^0*([1-9][0-9]*)$/;
+function strictId(value: any): string {
+    const text = typeof value === 'number' ? (Number.isSafeInteger(value) && value > 0 ? String(value) : '')
+        : typeof value === 'string' ? value.trim() : '';
+    const canonical = CANONICAL_ID.exec(text);
+    if (!canonical)
+        throw new BadRequestException('Bitrix вернул недопустимый идентификатор');
+    return canonical[1];
+}
+// Ссылка (PARENT, UF_HEAD): отсутствие выражается null, пустой строкой или нулём —
+// ноль никогда не бывает настоящим ID и в Bitrix означает «не задано». Любое иное
+// непустое значение обязано быть корректным идентификатором.
+function strictReference(value: any): string | null {
+    if (value === undefined || value === null || value === 0) return null;
+    if (typeof value === 'string') { const text = value.trim(); return text === '' || text === '0' ? null : strictId(text); }
+    return strictId(value);
+}
+// ACTIVE: только явно представленные формы. Отсутствующее или неизвестное значение
+// не имеет права стать false — иначе проекция молча объявит сотрудника уволенным.
+function strictActive(value: any): boolean {
+    if (value === true || value === 'Y') return true;
+    if (value === false || value === 'N') return false;
+    throw new BadRequestException('Bitrix вернул недопустимое значение ACTIVE');
+}
+// UF_DEPARTMENT: отсутствие — это ноль членств, но скалярная или иная неожиданная
+// форма — ошибка. Каждое членство канонизируется, ни одно не отбрасывается.
+function strictDepartmentIds(value: any): string[] {
+    if (value === undefined || value === null) return [];
+    if (!Array.isArray(value))
+        throw new BadRequestException('Bitrix вернул недопустимый UF_DEPARTMENT');
+    return [...new Set(value.map(strictId))].sort(compareIds);
+}
+function strictEmployee(raw: any): Record<string, unknown> {
+    const employee: Record<string, unknown> = {
+        ID: strictId(raw.ID),
+        NAME: trimmed(raw.NAME) ?? null,
+        LAST_NAME: trimmed(raw.LAST_NAME) ?? null,
+        ACTIVE: strictActive(raw.ACTIVE),
+        WORK_POSITION: trimmed(raw.WORK_POSITION) ?? null,
+        departmentIds: strictDepartmentIds(raw.UF_DEPARTMENT)
+    };
+    const secondName = trimmed(raw.SECOND_NAME);
+    if (secondName) employee.SECOND_NAME = secondName;
+    return employee;
+}
+// SORT остаётся мягким: это порядок отображения, а не идентичность, и его кривое
+// значение по уже согласованному контракту нормализуется в null.
+function strictDepartment(raw: any): Record<string, unknown> {
+    return { ID: strictId(raw.ID), NAME: trimmed(raw.NAME) ?? null, SORT: sortValue(raw.SORT), PARENT: strictReference(raw.PARENT), UF_HEAD: strictReference(raw.UF_HEAD) };
+}
 // Цикл в графе PARENT означает, что дерево оргструктуры непредставимо. Обход идёт
 // по цепочке родителей (у подразделения не больше одного родителя), серый цвет —
 // узел текущей цепочки, чёрный — уже проверенный. Неизвестный родитель обрывает
@@ -139,18 +226,18 @@ function projectOrganization(employeeRecords: Record<string, unknown>[], departm
     const departmentsWithUnknownParent: { departmentId: string; parentId: string }[] = [];
     const departmentsWithUnknownHead: { departmentId: string; headUserId: string }[] = [];
     let employeeDepartmentLinks = 0;
-    const employees = employeeRecords.map(record => {
-        const { UF_DEPARTMENT, ...employee } = record as any;
-        const ID = employee.ID as string;
-        // UF_DEPARTMENT может содержать несколько подразделений — сохраняются все.
-        const departmentIds = [...new Set((UF_DEPARTMENT as number[]).map(String))].sort(compareIds);
+    for (const record of employeeRecords) {
+        const ID = record.ID as string;
+        // UF_DEPARTMENT может содержать несколько подразделений — strictDepartmentIds
+        // уже канонизировал и отсортировал их, сохранив все до единого.
+        const departmentIds = record.departmentIds as string[];
         employeeDepartmentLinks += departmentIds.length;
         if (!departmentIds.length) employeesWithoutDepartment.push(ID);
         for (const departmentId of departmentIds)
             if (departmentById.has(departmentId)) collect(members, departmentId, ID);
             else unknownEmployeeDepartmentRefs.push({ userId: ID, departmentId });
-        return { ...employee, departmentIds };
-    }).sort(byId);
+    }
+    const employees = [...employeeRecords].sort(byId);
     for (const record of departmentRecords) {
         const ID = record.ID as string, parent = record.PARENT as string | null, head = record.UF_HEAD as string | null;
         if (parent !== null)
@@ -206,10 +293,15 @@ export class BitrixController {
     // чтение. Обе витрины читаются тем же readDirectory напрямую, без внутренних
     // HTTP-вызовов собственных маршрутов; сбой любой из них валит весь запрос,
     // поэтому ни «только сотрудники», ни «только подразделения» вернуться не могут.
-    // truncated проброшен наружу сознательно: усечённая витрина дала бы ложные
-    // unknown-ссылки в diagnostics, и молча скрывать это нельзя.
+    //
+    // Это не атомарный снимок: два справочника читаются последовательно, между ними
+    // портал может измениться, и повторов/снапшотов здесь нет. Нерезрешённая, но
+    // синтаксически корректная ссылка — это диагностика. А вот усечение, отсутствие
+    // продвижения пагинации, расходящийся дубликат, некорректный идентификатор или
+    // статус, цикл и любой сбой REST обязаны валить весь запрос: на неполных или
+    // неоднозначных данных проекция была бы ложной.
     @Get('bitrix/directory/org-structure')
     async orgStructure(
     @Req()
-    r: any) { const a = await directoryActor(r); const employees = await readDirectory(a.tenantId, 'user.get', { select: USER_SELECT }, sanitizeEmployee); const departments = await readDirectory(a.tenantId, 'department.get', {}, sanitizeDepartment); return { ...projectOrganization(employees.records, departments.records), truncated: { employees: employees.truncated, departments: departments.truncated } }; }
+    r: any) { const a = await directoryActor(r); const employees = await readDirectory(a.tenantId, 'user.get', { select: USER_SELECT }, strictEmployee, true); const departments = await readDirectory(a.tenantId, 'department.get', {}, strictDepartment, true); return projectOrganization(employees.records, departments.records); }
 }

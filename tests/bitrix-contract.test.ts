@@ -297,7 +297,7 @@ test('Bitrix provider contracts and installation/refresh with simulated transpor
    assert.equal(orgCalls[1].select,undefined);
    assert.ok(orgCalls.every(c=>c.auth===decrypt(installed.encryptedAccessToken)));
    assert.ok(directoryCalls.every(c=>c.auth!=='neighbour-access-token'));
-   assert.deepEqual(Object.keys(body).sort(),['counts','departments','diagnostics','employees','roots','truncated']);
+   assert.deepEqual(Object.keys(body).sort(),['counts','departments','diagnostics','employees','roots']);
    // Employees: deterministic order, no UF_DEPARTMENT, no primary department inferred,
    // duplicates collapsed, inactive employee kept, unknown ref kept rather than dropped.
    assert.deepEqual(body.employees.map((e:any)=>e.ID),['10','11','12','13','14']);
@@ -323,7 +323,7 @@ test('Bitrix provider contracts and installation/refresh with simulated transpor
    for(const record of body.departments)for(const id of record.employeeIds)assert.ok(body.employees.find((e:any)=>e.ID===id).departmentIds.includes(record.ID),record.ID+'->'+id);
    assert.deepEqual(body.diagnostics,{employeesWithoutDepartment:['13'],unknownEmployeeDepartmentRefs:[{userId:'14',departmentId:'888'}],departmentsWithUnknownParent:[{departmentId:'5',parentId:'777'}],departmentsWithUnknownHead:[{departmentId:'4',headUserId:'999'}]});
    assert.deepEqual(body.counts,{employees:5,departments:5,roots:2,employeeDepartmentLinks:6});
-   assert.deepEqual(body.truncated,{employees:false,departments:false});
+   assert.ok(!('truncated' in body));
    // Nothing missing is invented: no phantom department 888/777, no phantom employee 999.
    assert.ok(!body.departments.some((d:any)=>d.ID==='888'||d.ID==='777'));
    assert.ok(!body.employees.some((e:any)=>e.ID==='999'));
@@ -340,10 +340,10 @@ test('Bitrix provider contracts and installation/refresh with simulated transpor
    const secondRun=await get(adminHeaders);assert.equal(secondRun.status,200);const secondText=await secondRun.text();
    assert.equal(firstText,secondText);
    assert.equal(JSON.parse(firstText).counts.employees,55);
-   // Truncation of either directory is surfaced, never hidden.
-   directoryPages=Array.from({length:41},(_,page)=>Array.from({length:50},(_,i)=>emp(String(page*50+i),[1])));departmentPages=[departmentsFixture];
-   const capped=await get(adminHeaders);assert.equal(capped.status,200);const cappedBody=await capped.json();
-   assert.deepEqual(cappedBody.truncated,{employees:true,departments:false});assert.equal(cappedBody.counts.employees,2000);
+   // Strict completeness: a directory cut off at the request ceiling fails the projection.
+   directoryPages=Array.from({length:41},(_,page)=>Array.from({length:50},(_,i)=>emp(String(page*50+i+1),[1])));departmentPages=[departmentsFixture];
+   const capped=await get(adminHeaders);assert.equal(capped.status,400);const cappedText=await capped.text();
+   for(const leaked of ['"employees"','"departments"','"roots"','"counts"','Имя1'])assert.ok(!cappedText.includes(leaked),leaked);
    // A cycle in PARENT makes the tree unrepresentable: fail closed, no partial projection.
    for(const [label,pages] of [['self-parent',[dep('1','A',100,'1',null)]],['two-node',[dep('1','A',100,'2',null),dep('2','B',200,'1',null)]],['three-node',[dep('1','A',100,'2',null),dep('2','B',200,'3',null),dep('3','C',300,'1',null)]],['cycle beside a valid root',[dep('9','Корень',10,null,null),dep('1','A',100,'2',null),dep('2','B',200,'1',null)]]] as [string,any[]][]){
     directoryPages=[[e10]];departmentPages=[pages];
@@ -389,6 +389,112 @@ test('Bitrix provider contracts and installation/refresh with simulated transpor
    assert.equal(await counts(),countsBefore);
    const log=logged.join('\n');for(const secret of [...secrets,...(await secretMaterial())])assert.ok(!log.includes(secret),secret);
    assert.ok(logged.some(l=>l.includes('/bitrix/directory/org-structure')));
+  }finally{console.log=realLog;console.error=realError;directoryPages=[];departmentPages=[];directoryFailure=null;departmentFailure=null;await app.close();}});
+ // Strict org reads. The flat directories keep their verified permissive contract
+ // (truncated:true, a replayed full page ends the scan, keep-first on a duplicate ID);
+ // the projection cannot, because an incomplete or ambiguous directory manufactures
+ // false diagnostics and can hide a cycle or a membership. Everything below therefore
+ // has to fail the whole request with no projection key and no accumulated record.
+ await t.test('Org structure enforces strict completeness, identity and status normalization',async()=>{
+  process.env.BITRIX_INSTALL_WEBHOOK_ENABLED='false';const app=await createApp();await app.listen(0,'127.0.0.1');const base=await app.getUrl();
+  const logged:string[]=[];const realLog=console.log,realError=console.error;const capture=(...a:any[])=>{logged.push(a.map(x=>typeof x==='string'?x:JSON.stringify(x)).join(' '));};
+  const get=(headers:Record<string,string>={})=>originalFetch(base+'/bitrix/directory/org-structure',{headers});
+  // Valid records carry a marker so any accumulated data leaking into an error body is visible.
+  const okEmp=(id:any,departments:any=[1],extra:any={})=>({ID:id,NAME:'МАРКЕРU'+id,LAST_NAME:'Ф',SECOND_NAME:'',ACTIVE:true,WORK_POSITION:'П',UF_DEPARTMENT:departments,...extra});
+  const okDep=(id:any,extra:any={})=>({ID:id,NAME:'МАРКЕРD'+id,SORT:100,PARENT:null,UF_HEAD:null,...extra});
+  const empPage=(from:number)=>Array.from({length:50},(_,i)=>okEmp(String(from+i)));
+  const depPage=(from:number)=>Array.from({length:50},(_,i)=>okDep(String(from+i)));
+  const tenant=await one(pool,'SELECT * FROM tenants WHERE portal=$1',[process.env.BITRIX_PORTAL]);
+  const admin=await bitrixLogin({DOMAIN:process.env.BITRIX_PORTAL,AUTH_ID:'strict-org-launch',member_id:'acceptance-member',APPLICATION_TOKEN:'wizard-app-token'});
+  const adminHeaders={Authorization:'Bearer '+admin.token};
+  const countsBefore=await counts();const installationsBefore=await installations();
+  console.log=capture;console.error=capture;
+  try{
+   const secrets=[...(await secretMaterial()),admin.token];
+   const firstCall=directoryCalls.length;
+   const failClosed=async(label:string,users:any[][],departments:any[][])=>{
+    directoryPages=users;departmentPages=departments;
+    const response=await get(adminHeaders);assert.equal(response.status,400,label);const responseText=await response.text();
+    for(const leaked of ['"employees"','"departments"','"roots"','"diagnostics"','"counts"','МАРКЕР'])assert.ok(!responseText.includes(leaked),label+' / '+leaked);
+    for(const secret of secrets)assert.ok(!responseText.includes(secret),label+' / secret');
+   };
+   const succeeds=async(label:string,users:any[][],departments:any[][])=>{
+    directoryPages=users;departmentPages=departments;
+    const response=await get(adminHeaders);assert.equal(response.status,200,label);return response.json();
+   };
+   // ---- BLOCKER 1: strict completeness ----
+   await failClosed('users reach the request ceiling',Array.from({length:41},(_,page)=>empPage(page*50+1)),[[okDep('1')]]);
+   await failClosed('departments reach the request ceiling',[[okEmp('1')]],Array.from({length:41},(_,page)=>depPage(page*50+1)));
+   // ---- BLOCKER 2: a full page that adds no new ID is not proof of completion ----
+   await failClosed('replayed full employee page',[empPage(1),empPage(1)],[[okDep('1')]]);
+   await failClosed('replayed full employee page, equivalent copies',[empPage(1),empPage(1).map(r=>({...r}))],[[okDep('1')]]);
+   await failClosed('replayed full department page',[[okEmp('1')]],[depPage(1),depPage(1)]);
+   await failClosed('replayed full department page, equivalent copies',[[okEmp('1')]],[depPage(1),depPage(1).map(r=>({...r}))]);
+   // ---- BLOCKER 3: conflicting duplicates, never keep-first or keep-last ----
+   await failClosed('conflicting employee duplicate in one page, ACTIVE',[[okEmp('1'),okEmp('1',[1],{ACTIVE:false})]],[[okDep('1')]]);
+   await failClosed('conflicting employee duplicate in one page, position',[[okEmp('1'),okEmp('1',[1],{WORK_POSITION:'Другая'})]],[[okDep('1')]]);
+   await failClosed('conflicting employee duplicate in one page, memberships',[[okEmp('1',[1]),okEmp('1',[1,2])]],[[okDep('1'),okDep('2')]]);
+   await failClosed('conflicting employee duplicate in one page, second name',[[okEmp('1'),okEmp('1',[1],{SECOND_NAME:'Отчество'})]],[[okDep('1')]]);
+   await failClosed('conflicting employee duplicate on a later page',[empPage(1),[okEmp('1',[1],{ACTIVE:false}),okEmp('51')]],[[okDep('1')]]);
+   await failClosed('conflicting department duplicate in one page, PARENT',[[okEmp('1')]],[[okDep('1'),okDep('1',{PARENT:'2'})]]);
+   await failClosed('conflicting department duplicate in one page, UF_HEAD',[[okEmp('1')]],[[okDep('1'),okDep('1',{UF_HEAD:'1'})]]);
+   await failClosed('conflicting department duplicate on a later page',[[okEmp('1')]],[depPage(1),[okDep('1',{SORT:999}),okDep('51')]]);
+   await failClosed('conflict revealed only by canonicalization',[[okEmp('1')]],[[okDep('7',{ID:'7',PARENT:'1'}),okDep('7',{ID:7,PARENT:'2'})]]);
+   const equivalent=await succeeds('equivalent duplicates collapse',[[okEmp('1'),okEmp('1')]],[[okDep('1'),okDep('1')]]);
+   assert.deepEqual(equivalent.counts,{employees:1,departments:1,roots:1,employeeDepartmentLinks:1});
+   assert.deepEqual(equivalent.departments[0].employeeIds,['1']);
+   const canonicalDuplicate=await succeeds('canonically equal duplicates collapse',[[okEmp(7,[7])]],[[okDep('7',{ID:7}),okDep('7',{ID:'007'})]]);
+   assert.deepEqual(canonicalDuplicate.departments.map((d:any)=>d.ID),['7']);
+   assert.deepEqual(canonicalDuplicate.employees.map((e:any)=>e.ID),['7']);
+   assert.deepEqual(canonicalDuplicate.employees[0].departmentIds,['7']);
+   // ---- BLOCKER 4: strict identifiers ----
+   const canonical=await succeeds('identifier forms canonicalize',[[okEmp(7,[1]),okEmp('0042',['007']),okEmp('123456789012345678901234567890',[])]],[[okDep('1'),okDep('00007',{SORT:200})]]);
+   assert.deepEqual(canonical.employees.map((e:any)=>e.ID),['7','42','123456789012345678901234567890']);
+   assert.deepEqual(canonical.employees[1].departmentIds,['7']);
+   assert.deepEqual(canonical.departments.map((d:any)=>d.ID),['1','7']);
+   assert.deepEqual(canonical.departments[1].employeeIds,['42']);
+   // Precision-safe ordering: Number() collapses both of these to 1e20 and then orders
+   // them by code unit, which is the wrong way round.
+   const huge=await succeeds('huge decimal ids order precisely',[[okEmp('99999999999999999999',[]),okEmp('100000000000000000000',[]),okEmp('9',[]),okEmp('10',[])]],[[okDep('1')]]);
+   assert.deepEqual(huge.employees.map((e:any)=>e.ID),['9','10','99999999999999999999','100000000000000000000']);
+   for(const [label,id] of [['zero number',0],['zero string','0'],['negative number',-1],['negative string','-5'],['fractional number',1.5],['fractional string','1.5'],['NaN',NaN],['Infinity',Infinity],['unsafe integer',Number.MAX_SAFE_INTEGER+1],['boolean',true],['object',{}],['array',[1]],['exponent string','1e3'],['hex string','0x10'],['text','abc'],['whitespace','   '],['signed string','+7'],['trailing text','7x']] as [string,any][]){
+    await failClosed('employee ID '+label,[[okEmp(id)]],[[okDep('1')]]);
+    await failClosed('department ID '+label,[[okEmp('1')]],[[okDep(id)]]);
+   }
+   for(const [label,value] of [['scalar number',5],['scalar string','5'],['text','abc'],['boolean',true],['object',{}],['null member',[null]],['boolean member',[true]],['empty string member',['']],['zero member',[0]],['zero string member',['0']],['fractional member',[1.5]],['exponent member',['1e3']],['nested array member',[[1]]],['object member',[{}]],['unsafe integer member',[Number.MAX_SAFE_INTEGER+1]]] as [string,any][])
+    await failClosed('UF_DEPARTMENT '+label,[[okEmp('1',value)]],[[okDep('1')]]);
+   const noMembership=await succeeds('absent UF_DEPARTMENT is zero memberships',[[okEmp('1',null),{ID:'2',NAME:'МАРКЕРU2',LAST_NAME:'Ф',ACTIVE:true,WORK_POSITION:'П'}]],[[okDep('1')]]);
+   assert.deepEqual(noMembership.diagnostics.employeesWithoutDepartment,['1','2']);
+   assert.deepEqual(noMembership.counts,{employees:2,departments:1,roots:1,employeeDepartmentLinks:0});
+   for(const field of ['PARENT','UF_HEAD'])
+    for(const [label,value] of [['boolean',true],['object',{}],['array',[1]],['fractional',1.5],['text','abc'],['exponent','1e3'],['negative',-2],['unsafe integer',Number.MAX_SAFE_INTEGER+1]] as [string,any][])
+     await failClosed(field+' '+label,[[okEmp('1')]],[[okDep('1',{[field]:value})]]);
+   const absentRefs=await succeeds('absent PARENT/UF_HEAD normalize to null',[[okEmp('1',[1,2,3])]],[[okDep('1',{PARENT:null,UF_HEAD:0}),okDep('2',{PARENT:'',UF_HEAD:'0'}),okDep('3',{PARENT:'   ',UF_HEAD:undefined})]]);
+   for(const record of absentRefs.departments){assert.equal(record.PARENT,null);assert.equal(record.UF_HEAD,null);}
+   assert.deepEqual(absentRefs.roots,['1','2','3']);
+   assert.deepEqual(absentRefs.diagnostics.departmentsWithUnknownHead,[]);
+   assert.deepEqual(absentRefs.diagnostics.departmentsWithUnknownParent,[]);
+   // ---- BLOCKER 4: strict ACTIVE ----
+   for(const [label,value] of [['missing',undefined],['null',null],['empty string',''],['numeric one',1],['numeric zero',0],['string one','1'],['string zero','0'],['Yes','Yes'],['lowercase y','y'],['lowercase n','n'],['object',{}],['array',[]]] as [string,any][])
+    await failClosed('ACTIVE '+label,[[okEmp('1',[1],{ACTIVE:value})]],[[okDep('1')]]);
+   const statuses=await succeeds('ACTIVE accepts true/false/Y/N and keeps inactive employees',[[okEmp('1',[1],{ACTIVE:true}),okEmp('2',[1],{ACTIVE:false}),okEmp('3',[1],{ACTIVE:'Y'}),okEmp('4',[1],{ACTIVE:'N'})]],[[okDep('1')]]);
+   assert.deepEqual(statuses.employees.map((e:any)=>e.ACTIVE),[true,false,true,false]);
+   assert.deepEqual(statuses.departments[0].employeeIds,['1','2','3','4']);
+   assert.deepEqual(statuses.diagnostics.employeesWithoutDepartment,[]);
+   // An inactive employee is still a resolvable head, and gains nothing from being one.
+   const inactiveHead=await succeeds('inactive head resolves',[[okEmp('1',[1],{ACTIVE:false})]],[[okDep('1',{UF_HEAD:'1'})]]);
+   assert.deepEqual(inactiveHead.diagnostics.departmentsWithUnknownHead,[]);
+   assert.equal(inactiveHead.departments[0].UF_HEAD,'1');
+   assert.equal(inactiveHead.employees[0].ACTIVE,false);
+   assert.deepEqual(inactiveHead.departments[0].employeeIds,['1']);
+   // The request contract survives every strict path: the same seven-field select.
+   const strictCalls=directoryCalls.slice(firstCall);
+   assert.ok(strictCalls.length>=200);
+   for(const call of strictCalls.filter(c=>c.method==='user.get'))assert.deepEqual(call.select,USER_SELECT);
+   for(const call of strictCalls.filter(c=>c.method==='department.get'))assert.deepEqual(Object.keys(call.params).sort(),['auth','start']);
+   // Not one strict read, successful or failed, wrote anything or leaked a secret.
+   assert.equal(await counts(),countsBefore);assert.equal(await installations(),installationsBefore);
+   const log=logged.join('\n');for(const secret of [...secrets,...(await secretMaterial())])assert.ok(!log.includes(secret),secret);
   }finally{console.log=realLog;console.error=realError;directoryPages=[];departmentPages=[];directoryFailure=null;departmentFailure=null;await app.close();}});
  }finally{globalThis.fetch=originalFetch;delete process.env.BITRIX_MEMBER_ID;await pool.end();}
 });
