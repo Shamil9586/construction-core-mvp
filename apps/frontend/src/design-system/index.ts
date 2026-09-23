@@ -54,3 +54,15 @@ export type {
   ButtonWidth,
   ButtonArrow,
 } from './controls/Button';
+
+export { AppShell } from './navigation/AppShell';
+export type { AppShellProps } from './navigation/AppShell';
+
+export { Sidebar } from './navigation/Sidebar';
+export type { SidebarProps, NavItem } from './navigation/Sidebar';
+
+export { Breadcrumb } from './navigation/Breadcrumb';
+export type { BreadcrumbProps, BreadcrumbItem } from './navigation/Breadcrumb';
+
+export { PageHeader } from './navigation/PageHeader';
+export type { PageHeaderProps } from './navigation/PageHeader';

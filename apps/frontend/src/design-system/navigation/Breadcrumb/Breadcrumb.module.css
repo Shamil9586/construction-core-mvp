@@ -1,0 +1,52 @@
+.breadcrumb {
+  display: block;
+  margin-bottom: var(--cc-p-space-16);
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--cc-p-space-8);
+}
+
+.entry {
+  display: flex;
+  align-items: center;
+  gap: var(--cc-p-space-8);
+}
+
+.crumb {
+  box-sizing: border-box;
+  border: none;
+  background: none;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: var(--cc-text-link);
+  cursor: pointer;
+  appearance: none;
+}
+
+.crumb:hover {
+  text-decoration: underline;
+}
+
+.crumb:focus-visible {
+  outline: var(--cc-focus-ring-width) solid var(--cc-focus-ring);
+  outline-offset: var(--cc-focus-ring-offset);
+  border-radius: var(--cc-p-radius-3);
+}
+
+/* The current step — last in the trail, or any item with no handler. Not a
+   control, so it takes the secondary text colour rather than the link colour. */
+.current {
+  color: var(--cc-text-secondary);
+}
+
+.separator {
+  color: var(--cc-text-secondary);
+}

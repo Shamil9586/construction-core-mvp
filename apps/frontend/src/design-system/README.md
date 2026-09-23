@@ -133,3 +133,43 @@ Still to come, and blocked on the domain model rather than on design:
 `ConfirmedVolume`, `ZoneRow`, `Sequence`, and the identity slots of
 `WorkIdentityCard`. They will not be filled with placeholder text — a block whose
 data cannot exist is not rendered at all.
+
+**F2 — table layer:** `DataTable`, `ObjectRow`, `WorkSummaryRow` (see the commit for
+the full record; not duplicated here).
+
+**F3 — Application Shell:** `AppShell`, `Sidebar`, `Breadcrumb`, `PageHeader`, under
+`design-system/navigation/`.
+
+Pure layout and navigation chrome — no routing. `AppShell` renders the four
+landmarks (`aside`/`header`/`main`, plus the `nav` that `Sidebar` renders inside
+it) and depends on tokens alone; `Sidebar` takes `items`/`activeKey`/`onNavigate`,
+`Breadcrumb` takes `items` with a per-step `onSelect`, and neither calls a router
+or stores a route. A screen — or a thin adapter above one — supplies both,
+closing over the real `objectId`/`workId` it already has. The design system never
+stores, defaults or parses an identifier, so there is nothing here for a stale or
+hardcoded id (`CC-024`, `W-024-07`) to hide behind; both only ever appear as this
+gallery's own demonstration values, the same status ObjectRow's demo data already
+had in F2.
+
+Every property the legacy bare `aside`/`header`/`main` rules set — including at
+both of `style.css`'s responsive breakpoints — is re-declared on the matching
+class, the discipline the type scale already uses against bare `h1`/`h2`/`small`.
+Nav and breadcrumb items are `<button>`s rather than `<a>`s, the choice `ObjectRow`
+made for its own row activator, so legacy's `nav a` rule does not match this
+markup at all. `SCOPE_CLASS` moves to `AppShell`'s root: this is the first
+component meant to sit once at the top of the real application, rather than being
+applied per-screen.
+
+Not implemented, per the given scope: C01, O01, W01, API integration, business
+logic, domain models, backend changes. `main.tsx` is not touched and does not
+import any of this — the same gate F0 recorded, verified the same way: the
+absence of `cc-p-navy-900`, `ccScope`, `cc-type-metric` and `Inter Variable` from
+`dist/frontend/assets`.
+
+Gates: `npm run build` PASS; `npm run typecheck:strict` PASS (the new files sit
+under `src/design-system/**/*`, already covered by `tsconfig.strict.json`);
+`npm run test:ds` 65/65 PASS (18 new, in `tests/design-system/shell.spec.ts`);
+`npm test` 64/64 PASS. `npm run test:browser` NOT RUN — F3 touches no file it
+exercises and the production bundle carries no marker of it, so the baseline
+failures in `docs/status.md` remain separate and uncleared, the same basis F2
+used.

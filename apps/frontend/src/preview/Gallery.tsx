@@ -1,17 +1,22 @@
 import { useState, type ReactNode } from 'react';
 import {
+  AppShell,
+  Breadcrumb,
   Button,
   DataTable,
   LinkedStage,
   ObjectRow,
   objectColumns,
+  PageHeader,
   PlanFact,
   ProgressBar,
+  Sidebar,
   StatusBadge,
   WorkSummaryRow,
   workSummaryColumns,
   SCOPE_CLASS,
   typeClass,
+  type NavItem,
 } from '../design-system';
 
 /**
@@ -85,9 +90,17 @@ function Card({
   );
 }
 
+const shellNavItems: NavItem[] = [
+  { key: 'dashboard', label: 'Панель' },
+  { key: 'objects', label: 'Объекты' },
+  { key: 'production', label: 'Производство' },
+  { key: 'finance', label: 'Финансы' },
+];
+
 export function Gallery() {
   const [activated, setActivated] = useState('—');
   const [activations, setActivations] = useState(0);
+  const [activeNavKey, setActiveNavKey] = useState('objects');
 
   const activate = (label: string) => {
     setActivated(label);
@@ -329,6 +342,72 @@ export function Gallery() {
             errorLabel="Не удалось загрузить портфель"
             onRetry={() => activate('Повтор запроса')}
           />
+        </div>
+      </Section>
+
+      <Section title="Navigation / AppShell" id="app-shell">
+        <p
+          className={typeClass('label')}
+          style={{ color: 'var(--cc-text-secondary)', marginBottom: 12 }}
+        >
+          Активный раздел: <span data-active-nav>{activeNavKey}</span>
+        </p>
+        <div
+          style={{
+            height: 560,
+            border: '1px solid var(--cc-border-default)',
+            borderRadius: 'var(--cc-radius-card)',
+            overflow: 'hidden',
+          }}
+        >
+          <AppShell
+            sidebar={
+              <Sidebar
+                brand={<span className={typeClass('ui-strong')}>Contour</span>}
+                caption="ПРОИЗВОДСТВЕННЫЙ КОНТРОЛЬ"
+                items={shellNavItems}
+                activeKey={activeNavKey}
+                onNavigate={setActiveNavKey}
+                footer={<span>Тестовая среда</span>}
+              />
+            }
+            topbar={
+              <>
+                <span className={typeClass('ui')}>Производственное ядро</span>
+                <span
+                  className={typeClass('ui')}
+                  style={{ color: 'var(--cc-text-secondary)' }}
+                >
+                  Демо-пользователь
+                </span>
+              </>
+            }
+          >
+            <Breadcrumb
+              items={[
+                {
+                  label: 'Объекты',
+                  onSelect: () => activate('Объекты (хлебная крошка)'),
+                },
+                { label: 'Учебный корпус · Северный' },
+              ]}
+            />
+            <PageHeader
+              eyebrow="ОБЪЕКТ"
+              title="Учебный корпус · Северный"
+              description="CC-024 · ул. Строителей, 12"
+              actions={
+                <Button variant="Secondary" onClick={() => activate('Экспорт')}>
+                  Экспорт
+                </Button>
+              }
+            />
+            <p className={typeClass('body')}>
+              Содержимое экрана рендерится здесь вызывающей стороной. AppShell не
+              решает, какой раздел активен, — это состояние снаружи, переданное как
+              activeKey и onNavigate; C01/O01/W01 сюда не входят.
+            </p>
+          </AppShell>
         </div>
       </Section>
 

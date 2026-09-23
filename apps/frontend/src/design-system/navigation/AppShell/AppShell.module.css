@@ -1,0 +1,116 @@
+/*
+ * Navigation / AppShell
+ *
+ * Every property the legacy bare `aside` / `header` / `main` rules set
+ * (apps/frontend/src/style.css, including its two responsive breakpoints) is
+ * re-declared here on the matching class, so nothing is left for those rules to
+ * fill in. A class always outranks an element selector on a property both sides
+ * declare, regardless of load order — the risk is only ever a property *we*
+ * leave unset, the same leak the type scale already guards against for bare
+ * h1/h2/small.
+ */
+
+.shell {
+  box-sizing: border-box;
+  display: flex;
+  height: 100%;
+  min-height: 100%;
+  background: var(--cc-background-page);
+}
+
+/* Off-screen until focused. A jump link, not a route — plain browser anchor
+   navigation to `#<mainId>`, nothing router-specific.
+
+   Revealed on `:focus`, not `:focus-visible`: unlike a button, a link parked
+   off-screen can never be reached by a mouse click in the first place, so the
+   usual reason to prefer `:focus-visible` (do not ring a control the user just
+   clicked) does not apply — anything that focuses this link is keyboard or
+   assistive-technology navigation by construction. */
+.skipLink {
+  position: absolute;
+  top: var(--cc-p-space-8);
+  left: var(--cc-p-space-8);
+  z-index: 100;
+  padding: var(--cc-p-space-8) var(--cc-p-space-16);
+  background: var(--cc-action-primary);
+  color: var(--cc-text-on-action);
+  border-radius: var(--cc-radius-button);
+  transform: translateY(-200%);
+  transition: transform 0.15s ease;
+}
+
+.skipLink:focus {
+  transform: translateY(0);
+  outline: var(--cc-focus-ring-width) solid var(--cc-focus-ring);
+  outline-offset: var(--cc-focus-ring-offset);
+}
+
+/* Legacy: width 248px, background #152c37, color #c5d2d9, position fixed,
+   inset 0 auto 0 0, padding 30px 18px (205px / 100%+relative at its two
+   breakpoints). `position: static` alone neutralises the fixed positioning and,
+   with it, the inset shorthand — offsets have no effect on a statically
+   positioned box. Padding is owned by `Sidebar`, not by this frame, so it is
+   reset to 0 here rather than left to inherit anything. */
+.aside {
+  box-sizing: border-box;
+  flex: 0 0 var(--cc-sidebar-width);
+  width: var(--cc-sidebar-width);
+  position: static;
+  padding: 0;
+  background: var(--cc-background-navigation);
+  color: var(--cc-text-on-navigation-muted);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.workspace {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* Legacy: height 78px, background #fff, border-bottom #e4eaed, padding 0 36px,
+   flex row space-between, color #667580 (height auto + padding 12px at the
+   760px breakpoint, which this overrides unconditionally). */
+.header {
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  height: var(--cc-topbar-height);
+  padding: 0;
+  background: var(--cc-background-surface);
+  border-bottom: var(--cc-border-width) solid var(--cc-border-default);
+  color: var(--cc-text-primary);
+}
+
+.headerInner {
+  box-sizing: border-box;
+  height: 100%;
+  padding: 0 var(--cc-p-space-32);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--cc-p-space-16);
+}
+
+/* Legacy: padding 30px 36px 60px, max-width 1900px, margin auto (padding 24px /
+   18px at its two breakpoints, overridden unconditionally the same way). */
+.main {
+  box-sizing: border-box;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0;
+  max-width: none;
+  padding: var(--cc-p-space-32) var(--cc-p-space-32) var(--cc-p-space-40);
+}
+
+/* Focused only programmatically, via the skip link — never a normal Tab stop.
+   Still given a visible ring rather than none: the rule is "replaced with the
+   ring", not "removed", and an inset ring keeps it clear of the scroll edge. */
+.main:focus-visible {
+  outline: var(--cc-focus-ring-width) solid var(--cc-focus-ring);
+  outline-offset: calc(var(--cc-focus-ring-offset) * -1);
+}
