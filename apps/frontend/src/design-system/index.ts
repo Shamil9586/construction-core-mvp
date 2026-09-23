@@ -32,6 +32,21 @@ export type {
   LinkedStageSummary,
 } from './data/LinkedStage';
 
+export { DataTable } from './data/DataTable';
+export type {
+  DataTableProps,
+  DataTableColumn,
+  DataTableState,
+  RowStatus,
+  RowTone,
+} from './data/DataTable';
+
+export { ObjectRow, objectColumns } from './data/ObjectRow';
+export type { ObjectRowProps } from './data/ObjectRow';
+
+export { WorkSummaryRow, workSummaryColumns } from './data/WorkSummaryRow';
+export type { WorkSummaryRowProps } from './data/WorkSummaryRow';
+
 export { Button } from './controls/Button';
 export type {
   ButtonProps,

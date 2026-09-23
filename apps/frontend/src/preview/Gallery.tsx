@@ -1,10 +1,15 @@
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import {
   Button,
+  DataTable,
   LinkedStage,
+  ObjectRow,
+  objectColumns,
   PlanFact,
   ProgressBar,
   StatusBadge,
+  WorkSummaryRow,
+  workSummaryColumns,
   SCOPE_CLASS,
   typeClass,
 } from '../design-system';
@@ -81,6 +86,14 @@ function Card({
 }
 
 export function Gallery() {
+  const [activated, setActivated] = useState('—');
+  const [activations, setActivations] = useState(0);
+
+  const activate = (label: string) => {
+    setActivated(label);
+    setActivations((count) => count + 1);
+  };
+
   return (
     <div
       className={SCOPE_CLASS}
@@ -213,6 +226,110 @@ export function Gallery() {
             />
           </Card>
         </Row>
+      </Section>
+
+      <Section title="Data / Table · rowType = Object" id="object-table">
+        <p
+          className={typeClass('label')}
+          style={{ color: 'var(--cc-text-secondary)', marginBottom: 12 }}
+        >
+          Последняя активация: <span data-activated>{activated}</span> · всего
+          активаций: <span data-activation-count>{activations}</span>
+        </p>
+        <DataTable columns={objectColumns} title="Портфель объектов">
+          <ObjectRow
+            name="Учебный корпус · Северный"
+            meta="CC-024 · ул. Строителей, 12"
+            responsible="РП · Сергей Волков"
+            smr="62%"
+            smrProgress={62}
+            status={{ variant: 'Delayed', label: 'Есть отставание' }}
+            tone="Attention"
+            interactive
+            onActivate={() => activate('Учебный корпус · Северный')}
+          />
+          <ObjectRow
+            name="Производственный корпус"
+            meta="CC-031 · ул. Заводская, 4"
+            responsible="РП · Анна Кузнецова"
+            smr="88%"
+            smrProgress={88}
+            status={{ variant: 'OnTrack', label: 'По графику' }}
+            interactive
+            onActivate={() => activate('Производственный корпус')}
+          />
+          <ObjectRow
+            name="Склад"
+            meta="CC-018 · пр. Промышленный, 7"
+            responsible="РП · Игорь Лебедев"
+            smr="—"
+            smrProgress={null}
+            status={{ variant: 'Neutral', label: 'Нет данных' }}
+          />
+        </DataTable>
+      </Section>
+
+      <Section title="Data / Table · rowType = WorkSummary" id="work-table">
+        <DataTable
+          columns={workSummaryColumns}
+          title="Производство"
+          context="Отделочные работы · 3 из 12 работ объекта"
+        >
+          <WorkSummaryRow
+            name="Подготовка основания"
+            performer="ООО «Монолит Отделка»"
+            plan="800 м²"
+            fact="800 м²"
+            smr="100%"
+            status={{ variant: 'OnTrack', label: 'По графику' }}
+          />
+          <WorkSummaryRow
+            name="Штукатурка"
+            performer="ООО «Монолит Отделка»"
+            plan="1 000 м²"
+            fact="500 м²"
+            smr="50%"
+            status={{ variant: 'Delayed', label: 'Есть отставание' }}
+            tone="Attention"
+            interactive
+            onActivate={() => activate('Штукатурка')}
+          />
+          <WorkSummaryRow
+            name="Шпаклёвка"
+            performer="ООО «Монолит Отделка»"
+            plan="1 000 м²"
+            fact="0 м²"
+            smr="0%"
+            status={{ variant: 'Neutral', label: 'В работе' }}
+          />
+          <WorkSummaryRow
+            name="Окраска"
+            performer="ООО «Монолит Отделка»"
+            plan="1 000 м²"
+            fact="—"
+            smr="—"
+            status={{ variant: 'Neutral', label: 'Нет данных' }}
+          />
+        </DataTable>
+      </Section>
+
+      <Section title="Data / Table · состояния" id="table-states">
+        <div style={{ display: 'grid', gap: 20 }}>
+          <DataTable columns={objectColumns} title="Загрузка" state="Loading" />
+          <DataTable
+            columns={objectColumns}
+            title="Пусто"
+            state="Empty"
+            emptyLabel="Объектов нет"
+          />
+          <DataTable
+            columns={objectColumns}
+            title="Ошибка"
+            state="Error"
+            errorLabel="Не удалось загрузить портфель"
+            onRetry={() => activate('Повтор запроса')}
+          />
+        </div>
       </Section>
 
       <Section title="Проверка утечек legacy CSS" id="leak-test">

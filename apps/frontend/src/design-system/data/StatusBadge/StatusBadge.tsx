@@ -16,6 +16,16 @@ import styles from './StatusBadge.module.css';
  * (Design Rules §16). It matters more here than anywhere else, because `Delayed`
  * and `Attention` are deliberately the same amber — without the words they are
  * not merely hard to tell apart, they are identical.
+ *
+ * `Blocked` deserves saying out loud, because it is the variant most likely to be
+ * wired up wrongly. It is a visual variant and nothing more. It must not be
+ * derived from a colour — not from `scheduleStatus === 'RED'`, not from a `RED`
+ * severity on an attention signal, not from a red anything. A blocked state is a
+ * claim about the work and requires explicit business data to support it:
+ * `works[].blockers[]`, which carries the named reason. Red means large schedule
+ * variance; blocked means something is standing in the way. Treating the first as
+ * the second invents a rule the product model does not have, and does it in the
+ * place a director is most likely to act on.
  */
 
 export interface StatusBadgeProps {

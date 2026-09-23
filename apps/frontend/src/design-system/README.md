@@ -109,6 +109,12 @@ No colour is ever converted into a business rule. `StatusVariant` in the design
 system is a visual vocabulary of five appearances; which one a record deserves is
 decided in a view-model from these signals, never from a colour code.
 
+**`Blocked` in particular is a visual variant only.** It must not be derived from
+a colour — not from `scheduleStatus === 'RED'`, not from a `RED` severity, not
+from a red anything. A blocking state is a claim about the work and requires
+explicit business data to support it: `blockers`, which carries the named reason.
+Red means large schedule variance; blocked means something stands in the way.
+
 ## Stage record
 
 **F0 — tokens, type scale, Inter, tabular figures.**

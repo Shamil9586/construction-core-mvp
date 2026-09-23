@@ -28,6 +28,15 @@ export interface ProgressBarProps {
   size?: ProgressBarSize;
   /** Caption shown in place of a value. */
   noDataLabel?: string;
+  /**
+   * Drops the `progressbar` role and hides the bar from assistive technology.
+   *
+   * For use where the same figure is already written out beside the bar — a table
+   * cell showing "62%" next to it, for instance. There the bar adds nothing a
+   * screen reader needs, and announcing it twice makes a long table slower to get
+   * through. The visible percentage remains the accessible value.
+   */
+  decorative?: boolean;
   className?: string;
 }
 
@@ -36,6 +45,7 @@ export function ProgressBar({
   label,
   size = 'Inline',
   noDataLabel = 'Нет данных',
+  decorative = false,
   className,
 }: ProgressBarProps) {
   const hasValue = value !== null && Number.isFinite(value);
@@ -64,16 +74,19 @@ export function ProgressBar({
   // quietly rounded into something plausible.
   const width = Math.min(100, Math.max(0, value));
 
+  const semantics = decorative
+    ? ({ 'aria-hidden': true } as const)
+    : ({
+        role: 'progressbar',
+        'aria-label': label,
+        'aria-valuenow': value,
+        'aria-valuemin': 0,
+        'aria-valuemax': 100,
+      } as const);
+
   return (
     <div className={classes}>
-      <div
-        className={styles.track}
-        role="progressbar"
-        aria-label={label}
-        aria-valuenow={value}
-        aria-valuemin={0}
-        aria-valuemax={100}
-      >
+      <div className={styles.track} {...semantics}>
         <div className={styles.fill} style={{ width: `${width}%` }} />
       </div>
     </div>
