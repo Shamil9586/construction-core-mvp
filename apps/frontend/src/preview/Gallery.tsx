@@ -18,6 +18,19 @@ import {
   typeClass,
   type NavItem,
 } from '../design-system';
+import { CompanyControlCenter } from '../screens/C01';
+import { ObjectOverview } from '../screens/O01';
+import { WorkCard } from '../screens/W01';
+import { buildC01ViewModel } from '../view-models/c01';
+import { buildO01ViewModel } from '../view-models/o01';
+import { buildW01ViewModel, type W01ViewModel } from '../view-models/w01';
+import {
+  demoInspections,
+  demoObjects,
+  demoSelectedObjectId,
+  demoSelectedWorkId,
+  demoWorks,
+} from '../screens/demo/fixtures';
 
 /**
  * Isolated preview of the design-system components.
@@ -97,15 +110,53 @@ const shellNavItems: NavItem[] = [
   { key: 'finance', label: 'Финансы' },
 ];
 
+const demoTopbar = (
+  <>
+    <span className={typeClass('ui')}>Производственное ядро</span>
+    <span className={typeClass('ui')} style={{ color: 'var(--cc-text-secondary)' }}>
+      Демо-пользователь
+    </span>
+  </>
+);
+
+/**
+ * `POST /inspections/:id/accept` decides a work as a whole — the backend has no
+ * field for "498 of the 500 reported" (see `view-models/w01.ts`). This override
+ * exists only so the F4 screen preview can show the two-figure layout the
+ * product spec asks for; `buildW01ViewModel` itself never produces
+ * `PartiallyConfirmed` from real data.
+ */
+function demoPartialConfirmation(viewModel: W01ViewModel): W01ViewModel {
+  return {
+    ...viewModel,
+    confirmation: { kind: 'PartiallyConfirmed', value: '498', meta: 'м² · подтверждено частично' },
+  };
+}
+
 export function Gallery() {
   const [activated, setActivated] = useState('—');
   const [activations, setActivations] = useState(0);
   const [activeNavKey, setActiveNavKey] = useState('objects');
+  const [c01NavKey, setC01NavKey] = useState('objects');
+  const [o01NavKey, setO01NavKey] = useState('objects');
+  const [w01NavKey, setW01NavKey] = useState('production');
 
   const activate = (label: string) => {
     setActivated(label);
     setActivations((count) => count + 1);
   };
+
+  const c01ViewModel = buildC01ViewModel(demoObjects, demoWorks);
+
+  const selectedObject = demoObjects.find((object) => object.id === demoSelectedObjectId);
+  if (!selectedObject) throw new Error(`Demo fixture missing object: ${demoSelectedObjectId}`);
+  const o01ViewModel = buildO01ViewModel(selectedObject, demoWorks);
+
+  const selectedWork = demoWorks.find((work) => work.id === demoSelectedWorkId);
+  if (!selectedWork) throw new Error(`Demo fixture missing work: ${demoSelectedWorkId}`);
+  const w01ViewModel = demoPartialConfirmation(
+    buildW01ViewModel(selectedWork, selectedObject, demoInspections),
+  );
 
   return (
     <div
@@ -408,6 +459,116 @@ export function Gallery() {
               activeKey и onNavigate; C01/O01/W01 сюда не входят.
             </p>
           </AppShell>
+        </div>
+      </Section>
+
+      <Section title="Screens / C01 — Company Control Center" id="c01">
+        <p
+          className={typeClass('label')}
+          style={{ color: 'var(--cc-text-secondary)', marginBottom: 12 }}
+        >
+          Последняя активация: <span>{activated}</span>
+        </p>
+        <div
+          style={{
+            height: 900,
+            border: '1px solid var(--cc-border-default)',
+            borderRadius: 'var(--cc-radius-card)',
+            overflow: 'hidden',
+          }}
+        >
+          <CompanyControlCenter
+            viewModel={c01ViewModel}
+            sidebar={
+              <Sidebar
+                brand={<span className={typeClass('ui-strong')}>Contour</span>}
+                caption="ПРОИЗВОДСТВЕННЫЙ КОНТРОЛЬ"
+                items={shellNavItems}
+                activeKey={c01NavKey}
+                onNavigate={setC01NavKey}
+                footer={<span>Тестовая среда</span>}
+              />
+            }
+            topbar={demoTopbar}
+            onSelectObject={(objectId) => {
+              const object = demoObjects.find((o) => o.id === objectId);
+              activate(object ? `${object.name} (C01 → объект)` : objectId);
+            }}
+          />
+        </div>
+      </Section>
+
+      <Section title="Screens / O01 — Object Overview" id="o01">
+        <p
+          className={typeClass('label')}
+          style={{ color: 'var(--cc-text-secondary)', marginBottom: 12 }}
+        >
+          Последняя активация: <span>{activated}</span>
+        </p>
+        <div
+          style={{
+            height: 900,
+            border: '1px solid var(--cc-border-default)',
+            borderRadius: 'var(--cc-radius-card)',
+            overflow: 'hidden',
+          }}
+        >
+          <ObjectOverview
+            viewModel={o01ViewModel}
+            sidebar={
+              <Sidebar
+                brand={<span className={typeClass('ui-strong')}>Contour</span>}
+                caption="ПРОИЗВОДСТВЕННЫЙ КОНТРОЛЬ"
+                items={shellNavItems}
+                activeKey={o01NavKey}
+                onNavigate={setO01NavKey}
+                footer={<span>Тестовая среда</span>}
+              />
+            }
+            topbar={demoTopbar}
+            onNavigateHome={() => activate('Портфель (O01 → хлебная крошка)')}
+            onSelectWork={(workId) => {
+              const work = demoWorks.find((w) => w.id === workId);
+              activate(work ? `${work.name} (O01 → работа)` : workId);
+            }}
+          />
+        </div>
+      </Section>
+
+      <Section title="Screens / W01 — Work Card" id="w01">
+        <p
+          className={typeClass('label')}
+          style={{ color: 'var(--cc-text-secondary)', marginBottom: 12 }}
+        >
+          Последняя активация: <span>{activated}</span>
+        </p>
+        <div
+          style={{
+            height: 900,
+            border: '1px solid var(--cc-border-default)',
+            borderRadius: 'var(--cc-radius-card)',
+            overflow: 'hidden',
+          }}
+        >
+          <WorkCard
+            viewModel={w01ViewModel}
+            sidebar={
+              <Sidebar
+                brand={<span className={typeClass('ui-strong')}>Contour</span>}
+                caption="ПРОИЗВОДСТВЕННЫЙ КОНТРОЛЬ"
+                items={shellNavItems}
+                activeKey={w01NavKey}
+                onNavigate={setW01NavKey}
+                footer={<span>Тестовая среда</span>}
+              />
+            }
+            topbar={demoTopbar}
+            onNavigateHome={() => activate('Портфель (W01 → хлебная крошка)')}
+            onSelectObject={(objectId) => {
+              const object = demoObjects.find((o) => o.id === objectId);
+              activate(object ? `${object.name} (W01 → хлебная крошка)` : objectId);
+            }}
+          />
         </div>
       </Section>
 

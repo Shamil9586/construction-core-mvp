@@ -10,7 +10,7 @@
  */
 
 export { formatPercent, NO_DATA_DASH, NO_DATA_TEXT } from './percent';
-export { formatQuantity, formatMeasure, joinMeta } from './quantity';
+export { formatQuantity, formatMeasure, joinMeta, formatQuantityWithUnit } from './quantity';
 export type { Measure } from './quantity';
 export { formatMoney, formatMoneyCompact } from './money';
 export { formatDate, formatDayMonth } from './date';

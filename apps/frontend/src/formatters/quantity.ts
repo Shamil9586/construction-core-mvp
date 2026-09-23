@@ -61,3 +61,18 @@ export function formatMeasure(
 export function joinMeta(...parts: Array<string | null | undefined>): string {
   return parts.filter((part): part is string => Boolean(part && part.trim())).join(' · ');
 }
+
+/**
+ * A quantity and its unit as one string, e.g. "800 м²", for a plain table cell
+ * that has no separate slot for the unit. Absent stays a bare dash — the unit is
+ * not appended to it, since "— м²" would misreport a real unit for a figure that
+ * was never measured.
+ */
+export function formatQuantityWithUnit(
+  value: string | number | null | undefined,
+  unit: string,
+  absent: string = NO_DATA_DASH,
+): string {
+  const formatted = formatQuantity(value, absent);
+  return formatted === absent ? absent : `${formatted} ${unit}`;
+}
