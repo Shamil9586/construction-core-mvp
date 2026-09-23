@@ -61,3 +61,18 @@ specs do not repeat the coupling that makes the existing ones fragile.
 Report what actually ran and what it actually said. If a gate was skipped, say it was
 skipped. If a test fails, quote the output. "Build and tests pass" is only true when both
 were executed in this session.
+
+## Recording a stage result
+
+Each stage records its own gate results and does not inherit or absorb anyone
+else's. Three rules keep the record readable:
+
+- **"NOT RUN" is a result.** When a gate was not executed, write NOT RUN and the
+  reason. Do not omit the row, and do not substitute a related gate that did run.
+- **Baseline failures stay separate.** The pre-existing Playwright failures belong
+  to the baseline, not to the stage being reported. They are listed under their
+  own heading, neither re-tested nor cleared by a stage that did not run them.
+- **Claim only what was measured.** "The design system is not imported by the
+  application, verified by the absence of these markers in the build output" is a
+  measurement. "The legacy interface is pixel-for-pixel unchanged" is not — no
+  visual comparison was made. Say the first, never the second.

@@ -57,12 +57,19 @@ export const color = {
  * decides which of these a given record deserves — that decision belongs to a
  * view-model, which reads confirmed data and existing domain rules.
  *
- * In particular: a colour is never an input. `RED` from `ScheduleStatusService`
- * is a degree of schedule variance and does not mean "blocked"; blocking has its
- * own source in `works[].blockers[]`. `healthStatus` mixes contours — pto and sdo
- * lateness raise it — so it is never translated into a badge automatically.
- * Deriving business meaning from a colour code invents a rule the product model
- * does not have.
+ * The three backend signals stay scoped and separate:
+ *
+ *   scheduleStatus  schedule state under the existing schedule contract
+ *                   (ScheduleStatusService, variance against thresholds)
+ *   healthStatus    an aggregated attention state that deliberately mixes
+ *                   contours — late ИД and СДО raise it — and is therefore
+ *                   never mapped automatically to a delay
+ *   blockers        a separate confirmed source, carrying named reasons a work
+ *                   cannot proceed
+ *
+ * No colour is converted into a business rule. `RED` is a degree of schedule
+ * variance and does not mean "blocked"; deriving business meaning from a colour
+ * code invents a rule the product model does not have.
  */
 export type StatusVariant =
   | 'OnTrack'

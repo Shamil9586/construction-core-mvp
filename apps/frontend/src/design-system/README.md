@@ -82,11 +82,36 @@ baseline and enable tabular figures.
   which one a record deserves is decided in a view-model from confirmed data and
   existing domain rules.
 
-## Status
+## Status semantics
 
-**F0 complete** — tokens, type scale, Inter, tabular figures.
+Three separate signals arrive from the backend. They answer different questions
+and none of them is converted into another.
 
-Components land from F1. Five of them — `ConfirmedVolume`, `ZoneRow`, `Sequence`,
-and the identity slots of `WorkIdentityCard` — depend on capabilities the domain
-model does not yet express. They will not be filled with placeholder text: a block
-whose data cannot exist is not rendered at all.
+| Signal | What it is | What it is not |
+|---|---|---|
+| `scheduleStatus` | Schedule state under the existing schedule contract — `ScheduleStatusService` compares actual against planned progress using the configured variance thresholds | Not a statement about blocking, acceptance, ИД, СДО or quality |
+| `healthStatus` | An aggregated attention state for an object. `ObjectHealthService` folds in schedule, critical and overdue issues, staleness, and late ИД (`ptoLate`) and СДО (`sdoLate`) | Not a schedule state, and never mapped automatically to a delay — it mixes contours by design |
+| `blockers` | A separate confirmed source: named reasons a work cannot proceed — unfinished predecessor, no СК clearance, critical issue, missing required document | Not derived from any colour or severity code |
+
+No colour is ever converted into a business rule. `StatusVariant` in the design
+system is a visual vocabulary of five appearances; which one a record deserves is
+decided in a view-model from these signals, never from a colour code.
+
+## Stage record
+
+**F0 — tokens, type scale, Inter, tabular figures.**
+
+What F0 did *not* do: connect the design system to product screens. No module here
+is imported by the application, verified by the absence of `cc-p-navy-900`,
+`ccScope`, `cc-type-metric` and `Inter Variable` from `dist/frontend/assets`.
+
+Playwright on F0: **NOT RUN.** The baseline failures recorded in `docs/status.md`
+are a separate, pre-existing gate and are neither re-tested nor cleared here.
+
+**F1 — first components:** `StatusBadge`, `ProgressBar`, `Button`, `PlanFact`,
+`LinkedStage`.
+
+Still to come, and blocked on the domain model rather than on design:
+`ConfirmedVolume`, `ZoneRow`, `Sequence`, and the identity slots of
+`WorkIdentityCard`. They will not be filled with placeholder text — a block whose
+data cannot exist is not rendered at all.
