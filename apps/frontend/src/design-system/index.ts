@@ -1,9 +1,9 @@
 /**
  * Construction Core design system — public entry point.
  *
- * Importing this module loads the token layer and the type scale. Nothing in the
- * application imports it yet: F0 delivers the foundation only, and wiring it into
- * the shell happens at F3, so the running application is unchanged for now.
+ * Importing this module loads the token layer and the type scale. The product
+ * screens do not import it yet: F1 delivers components and their preview, and
+ * wiring into the application shell happens at F3.
  *
  * The design system depends on its tokens and on nothing else — not on services,
  * not on API types, not on view-models, not on formatters, not on domain models
@@ -15,3 +15,27 @@ import './tokens/tokens.css';
 import './tokens/typography.css';
 
 export * from './tokens';
+
+export { StatusBadge } from './data/StatusBadge';
+export type { StatusBadgeProps } from './data/StatusBadge';
+
+export { ProgressBar } from './data/ProgressBar';
+export type { ProgressBarProps, ProgressBarSize } from './data/ProgressBar';
+
+export { PlanFact } from './data/PlanFact';
+export type { PlanFactProps, PlanFactItem, PlanFactEmphasis } from './data/PlanFact';
+
+export { LinkedStage } from './data/LinkedStage';
+export type {
+  LinkedStageProps,
+  LinkedStageItem,
+  LinkedStageSummary,
+} from './data/LinkedStage';
+
+export { Button } from './controls/Button';
+export type {
+  ButtonProps,
+  ButtonVariant,
+  ButtonWidth,
+  ButtonArrow,
+} from './controls/Button';

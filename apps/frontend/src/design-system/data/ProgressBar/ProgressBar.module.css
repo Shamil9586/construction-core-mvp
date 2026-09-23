@@ -1,0 +1,47 @@
+/*
+ * Data / ProgressBar
+ *
+ * The fill is the neutral blue in every case. There is no status modifier here
+ * and none should be added: colouring the bar amber on a delay would make 62%
+ * read as a judgement of quality or of acceptance, when all it reports is how
+ * much of the planned volume has been done (D-08).
+ */
+
+.root {
+  display: inline-flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-4);
+}
+
+.block {
+  display: flex;
+  width: 100%;
+}
+
+.track {
+  box-sizing: border-box;
+  height: var(--cc-progress-height);
+  border-radius: var(--cc-progress-radius);
+  background: var(--cc-progress-track);
+  overflow: hidden;
+}
+
+.inline .track {
+  width: var(--cc-progress-inline-width);
+}
+
+.block .track {
+  width: 100%;
+}
+
+.fill {
+  height: 100%;
+  border-radius: var(--cc-progress-radius);
+  background: var(--cc-progress-fill);
+}
+
+/* An empty track on its own reads as 0%, which claims a measurement that does not
+   exist. The caption is part of the state, not decoration. */
+.noDataLabel {
+  color: var(--cc-text-secondary);
+}

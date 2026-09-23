@@ -20,6 +20,7 @@
     "src/formatters/**/*",
     "src/types/**/*",
     "src/view-models/**/*",
-    "src/screens/**/*"
+    "src/screens/**/*",
+    "src/preview/**/*"
   ]
 }

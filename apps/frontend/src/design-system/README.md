@@ -62,6 +62,18 @@ margin — all six. The legacy global stylesheet styles bare `h1`, `h2`, `p`,
 Apply `ccScope` (`SCOPE_CLASS`) to a design-system subtree to re-establish the
 baseline and enable tabular figures.
 
+### Known residual leak
+
+One legacy rule still reaches through: `small { display: block }`. It sets a
+property the meta style does not declare, and declaring `display` on a text style
+would break every block use of it, so it is left alone.
+
+The mitigation is to not use the element: meta text is a `<span>` with
+`cc-type-meta`, never a bare `<small>`. A browser test asserts that no component
+renders one. Size, leading, weight, tracking and margin are all held correctly —
+verified in the browser against `h1`, `h2`, `p`, `small` and `strong` with the
+legacy sheet loaded *after* the design system, which is the harder ordering.
+
 ## Invariants
 
 - Percentages only as `%`. No п.п., no relative deviation, no renamed difference
