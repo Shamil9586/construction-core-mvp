@@ -329,3 +329,38 @@ work, so this fix has no visible effect on the existing preview; covered
 instead by four new pure tests matching the review's own numbered list).
 `npm test` 89/89 PASS (4 new). `npm run test:browser` NOT RUN, same basis as
 before.
+
+**F4 final targeted fix (independent Work review, third re-review):** patch
+3 introduced `hasCompleteScheduleData` correctly but still combined it with
+problem detection through
+`if (reason !== null) { attention.push(...) } else if (!hasCompleteScheduleData) { unevaluatedObjectCount += 1 }`
+— the `else` meant a confirmed problem suppressed the completeness count for
+that *same* object: a RED work sitting next to a GRAY one on one object
+reported the RED delay but never also counted the object as having
+incomplete data. Problem detection and data completeness are two
+independent facts about an object and are now two unconditional `if`
+statements, with nothing between them that could exclude one on account of
+the other. `hasCompleteScheduleData`'s own definition — every work needs a
+known (`RED`/`YELLOW`/`GREEN`) reading, zero works is incomplete by
+definition — is unchanged from patch 3.
+
+Added 8 tests, one per row of the review's table (`GREEN+GREEN`,
+`GREEN+GRAY`, `GREEN+UNKNOWN`, `GRAY+blocker`, `RED+GRAY`, `YELLOW+UNKNOWN`,
+`RED` with all data known, zero works), plus the existing empty-portfolio
+case reconfirmed. Two previously-passing tests asserted the *wrong* thing
+under the old `else if` and are corrected: `Required test 3` (patch 2) and
+`Round-3 required test 3` (patch 3) both asserted
+`unevaluatedObjectCount === 0` for an object with a real blocker on a
+GRAY-status work; that object's data is incomplete regardless of the
+blocker, so the expectation is now `1`. All 5 affected tests were confirmed
+failing against the pre-fix code before the fix was applied, then passing
+after — not just written to match the new behaviour.
+
+Gates (final targeted fix): `npm run build` PASS; `npm run typecheck:strict`
+PASS; `npm run test:ds` 94/94 PASS (unchanged, no fixture mixes a problem and
+an incomplete reading on one object); `npm test` 98/98 PASS (9 net new: 8
+table-row tests, plus one pre-existing test's assertion corrected in place).
+`npm run test:browser` NOT RUN, same basis as before.
+
+No commit on this branch has been declared an accepted F4 baseline by this
+document — acceptance is Work's independent call, not recorded here.

@@ -35,14 +35,23 @@
  * the *whole object* had been evaluated, even when other works on the same
  * object were `GRAY` or carried an unrecognised status. A GREEN work next to
  * a GRAY one used to read as fully evaluated and problem-free; it is not.
- * Problem detection and data-completeness are now two fully independent
- * checks: `hasCompleteScheduleData` requires *every* work to carry a known
+ * `hasCompleteScheduleData` requires *every* work to carry a known
  * (`RED`/`YELLOW`/`GREEN`) reading — one unknown work anywhere on the object
  * is enough to make the evaluation incomplete — and an object with zero
  * works is incomplete by definition, never vacuously "complete". Blocker and
  * RED/YELLOW detection are untouched by this pass: they were already
  * `.some()`-based existence checks, which is the correct shape for "a
- * problem exists somewhere on this object" and was never the bug.
+ * problem exists somewhere on this object".
+ *
+ * Corrective note, fourth pass (Work review, F4 final targeted fix): patch
+ * 3 introduced `hasCompleteScheduleData` correctly but still combined it
+ * with problem detection through `if (reason !== null) { ... } else if
+ * (!hasCompleteScheduleData) { ... }` — the `else` meant a confirmed problem
+ * suppressed the completeness count for that same object, so a RED work
+ * sitting next to a GRAY one was reported as a problem *only*, never also as
+ * incomplete. The two are independent facts about the same object and are
+ * now two unconditional `if` statements: a single object can appear in
+ * `attention` and add 1 to `unevaluatedObjectCount` at the same time.
  */
 
 import type { ObjectSummary, Work } from '../types/api';
@@ -83,13 +92,14 @@ export interface C01ViewModel {
   portfolio: C01PortfolioRow[];
   attention: C01AttentionItem[];
   /**
-   * Objects with no confirmed problem *and* incomplete schedule data — either
-   * no works at all, or at least one work whose `scheduleStatus` is not a
-   * known reading (`GRAY`, or an unrecognised string). One GREEN work next
-   * to a GRAY one is not proof the object was fully evaluated; every work
-   * must carry a known reading. A problem always takes precedence: an object
-   * with a confirmed blocker or a RED/YELLOW work is never counted here even
-   * if its other works are unmeasured — see `hasCompleteScheduleData` below.
+   * Counts objects with incomplete schedule data — either no works at all,
+   * or at least one work whose `scheduleStatus` is not a known reading
+   * (`GRAY`, or an unrecognised string) — evaluated independently of whether
+   * that same object also has a confirmed problem. One GREEN work next to a
+   * GRAY one is not proof the object was fully evaluated; every work must
+   * carry a known reading. A single object can be in `attention` *and* add 1
+   * here at the same time (e.g. a RED work next to a GRAY one) — see
+   * `hasCompleteScheduleData` below.
    */
   unevaluatedObjectCount: number;
 }
@@ -183,7 +193,9 @@ export function buildC01ViewModel(objects: ObjectSummary[], works: Work[]): C01V
         reason,
         message: attentionMessage(reason),
       });
-    } else if (!hasCompleteScheduleData) {
+    }
+
+    if (!hasCompleteScheduleData) {
       unevaluatedObjectCount += 1;
     }
   }

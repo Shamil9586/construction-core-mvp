@@ -154,17 +154,24 @@ test('Required test 2: an object with no works (unknown) is never reported as "n
   assert.equal(vm.unevaluatedObjectCount, 1, 'but zero works means nothing was actually evaluated either');
 });
 
-test('Required test 3: a GRAY-health object with a real blocker still reports the blocker', () => {
+test('Required test 3: a GRAY-health object with a real blocker still reports the blocker, and still counts as incomplete', () => {
   // The reachable case the review flagged: ObjectHealthService's own
   // `blocked` signal requires `delayDays > 0`, so a work can carry
   // `blockers` while healthStatus still reads GRAY. Blockers must be checked
-  // unconditionally, never gated on healthStatus.
+  // unconditionally, never gated on healthStatus. Separately (F4 final
+  // targeted fix): the work's own `scheduleStatus` is GRAY — a real
+  // confirmed problem and incomplete data are independent facts about the
+  // same object, and both are true here at once.
   const object = makeObject({ healthStatus: 'GRAY' });
   const work = makeWork({ scheduleStatus: 'GRAY', delayDays: 0, blockers: ['Штукатурка стен: не завершена'] });
   const vm = buildC01ViewModel([object], [work]);
   assert.equal(vm.attention.length, 1);
   assert.equal(vm.attention[0].reason, 'Blocked');
-  assert.equal(vm.unevaluatedObjectCount, 0, 'a confirmed problem was found, so this object is not "unevaluated"');
+  assert.equal(
+    vm.unevaluatedObjectCount,
+    1,
+    'the blocked work\'s own scheduleStatus is GRAY, so data is incomplete regardless of the confirmed blocker',
+  );
 });
 
 test('Required test 4: an unevaluated object and a confirmed problem are both reported, at once', () => {
@@ -229,14 +236,17 @@ test('Round-3 required test 2: GREEN + an unrecognised schedule status in the sa
   assert.equal(vm.unevaluatedObjectCount, 1, 'an unrecognised status is not a known reading either');
 });
 
-test('Round-3 required test 3: GRAY schedule status and a real blocker in the same object — the blocker still shows', () => {
+test('Round-3 required test 3: GRAY schedule status and a real blocker in the same object — the blocker still shows, and data is still incomplete', () => {
   const object = makeObject({ healthStatus: 'GRAY' });
   // The blocker sits on a work whose own scheduleStatus is GRAY — data
-  // completeness and problem detection must not interfere with each other.
+  // completeness and problem detection must not interfere with each other,
+  // in either direction: the blocker must show, and the GRAY reading must
+  // still count as incomplete, at once (F4 final targeted fix).
   const work = makeWork({ scheduleStatus: 'GRAY', blockers: ['Штукатурка стен: не завершена'] });
   const vm = buildC01ViewModel([object], [work]);
   assert.equal(vm.attention.length, 1);
   assert.equal(vm.attention[0].reason, 'Blocked');
+  assert.equal(vm.unevaluatedObjectCount, 1);
 });
 
 test('Round-3 required test 4: no works at all is insufficient data, not vacuously "complete"', () => {
@@ -244,6 +254,98 @@ test('Round-3 required test 4: no works at all is insufficient data, not vacuous
   const vm = buildC01ViewModel([object], []);
   assert.equal(vm.attention.length, 0);
   assert.equal(vm.unevaluatedObjectCount, 1, '`.every()` on an empty array must not read as complete evaluation');
+});
+
+// --- F4 final targeted fix: problem and completeness are independent facts
+// about the SAME object, never mutually exclusive ---
+//
+// The bug: `if (reason !== null) { attention.push(...) } else if
+// (!hasCompleteScheduleData) { unevaluatedObjectCount += 1 }` — the `else`
+// meant a confirmed problem suppressed the completeness count for that same
+// object. Fixed by splitting into two unconditional `if` statements. Every
+// row of the review's own table is its own test here, all against a single
+// object's own works (not the portfolio-wide, cross-object coexistence
+// `Required test 4` above already covers, which is a different scenario).
+
+test('Table row: GREEN + GREEN — no problem, complete data', () => {
+  const object = makeObject({ healthStatus: 'GREEN' });
+  const workA = makeWork({ id: 'work-a', scheduleStatus: 'GREEN' });
+  const workB = makeWork({ id: 'work-b', scheduleStatus: 'GREEN' });
+  const vm = buildC01ViewModel([object], [workA, workB]);
+  assert.equal(vm.attention.length, 0);
+  assert.equal(vm.unevaluatedObjectCount, 0);
+});
+
+test('Table row: GREEN + GRAY — no problem, incomplete data', () => {
+  const object = makeObject({ healthStatus: 'GREEN' });
+  const workA = makeWork({ id: 'work-a', scheduleStatus: 'GREEN' });
+  const workB = makeWork({ id: 'work-b', scheduleStatus: 'GRAY' });
+  const vm = buildC01ViewModel([object], [workA, workB]);
+  assert.equal(vm.attention.length, 0);
+  assert.equal(vm.unevaluatedObjectCount, 1);
+});
+
+test('Table row: GREEN + UNKNOWN — no problem, incomplete data', () => {
+  const object = makeObject({ healthStatus: 'GREEN' });
+  const workA = makeWork({ id: 'work-a', scheduleStatus: 'GREEN' });
+  const workB = makeWork({ id: 'work-b', scheduleStatus: 'SOME_FUTURE_SCHEDULE_STATUS' as any });
+  const vm = buildC01ViewModel([object], [workA, workB]);
+  assert.equal(vm.attention.length, 0);
+  assert.equal(vm.unevaluatedObjectCount, 1);
+});
+
+test('Table row: GRAY + real blocker — problem present, incomplete data, both at once', () => {
+  const object = makeObject({ healthStatus: 'GRAY' });
+  const workA = makeWork({ id: 'work-a', scheduleStatus: 'GRAY' });
+  const workB = makeWork({ id: 'work-b', scheduleStatus: 'GRAY', blockers: ['Нет допуска строительного контроля'] });
+  const vm = buildC01ViewModel([object], [workA, workB]);
+  assert.equal(vm.attention.length, 1);
+  assert.equal(vm.attention[0].reason, 'Blocked');
+  assert.equal(vm.unevaluatedObjectCount, 1);
+});
+
+test('Table row: RED + GRAY — problem present, incomplete data, both at once', () => {
+  const object = makeObject({ healthStatus: 'RED' });
+  const redWork = makeWork({ id: 'work-red', scheduleStatus: 'RED' });
+  const grayWork = makeWork({ id: 'work-gray', scheduleStatus: 'GRAY' });
+  const vm = buildC01ViewModel([object], [redWork, grayWork]);
+  assert.equal(vm.attention.length, 1);
+  assert.equal(vm.attention[0].reason, 'ScheduleDelay');
+  assert.equal(vm.unevaluatedObjectCount, 1, 'a confirmed RED must not suppress the GRAY work\'s incompleteness');
+});
+
+test('Table row: YELLOW + UNKNOWN — problem present, incomplete data, both at once', () => {
+  const object = makeObject({ healthStatus: 'YELLOW' });
+  const yellowWork = makeWork({ id: 'work-yellow', scheduleStatus: 'YELLOW' });
+  const unknownWork = makeWork({ id: 'work-unknown', scheduleStatus: 'SOME_FUTURE_SCHEDULE_STATUS' as any });
+  const vm = buildC01ViewModel([object], [yellowWork, unknownWork]);
+  assert.equal(vm.attention.length, 1);
+  assert.equal(vm.attention[0].reason, 'ScheduleRisk');
+  assert.equal(vm.unevaluatedObjectCount, 1);
+});
+
+test('Table row: RED, all data known — problem present, complete data', () => {
+  const object = makeObject({ healthStatus: 'RED' });
+  const redWork = makeWork({ id: 'work-red', scheduleStatus: 'RED' });
+  const greenWork = makeWork({ id: 'work-green', scheduleStatus: 'GREEN' });
+  const vm = buildC01ViewModel([object], [redWork, greenWork]);
+  assert.equal(vm.attention.length, 1);
+  assert.equal(vm.attention[0].reason, 'ScheduleDelay');
+  assert.equal(vm.unevaluatedObjectCount, 0, 'every work has a known reading, so this object is not incomplete');
+});
+
+test('Table row: no works — insufficient data, no problem', () => {
+  const object = makeObject({ healthStatus: 'GREEN' });
+  const vm = buildC01ViewModel([object], []);
+  assert.equal(vm.attention.length, 0);
+  assert.equal(vm.unevaluatedObjectCount, 1);
+});
+
+test('Table row: empty portfolio — no objects, no problems, no unevaluated count, existing empty-portfolio UI unaffected', () => {
+  const vm = buildC01ViewModel([], []);
+  assert.equal(vm.portfolio.length, 0);
+  assert.equal(vm.attention.length, 0);
+  assert.equal(vm.unevaluatedObjectCount, 0);
 });
 
 // --- Blocker 5 (1st review round, unaffected by round 2): real blocker reasons reach O01 ---
