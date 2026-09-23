@@ -1,0 +1,25 @@
+{
+  // Strict type checking for the new frontend layers only.
+  //
+  // The root tsconfig stays at "strict": false. Turning it on repo-wide would
+  // fail `npm run build` across the backend, the domain package and the legacy
+  // frontend — code this workstream is not permitted to rewrite — so the root
+  // gate would go red for reasons unrelated to the work being done.
+  //
+  // This config adds a second, narrower gate over the directories written under
+  // the new architecture. It emits nothing and changes no existing behaviour.
+  // Run it with `npm run typecheck:strict`.
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"]
+  },
+  "include": [
+    "src/design-system/**/*",
+    "src/formatters/**/*",
+    "src/types/**/*",
+    "src/view-models/**/*",
+    "src/screens/**/*"
+  ]
+}

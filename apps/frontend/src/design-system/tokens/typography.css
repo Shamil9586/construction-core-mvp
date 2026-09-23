@@ -1,0 +1,179 @@
+/*
+ * Construction Core — type scale
+ * Source of truth: 01_Visual_Design_System_v1.md §3
+ *
+ * Sixteen styles, named exactly as the tokens so a Figma text style and a class
+ * name are the same word. The scale was reduced to sixteen deliberately: 34 next
+ * to 32, or 30 next to 28, does not read as a difference but does cost a separate
+ * style, a separate check and a separate decision on every new screen (D-05).
+ *
+ * These are global, namespaced classes rather than a CSS module, so any component
+ * module can apply them without a `composes` chain. The `cc-type-` prefix keeps
+ * them clear of the legacy stylesheet.
+ *
+ * Every style declares font-family, font-size, line-height, font-weight,
+ * letter-spacing and margin — all six, every time. That is not redundancy: the
+ * legacy global sheet styles bare h1, h2, p, small and strong, and a property we
+ * leave undeclared is inherited from it. h1 there carries letter-spacing -0.8px
+ * and margin 8px 0 10px, which would silently deform a heading of ours.
+ *
+ * Tabular figures come from .ccScope for the whole subtree and are restated on
+ * the styles that carry measured values, so those keep column alignment even when
+ * used outside the scope (D-06).
+ */
+
+.cc-type-display,
+.cc-type-metric-xl,
+.cc-type-metric-lg,
+.cc-type-metric-md,
+.cc-type-heading-page,
+.cc-type-heading-section,
+.cc-type-heading-card,
+.cc-type-body-lg,
+.cc-type-body,
+.cc-type-body-strong,
+.cc-type-ui,
+.cc-type-ui-strong,
+.cc-type-label,
+.cc-type-label-strong,
+.cc-type-meta,
+.cc-type-eyebrow {
+  font-family: var(--cc-p-font-sans);
+  letter-spacing: normal;
+  margin: 0;
+}
+
+/* Physical readiness of construction work on O01. One use per screen. */
+.cc-type-display {
+  font-size: var(--cc-p-size-42);
+  line-height: var(--cc-p-line-50);
+  font-weight: var(--cc-p-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+/* KPI card value. */
+.cc-type-metric-xl {
+  font-size: var(--cc-p-size-32);
+  line-height: var(--cc-p-line-40);
+  font-weight: var(--cc-p-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+/* Plan/Fact and Confirmed Volume values, closed sum. */
+.cc-type-metric-lg {
+  font-size: var(--cc-p-size-28);
+  line-height: var(--cc-p-line-36);
+  font-weight: var(--cc-p-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+/* Percentage in a table row, textual schedule state. */
+.cc-type-metric-md {
+  font-size: var(--cc-p-size-22);
+  line-height: var(--cc-p-line-28);
+  font-weight: var(--cc-p-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+/* Screen title. One h1 per screen. */
+.cc-type-heading-page {
+  font-size: var(--cc-p-size-28);
+  line-height: var(--cc-p-line-36);
+  font-weight: var(--cc-p-weight-semibold);
+}
+
+/* Object name in an Attention Card. */
+.cc-type-heading-section {
+  font-size: var(--cc-p-size-20);
+  line-height: var(--cc-p-line-28);
+  font-weight: var(--cc-p-weight-semibold);
+}
+
+/* Card title. */
+.cc-type-heading-card {
+  font-size: var(--cc-p-size-17);
+  line-height: var(--cc-p-line-24);
+  font-weight: var(--cc-p-weight-semibold);
+}
+
+/* Textual value inside a card. */
+.cc-type-body-lg {
+  font-size: var(--cc-p-size-16);
+  line-height: var(--cc-p-line-24);
+  font-weight: var(--cc-p-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+/* Table cell, body text. */
+.cc-type-body {
+  font-size: var(--cc-p-size-14);
+  line-height: var(--cc-p-line-20);
+  font-weight: var(--cc-p-weight-regular);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+/* Name of a work or object, key value of a row. */
+.cc-type-body-strong {
+  font-size: var(--cc-p-size-14);
+  line-height: var(--cc-p-line-20);
+  font-weight: var(--cc-p-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+/* Navigation item, screen subtitle. */
+.cc-type-ui {
+  font-size: var(--cc-p-size-13);
+  line-height: var(--cc-p-line-18);
+  font-weight: var(--cc-p-weight-regular);
+}
+
+/* Button text, active navigation item. */
+.cc-type-ui-strong {
+  font-size: var(--cc-p-size-13);
+  line-height: var(--cc-p-line-18);
+  font-weight: var(--cc-p-weight-semibold);
+}
+
+/* Field caption, explanation. */
+.cc-type-label {
+  font-size: var(--cc-p-size-12);
+  line-height: var(--cc-p-line-16);
+  font-weight: var(--cc-p-weight-regular);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+/* Status badge text. */
+.cc-type-label-strong {
+  font-size: var(--cc-p-size-12);
+  line-height: var(--cc-p-line-16);
+  font-weight: var(--cc-p-weight-semibold);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+/* Date, unit, authorship of a record. Service context only — a critical reason
+   or an action never lives at this size. */
+.cc-type-meta {
+  font-size: var(--cc-p-size-11);
+  line-height: var(--cc-p-line-16);
+  font-weight: var(--cc-p-weight-regular);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}
+
+/* Column heading, block over-title. */
+.cc-type-eyebrow {
+  font-size: var(--cc-p-size-10);
+  line-height: var(--cc-p-line-14);
+  font-weight: var(--cc-p-weight-semibold);
+  letter-spacing: var(--cc-p-tracking-eyebrow);
+  text-transform: uppercase;
+}
