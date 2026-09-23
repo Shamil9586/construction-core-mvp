@@ -106,6 +106,59 @@ test.describe('AppShell landmarks', () => {
   });
 });
 
+test.describe('AppShell — header isolation (corrective)', () => {
+  // Work review finding 1: legacy's bare `header{display:flex;align-items:
+  // center;justify-content:space-between}` had nothing on our side contesting
+  // those three properties, so it applied to the real <header>. That in turn
+  // left `.headerInner` — a flex item with no explicit width — sized to its own
+  // content rather than stretched to fill <header>, so its own
+  // `justify-content: space-between` had no real width to distribute across.
+
+  test('the real <header> is not a flex container — legacy display:flex does not leak in', async ({
+    page,
+  }) => {
+    const header = shellSection(page).locator('header');
+    expect(await style(header, 'display')).toBe('block');
+  });
+
+  test('headerInner spans the full header width, not just its own content width', async ({
+    page,
+  }) => {
+    const header = shellSection(page).locator('header');
+    const inner = header.locator('div').first();
+
+    const headerBox = await header.boundingBox();
+    const innerBox = await inner.boundingBox();
+    expect(headerBox).not.toBeNull();
+    expect(innerBox).not.toBeNull();
+    expect(Math.round(innerBox!.width)).toBe(Math.round(headerBox!.width));
+  });
+
+  test('the right-aligned topbar slot reaches the right edge, not just beside the left content', async ({
+    page,
+  }) => {
+    const header = shellSection(page).locator('header');
+    const left = header.getByText('Производственное ядро', { exact: true });
+    const right = header.getByText('Демо-пользователь', { exact: true });
+
+    const headerBox = await header.boundingBox();
+    const leftBox = await left.boundingBox();
+    const rightBox = await right.boundingBox();
+    expect(headerBox && leftBox && rightBox).toBeTruthy();
+
+    // The right slot sits within headerInner's own padding of the header's true
+    // right edge — not bunched up beside the left label, which is what a
+    // content-width-shrunk headerInner produced before this fix.
+    const distanceFromRightEdge =
+      headerBox!.x + headerBox!.width - (rightBox!.x + rightBox!.width);
+    expect(distanceFromRightEdge).toBeLessThan(40);
+
+    // Real distance between the two labels — space-between across the full
+    // width, not two labels separated only by their 16px flex gap.
+    expect(rightBox!.x - (leftBox!.x + leftBox!.width)).toBeGreaterThan(100);
+  });
+});
+
 test.describe('AppShell — skip link', () => {
   test('is off-screen until focused, then jumps focus to main', async ({ page }) => {
     const section = shellSection(page);
@@ -203,6 +256,63 @@ test.describe('Breadcrumb', () => {
       'aria-current',
       'page',
     );
+  });
+});
+
+test.describe('Breadcrumb — narrow-viewport isolation (corrective)', () => {
+  // Work review finding 2: Breadcrumb's root is a real <nav>, same as
+  // Sidebar's rail, but only `display` was reset on it — `overflow` and
+  // `margin-top` were left undeclared. Legacy styles a bare `nav` at its 760px
+  // breakpoint (`nav{display:flex;overflow:auto;margin-top:10px}`), so both
+  // would have applied unopposed at a narrow viewport. Sidebar's own `.nav`
+  // already reset all three; this closes the same gap here.
+
+  test('desktop: margin-top and overflow are already the intended values', async ({
+    page,
+  }) => {
+    const nav = breadcrumbNav(page);
+    expect(await style(nav, 'margin-top')).toBe('0px');
+    expect(await style(nav, 'overflow-y')).toBe('visible');
+  });
+
+  test('narrow viewport: legacy margin-top:10px does not leak in', async ({ page }) => {
+    await page.setViewportSize({ width: 480, height: 900 });
+    const nav = breadcrumbNav(page);
+
+    expect(await style(nav, 'margin-top')).toBe('0px');
+
+    await page.setViewportSize({ width: 1440, height: 1000 });
+  });
+
+  test('narrow viewport: overflow is the explicit visible choice, not legacy auto', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 480, height: 900 });
+    const nav = breadcrumbNav(page);
+
+    expect(await style(nav, 'overflow-y')).toBe('visible');
+    expect(await style(nav, 'overflow-x')).toBe('visible');
+
+    await page.setViewportSize({ width: 1440, height: 1000 });
+  });
+
+  test('narrow viewport: the trail wraps rather than causing horizontal overflow', async ({
+    page,
+  }) => {
+    // Confirms .list's own flex-wrap is what actually handles narrow widths —
+    // overflow: visible is safe specifically because wrapping, not scrolling,
+    // is the real strategy. 480px, matching the shell-wide narrow-viewport
+    // check above: at this shell's fixed (non-collapsing) 208px sidebar width,
+    // that already leaves a realistically tight ~208px for <main>'s content,
+    // enough to force this two-step demo trail onto two lines without going
+    // narrower than the sidebar itself allows for.
+    await page.setViewportSize({ width: 480, height: 900 });
+    const nav = breadcrumbNav(page);
+
+    const overflow = await nav.evaluate((node) => node.scrollWidth - node.clientWidth);
+    expect(overflow).toBeLessThanOrEqual(1);
+
+    await page.setViewportSize({ width: 1440, height: 1000 });
   });
 });
 

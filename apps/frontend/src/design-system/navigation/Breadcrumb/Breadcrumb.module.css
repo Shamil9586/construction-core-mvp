@@ -1,5 +1,17 @@
+/* Breadcrumb's root is also a real <nav>, the same element Sidebar's rail
+   wraps its list in. Legacy styles a *bare* `nav` at its 760px breakpoint —
+   `nav{display:flex;overflow:auto;margin-top:10px}` — so `overflow` and
+   `margin-top` are reset here for the same reason Sidebar's `.nav` already
+   resets them: left undeclared, that rule is the only one touching those two
+   properties on this element, and it would apply regardless of viewport-
+   independent intent. `overflow: visible` is also the deliberate choice, not
+   merely the neutral one — narrow widths are handled by `.list`'s own
+   `flex-wrap: wrap` below, so the trail wraps onto a second line rather than
+   scrolling. */
 .breadcrumb {
   display: block;
+  overflow: visible;
+  margin-top: 0;
   margin-bottom: var(--cc-p-space-16);
 }
 

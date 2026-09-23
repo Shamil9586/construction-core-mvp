@@ -74,9 +74,23 @@
 
 /* Legacy: height 78px, background #fff, border-bottom #e4eaed, padding 0 36px,
    flex row space-between, color #667580 (height auto + padding 12px at the
-   760px breakpoint, which this overrides unconditionally). */
+   760px breakpoint, which this overrides unconditionally).
+
+   `display`/`align-items`/`justify-content` are reset to their initial values
+   here even though this element itself does not use them: legacy's `header`
+   rule sets all three, and without a competing declaration on our side they
+   would apply to the real <header> regardless. Left unset, that turned <header>
+   itself into an unintended flex row — `.headerInner` below then had nothing
+   forcing it to full width, so its own `justify-content: space-between` acted
+   on a box no wider than its content, and the right-aligned slot never reached
+   the true right edge. `display: block` alone would have been enough, since
+   align-items/justify-content are no-ops on a non-flex/grid box, but all three
+   are stated so the reset reads the same way the leak did. */
 .header {
   box-sizing: border-box;
+  display: block;
+  align-items: normal;
+  justify-content: normal;
   flex: 0 0 auto;
   height: var(--cc-topbar-height);
   padding: 0;
@@ -85,8 +99,14 @@
   color: var(--cc-text-primary);
 }
 
+/* The one element that actually lays the topbar out. `width: 100%` is stated
+   explicitly rather than left to block default: it is exactly the property the
+   leak above defeated, so it stays declared here as the second, independent
+   guarantee — this still holds even if `.header`'s own display mode changes
+   again later. */
 .headerInner {
   box-sizing: border-box;
+  width: 100%;
   height: 100%;
   padding: 0 var(--cc-p-space-32);
   display: flex;
