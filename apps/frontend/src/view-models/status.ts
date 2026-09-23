@@ -10,20 +10,31 @@
  * independently on purpose, so this layer never has a reason to import from
  * `design-system`.
  *
- * Corrective note (Work review, F4 patch): this module used to also export
- * `aggregateScheduleStatus`, a worst-wins reduction of several works'
- * `scheduleStatus` into one synthetic per-object figure. Two findings removed
- * it. First, it was a frontend-invented business rule — nothing in the backend
- * computes "an object's schedule status" as a single value, so presenting one
- * through `StatusBadge` made an invented figure look like a confirmed field.
- * Second, its own fallback (`return 'GREEN'`) mapped a genuinely unrecognised
- * status to a *positive* one, which is the specific failure mode `Known<T>`
- * unions exist to avoid — see the `default` arms below, which all resolve to
- * `Neutral` instead. Object-level status now comes only from
- * `ObjectSummary.healthStatus`, a field the backend actually computes.
+ * Corrective note, first pass (Work review, F4 patch 1): this module used to
+ * also export `aggregateScheduleStatus`, a worst-wins reduction of several
+ * works' `scheduleStatus` into one synthetic per-object figure. It was
+ * removed for inventing a business rule the backend does not have, and for a
+ * fallback that mapped an unrecognised status to `GREEN` — see the `default`
+ * arms below, which all resolve to `Neutral` instead. That patch replaced it
+ * with `healthStatusPresentation(object.healthStatus)`.
+ *
+ * Corrective note, second pass (Work review, F4 patch 2): using
+ * `healthStatus` for a *schedule*-labelled badge was itself still wrong, and
+ * this module's `healthStatusPresentation` is removed with it.
+ * `ObjectHealthService` folds in critical/overdue issues, staleness and late
+ * ИД/СДО alongside schedule variance by design — reading `RED` as "Есть
+ * отставание" or `GREEN` as "По графику" asserts a schedule claim the value
+ * does not confirm; it could be `RED` from a critical issue on an
+ * on-schedule object, or `GREEN` while stale-but-not-yet-flagged. No API
+ * field gives a confirmed *per-object* schedule status today, so C01's
+ * portfolio row and O01's schedule card now use `NO_SCHEDULE_STATUS`
+ * unconditionally for that one slot — a stated absence, not a guess. Per-work
+ * `scheduleStatus` (`scheduleStatusPresentation`, `workStatusPresentation`)
+ * is unaffected: it is a real, confirmed, already-per-work figure and was
+ * never the problem.
  */
 
-import type { HealthStatus, ScheduleStatus, Work } from '../types/api';
+import type { ScheduleStatus, Work } from '../types/api';
 
 export type ScheduleVariant = 'OnTrack' | 'Delayed' | 'Attention' | 'Blocked' | 'Neutral';
 
@@ -58,30 +69,12 @@ export function scheduleStatusPresentation(status: ScheduleStatus): StatusPresen
 }
 
 /**
- * `healthStatus` is `ObjectHealthService`'s own confirmed, already-computed
- * per-object figure — the only object-level status this module presents.
- * Kept as its own function, structurally identical to
- * `scheduleStatusPresentation` today, because the two read *different*
- * confirmed backend signals (schedule variance vs. mixed attention) that are
- * allowed to diverge in wording later; collapsing them into one function would
- * make that an accident of the current label choice rather than a decision.
- * Same rule as above: unrecognised or absent data resolves to `Neutral`, never
- * `OnTrack`.
+ * The object-level "schedule state" badge C01's portfolio row and O01's
+ * schedule card both need a value for, when no confirmed per-object schedule
+ * field exists to source one from. Deliberately a constant, not a function —
+ * there is no branch to take, because there is no input to branch on.
  */
-export function healthStatusPresentation(status: HealthStatus): StatusPresentation {
-  switch (status) {
-    case 'GREEN':
-      return { variant: 'OnTrack', label: 'По графику' };
-    case 'YELLOW':
-      return { variant: 'Attention', label: 'Требует внимания' };
-    case 'RED':
-      return { variant: 'Delayed', label: 'Есть отставание' };
-    case 'GRAY':
-      return { variant: 'Neutral', label: 'Нет данных' };
-    default:
-      return { variant: 'Neutral', label: 'Нет данных' };
-  }
-}
+export const NO_SCHEDULE_STATUS: StatusPresentation = { variant: 'Neutral', label: 'Нет данных' };
 
 /**
  * A work's own status presentation. `Blocked` overrides the schedule colour

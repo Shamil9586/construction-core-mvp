@@ -6,7 +6,6 @@ import {
   PageHeader,
   PlanFact,
   ProgressBar,
-  StatusBadge,
   WorkSummaryRow,
   typeClass,
   workSummaryColumns,
@@ -98,6 +97,15 @@ export function ObjectOverview({
           <span className={[styles.detailLabel, typeClass('label')].join(' ')}>
             Состояние графика
           </span>
+          {/*
+            No status badge here: no API field gives a confirmed per-object
+            schedule status, and `healthStatus` — the one status the backend
+            does compute — mixes in issues, staleness and late ИД/СДО, so
+            presenting it next to "Состояние графика" would claim a
+            schedule-specific verdict the value does not confirm. Plan and
+            fact are both real, confirmed figures and stand on their own,
+            per Design Rules §7.
+          */}
           <div className={styles.scheduleRow}>
             <PlanFact
               items={[
@@ -105,9 +113,6 @@ export function ObjectOverview({
                 { label: 'Факт', value: viewModel.schedule.fact },
               ]}
             />
-            <StatusBadge variant={viewModel.schedule.status.variant}>
-              {viewModel.schedule.status.label}
-            </StatusBadge>
           </div>
         </div>
       </section>

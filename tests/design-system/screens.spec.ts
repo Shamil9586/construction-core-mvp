@@ -60,7 +60,7 @@ test.describe('C01 — Company Control Center', () => {
     await expect(section.getByRole('heading', { level: 1, name: 'Портфель объектов' })).toBeVisible();
   });
 
-  test('the portfolio table lists every object with its readiness and schedule state', async ({
+  test('the portfolio table lists every object with its physical readiness', async ({
     page,
   }) => {
     const table = c01Section(page).getByRole('table', { name: /Объекты компании/ });
@@ -71,12 +71,22 @@ test.describe('C01 — Company Control Center', () => {
     // Physical readiness (СМР), not health status or financial closing.
     await expect(table.getByText('62%', { exact: true })).toBeVisible();
     await expect(table.getByText('88%', { exact: true })).toBeVisible();
+  });
 
-    // Pure schedule aggregate per object — Delayed for the two RED objects,
-    // OnTrack for the all-GREEN one, Neutral where nothing has been measured.
-    await expect(table.getByText('Есть отставание', { exact: true }).first()).toBeVisible();
-    await expect(table.getByText('По графику', { exact: true })).toBeVisible();
-    await expect(table.getByText('Нет данных', { exact: true })).toBeVisible();
+  test('the "График" column never shows a schedule verdict — no confirmed per-object source exists', async ({
+    page,
+  }) => {
+    // Two objects have healthStatus RED (one from a real blocker, one from a
+    // real schedule delay) and one is GREEN — if this badge still read
+    // healthStatus, "Есть отставание"/"По графику" would appear here. Every
+    // row must read the same neutral absence marker instead (see
+    // NO_SCHEDULE_STATUS in view-models/status.ts).
+    const table = c01Section(page).getByRole('table', { name: /Объекты компании/ });
+    const rows = table.locator('tbody tr');
+    await expect(rows).toHaveCount(4);
+    await expect(table.getByText('Есть отставание')).toHaveCount(0);
+    await expect(table.getByText('По графику')).toHaveCount(0);
+    await expect(table.getByText('Нет данных')).toHaveCount(4);
   });
 
   test('attention queue uses management wording, never a work or trade name', async ({ page }) => {
@@ -170,10 +180,28 @@ test.describe('O01 — Object Overview', () => {
 
     // Plan-on-date and fact stay two figures, per §7 — never a computed gap.
     await expect(section.getByText('75%', { exact: true })).toBeVisible();
-    // The object's confirmed healthStatus badge, not the (also "Есть
-    // отставание") WorkSummaryRow badge further down for one specific work —
-    // DOM order puts this schedule card first.
-    await expect(section.getByText('Есть отставание', { exact: true }).first()).toBeVisible();
+  });
+
+  test('"Состояние графика" shows plan and fact only — no status badge, no healthStatus verdict', async ({
+    page,
+  }) => {
+    // healthStatus for this object is RED (from a real blocker), but nothing
+    // here may say "Есть отставание"/"По графику" for the *object* — that
+    // would claim a schedule-specific verdict healthStatus does not confirm
+    // (it mixes in issues, staleness and late ИД/СДО). The only "Есть
+    // отставание" on this screen belongs to one specific WorkSummaryRow
+    // (Отделка фасада), a real per-work figure, not an object-level one.
+    const section = o01Section(page);
+    const scheduleHeading = section.getByText('Состояние графика', { exact: true });
+    await expect(scheduleHeading).toBeVisible();
+
+    const worksTableDelayedBadges = section
+      .getByRole('table', { name: /Работы объекта/ })
+      .getByText('Есть отставание', { exact: true });
+    await expect(worksTableDelayedBadges).toHaveCount(1);
+    // Exactly one "Есть отставание" on the whole screen — the works-table
+    // one above. If the schedule card still had its own badge, this would be 2.
+    await expect(section.getByText('Есть отставание', { exact: true })).toHaveCount(1);
   });
 
   test('production attention lists every work, with the ones needing attention first', async ({

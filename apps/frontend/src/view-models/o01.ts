@@ -1,26 +1,34 @@
 /**
  * O01 — Object Overview.
  *
- * Single-object management view: header identity, physical readiness, the
- * object's status, and production attention — including which works are
- * blocked and why. Quality (СК), ИД and finance stay off this view by
- * construction — nothing here reads `inspections`, `packages`, `documents`,
- * `sdo` or `closings`, so there is nothing to accidentally mix in.
+ * Single-object management view: header identity, physical readiness, plan
+ * vs. fact, and production attention — including which works are blocked and
+ * why. Quality (СК), ИД and finance stay off this view by construction —
+ * nothing here reads `inspections`, `packages`, `documents`, `sdo` or
+ * `closings`, so there is nothing to accidentally mix in.
  *
- * Corrective note (Work review, F4 patch): `schedule.status` used to come
- * from a frontend-computed worst-wins aggregate of the object's works. It now
- * reads `ObjectSummary.healthStatus` directly, the same confirmed source
- * `view-models/c01.ts` uses — see that file's header for why the aggregate
- * was removed rather than fixed. Separately, a work with `blockers` used to
- * show only a generic "Заблокировано" badge in the works table, with the real
- * reason (`work.blockers`, already confirmed data) dropped on the floor.
+ * Corrective note, first pass (Work review, F4 patch 1): `schedule.status`
+ * used to come from a frontend-computed worst-wins aggregate of the object's
+ * works — removed for inventing a business rule the backend does not have.
+ *
+ * Corrective note, second pass (Work review, F4 patch 2): the replacement,
+ * `healthStatusPresentation(object.healthStatus)`, was itself still wrong —
+ * `healthStatus` mixes in critical/overdue issues, staleness and late
+ * ИД/СДО, so presenting it next to "Состояние графика" over-claims a
+ * schedule-specific verdict the value does not confirm. There is no API
+ * field for a confirmed per-object schedule status, so the badge is removed
+ * outright rather than replaced again — `schedule` now carries only `plan`
+ * and `fact`, the two real percentages Design Rules §7 asks for side by side.
+ * Separately, a work with `blockers` used to show only a generic
+ * "Заблокировано" badge in the works table, with the real reason
+ * (`work.blockers`, already confirmed data) dropped on the floor.
  * `blockedWorks` now carries those reasons through unedited — never a
  * generic label standing in for a reason nobody supplied.
  */
 
 import type { ObjectSummary, Work } from '../types/api';
 import { formatDate, formatPercent, formatQuantityWithUnit, NO_DATA_DASH } from '../formatters';
-import { healthStatusPresentation, workStatusPresentation, type StatusPresentation } from './status';
+import { workStatusPresentation, type StatusPresentation } from './status';
 
 export interface O01Details {
   externalCode: string;
@@ -57,8 +65,12 @@ export interface O01ViewModel {
   details: O01Details;
   /** Physical readiness — the screen's one `display`-scale figure (Design Rules). */
   readiness: { value: number | null; formatted: string };
-  /** The object's confirmed status — `ObjectSummary.healthStatus`, not a frontend aggregate. */
-  schedule: { plan: string; fact: string; status: StatusPresentation };
+  /**
+   * Plan-on-date vs. fact, per Design Rules §7 — the two figures shown side
+   * by side. No status badge: no API field gives a confirmed per-object
+   * schedule status (see `view-models/status.ts`'s `NO_SCHEDULE_STATUS`).
+   */
+  schedule: { plan: string; fact: string };
   works: O01WorkRow[];
   /** Works with a non-empty `blockers` list, reasons intact. Empty when nothing is blocked. */
   blockedWorks: O01BlockedWork[];
@@ -106,7 +118,6 @@ export function buildO01ViewModel(object: ObjectSummary, works: Work[]): O01View
     schedule: {
       plan: formatPercent(object.plannedProgress),
       fact: formatPercent(object.actualProgress),
-      status: healthStatusPresentation(object.healthStatus),
     },
     works: works_,
     blockedWorks,

@@ -33,6 +33,23 @@ export interface W01Props {
   className?: string;
 }
 
+function ConfirmationStatus({
+  variant,
+  children,
+}: {
+  variant: 'OnTrack' | 'Attention' | 'Neutral';
+  children: string;
+}) {
+  return (
+    <div className={styles.confirmationStack}>
+      <span className={[styles.confirmationLabel, typeClass('label')].join(' ')}>
+        Подтверждение СК
+      </span>
+      <StatusBadge variant={variant}>{children}</StatusBadge>
+    </div>
+  );
+}
+
 function ConfirmationBlock({ confirmation }: { confirmation: WorkConfirmation }) {
   switch (confirmation.kind) {
     // An explicit confirmed-quantity figure — reachable only where the data
@@ -49,32 +66,23 @@ function ConfirmationBlock({ confirmation }: { confirmation: WorkConfirmation })
     // number is shown here, only the status, so it can never be read as a
     // confirmed figure equal to (or different from) Fact.
     case 'Accepted':
-      return (
-        <div className={styles.confirmationStack}>
-          <span className={[styles.confirmationLabel, typeClass('label')].join(' ')}>
-            Подтверждение СК
-          </span>
-          <StatusBadge variant="OnTrack">Принято СК</StatusBadge>
-        </div>
-      );
+      return <ConfirmationStatus variant="OnTrack">Принято СК</ConfirmationStatus>;
+    // WAITING / IN_REVIEW / REINSPECTION — genuinely still open, no decision
+    // made yet (see the corrective note in view-models/w01.ts).
     case 'Pending':
-      return (
-        <div className={styles.confirmationStack}>
-          <span className={[styles.confirmationLabel, typeClass('label')].join(' ')}>
-            Подтверждение СК
-          </span>
-          <StatusBadge variant="Neutral">На проверке</StatusBadge>
-        </div>
-      );
+      return <ConfirmationStatus variant="Neutral">На проверке</ConfirmationStatus>;
+    // ISSUES_FOUND — a real, distinct outcome, not "still on review".
+    case 'IssuesFound':
+      return <ConfirmationStatus variant="Attention">Есть замечания</ConfirmationStatus>;
+    // REJECTED — a terminal decision, never shown as pending.
+    case 'Rejected':
+      return <ConfirmationStatus variant="Attention">Отклонено</ConfirmationStatus>;
+    // An inspection status string this screen does not recognise — neutral,
+    // not a guess (see scheduleStatusPresentation's own default for the same rule).
+    case 'Unknown':
+      return <ConfirmationStatus variant="Neutral">Статус проверки не определён</ConfirmationStatus>;
     case 'NotSubmitted':
-      return (
-        <div className={styles.confirmationStack}>
-          <span className={[styles.confirmationLabel, typeClass('label')].join(' ')}>
-            Подтверждение СК
-          </span>
-          <StatusBadge variant="Neutral">Не предъявлено</StatusBadge>
-        </div>
-      );
+      return <ConfirmationStatus variant="Neutral">Не предъявлено</ConfirmationStatus>;
     default: {
       const exhaustive: never = confirmation;
       return exhaustive;

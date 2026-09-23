@@ -1,16 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  scheduleStatusPresentation,
-  healthStatusPresentation,
-} from '../apps/frontend/src/view-models/status';
+import { scheduleStatusPresentation, NO_SCHEDULE_STATUS } from '../apps/frontend/src/view-models/status';
 import { buildC01ViewModel } from '../apps/frontend/src/view-models/c01';
 import { buildO01ViewModel } from '../apps/frontend/src/view-models/o01';
 import { buildW01ViewModel } from '../apps/frontend/src/view-models/w01';
-import type { Inspection, ObjectSummary, Work } from '../apps/frontend/src/types/api';
+import type { Inspection, InspectionStatus, ObjectSummary, Work } from '../apps/frontend/src/types/api';
 
 /**
- * F4 corrective patch (Work review) — pure view-model coverage.
+ * F4 corrective patch (Work review, two passes) — pure view-model coverage.
  *
  * These test the derivation functions directly, without a browser, for the
  * same reason `tests/domain.test.ts` tests the domain services directly:
@@ -18,6 +15,10 @@ import type { Inspection, ObjectSummary, Work } from '../apps/frontend/src/types
  * anything rendered. Browser coverage for the same findings, where the claim
  * is about what actually appears on screen, lives in
  * tests/design-system/screens.spec.ts.
+ *
+ * Several tests below replace ones from the first corrective pass that
+ * pinned `healthStatus === schedule status` — itself a finding of the second
+ * review round. Their replacements are marked accordingly.
  */
 
 function versioned(id: string) {
@@ -100,7 +101,7 @@ function makeInspection(overrides: Partial<Inspection> = {}): Inspection {
   };
 }
 
-// --- Finding 2: unknown status must never read as a positive one ---------
+// --- Unknown status must never read as a positive one ---------------------
 
 test('scheduleStatusPresentation: an unrecognised value is Neutral, never OnTrack', () => {
   const result = scheduleStatusPresentation('SOMETHING_THE_FRONTEND_HAS_NEVER_SEEN' as any);
@@ -108,63 +109,98 @@ test('scheduleStatusPresentation: an unrecognised value is Neutral, never OnTrac
   assert.notEqual(result.variant, 'OnTrack');
 });
 
-test('healthStatusPresentation: an unrecognised value is Neutral, never OnTrack', () => {
-  const result = healthStatusPresentation('SOMETHING_THE_FRONTEND_HAS_NEVER_SEEN' as any);
-  assert.equal(result.variant, 'Neutral');
-  assert.notEqual(result.variant, 'OnTrack');
-});
-
-test('scheduleStatusPresentation and healthStatusPresentation: GRAY is Neutral', () => {
+test('scheduleStatusPresentation: GRAY is Neutral', () => {
   assert.equal(scheduleStatusPresentation('GRAY').variant, 'Neutral');
-  assert.equal(healthStatusPresentation('GRAY').variant, 'Neutral');
 });
 
-// --- Finding 1: object-level status is healthStatus, not a frontend aggregate ---
+// --- Blocker 1 (2nd review round): no object-level status is a schedule claim ---
 
-test('C01 portfolio row status is healthStatus, not derived from the works array', () => {
-  // healthStatus says GREEN even though a work is RED — if the portfolio badge
-  // were still a worst-wins aggregate over works, it would read Delayed here.
-  const object = makeObject({ healthStatus: 'GREEN' });
-  const work = makeWork({ scheduleStatus: 'RED' });
-  const vm = buildC01ViewModel([object], [work]);
-  assert.equal(vm.portfolio[0].status.variant, 'OnTrack');
+test('C01 portfolio row status is always the neutral no-data marker, never healthStatus and never a works aggregate', () => {
+  // Replaces the first pass's "status is healthStatus" test — that was
+  // itself the second round's finding: healthStatus is not a confirmed
+  // per-object *schedule* status, so it must not appear under "График" either.
+  const redHealth = makeObject({ healthStatus: 'RED' });
+  const greenWork = makeWork({ scheduleStatus: 'GREEN' });
+  const vm = buildC01ViewModel([redHealth], [greenWork]);
+  assert.deepEqual(vm.portfolio[0].status, NO_SCHEDULE_STATUS);
 });
 
-test('O01 schedule status is healthStatus, not derived from the works array', () => {
-  const object = makeObject({ healthStatus: 'GREEN' });
+test('O01 schedule carries only plan and fact — no status field at all', () => {
+  const object = makeObject({ healthStatus: 'RED' });
   const work = makeWork({ scheduleStatus: 'RED' });
   const vm = buildO01ViewModel(object, [work]);
-  assert.equal(vm.schedule.status.variant, 'OnTrack');
+  assert.ok(!('status' in vm.schedule), 'no confirmed per-object schedule status exists to show');
+  assert.equal(vm.schedule.plan, '50%');
+  assert.equal(vm.schedule.fact, '50%');
 });
 
-// --- Finding 4: "no data" and "no problems" must not collapse into one ---
+test('Required test 1: healthStatus RED from a non-schedule cause (e.g. ИД/СДО) does not read as a schedule delay', () => {
+  // healthStatus RED with every work GREEN and no blockers simulates exactly
+  // the case the review named: RED for a reason that has nothing to do with
+  // schedule. Nothing about this object may say "Есть отставание" anywhere.
+  const object = makeObject({ healthStatus: 'RED' });
+  const work = makeWork({ scheduleStatus: 'GREEN', blockers: [] });
+  const c01 = buildC01ViewModel([object], [work]);
+  assert.notEqual(c01.portfolio[0].status.label, 'Есть отставание');
+  assert.equal(c01.attention.length, 0, 'no real schedule or blocker problem exists on this object');
+});
 
-test('C01 attention: an object with healthStatus GRAY is not reported as problem-free', () => {
-  const object = makeObject({ healthStatus: 'GRAY' });
+// --- Blocker 3 (2nd review round): attention derived from real per-work data, independent of healthStatus ---
+
+test('Required test 2: an object with no works (unknown) is never reported as "no problems"', () => {
+  const object = makeObject({ healthStatus: 'GREEN' });
   const vm = buildC01ViewModel([object], []);
-  assert.equal(vm.attention.length, 0, 'a GRAY object is not a confirmed problem');
-  assert.equal(vm.unevaluatedObjectCount, 1, 'but it must be counted as unevaluated, not silently dropped');
+  assert.equal(vm.attention.length, 0, 'no confirmed problem exists to report');
+  assert.equal(vm.unevaluatedObjectCount, 1, 'but zero works means nothing was actually evaluated either');
 });
 
-test('C01 attention: an object with healthStatus GREEN and no problem works is genuinely problem-free', () => {
+test('Required test 3: a GRAY-health object with a real blocker still reports the blocker', () => {
+  // The reachable case the review flagged: ObjectHealthService's own
+  // `blocked` signal requires `delayDays > 0`, so a work can carry
+  // `blockers` while healthStatus still reads GRAY. Blockers must be checked
+  // unconditionally, never gated on healthStatus.
+  const object = makeObject({ healthStatus: 'GRAY' });
+  const work = makeWork({ scheduleStatus: 'GRAY', delayDays: 0, blockers: ['Штукатурка стен: не завершена'] });
+  const vm = buildC01ViewModel([object], [work]);
+  assert.equal(vm.attention.length, 1);
+  assert.equal(vm.attention[0].reason, 'Blocked');
+  assert.equal(vm.unevaluatedObjectCount, 0, 'a confirmed problem was found, so this object is not "unevaluated"');
+});
+
+test('Required test 4: an unevaluated object and a confirmed problem are both reported, at once', () => {
+  const problem = makeObject({ id: 'obj-problem', healthStatus: 'RED' });
+  const unevaluated = makeObject({ id: 'obj-unevaluated', healthStatus: 'GRAY' });
+  const redWork = makeWork({ id: 'work-red', objectId: 'obj-problem', scheduleStatus: 'RED' });
+  const vm = buildC01ViewModel([problem, unevaluated], [redWork]);
+  assert.equal(vm.attention.length, 1);
+  assert.equal(vm.attention[0].objectId, 'obj-problem');
+  assert.equal(vm.unevaluatedObjectCount, 1);
+});
+
+test('attention item status reflects the specific reason, not a mixed object status', () => {
+  const redObject = makeObject({ healthStatus: 'GREEN' }); // deliberately mismatched
+  const redWork = makeWork({ scheduleStatus: 'RED' });
+  const vm = buildC01ViewModel([redObject], [redWork]);
+  assert.equal(vm.attention[0].status.variant, 'Delayed');
+  assert.equal(vm.attention[0].status.label, 'Есть отставание');
+});
+
+test('a genuinely evaluated, problem-free object is neither in attention nor counted as unevaluated', () => {
   const object = makeObject({ healthStatus: 'GREEN' });
   const work = makeWork({ scheduleStatus: 'GREEN' });
   const vm = buildC01ViewModel([object], [work]);
   assert.equal(vm.attention.length, 0);
-  assert.equal(vm.unevaluatedObjectCount, 0, 'a real GREEN result must not be counted as unevaluated either');
+  assert.equal(vm.unevaluatedObjectCount, 0);
 });
 
-test('C01 attention: mixed portfolio reports confirmed problems and unevaluated objects independently', () => {
-  const delayed = makeObject({ id: 'obj-delayed', healthStatus: 'RED' });
-  const unevaluated = makeObject({ id: 'obj-gray', healthStatus: 'GRAY' });
-  const delayedWork = makeWork({ id: 'work-delayed', objectId: 'obj-delayed', scheduleStatus: 'RED' });
-  const vm = buildC01ViewModel([delayed, unevaluated], [delayedWork]);
-  assert.equal(vm.attention.length, 1);
-  assert.equal(vm.attention[0].objectId, 'obj-delayed');
-  assert.equal(vm.unevaluatedObjectCount, 1);
+test('an empty portfolio produces no items and no unevaluated count — the screen distinguishes this case itself', () => {
+  const vm = buildC01ViewModel([], []);
+  assert.deepEqual(vm.attention, []);
+  assert.equal(vm.unevaluatedObjectCount, 0);
+  assert.deepEqual(vm.portfolio, []);
 });
 
-// --- Finding 5: real blocker reasons reach O01, not a generic label ------
+// --- Blocker 5 (1st review round, unaffected by round 2): real blocker reasons reach O01 ---
 
 test('O01 blockedWorks carries the real blocker reasons through unedited', () => {
   const object = makeObject();
@@ -184,9 +220,74 @@ test('O01 blockedWorks is empty, not a placeholder, when nothing is blocked', ()
   assert.deepEqual(vm.blockedWorks, []);
 });
 
-// --- Finding 3: SK confirmation is never inferred from `accepted` --------
+// --- Blocker 2 (2nd review round): real Inspection.status semantics -------
 
-test('W01 confirmation: accepted work is a status only, with no quantity field', () => {
+const stillOpenStatuses: InspectionStatus[] = ['WAITING', 'IN_REVIEW', 'REINSPECTION'];
+
+test('Required test 5a: WAITING / IN_REVIEW / REINSPECTION are all Pending — genuinely still open', () => {
+  for (const status of stillOpenStatuses) {
+    const object = makeObject();
+    const work = makeWork({ accepted: false });
+    const inspection = makeInspection({ objectWorkId: work.id, status });
+    const vm = buildW01ViewModel(work, object, [inspection]);
+    assert.equal(vm.confirmation.kind, 'Pending', `expected Pending for ${status}`);
+  }
+});
+
+test('Required test 5b: ISSUES_FOUND is its own state, not folded into Pending', () => {
+  const object = makeObject();
+  const work = makeWork({ accepted: false });
+  const inspection = makeInspection({ objectWorkId: work.id, status: 'ISSUES_FOUND' });
+  const vm = buildW01ViewModel(work, object, [inspection]);
+  assert.equal(vm.confirmation.kind, 'IssuesFound');
+});
+
+test('Required test 5c: REJECTED is a terminal decision, never shown as Pending', () => {
+  const object = makeObject();
+  const work = makeWork({ accepted: false });
+  const inspection = makeInspection({ objectWorkId: work.id, status: 'REJECTED' });
+  const vm = buildW01ViewModel(work, object, [inspection]);
+  assert.equal(vm.confirmation.kind, 'Rejected');
+  assert.notEqual(vm.confirmation.kind, 'Pending');
+});
+
+test('Required test 5d: an unrecognised inspection status is Unknown, not Pending', () => {
+  const object = makeObject();
+  const work = makeWork({ accepted: false });
+  const inspection = makeInspection({ objectWorkId: work.id, status: 'SOME_FUTURE_STATUS' as InspectionStatus });
+  const vm = buildW01ViewModel(work, object, [inspection]);
+  assert.equal(vm.confirmation.kind, 'Unknown');
+});
+
+test('Required test 5e: absence of any inspection (NotSubmitted) is distinct from an unrecognised status (Unknown)', () => {
+  const object = makeObject();
+  const work = makeWork({ accepted: false });
+
+  const noInspection = buildW01ViewModel(work, object, []);
+  assert.equal(noInspection.confirmation.kind, 'NotSubmitted');
+
+  const unknownInspection = buildW01ViewModel(
+    work,
+    object,
+    [makeInspection({ objectWorkId: work.id, status: 'SOME_FUTURE_STATUS' as InspectionStatus })],
+  );
+  assert.equal(unknownInspection.confirmation.kind, 'Unknown');
+  assert.notEqual(unknownInspection.confirmation.kind, noInspection.confirmation.kind);
+});
+
+test('work.accepted always wins over inspection.status, including the contradictory case the backend should never produce', () => {
+  const object = makeObject();
+  // work.accepted true while the latest inspection record somehow still says
+  // WAITING — accepted is the authoritative decision field.
+  const work = makeWork({ accepted: true });
+  const inspection = makeInspection({ objectWorkId: work.id, status: 'WAITING' });
+  const vm = buildW01ViewModel(work, object, [inspection]);
+  assert.equal(vm.confirmation.kind, 'Accepted');
+});
+
+// --- Required test 6 / Blocker 3 (1st review round, unaffected by round 2): accepted work carries no invented quantity ---
+
+test('Required test 6: Accepted never gets a quantity from actualQuantity', () => {
   const object = makeObject();
   const work = makeWork({ accepted: true, actualQuantity: '500.0000' });
   const vm = buildW01ViewModel(work, object, []);
@@ -196,28 +297,14 @@ test('W01 confirmation: accepted work is a status only, with no quantity field',
   assert.equal(vm.fact.value, '500');
 });
 
-test('W01 confirmation: a requested but undecided inspection is Pending, not Confirmed', () => {
-  const object = makeObject();
-  const work = makeWork({ accepted: false });
-  const inspection = makeInspection({ objectWorkId: work.id, status: 'WAITING' });
-  const vm = buildW01ViewModel(work, object, [inspection]);
-  assert.equal(vm.confirmation.kind, 'Pending');
-});
-
-test('W01 confirmation: no inspection at all is NotSubmitted', () => {
-  const object = makeObject();
-  const work = makeWork({ accepted: false });
-  const vm = buildW01ViewModel(work, object, []);
-  assert.equal(vm.confirmation.kind, 'NotSubmitted');
-});
-
-test('W01 confirmation: buildW01ViewModel never produces ConfirmedQuantity from real data', () => {
+test('buildW01ViewModel never produces ConfirmedQuantity from real data', () => {
   // Exhaustive over every reachable combination of accepted/inspection state —
   // the only way to reach ConfirmedQuantity is the explicit demo override in
   // preview/Gallery.tsx, never this adapter.
   const object = makeObject();
+  const statuses: InspectionStatus[] = ['WAITING', 'IN_REVIEW', 'REINSPECTION', 'ISSUES_FOUND', 'REJECTED', 'ACCEPTED'];
   for (const accepted of [true, false]) {
-    for (const inspections of [[], [makeInspection({ status: 'WAITING' })], [makeInspection({ status: 'ACCEPTED' })]]) {
+    for (const inspections of [[], ...statuses.map((status) => [makeInspection({ status })])]) {
       const work = makeWork({ accepted });
       const vm = buildW01ViewModel(work, object, inspections);
       assert.notEqual(vm.confirmation.kind, 'ConfirmedQuantity');

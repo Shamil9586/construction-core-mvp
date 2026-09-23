@@ -12,6 +12,7 @@ import {
 import {
   C01_ATTENTION_EMPTY_LABEL,
   C01_INSUFFICIENT_DATA_LABEL,
+  C01_NO_OBJECTS_LABEL,
   type C01ViewModel,
 } from '../../view-models/c01';
 import styles from './C01.module.css';
@@ -47,8 +48,10 @@ export function CompanyControlCenter({
   onSelectObject,
   className,
 }: C01Props) {
-  const attentionTone = (variant: C01ViewModel['attention'][number]['status']['variant']) =>
-    variant === 'OnTrack' || variant === 'Neutral' ? 'Neutral' : 'Attention';
+  // A portfolio row's highlight follows the same confirmed attention queue
+  // rendered below it — never the schedule badge, which is `NO_SCHEDULE_STATUS`
+  // for every row (see view-models/status.ts) and so carries no signal of its own.
+  const attentionObjectIds = new Set(viewModel.attention.map((item) => item.objectId));
 
   return (
     <AppShell sidebar={sidebar} topbar={topbar} className={className}>
@@ -75,7 +78,7 @@ export function CompanyControlCenter({
               smr={row.smr}
               smrProgress={row.smrProgress}
               status={row.status}
-              tone={attentionTone(row.status.variant)}
+              tone={attentionObjectIds.has(row.id) ? 'Attention' : 'Neutral'}
               interactive
               onActivate={() => onSelectObject(row.id)}
             />
@@ -88,7 +91,9 @@ export function CompanyControlCenter({
           Требует внимания
         </h2>
 
-        {viewModel.attention.length === 0 && viewModel.unevaluatedObjectCount === 0 ? (
+        {viewModel.portfolio.length === 0 ? (
+          <p className={[styles.empty, typeClass('body')].join(' ')}>{C01_NO_OBJECTS_LABEL}</p>
+        ) : viewModel.attention.length === 0 && viewModel.unevaluatedObjectCount === 0 ? (
           <p className={[styles.empty, typeClass('body')].join(' ')}>
             {C01_ATTENTION_EMPTY_LABEL}
           </p>

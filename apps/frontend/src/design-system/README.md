@@ -186,10 +186,14 @@ type style, exactly the "one use per screen" its own doc comment names.
 
 Two gaps the domain model does not close, recorded rather than papered over:
 
-- No API field gives an object's overall status except `healthStatus`, so
-  every object-level badge — C01's portfolio rows, O01's schedule card — reads
-  it directly. Nothing here derives a second, frontend-only figure; see the
-  corrective patch below for why an earlier per-work aggregate was removed.
+- No API field gives a confirmed *per-object schedule* status — only
+  per-work `Work.scheduleStatus` and the mixed `ObjectSummary.healthStatus`
+  (which folds in issues, staleness and late ИД/СДО alongside schedule
+  variance) exist. Neither is presented as one: C01's portfolio "График"
+  column and O01's schedule card both show a stated absence
+  (`NO_SCHEDULE_STATUS`) rather than either an invented aggregate or a
+  mixed field wearing a schedule label. See the second corrective patch
+  below for the two attempts that came before this.
 - W01's specified work definition (type, finish type, layer/pie, execution
   conditions, zone) and its "confirmed 498 of 500" СК figure both go beyond
   what `Work`/`Inspection` can express today. Only the work type renders;
@@ -243,10 +247,59 @@ accepted as shipped. Full detail is in the header comments of
    `O01ViewModel.blockedWorks` now carries them through unedited, rendered in
    a new, conditional "Блокировки в производстве" section.
 
-Gates (corrective patch): `npm run build` PASS; `npm run typecheck:strict`
+Gates (corrective patch 1): `npm run build` PASS; `npm run typecheck:strict`
 PASS; `npm run test:ds` 92/92 PASS (3 new browser tests, plus one W01 preview
 section added — `w01-accepted` — to exercise finding 3's real, non-demo
 adapter path); `npm test` 78/78 PASS (14 new, in the new
 `tests/view-models.test.ts`, testing the view-model functions directly rather
 than through a browser). `npm run test:browser` NOT RUN, same basis as
 before.
+
+**F4 corrective patch 2 (independent Work review, re-review):** three
+blockers, all still in the view-model/data-boundary layer. The first
+corrective patch's own fix for finding 1 turned out to be a second instance
+of the same mistake — full detail in the header comments of
+`view-models/status.ts`, `c01.ts`, `o01.ts` and `w01.ts`; summarised here:
+
+1. **`healthStatus` is not a schedule status either.** Patch 1 replaced the
+   invented worst-wins aggregate with `healthStatusPresentation(object.healthStatus)`
+   for every object-level badge — but `healthStatus` deliberately mixes in
+   critical/overdue issues, staleness and late ИД/СДО, so reading its `RED` as
+   "Есть отставание" or `GREEN` as "По графику" still asserted a
+   schedule-specific claim the value does not confirm. `healthStatusPresentation`
+   is removed; C01's portfolio row and O01's schedule card now show
+   `NO_SCHEDULE_STATUS` — a stated absence — because no API field gives a
+   confirmed per-object schedule status today. A C01 portfolio row's amber
+   highlight now follows the attention queue directly (does this object have a
+   confirmed reason in `attention`?) rather than a badge colour that carries no
+   signal any more.
+2. **Real `Inspection.status` values, not "any inspection = Pending".**
+   `buildW01ViewModel`'s non-accepted branch used to collapse every inspection
+   record into `Pending` regardless of its actual status. Studied against
+   `apps/backend/src/service.ts` (`addIssue`/`inspectionAction` both gate on
+   the same four-status "still open" set) and the legacy app's own
+   `stateNames`: `WAITING`/`IN_REVIEW`/`REINSPECTION` stay `Pending`;
+   `ISSUES_FOUND` and `REJECTED` get their own `IssuesFound`/`Rejected` kinds;
+   an unrecognised status resolves to `Unknown`, distinct from `NotSubmitted`
+   (no inspection at all). `Accepted` still carries no quantity, unchanged from
+   patch 1.
+3. **Attention no longer gates on `healthStatus`.** Patch 1's
+   `unevaluatedObjectCount` skipped an object entirely once `healthStatus`
+   read `GRAY`, before ever checking its `blockers` or `scheduleStatus` — but
+   `ObjectHealthService`'s own `blocked` signal requires `delayDays > 0`, so a
+   work can carry real `blockers` while `healthStatus` still reads `GRAY`,
+   and that confirmed problem was being silently hidden behind "insufficient
+   data". Every object's `blockers` and `scheduleStatus` are now checked
+   directly and unconditionally; "unevaluated" is its own independent fact
+   (no work has a real, non-`GRAY` schedule reading *and* no confirmed
+   problem exists), never a side effect of a mixed field. A confirmed problem
+   and an unevaluated object elsewhere in the same portfolio are both
+   reported, at once. An empty portfolio gets its own message
+   (`C01_NO_OBJECTS_LABEL`), distinct from both "no problems" and
+   "insufficient data".
+
+Gates (corrective patch 2): `npm run build` PASS; `npm run typecheck:strict`
+PASS; `npm run test:ds` 94/94 PASS (2 new browser tests); `npm test` 85/85
+PASS (21 in `tests/view-models.test.ts`, several replacing patch 1's own
+tests that had pinned `healthStatus === schedule status`). `npm run
+test:browser` NOT RUN, same basis as before.
