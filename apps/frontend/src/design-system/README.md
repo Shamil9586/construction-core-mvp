@@ -303,3 +303,29 @@ PASS; `npm run test:ds` 94/94 PASS (2 new browser tests); `npm test` 85/85
 PASS (21 in `tests/view-models.test.ts`, several replacing patch 1's own
 tests that had pinned `healthStatus === schedule status`). `npm run
 test:browser` NOT RUN, same basis as before.
+
+**F4 corrective patch 3 (independent Work review, second re-review):** one
+remaining blocker, accepting patches 1 and 2 in full. Full detail in
+`view-models/c01.ts`'s header comment; summarised here:
+
+**C01 partial data evaluation.** Patch 2's own "insufficient data" check —
+`objectWorks.some(known reading)` — had the same shape of bug one level
+down: *one* known work was enough to mark the *whole object* fully
+evaluated, even when another work on the same object was `GRAY` or carried
+an unrecognised status. An object with one GREEN work and one GRAY work used
+to read as clean; it should read as incomplete. Problem detection
+(`blocked`/`hasRed`/`hasYellow`, each an existence check — `.some()` was
+always the right shape there) and data completeness
+(`hasCompleteScheduleData`, now `.every()` over all of an object's works,
+plus an explicit `objectWorks.length > 0` guard so zero works is never
+vacuously "complete") are fully independent checks. Neither `healthStatus`
+nor any other object-level field is used for completeness — only the
+object's own works.
+
+Gates (corrective patch 3): `npm run build` PASS; `npm run typecheck:strict`
+PASS; `npm run test:ds` 94/94 PASS (unchanged — none of the four demo
+objects in `screens/demo/fixtures.ts` happens to mix a known and an unknown
+work, so this fix has no visible effect on the existing preview; covered
+instead by four new pure tests matching the review's own numbered list).
+`npm test` 89/89 PASS (4 new). `npm run test:browser` NOT RUN, same basis as
+before.

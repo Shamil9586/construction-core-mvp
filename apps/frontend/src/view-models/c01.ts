@@ -27,11 +27,22 @@
  * have a confirmed blocker and still read `GRAY` — which used to skip it
  * entirely, silently hiding a real problem behind "insufficient data". Every
  * object's `blockers` and `scheduleStatus` are now checked directly and
- * unconditionally, never gated on `healthStatus`. "Insufficient data" is now
- * its own, independent fact: an object counts as unevaluated only when *none*
- * of its own works carry a real (non-`GRAY`) `scheduleStatus` reading *and*
- * it has no confirmed problem either — never as a side effect of a mixed
- * field being `GRAY`.
+ * unconditionally, never gated on `healthStatus`.
+ *
+ * Corrective note, third pass (Work review, F4 patch 3): patch 2's own
+ * "insufficient data" check, `objectWorks.some(known reading)`, had the same
+ * shape of bug one level down — one known work was being treated as proof
+ * the *whole object* had been evaluated, even when other works on the same
+ * object were `GRAY` or carried an unrecognised status. A GREEN work next to
+ * a GRAY one used to read as fully evaluated and problem-free; it is not.
+ * Problem detection and data-completeness are now two fully independent
+ * checks: `hasCompleteScheduleData` requires *every* work to carry a known
+ * (`RED`/`YELLOW`/`GREEN`) reading — one unknown work anywhere on the object
+ * is enough to make the evaluation incomplete — and an object with zero
+ * works is incomplete by definition, never vacuously "complete". Blocker and
+ * RED/YELLOW detection are untouched by this pass: they were already
+ * `.some()`-based existence checks, which is the correct shape for "a
+ * problem exists somewhere on this object" and was never the bug.
  */
 
 import type { ObjectSummary, Work } from '../types/api';
@@ -72,11 +83,13 @@ export interface C01ViewModel {
   portfolio: C01PortfolioRow[];
   attention: C01AttentionItem[];
   /**
-   * Objects with no confirmed problem *and* no real (non-`GRAY`) schedule
-   * reading on any of their works — genuinely nothing to evaluate, not a
-   * side effect of a mixed field reading `GRAY`. A problem always takes
-   * precedence: an object with a confirmed blocker or a RED/YELLOW work is
-   * never counted here even if most of its other works are unmeasured.
+   * Objects with no confirmed problem *and* incomplete schedule data — either
+   * no works at all, or at least one work whose `scheduleStatus` is not a
+   * known reading (`GRAY`, or an unrecognised string). One GREEN work next
+   * to a GRAY one is not proof the object was fully evaluated; every work
+   * must carry a known reading. A problem always takes precedence: an object
+   * with a confirmed blocker or a RED/YELLOW work is never counted here even
+   * if its other works are unmeasured — see `hasCompleteScheduleData` below.
    */
   unevaluatedObjectCount: number;
 }
@@ -120,6 +133,11 @@ const ATTENTION_RANK: Record<C01AttentionReason, number> = {
   ScheduleRisk: 2,
 };
 
+/** A schedule reading the frontend actually recognises — never GRAY, never an unrecognised string. */
+function isKnownScheduleReading(status: Work['scheduleStatus']): boolean {
+  return status === 'RED' || status === 'YELLOW' || status === 'GREEN';
+}
+
 export function buildC01ViewModel(objects: ObjectSummary[], works: Work[]): C01ViewModel {
   const portfolio: C01PortfolioRow[] = objects.map((object) => ({
     id: object.id,
@@ -136,15 +154,21 @@ export function buildC01ViewModel(objects: ObjectSummary[], works: Work[]): C01V
 
   for (const object of objects) {
     const objectWorks = works.filter((work) => work.objectId === object.id);
+
+    // Problem detection: existence checks, each independent of the others
+    // and of data completeness below. A problem anywhere on the object is
+    // reported regardless of what its other works look like.
     const blocked = objectWorks.some((work) => work.blockers.length > 0);
     const hasRed = objectWorks.some((work) => work.scheduleStatus === 'RED');
     const hasYellow = objectWorks.some((work) => work.scheduleStatus === 'YELLOW');
-    // A real reading exists for this object as soon as one work's schedule
-    // status is anything other than GRAY — including GREEN, which is not a
-    // "problem" but is still evidence the object was actually evaluated.
-    const hasScheduleReading = objectWorks.some(
-      (work) => work.scheduleStatus === 'RED' || work.scheduleStatus === 'YELLOW' || work.scheduleStatus === 'GREEN',
-    );
+
+    // Data completeness: every work must carry a known reading, and zero
+    // works is incomplete by definition — `.every()` on an empty array would
+    // otherwise vacuously report "complete". One known work is not proof the
+    // whole object was evaluated; a single unknown work anywhere is enough
+    // to make this false, independent of whether a problem was also found.
+    const hasCompleteScheduleData =
+      objectWorks.length > 0 && objectWorks.every((work) => isKnownScheduleReading(work.scheduleStatus));
 
     let reason: C01AttentionReason | null = null;
     if (blocked) reason = 'Blocked';
@@ -159,7 +183,7 @@ export function buildC01ViewModel(objects: ObjectSummary[], works: Work[]): C01V
         reason,
         message: attentionMessage(reason),
       });
-    } else if (!hasScheduleReading) {
+    } else if (!hasCompleteScheduleData) {
       unevaluatedObjectCount += 1;
     }
   }

@@ -200,6 +200,52 @@ test('an empty portfolio produces no items and no unevaluated count — the scre
   assert.deepEqual(vm.portfolio, []);
 });
 
+// --- Blocker (3rd review round): one known work is not proof of complete evaluation ---
+//
+// Patch 2's own "unevaluated" check used `.some()` — one known reading
+// anywhere on the object made the whole object look fully evaluated, even
+// with other works still GRAY or unrecognised. These four tests are the
+// review's own numbered list.
+
+test('Round-3 required test 1: GREEN + GRAY in the same object does not produce "no problems"', () => {
+  const object = makeObject({ healthStatus: 'GREEN' });
+  const greenWork = makeWork({ id: 'work-green', scheduleStatus: 'GREEN' });
+  const grayWork = makeWork({ id: 'work-gray', scheduleStatus: 'GRAY' });
+  const vm = buildC01ViewModel([object], [greenWork, grayWork]);
+  assert.equal(vm.attention.length, 0, 'no blocker and no RED/YELLOW work — no confirmed problem');
+  assert.equal(
+    vm.unevaluatedObjectCount,
+    1,
+    'the GRAY work makes the object incomplete even though another work is GREEN',
+  );
+});
+
+test('Round-3 required test 2: GREEN + an unrecognised schedule status in the same object does not produce "no problems"', () => {
+  const object = makeObject({ healthStatus: 'GREEN' });
+  const greenWork = makeWork({ id: 'work-green', scheduleStatus: 'GREEN' });
+  const unknownWork = makeWork({ id: 'work-unknown', scheduleStatus: 'SOME_FUTURE_SCHEDULE_STATUS' as any });
+  const vm = buildC01ViewModel([object], [greenWork, unknownWork]);
+  assert.equal(vm.attention.length, 0);
+  assert.equal(vm.unevaluatedObjectCount, 1, 'an unrecognised status is not a known reading either');
+});
+
+test('Round-3 required test 3: GRAY schedule status and a real blocker in the same object — the blocker still shows', () => {
+  const object = makeObject({ healthStatus: 'GRAY' });
+  // The blocker sits on a work whose own scheduleStatus is GRAY — data
+  // completeness and problem detection must not interfere with each other.
+  const work = makeWork({ scheduleStatus: 'GRAY', blockers: ['Штукатурка стен: не завершена'] });
+  const vm = buildC01ViewModel([object], [work]);
+  assert.equal(vm.attention.length, 1);
+  assert.equal(vm.attention[0].reason, 'Blocked');
+});
+
+test('Round-3 required test 4: no works at all is insufficient data, not vacuously "complete"', () => {
+  const object = makeObject({ healthStatus: 'GREEN' });
+  const vm = buildC01ViewModel([object], []);
+  assert.equal(vm.attention.length, 0);
+  assert.equal(vm.unevaluatedObjectCount, 1, '`.every()` on an empty array must not read as complete evaluation');
+});
+
 // --- Blocker 5 (1st review round, unaffected by round 2): real blocker reasons reach O01 ---
 
 test('O01 blockedWorks carries the real blocker reasons through unedited', () => {
