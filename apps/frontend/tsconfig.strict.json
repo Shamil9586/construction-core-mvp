@@ -21,6 +21,8 @@
     "src/types/**/*",
     "src/view-models/**/*",
     "src/screens/**/*",
-    "src/preview/**/*"
+    "src/preview/**/*",
+    "src/app/**/*",
+    "src/data/**/*"
   ]
 }
