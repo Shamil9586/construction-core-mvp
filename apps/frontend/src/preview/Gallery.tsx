@@ -121,15 +121,19 @@ const demoTopbar = (
 
 /**
  * `POST /inspections/:id/accept` decides a work as a whole — the backend has no
- * field for "498 of the 500 reported" (see `view-models/w01.ts`). This override
- * exists only so the F4 screen preview can show the two-figure layout the
- * product spec asks for; `buildW01ViewModel` itself never produces
- * `PartiallyConfirmed` from real data.
+ * field for "498 of the 500 reported" (see `view-models/w01.ts`'s corrective
+ * note). This override exists only so the F4 screen preview can show the
+ * two-figure layout the product spec asks for; `buildW01ViewModel` itself
+ * never infers a confirmed quantity from `work.accepted` and never produces
+ * `ConfirmedQuantity` from real data. The demo number is not labelled "full"
+ * or "partial" — that judgement would itself be an inference this override
+ * has no more right to make than the adapter does; it is shown plainly next
+ * to Fact and left for the reader to compare.
  */
-function demoPartialConfirmation(viewModel: W01ViewModel): W01ViewModel {
+function demoConfirmedQuantity(viewModel: W01ViewModel): W01ViewModel {
   return {
     ...viewModel,
-    confirmation: { kind: 'PartiallyConfirmed', value: '498', meta: 'м² · подтверждено частично' },
+    confirmation: { kind: 'ConfirmedQuantity', value: '498', meta: 'м² · подтверждено СК' },
   };
 }
 
@@ -140,6 +144,7 @@ export function Gallery() {
   const [c01NavKey, setC01NavKey] = useState('objects');
   const [o01NavKey, setO01NavKey] = useState('objects');
   const [w01NavKey, setW01NavKey] = useState('production');
+  const [w01AcceptedNavKey, setW01AcceptedNavKey] = useState('production');
 
   const activate = (label: string) => {
     setActivated(label);
@@ -154,9 +159,18 @@ export function Gallery() {
 
   const selectedWork = demoWorks.find((work) => work.id === demoSelectedWorkId);
   if (!selectedWork) throw new Error(`Demo fixture missing work: ${demoSelectedWorkId}`);
-  const w01ViewModel = demoPartialConfirmation(
+  const w01ViewModel = demoConfirmedQuantity(
     buildW01ViewModel(selectedWork, selectedObject, demoInspections),
   );
+
+  // Утепление фасада (demo-work-1-2) is accepted with no explicit confirmed
+  // quantity anywhere in the fixtures — the real, non-overridden path through
+  // buildW01ViewModel, kept alongside the override above so both are visible:
+  // `Accepted` (a status, no number) is what real data produces; `ConfirmedQuantity`
+  // is demo-only. See view-models/w01.ts's corrective note.
+  const acceptedWork = demoWorks.find((work) => work.id === 'demo-work-1-2');
+  if (!acceptedWork) throw new Error('Demo fixture missing work: demo-work-1-2');
+  const w01AcceptedViewModel = buildW01ViewModel(acceptedWork, selectedObject, demoInspections);
 
   return (
     <div
@@ -567,6 +581,46 @@ export function Gallery() {
             onSelectObject={(objectId) => {
               const object = demoObjects.find((o) => o.id === objectId);
               activate(object ? `${object.name} (W01 → хлебная крошка)` : objectId);
+            }}
+          />
+        </div>
+      </Section>
+
+      <Section title="Screens / W01 — accepted work, no demo override" id="w01-accepted">
+        <p
+          className={typeClass('label')}
+          style={{ color: 'var(--cc-text-secondary)', marginBottom: 12 }}
+        >
+          Тот же экран, через реальный адаптер без демонстрационной подмены:
+          работа принята СК (<code>work.accepted</code>), и подтверждение
+          показывается только как статус — без сочинённого объёма. Последняя
+          активация: <span>{activated}</span>
+        </p>
+        <div
+          style={{
+            height: 900,
+            border: '1px solid var(--cc-border-default)',
+            borderRadius: 'var(--cc-radius-card)',
+            overflow: 'hidden',
+          }}
+        >
+          <WorkCard
+            viewModel={w01AcceptedViewModel}
+            sidebar={
+              <Sidebar
+                brand={<span className={typeClass('ui-strong')}>Contour</span>}
+                caption="ПРОИЗВОДСТВЕННЫЙ КОНТРОЛЬ"
+                items={shellNavItems}
+                activeKey={w01AcceptedNavKey}
+                onNavigate={setW01AcceptedNavKey}
+                footer={<span>Тестовая среда</span>}
+              />
+            }
+            topbar={demoTopbar}
+            onNavigateHome={() => activate('Портфель (W01 accepted → хлебная крошка)')}
+            onSelectObject={(objectId) => {
+              const object = demoObjects.find((o) => o.id === objectId);
+              activate(object ? `${object.name} (W01 accepted → хлебная крошка)` : objectId);
             }}
           />
         </div>

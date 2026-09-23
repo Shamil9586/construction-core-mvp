@@ -186,25 +186,67 @@ type style, exactly the "one use per screen" its own doc comment names.
 
 Two gaps the domain model does not close, recorded rather than papered over:
 
-- A per-object *schedule* aggregate (as opposed to the already-mixed
-  `healthStatus`) is not an API field, so `view-models/status.ts` derives one
-  from each object's `Work[].scheduleStatus`, worst-wins, the same precedence
-  `ObjectHealthService` uses minus the non-schedule signals it also folds in.
+- No API field gives an object's overall status except `healthStatus`, so
+  every object-level badge — C01's portfolio rows, O01's schedule card — reads
+  it directly. Nothing here derives a second, frontend-only figure; see the
+  corrective patch below for why an earlier per-work aggregate was removed.
 - W01's specified work definition (type, finish type, layer/pie, execution
   conditions, zone) and its "confirmed 498 of 500" СК figure both go beyond
   what `Work`/`Inspection` can express today. Only the work type renders;
   finish type, layer, conditions and zone are left out entirely, the same
   choice F1 recorded for `WorkIdentityCard`'s missing slots. The real
-  `buildW01ViewModel` adapter only ever produces `Confirmed` (from
-  `work.accepted`), `Pending` or `NotSubmitted` — never a partial figure. The
-  three-figure demonstration the product spec asks for is shown with an
-  explicit, documented override in the preview only (`demoPartialConfirmation`
-  in `preview/Gallery.tsx`), not as a capability real data can reach.
+  `buildW01ViewModel` adapter only ever produces `Accepted` (a status, from
+  `work.accepted`, with no quantity attached), `Pending` or `NotSubmitted` —
+  never a confirmed figure. The three-figure demonstration the product spec
+  asks for is shown with an explicit, documented override in the preview only
+  (`demoConfirmedQuantity` in `preview/Gallery.tsx`), not as a capability real
+  data can reach.
 
 Data is typed mock view-models over real `types/api.ts` shapes
 (`screens/demo/fixtures.ts`), not a fabricated backend contract, and not
 wired into `main.tsx` — the same isolation F0–F3 kept, verified the same way.
 
-Gates: `npm run build` PASS; `npm run typecheck:strict` PASS; `npm run test:ds`
-89/89 PASS (17 new, in `tests/design-system/screens.spec.ts`); `npm test`
-64/64 PASS. `npm run test:browser` NOT RUN, same basis as F2/F3.
+Gates (original F4 pass): `npm run build` PASS; `npm run typecheck:strict`
+PASS; `npm run test:ds` 89/89 PASS (17 new, in
+`tests/design-system/screens.spec.ts`); `npm test` 64/64 PASS. `npm run
+test:browser` NOT RUN, same basis as F2/F3.
+
+**F4 corrective patch (independent Work review):** five findings, all in the
+view-model/data-boundary layer — architecture and screen composition were
+accepted as shipped. Full detail is in the header comments of
+`view-models/status.ts`, `c01.ts`, `o01.ts` and `w01.ts`; summarised here:
+
+1. **No frontend-invented object status.** `aggregateScheduleStatus` — a
+   worst-wins reduction of `Work[].scheduleStatus` into a synthetic per-object
+   figure — is gone. Every object-level badge now reads
+   `ObjectSummary.healthStatus` directly, via the new `healthStatusPresentation`.
+2. **Unknown never reads as positive.** `aggregateScheduleStatus`'s own
+   fallback silently resolved an unrecognised status to `GREEN`. Removing the
+   function removed the bug with it; both status-mapping functions default an
+   unrecognised value to `Neutral`, covered directly in
+   `tests/view-models.test.ts`.
+3. **СК confirmation is never inferred from `accepted`.** `WorkConfirmation`'s
+   `Confirmed` variant used to restate `actualQuantity` under a "confirmed"
+   caption whenever `work.accepted` was true — an inference `POST
+   /inspections/:id/accept` (no quantity field) never supports. It is now
+   `Accepted`, a status with no number attached; `ConfirmedQuantity` (an
+   explicit figure) exists in the type but is reachable only through a
+   labelled demo override, never the real adapter.
+4. **"No data" and "no problems" no longer collapse.** An object with
+   `healthStatus: 'GRAY'` used to fall out of C01's attention loop
+   indistinguishably from a genuinely clean object. `unevaluatedObjectCount`
+   now carries that fact explicitly, and the screen renders a distinct
+   message for it, independent of whether the queue also has real items.
+5. **Blocker reasons reach the screen.** O01's works table showed only a
+   generic "Заблокировано" badge for a blocked work; `work.blockers`'s actual
+   reasons were computed (via `workStatusPresentation`) but never displayed.
+   `O01ViewModel.blockedWorks` now carries them through unedited, rendered in
+   a new, conditional "Блокировки в производстве" section.
+
+Gates (corrective patch): `npm run build` PASS; `npm run typecheck:strict`
+PASS; `npm run test:ds` 92/92 PASS (3 new browser tests, plus one W01 preview
+section added — `w01-accepted` — to exercise finding 3's real, non-demo
+adapter path); `npm test` 78/78 PASS (14 new, in the new
+`tests/view-models.test.ts`, testing the view-model functions directly rather
+than through a browser). `npm run test:browser` NOT RUN, same basis as
+before.

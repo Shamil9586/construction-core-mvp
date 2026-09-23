@@ -136,6 +136,30 @@ export function ObjectOverview({
           ))}
         </DataTable>
       </section>
+
+      {viewModel.blockedWorks.length > 0 ? (
+        <section className={styles.section}>
+          <div className={styles.blockersCard}>
+            <span className={[styles.detailLabel, typeClass('label')].join(' ')}>
+              Блокировки в производстве
+            </span>
+            <ul className={styles.blockedWorkList}>
+              {viewModel.blockedWorks.map((blocked) => (
+                <li key={blocked.workId} className={styles.blockedWorkItem}>
+                  <span className={typeClass('body-strong')}>{blocked.workName}</span>
+                  <ul className={styles.blockerReasonList}>
+                    {blocked.reasons.map((reason) => (
+                      <li key={reason} className={typeClass('body')}>
+                        {reason}
+                      </li>
+                    ))}
+                  </ul>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </section>
+      ) : null}
     </AppShell>
   );
 }

@@ -13,14 +13,20 @@
  * placeholder or an explanatory sentence, the same choice F1 recorded for
  * `ConfirmedVolume`/`ZoneRow`/`Sequence` on `WorkIdentityCard`.
  *
- * СК confirmation has the same shape of gap. `POST /inspections/:id/accept`
- * decides a work as a whole — the backend cannot express "498 of the 500
- * reported". `buildW01ViewModel` therefore only ever produces `Confirmed` (the
- * fact figure, once the whole work is accepted), `Pending` or `NotSubmitted`
- * from real data. `PartiallyConfirmed` exists in the type so the screen can
- * render the two-figure layout the product spec calls for, but it is reachable
- * only through explicitly-labelled demo data — see `screens/demo/fixtures.ts`
- * and the F4 report's "Known limitations".
+ * Corrective note (Work review, F4 patch): this adapter used to treat
+ * `work.accepted` as proof that the *fact* quantity was confirmed by СК,
+ * restating `actualQuantity` under a "подтверждено СК полностью" caption. That
+ * was an inference, not a read: `POST /inspections/:id/accept` records a
+ * decision about the work as a whole and carries no quantity field at all, so
+ * there is no explicit source for "this many square metres were confirmed".
+ * `buildW01ViewModel` now only ever produces `Accepted` — an acceptance
+ * *status*, no number attached — `Pending` or `NotSubmitted`. `Confirmed
+ * quantity != fact` stays true by construction: this function has no way to
+ * produce a number for the confirmation slot at all. `ConfirmedQuantity`
+ * remains in the type for the day an explicit confirmed-volume field exists,
+ * and is exercised today only through an explicitly-labelled demo override —
+ * see `preview/Gallery.tsx`'s `demoConfirmedQuantity` and the F4 corrective
+ * report's "Known limitations".
  */
 
 import type { Inspection, ObjectSummary, Work } from '../types/api';
@@ -30,8 +36,8 @@ import { workStatusPresentation, type StatusPresentation } from './status';
 export type WorkConfirmation =
   | { kind: 'NotSubmitted' }
   | { kind: 'Pending' }
-  | { kind: 'Confirmed'; value: string; meta: string }
-  | { kind: 'PartiallyConfirmed'; value: string; meta: string };
+  | { kind: 'Accepted' }
+  | { kind: 'ConfirmedQuantity'; value: string; meta: string };
 
 export interface W01Schedule {
   plannedStart: string;
@@ -67,12 +73,10 @@ export function buildW01ViewModel(
     .filter((inspection) => inspection.objectWorkId === work.id)
     .sort((a, b) => (a.requestedAt < b.requestedAt ? 1 : -1))[0];
 
+  // No branch here ever attaches a quantity — `work.accepted` is a decision
+  // about the whole work, not a measurement, so it can only produce a status.
   const confirmation: WorkConfirmation = work.accepted
-    ? {
-        kind: 'Confirmed',
-        value: formatMeasure(work.actualQuantity, work.unit).value,
-        meta: `${work.unit} · подтверждено СК полностью`,
-      }
+    ? { kind: 'Accepted' }
     : latestInspection
       ? { kind: 'Pending' }
       : { kind: 'NotSubmitted' };

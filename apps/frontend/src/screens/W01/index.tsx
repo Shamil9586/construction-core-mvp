@@ -35,19 +35,26 @@ export interface W01Props {
 
 function ConfirmationBlock({ confirmation }: { confirmation: WorkConfirmation }) {
   switch (confirmation.kind) {
-    case 'Confirmed':
+    // An explicit confirmed-quantity figure — reachable only where the data
+    // source actually has one (never inferred from `accepted`, see
+    // view-models/w01.ts). Rendered as its own PlanFact figure so it reads
+    // next to Fact without either merging into or correcting the other.
+    case 'ConfirmedQuantity':
       return (
         <PlanFact
           items={[{ label: 'Подтверждено СК', value: confirmation.value, meta: confirmation.meta }]}
         />
       );
-    case 'PartiallyConfirmed':
+    // Accepted is a decision about the work as a whole, not a quantity — no
+    // number is shown here, only the status, so it can never be read as a
+    // confirmed figure equal to (or different from) Fact.
+    case 'Accepted':
       return (
         <div className={styles.confirmationStack}>
-          <PlanFact
-            items={[{ label: 'Подтверждено СК', value: confirmation.value, meta: confirmation.meta }]}
-          />
-          <StatusBadge variant="Attention">Подтверждено частично</StatusBadge>
+          <span className={[styles.confirmationLabel, typeClass('label')].join(' ')}>
+            Подтверждение СК
+          </span>
+          <StatusBadge variant="OnTrack">Принято СК</StatusBadge>
         </div>
       );
     case 'Pending':

@@ -1,5 +1,5 @@
 /**
- * Schedule-status vocabulary shared by C01, O01 and W01.
+ * Status vocabulary shared by C01, O01 and W01.
  *
  * This module does not import the design system. The data chain and the
  * presentation chain meet only at the screen (see `design-system/README.md`), so
@@ -9,9 +9,21 @@
  * `RowStatus` is expected without an adapter — but the two are declared
  * independently on purpose, so this layer never has a reason to import from
  * `design-system`.
+ *
+ * Corrective note (Work review, F4 patch): this module used to also export
+ * `aggregateScheduleStatus`, a worst-wins reduction of several works'
+ * `scheduleStatus` into one synthetic per-object figure. Two findings removed
+ * it. First, it was a frontend-invented business rule — nothing in the backend
+ * computes "an object's schedule status" as a single value, so presenting one
+ * through `StatusBadge` made an invented figure look like a confirmed field.
+ * Second, its own fallback (`return 'GREEN'`) mapped a genuinely unrecognised
+ * status to a *positive* one, which is the specific failure mode `Known<T>`
+ * unions exist to avoid — see the `default` arms below, which all resolve to
+ * `Neutral` instead. Object-level status now comes only from
+ * `ObjectSummary.healthStatus`, a field the backend actually computes.
  */
 
-import type { ScheduleStatus, Work } from '../types/api';
+import type { HealthStatus, ScheduleStatus, Work } from '../types/api';
 
 export type ScheduleVariant = 'OnTrack' | 'Delayed' | 'Attention' | 'Blocked' | 'Neutral';
 
@@ -27,7 +39,8 @@ export interface StatusPresentation {
  * become a real delay yet, so it reads as `Attention` ("Требует внимания") and
  * shares the amber with `Delayed` by design (D-07). An unrecognised value falls
  * back to `Neutral` rather than throwing — `ScheduleStatus` is a `Known<T>` union
- * because the column is plain `text`, not a CHECK constraint.
+ * because the column is plain `text`, not a CHECK constraint — and never to
+ * `OnTrack`: an unknown figure is not evidence of anything good.
  */
 export function scheduleStatusPresentation(status: ScheduleStatus): StatusPresentation {
   switch (status) {
@@ -45,19 +58,29 @@ export function scheduleStatusPresentation(status: ScheduleStatus): StatusPresen
 }
 
 /**
- * Worst-wins aggregation of several works' `scheduleStatus` into one figure for
- * their object, mirroring `ObjectHealthService`'s own precedence (RED > YELLOW >
- * GRAY > GREEN) but restricted to schedule alone — no critical issues, no
- * staleness, no late ИД/СДО folded in. `ObjectSummary.healthStatus` already
- * mixes those in deliberately; a pure schedule figure is what O01's "plan/fact
- * schedule state" needs to stay a single, uncontaminated contour, and it is not
- * a field the API returns directly (only per-work `scheduleStatus` is).
+ * `healthStatus` is `ObjectHealthService`'s own confirmed, already-computed
+ * per-object figure — the only object-level status this module presents.
+ * Kept as its own function, structurally identical to
+ * `scheduleStatusPresentation` today, because the two read *different*
+ * confirmed backend signals (schedule variance vs. mixed attention) that are
+ * allowed to diverge in wording later; collapsing them into one function would
+ * make that an accident of the current label choice rather than a decision.
+ * Same rule as above: unrecognised or absent data resolves to `Neutral`, never
+ * `OnTrack`.
  */
-export function aggregateScheduleStatus(statuses: ScheduleStatus[]): ScheduleStatus {
-  if (statuses.includes('RED')) return 'RED';
-  if (statuses.includes('YELLOW')) return 'YELLOW';
-  if (statuses.length === 0 || statuses.includes('GRAY')) return 'GRAY';
-  return 'GREEN';
+export function healthStatusPresentation(status: HealthStatus): StatusPresentation {
+  switch (status) {
+    case 'GREEN':
+      return { variant: 'OnTrack', label: 'По графику' };
+    case 'YELLOW':
+      return { variant: 'Attention', label: 'Требует внимания' };
+    case 'RED':
+      return { variant: 'Delayed', label: 'Есть отставание' };
+    case 'GRAY':
+      return { variant: 'Neutral', label: 'Нет данных' };
+    default:
+      return { variant: 'Neutral', label: 'Нет данных' };
+  }
 }
 
 /**

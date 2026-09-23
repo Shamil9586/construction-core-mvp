@@ -9,7 +9,11 @@ import {
   StatusBadge,
   typeClass,
 } from '../../design-system';
-import { C01_ATTENTION_EMPTY_LABEL, type C01ViewModel } from '../../view-models/c01';
+import {
+  C01_ATTENTION_EMPTY_LABEL,
+  C01_INSUFFICIENT_DATA_LABEL,
+  type C01ViewModel,
+} from '../../view-models/c01';
 import styles from './C01.module.css';
 
 /**
@@ -84,11 +88,13 @@ export function CompanyControlCenter({
           Требует внимания
         </h2>
 
-        {viewModel.attention.length === 0 ? (
+        {viewModel.attention.length === 0 && viewModel.unevaluatedObjectCount === 0 ? (
           <p className={[styles.empty, typeClass('body')].join(' ')}>
             {C01_ATTENTION_EMPTY_LABEL}
           </p>
-        ) : (
+        ) : null}
+
+        {viewModel.attention.length > 0 ? (
           <ul className={styles.attentionList}>
             {viewModel.attention.map((item) => (
               <li key={item.objectId} className={styles.attentionRow}>
@@ -105,7 +111,13 @@ export function CompanyControlCenter({
               </li>
             ))}
           </ul>
-        )}
+        ) : null}
+
+        {viewModel.unevaluatedObjectCount > 0 ? (
+          <p className={[styles.insufficientData, typeClass('label')].join(' ')}>
+            {C01_INSUFFICIENT_DATA_LABEL}
+          </p>
+        ) : null}
       </section>
     </AppShell>
   );

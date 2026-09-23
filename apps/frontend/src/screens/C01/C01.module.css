@@ -56,3 +56,10 @@
 .attentionMessage {
   color: var(--cc-text-secondary);
 }
+
+/* A fact about data coverage, not a status — deliberately not a card and not
+   a StatusBadge, so it cannot be mistaken for another attention item. */
+.insufficientData {
+  color: var(--cc-text-secondary);
+  margin: var(--cc-p-space-12) 0 0;
+}

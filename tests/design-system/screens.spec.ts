@@ -2,14 +2,19 @@ import { test, expect, type Page, type Locator } from '@playwright/test';
 
 /**
  * F4 screen checks: C01 (Company Control Center), O01 (Object Overview), W01
- * (Work Card).
+ * (Work Card) — including the Work review corrective patch (see the header
+ * comments in view-models/status.ts, c01.ts, o01.ts and w01.ts for what each
+ * finding was and why).
  *
  * Run against the same isolated preview page as the design-system specs. Every
  * query below is scoped to its own `[data-section]` — the three screens share
  * one demo object ("Жилой комплекс «Полесье»"), which renders as an
  * interactive control in more than one section (an `ObjectRow` activator on
  * C01, a breadcrumb crumb on W01), so an unscoped page-wide query would be
- * ambiguous the same way it would for the F2/F3 sections above these.
+ * ambiguous the same way it would for the F2/F3 sections above these. W01 has
+ * a second, separate section (`w01-accepted`) demonstrating the same screen
+ * through `buildW01ViewModel`'s real adapter with no demo override, for the
+ * corrective patch's СК-confirmation finding.
  */
 
 const PREVIEW = '/preview.html';
@@ -37,6 +42,10 @@ function o01Section(page: Page): Locator {
 
 function w01Section(page: Page): Locator {
   return page.locator('[data-section="w01"]');
+}
+
+function w01AcceptedSection(page: Page): Locator {
+  return page.locator('[data-section="w01-accepted"]');
 }
 
 test.beforeEach(async ({ page }: { page: Page }) => {
@@ -111,6 +120,29 @@ test.describe('C01 — Company Control Center', () => {
       'Логистический терминал (C01 → объект)',
     );
   });
+
+  test('an object with no evaluable data is reported as unevaluated, never as "no problems"', async ({
+    page,
+  }) => {
+    // Логистический терминал (demo-object-3) has healthStatus GRAY — no
+    // schedule data at all yet. It must not be silently indistinguishable
+    // from a portfolio that was checked and found clean.
+    const section = c01Section(page);
+    await expect(
+      section.getByText('Недостаточно данных для оценки графика по части объектов', { exact: true }),
+    ).toBeVisible();
+    // The two real, confirmed problems (object 1 blocked, object 4 delayed)
+    // are still reported — the insufficient-data note is additional, not a
+    // replacement for genuine attention items.
+    await expect(
+      section.getByText('Есть технологическая блокировка производства работ', { exact: true }),
+    ).toBeVisible();
+    // The positive "no problems" claim must not appear alongside either of
+    // the above — this portfolio was never fully clean nor fully unevaluated.
+    await expect(
+      section.getByText('Проблем по графику производства работ не выявлено'),
+    ).toHaveCount(0);
+  });
 });
 
 test.describe('O01 — Object Overview', () => {
@@ -138,9 +170,9 @@ test.describe('O01 — Object Overview', () => {
 
     // Plan-on-date and fact stay two figures, per §7 — never a computed gap.
     await expect(section.getByText('75%', { exact: true })).toBeVisible();
-    // The object-level schedule badge, not the (also "Есть отставание")
-    // WorkSummaryRow badge further down for the one work causing it — DOM
-    // order puts this schedule card first.
+    // The object's confirmed healthStatus badge, not the (also "Есть
+    // отставание") WorkSummaryRow badge further down for one specific work —
+    // DOM order puts this schedule card first.
     await expect(section.getByText('Есть отставание', { exact: true }).first()).toBeVisible();
   });
 
@@ -183,6 +215,21 @@ test.describe('O01 — Object Overview', () => {
     await section.getByRole('navigation', { name: 'Хлебные крошки' }).getByRole('button', { name: 'Портфель' }).click();
     await expect(marker).toHaveText('Портфель (O01 → хлебная крошка)');
   });
+
+  test('a blocked work shows its real reason, not just a generic "Заблокировано" badge', async ({
+    page,
+  }) => {
+    // Монтаж вентфасада (demo-work-1-3) carries a real blocker reason in the
+    // fixtures. Before this patch the works-table badge said only
+    // "Заблокировано" and the reason was dropped; it must now be visible.
+    // (The empty case — no blocked works, section omitted entirely — is
+    // covered precisely in tests/view-models.test.ts, since this preview's
+    // one O01 object always has a blocked work to demonstrate the fix.)
+    const section = o01Section(page);
+    await expect(section.getByText('Блокировки в производстве', { exact: true })).toBeVisible();
+    await expect(section.getByText('Монтаж вентфасада', { exact: true }).first()).toBeVisible();
+    await expect(section.getByText('Отделка фасада: не завершена', { exact: true })).toBeVisible();
+  });
 });
 
 test.describe('W01 — Work Card', () => {
@@ -216,12 +263,13 @@ test.describe('W01 — Work Card', () => {
     await expect(section.getByText(`1${NBSP}000`, { exact: true })).toBeVisible();
     await expect(section.getByText('500', { exact: true })).toBeVisible();
 
-    // The СК confirmation demonstration (498 of the 500 reported) — a capability
-    // the real backend cannot express yet; see view-models/w01.ts. It renders as
-    // its own block, not as a third column of the Plan/Fact figure above.
+    // The СК confirmation demonstration (498 next to a Fact of 500) — a
+    // capability the real backend cannot express yet; see view-models/w01.ts.
+    // It renders as its own block, not as a third column of the Plan/Fact
+    // figure above, and is not labelled "partial" or "full" — that judgement
+    // would itself be an inference nobody supplied a source for.
     await expect(section.getByText('Подтверждено СК', { exact: true })).toBeVisible();
     await expect(section.getByText('498', { exact: true })).toBeVisible();
-    await expect(section.getByText('Подтверждено частично', { exact: true })).toBeVisible();
 
     // No arithmetic difference (500 - 498 = 2, or "-2") is ever displayed.
     await expect(section.getByText('-2', { exact: true })).toHaveCount(0);
@@ -273,5 +321,27 @@ test.describe('W01 — Work Card', () => {
 
     await nav.getByRole('button', { name: 'Портфель' }).click();
     await expect(marker).toHaveText('Портфель (W01 → хлебная крошка)');
+  });
+});
+
+test.describe('W01 — accepted work, real adapter (no demo override)', () => {
+  test('acceptance is shown as a status, never as a restated Fact quantity', async ({ page }) => {
+    // Утепление фасада (demo-work-1-2): accepted:true, actualQuantity 800 м².
+    // Before this patch, `work.accepted` alone produced a "Подтверждено СК"
+    // figure equal to Fact — an inference the backend never confirmed. The
+    // real adapter now produces only a status.
+    const section = w01AcceptedSection(page);
+    await expect(section.getByRole('heading', { level: 1, name: 'Утепление фасада' })).toBeVisible();
+
+    await expect(section.getByText('Принято СК', { exact: true })).toBeVisible();
+    // "Подтверждено СК" is the label the PlanFact figure would use if an
+    // explicit confirmed quantity existed (see ConfirmedQuantity in the other
+    // W01 section) — it must not appear here, where none does.
+    await expect(section.getByText('Подтверждено СК', { exact: true })).toHaveCount(0);
+
+    // Fact is still shown, plainly, unaffected by the acceptance decision.
+    // (Plan and Fact are both 800 for this fully-completed work, so two
+    // elements legitimately match — the point here is that at least one does.)
+    await expect(section.getByText('800', { exact: true }).first()).toBeVisible();
   });
 });
