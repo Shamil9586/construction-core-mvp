@@ -173,3 +173,38 @@ under `src/design-system/**/*`, already covered by `tsconfig.strict.json`);
 exercises and the production bundle carries no marker of it, so the baseline
 failures in `docs/status.md` remain separate and uncleared, the same basis F2
 used.
+
+**F4 — first product screens:** C01 Company Control Center, O01 Object
+Overview, W01 Work Card, under `screens/`, driven by `view-models/status.ts`,
+`c01.ts`, `o01.ts`, `w01.ts`. Every screen is an `AppShell` composition built
+only from already-accepted components — `Breadcrumb`, `PageHeader`,
+`DataTable`, `ObjectRow`, `WorkSummaryRow`, `PlanFact`, `ProgressBar`,
+`StatusBadge`, `Button` — plus one screen-local part per screen for markup no
+existing component covers (C01's attention queue, O01's object-details `dl`,
+W01's schedule-dates `dl`). O01 is the first and only user of the `display`
+type style, exactly the "one use per screen" its own doc comment names.
+
+Two gaps the domain model does not close, recorded rather than papered over:
+
+- A per-object *schedule* aggregate (as opposed to the already-mixed
+  `healthStatus`) is not an API field, so `view-models/status.ts` derives one
+  from each object's `Work[].scheduleStatus`, worst-wins, the same precedence
+  `ObjectHealthService` uses minus the non-schedule signals it also folds in.
+- W01's specified work definition (type, finish type, layer/pie, execution
+  conditions, zone) and its "confirmed 498 of 500" СК figure both go beyond
+  what `Work`/`Inspection` can express today. Only the work type renders;
+  finish type, layer, conditions and zone are left out entirely, the same
+  choice F1 recorded for `WorkIdentityCard`'s missing slots. The real
+  `buildW01ViewModel` adapter only ever produces `Confirmed` (from
+  `work.accepted`), `Pending` or `NotSubmitted` — never a partial figure. The
+  three-figure demonstration the product spec asks for is shown with an
+  explicit, documented override in the preview only (`demoPartialConfirmation`
+  in `preview/Gallery.tsx`), not as a capability real data can reach.
+
+Data is typed mock view-models over real `types/api.ts` shapes
+(`screens/demo/fixtures.ts`), not a fabricated backend contract, and not
+wired into `main.tsx` — the same isolation F0–F3 kept, verified the same way.
+
+Gates: `npm run build` PASS; `npm run typecheck:strict` PASS; `npm run test:ds`
+89/89 PASS (17 new, in `tests/design-system/screens.spec.ts`); `npm test`
+64/64 PASS. `npm run test:browser` NOT RUN, same basis as F2/F3.
