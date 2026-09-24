@@ -20,6 +20,14 @@ function hasStringField(record: Record<string, unknown>, field: string): boolean
   return isString(record[field]);
 }
 
+function isStringOrNull(value: unknown): value is string | null {
+  return isString(value) || value === null;
+}
+
+function hasStringOrNullField(record: Record<string, unknown>, field: string): boolean {
+  return isStringOrNull(record[field]);
+}
+
 const MALFORMED_SNAPSHOT_MESSAGE = 'Неверный ответ сервера: искажённый снимок данных.';
 
 function fail(): never {
@@ -52,6 +60,18 @@ function fail(): never {
  *     `name`/`contractor`/`unit` (works) — rendered directly as JSX text or
  *     passed to `joinMeta`; a non-string here throws the same way `blockers`
  *     does.
+ *   - `customerName`/`organizationName` (objects) — `string | null` in the
+ *     type (`ReadService.snapshot()`'s `SELECT o.*` always selects these
+ *     columns, so the backend never omits the key — only its value can be
+ *     `null`). `o01.ts` reads them through `?? NO_DATA_DASH`, which only
+ *     replaces `null`/`undefined`; a truthy non-string (`{}`, `[]`) passes
+ *     straight through into `O01Details`, typed `string`, and
+ *     `screens/O01/index.tsx` renders it directly as a JSX child — the same
+ *     crash class as `blockers`, just reachable through `??` instead of
+ *     `.length`. A string or `null` is accepted; anything else, including a
+ *     missing key, is rejected — a missing key on a column the backend
+ *     always selects is a transport defect, not a legitimate narrow
+ *     response, the same reasoning `inspections` below already uses.
  *   - `status` (inspections) — the field `confirmationFromInspectionStatus`
  *     switches on; required to be a string so a genuinely truncated
  *     inspection record cannot pass silently, this does not check *which*
@@ -81,6 +101,8 @@ export function validateSnapshot(value: unknown): Snapshot {
     if (!hasStringField(object, 'externalCode')) fail();
     if (!hasStringField(object, 'address')) fail();
     if (!hasStringField(object, 'responsible')) fail();
+    if (!hasStringOrNullField(object, 'customerName')) fail();
+    if (!hasStringOrNullField(object, 'organizationName')) fail();
   }
 
   if (!isObjectArray(value.works)) fail();

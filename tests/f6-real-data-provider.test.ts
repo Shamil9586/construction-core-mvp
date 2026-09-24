@@ -229,6 +229,34 @@ test('realDataProvider: inspections: [] and works with no blockers (legitimate e
   }
 });
 
+test('realDataProvider: customerName/organizationName — a string and a null both pass through unchanged', async () => {
+  // F6-02 corrective, third pass (Work re-review): both fields are
+  // `string | null` in the type; o01.ts reads them through `?? NO_DATA_DASH`
+  // and screens/O01/index.tsx renders the result directly as a JSX child.
+  // A real snapshot legitimately carries both shapes — demoObjects[0] has a
+  // string customerName, demoObjects[1] has customerName: null — and both
+  // must survive validation exactly as sent, never coerced.
+  const restoreStorage = stubSessionStorage('tok');
+  const snapshotBody = {
+    ...validRepresentativeSnapshot(),
+    objects: [
+      { ...demoObjects[0], customerName: 'ООО «Заказчик»', organizationName: null },
+      { ...demoObjects[1], customerName: null, organizationName: 'ООО «Организация»' },
+    ],
+  };
+  const { restore } = stubFetch(async () => json(200, snapshotBody));
+  try {
+    const result = await realDataProvider.getSnapshot();
+    assert.equal(result.objects[0].customerName, 'ООО «Заказчик»');
+    assert.equal(result.objects[0].organizationName, null);
+    assert.equal(result.objects[1].customerName, null);
+    assert.equal(result.objects[1].organizationName, 'ООО «Организация»');
+  } finally {
+    restore();
+    restoreStorage();
+  }
+});
+
 test('realDataProvider: an unrecognised scheduleStatus/inspection status is accepted, not rejected', async () => {
   // status.ts's own switch statements already read an unrecognised value as
   // neutral, by deliberate design (see its corrective notes) — validation
@@ -318,6 +346,14 @@ const CORRUPTED_OBJECT_FIELD_CASES: Array<{ label: string; object: Record<string
   { label: 'externalCode: 42 (joined via joinMeta, which calls .trim())', object: { ...demoObjects[0], externalCode: 42 } },
   { label: 'address missing', object: (() => { const { address, ...rest } = demoObjects[0] as any; return rest; })() },
   { label: 'responsible: null', object: { ...demoObjects[0], responsible: null } },
+  { label: 'customerName: {} (rendered directly as a JSX child in O01, same crash class as name)', object: { ...demoObjects[0], customerName: {} } },
+  { label: 'customerName: [] (an array is not a string or null either)', object: { ...demoObjects[0], customerName: [] } },
+  { label: 'organizationName: {}', object: { ...demoObjects[0], organizationName: {} } },
+  { label: 'organizationName: []', object: { ...demoObjects[0], organizationName: [] } },
+  {
+    label: 'organizationName missing entirely — SELECT o.* always selects this column, so a missing key is a transport defect',
+    object: (() => { const { organizationName, ...rest } = demoObjects[0] as any; return rest; })(),
+  },
 ];
 
 for (const { label, object } of CORRUPTED_OBJECT_FIELD_CASES) {
