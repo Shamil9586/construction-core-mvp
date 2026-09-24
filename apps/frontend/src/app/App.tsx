@@ -1,7 +1,7 @@
 import { BrowserRouter } from 'react-router-dom';
 import { AppRoutes } from './AppRoutes';
 import { SnapshotProvider } from '../data/SnapshotContext';
-import { mockDataProvider } from '../data/mockDataProvider';
+import { selectDataProvider } from '../data/selectDataProvider';
 
 /**
  * `basename` is client-side routing only: once the F5 bundle is already
@@ -19,6 +19,15 @@ import { mockDataProvider } from '../data/mockDataProvider';
 const APP_BASENAME = '/app.html';
 
 /**
+ * F6 — which `DataProvider` backs this application instance, decided once at
+ * module load from build-time configuration (`VITE_DATA_PROVIDER`), not
+ * inside the component: the choice is an application-bootstrap concern, not
+ * render state, and a misconfigured value should fail the app immediately
+ * rather than on some later render.
+ */
+const dataProvider = selectDataProvider(import.meta.env.VITE_DATA_PROVIDER);
+
+/**
  * Application composition — the root the F5 objective describes:
  * Application → Routing → Data Boundary → Adapters → View Models → Screens.
  * `SnapshotProvider` is the data boundary's runtime home; `AppRoutes` is the
@@ -27,7 +36,7 @@ const APP_BASENAME = '/app.html';
  */
 export function App() {
   return (
-    <SnapshotProvider provider={mockDataProvider}>
+    <SnapshotProvider provider={dataProvider}>
       <BrowserRouter basename={APP_BASENAME}>
         <AppRoutes />
       </BrowserRouter>
