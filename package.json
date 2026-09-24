@@ -12,7 +12,8 @@
     "db:seed": "node --import tsx scripts/seed.ts",
     "db:local": "node --import tsx scripts/local-postgres.ts",
     "test:browser": "playwright test",
-    "test:ds": "playwright test --config playwright.ds.config.ts"
+    "test:ds": "playwright test --config playwright.ds.config.ts",
+    "test:f6-browser": "playwright test --config playwright.f6.config.ts"
   },
   "dependencies": {
     "@ant-design/icons": "^6.0.0",

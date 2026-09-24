@@ -20,10 +20,13 @@ import { demoInspections, demoObjects, demoWorks } from '../apps/frontend/src/sc
  * not touched — so that coverage stays exactly where F5 already proved it,
  * tests/design-system/app.spec.ts, rather than being duplicated here.
  *
- * F6-01/F6-02 corrective (Work review): the two blocks below add coverage
- * for the two confirmed blockers — provider selection failing closed outside
- * development, and a structurally malformed successful response being
- * rejected instead of trusted through to render.
+ * F6-01/F6-02 corrective (Work review, two passes): the blocks below add
+ * coverage for provider selection failing closed outside development, and
+ * for a structurally malformed successful response — including a corrupted
+ * *field within an otherwise valid record*, not just a malformed top-level
+ * shape — being rejected instead of trusted through to render. The second
+ * pass's browser-level proof (a genuinely automated, persistent regression,
+ * not a manual run) lives in tests/f6-browser/malformed-snapshot.spec.ts.
  */
 
 function stubSessionStorage(token: string | null) {
@@ -49,13 +52,29 @@ function stubFetch(handler: (input: RequestInfo | URL, init?: RequestInit) => Pr
 const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
-/** A minimal but structurally valid internal Snapshot body — passes validateSnapshot. */
-const validMinimalSnapshot = () => ({
-  objects: [{ id: 'o1' }],
-  works: [{ id: 'w1', objectId: 'o1' }],
+/**
+ * A structurally valid Snapshot with every required collection present but
+ * empty — legitimate per the type (mockDataProvider ships the same shape for
+ * contractors/dependencies) and passes validateSnapshot vacuously. Used only
+ * by tests that care about transport (headers, URL, HTTP status handling),
+ * never as a stand-in for "a valid record" — the review's own finding was
+ * that a snapshot content-free of real records must not be mistaken for one.
+ */
+const validEmptySnapshot = () => ({
+  objects: [],
+  works: [],
   contractors: [],
   dependencies: [],
   inspections: [],
+});
+
+/** The real, typed demo fixtures — every field a genuine internal Snapshot record carries. */
+const validRepresentativeSnapshot = () => ({
+  objects: demoObjects,
+  works: demoWorks,
+  contractors: [],
+  dependencies: [],
+  inspections: demoInspections,
 });
 
 /* --------------------------------------------------------------------- *
@@ -96,7 +115,7 @@ test('provider selection: an unrecognised value fails closed regardless of envir
 
 test('realDataProvider sends the session token as a bearer header to /api/snapshot', async () => {
   const restoreStorage = stubSessionStorage('tok-123');
-  const { calls, restore } = stubFetch(async () => json(200, validMinimalSnapshot()));
+  const { calls, restore } = stubFetch(async () => json(200, validEmptySnapshot()));
   try {
     await realDataProvider.getSnapshot();
     assert.equal(calls.length, 1);
@@ -111,7 +130,7 @@ test('realDataProvider sends the session token as a bearer header to /api/snapsh
 
 test('realDataProvider sends no Authorization header when no session token is present', async () => {
   const restoreStorage = stubSessionStorage(null);
-  const { calls, restore } = stubFetch(async () => json(200, validMinimalSnapshot()));
+  const { calls, restore } = stubFetch(async () => json(200, validEmptySnapshot()));
   try {
     await realDataProvider.getSnapshot();
     const headers = (calls[0].init?.headers ?? {}) as Record<string, string>;
@@ -149,6 +168,22 @@ test('realDataProvider rejects non-2xx HTML/text without leaking the body (proxy
   }
 });
 
+test('realDataProvider rejects invalid JSON on an HTTP 200 (not a Snapshot-shape defect, a parse defect)', async () => {
+  const restoreStorage = stubSessionStorage('tok');
+  const { restore } = stubFetch(
+    async () => new Response('<!doctype html><html></html>', { status: 200, headers: { 'content-type': 'application/json' } }),
+  );
+  try {
+    await assert.rejects(
+      () => realDataProvider.getSnapshot(),
+      (e: Error) => /Неверный ответ сервера: HTTP 200/.test(e.message),
+    );
+  } finally {
+    restore();
+    restoreStorage();
+  }
+});
+
 test('realDataProvider rejects on transport failure — it never substitutes mock fixtures', async () => {
   const restoreStorage = stubSessionStorage('tok');
   const { restore } = stubFetch(async () => {
@@ -171,13 +206,7 @@ test('realDataProvider rejects on transport failure — it never substitutes moc
 
 test('realDataProvider: a fully-formed internal Snapshot passes through unchanged (representative fixture)', async () => {
   const restoreStorage = stubSessionStorage('tok');
-  const snapshotBody = {
-    objects: demoObjects,
-    works: demoWorks,
-    contractors: [],
-    dependencies: [],
-    inspections: demoInspections,
-  };
+  const snapshotBody = validRepresentativeSnapshot();
   const { restore } = stubFetch(async () => json(200, snapshotBody));
   try {
     const result = await realDataProvider.getSnapshot();
@@ -188,9 +217,9 @@ test('realDataProvider: a fully-formed internal Snapshot passes through unchange
   }
 });
 
-test('realDataProvider: inspections: [] (a legitimate empty list) is accepted, not rejected', async () => {
+test('realDataProvider: inspections: [] and works with no blockers (legitimate empties) are accepted', async () => {
   const restoreStorage = stubSessionStorage('tok');
-  const { restore } = stubFetch(async () => json(200, validMinimalSnapshot()));
+  const { restore } = stubFetch(async () => json(200, validEmptySnapshot()));
   try {
     const result = await realDataProvider.getSnapshot();
     assert.deepEqual(result.inspections, []);
@@ -200,33 +229,29 @@ test('realDataProvider: inspections: [] (a legitimate empty list) is accepted, n
   }
 });
 
-const MALFORMED_CASES: Array<{ label: string; body: unknown }> = [
-  { label: 'empty object', body: {} },
-  { label: 'null body', body: null },
-  { label: 'objects is not an array', body: { ...validMinimalSnapshot(), objects: {} } },
-  { label: 'works is not an array', body: { ...validMinimalSnapshot(), works: {} } },
-  { label: 'contractors is not an array', body: { ...validMinimalSnapshot(), contractors: null } },
-  { label: 'dependencies is not an array', body: { ...validMinimalSnapshot(), dependencies: null } },
-  {
-    label: 'an object record without an id (corrupted used record)',
-    body: { ...validMinimalSnapshot(), objects: [{ name: 'no id' }] },
-  },
-  {
-    label: 'a work record without objectId (corrupted used record)',
-    body: { ...validMinimalSnapshot(), works: [{ id: 'w1' }] },
-  },
-  {
-    label: 'inspections missing entirely — must not be read as []',
-    body: (() => {
-      const { inspections, ...rest } = validMinimalSnapshot();
-      return rest;
-    })(),
-  },
-  { label: 'inspections: null — must not be read as []', body: { ...validMinimalSnapshot(), inspections: null } },
-];
+test('realDataProvider: an unrecognised scheduleStatus/inspection status is accepted, not rejected', async () => {
+  // status.ts's own switch statements already read an unrecognised value as
+  // neutral, by deliberate design (see its corrective notes) — validation
+  // must not fight that, only reject structurally broken records.
+  const restoreStorage = stubSessionStorage('tok');
+  const snapshotBody = {
+    ...validRepresentativeSnapshot(),
+    works: [{ ...demoWorks[0], scheduleStatus: 'SOME_FUTURE_STATUS' }],
+    inspections: [{ ...demoInspections[0], status: 'SOME_FUTURE_STATUS' }],
+  };
+  const { restore } = stubFetch(async () => json(200, snapshotBody));
+  try {
+    const result = await realDataProvider.getSnapshot();
+    assert.equal(result.works[0].scheduleStatus, 'SOME_FUTURE_STATUS');
+    assert.equal(result.inspections?.[0].status, 'SOME_FUTURE_STATUS');
+  } finally {
+    restore();
+    restoreStorage();
+  }
+});
 
-for (const { label, body } of MALFORMED_CASES) {
-  test(`realDataProvider rejects a malformed 2xx snapshot: ${label}`, async () => {
+function rejects(body: unknown) {
+  return async () => {
     const restoreStorage = stubSessionStorage('tok');
     const { restore } = stubFetch(async () => json(200, body));
     try {
@@ -238,5 +263,78 @@ for (const { label, body } of MALFORMED_CASES) {
       restore();
       restoreStorage();
     }
-  });
+  };
+}
+
+const MALFORMED_TOP_LEVEL_CASES: Array<{ label: string; body: unknown }> = [
+  { label: 'empty object', body: {} },
+  { label: 'null body', body: null },
+  { label: 'objects is not an array', body: { ...validEmptySnapshot(), objects: {} } },
+  { label: 'works is not an array', body: { ...validEmptySnapshot(), works: {} } },
+  { label: 'contractors is not an array', body: { ...validEmptySnapshot(), contractors: null } },
+  { label: 'dependencies is not an array', body: { ...validEmptySnapshot(), dependencies: null } },
+  {
+    label: 'inspections missing entirely — must not be read as []',
+    body: (() => {
+      const { inspections, ...rest } = validEmptySnapshot();
+      return rest;
+    })(),
+  },
+  { label: 'inspections: null — must not be read as []', body: { ...validEmptySnapshot(), inspections: null } },
+];
+
+for (const { label, body } of MALFORMED_TOP_LEVEL_CASES) {
+  test(`realDataProvider rejects a malformed 2xx snapshot (top level): ${label}`, rejects(body));
+}
+
+/**
+ * The review's concrete reproduction and its immediate neighbours: a
+ * corrupted *field inside an otherwise valid work record*, the exact defect
+ * the first validateSnapshot pass missed. Each case starts from the real
+ * demoWorks fixture and corrupts exactly one field.
+ */
+const CORRUPTED_WORK_FIELD_CASES: Array<{ label: string; work: Record<string, unknown> }> = [
+  { label: 'blockers missing entirely', work: (() => { const { blockers, ...rest } = demoWorks[0] as any; return rest; })() },
+  { label: 'blockers: null', work: { ...demoWorks[0], blockers: null } },
+  { label: 'blockers: {} (has no real length, was silently treated as not-blocked)', work: { ...demoWorks[0], blockers: {} } },
+  { label: 'blockers: [123] — a non-string element (would throw rendering <li>{reason}</li>)', work: { ...demoWorks[0], blockers: [123] } },
+  { label: 'blockers: [{}] — an object element', work: { ...demoWorks[0], blockers: [{}] } },
+  { label: 'id missing', work: (() => { const { id, ...rest } = demoWorks[0] as any; return rest; })() },
+  { label: 'objectId missing', work: (() => { const { objectId, ...rest } = demoWorks[0] as any; return rest; })() },
+  { label: 'name: 5 (rendered directly as JSX text)', work: { ...demoWorks[0], name: 5 } },
+  { label: 'contractor: null (joined via joinMeta elsewhere on the object side, direct render here)', work: { ...demoWorks[0], contractor: null } },
+  { label: 'unit missing', work: (() => { const { unit, ...rest } = demoWorks[0] as any; return rest; })() },
+];
+
+for (const { label, work } of CORRUPTED_WORK_FIELD_CASES) {
+  test(`realDataProvider rejects a work record with a corrupted consumed field: ${label}`, rejects({
+    ...validRepresentativeSnapshot(),
+    works: [work, ...demoWorks.slice(1)],
+  }));
+}
+
+const CORRUPTED_OBJECT_FIELD_CASES: Array<{ label: string; object: Record<string, unknown> }> = [
+  { label: 'name: {} (rendered directly as JSX text)', object: { ...demoObjects[0], name: {} } },
+  { label: 'externalCode: 42 (joined via joinMeta, which calls .trim())', object: { ...demoObjects[0], externalCode: 42 } },
+  { label: 'address missing', object: (() => { const { address, ...rest } = demoObjects[0] as any; return rest; })() },
+  { label: 'responsible: null', object: { ...demoObjects[0], responsible: null } },
+];
+
+for (const { label, object } of CORRUPTED_OBJECT_FIELD_CASES) {
+  test(`realDataProvider rejects an object record with a corrupted consumed field: ${label}`, rejects({
+    ...validRepresentativeSnapshot(),
+    objects: [object, ...demoObjects.slice(1)],
+  }));
+}
+
+const CORRUPTED_INSPECTION_FIELD_CASES: Array<{ label: string; inspection: Record<string, unknown> }> = [
+  { label: 'objectWorkId missing (the field WorkRoute/buildW01ViewModel match on)', inspection: (() => { const { objectWorkId, ...rest } = demoInspections[0] as any; return rest; })() },
+  { label: 'status: null', inspection: { ...demoInspections[0], status: null } },
+];
+
+for (const { label, inspection } of CORRUPTED_INSPECTION_FIELD_CASES) {
+  test(`realDataProvider rejects an inspection record with a corrupted consumed field: ${label}`, rejects({
+    ...validRepresentativeSnapshot(),
+    inspections: [inspection, ...demoInspections.slice(1)],
+  }));
 }
