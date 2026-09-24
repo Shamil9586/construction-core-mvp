@@ -1,6 +1,7 @@
 import type { Snapshot } from '../types/api';
 import type { DataProvider } from './DataProvider';
 import { parseResponse } from '../http';
+import { validateSnapshot } from './validateSnapshot';
 
 /**
  * Real backend-backed `DataProvider` — `GET /api/snapshot`, the same endpoint
@@ -12,9 +13,13 @@ import { parseResponse } from '../http';
  * the legacy entry, or a future dedicated login) for a call to succeed.
  *
  * `parseResponse` (frozen, `http.ts`) is the one place HTTP/JSON errors are
- * turned into a safe message — this provider does not add a second error
- * path. A rejection here is a real error: nothing here ever substitutes
- * `mockDataProvider`'s fixtures on failure.
+ * turned into a safe message; `validateSnapshot` (F6-02 corrective) is the
+ * one place a structurally malformed *successful* response is turned into a
+ * safe rejection instead of an untyped value trusted all the way to render.
+ * This provider adds no third path: it only retrieves, parses and checks the
+ * shape of what came back — no business-state derivation. A rejection here
+ * is a real error: nothing here ever substitutes `mockDataProvider`'s
+ * fixtures on failure.
  */
 export const realDataProvider: DataProvider = {
   async getSnapshot(): Promise<Snapshot> {
@@ -22,6 +27,6 @@ export const realDataProvider: DataProvider = {
     const response = await fetch('/api/snapshot', {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
-    return (await parseResponse(response)) as Snapshot;
+    return validateSnapshot(await parseResponse(response));
   },
 };

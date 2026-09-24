@@ -23,9 +23,11 @@ const APP_BASENAME = '/app.html';
  * module load from build-time configuration (`VITE_DATA_PROVIDER`), not
  * inside the component: the choice is an application-bootstrap concern, not
  * render state, and a misconfigured value should fail the app immediately
- * rather than on some later render.
+ * rather than on some later render. `import.meta.env.DEV` — Vite's own flag,
+ * not a test-only stand-in — is what lets an unset value default to mock
+ * only under the dev server (F6-01 corrective; see selectDataProvider.ts).
  */
-const dataProvider = selectDataProvider(import.meta.env.VITE_DATA_PROVIDER);
+const dataProvider = selectDataProvider(import.meta.env.VITE_DATA_PROVIDER, import.meta.env.DEV);
 
 /**
  * Application composition — the root the F5 objective describes:

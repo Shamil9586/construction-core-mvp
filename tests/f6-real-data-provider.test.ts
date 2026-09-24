@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { realDataProvider } from '../apps/frontend/src/data/realDataProvider';
 import { selectDataProvider } from '../apps/frontend/src/data/selectDataProvider';
 import { mockDataProvider } from '../apps/frontend/src/data/mockDataProvider';
+import { demoInspections, demoObjects, demoWorks } from '../apps/frontend/src/screens/demo/fixtures';
 
 /**
  * F6 — real DataProvider and provider-selection coverage.
@@ -18,6 +19,11 @@ import { mockDataProvider } from '../apps/frontend/src/data/mockDataProvider';
  * WorkRoute and SnapshotContext read `state.snapshot` generically and were
  * not touched — so that coverage stays exactly where F5 already proved it,
  * tests/design-system/app.spec.ts, rather than being duplicated here.
+ *
+ * F6-01/F6-02 corrective (Work review): the two blocks below add coverage
+ * for the two confirmed blockers — provider selection failing closed outside
+ * development, and a structurally malformed successful response being
+ * rejected instead of trusted through to render.
  */
 
 function stubSessionStorage(token: string | null) {
@@ -43,28 +49,56 @@ function stubFetch(handler: (input: RequestInfo | URL, init?: RequestInit) => Pr
 const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
-test('provider selection: explicit, no hidden default beyond documented mock', () => {
-  assert.equal(selectDataProvider(undefined), mockDataProvider);
-  assert.equal(selectDataProvider(''), mockDataProvider);
-  assert.equal(selectDataProvider('mock'), mockDataProvider);
-  assert.equal(selectDataProvider('real'), realDataProvider);
-  assert.notEqual(selectDataProvider('real'), mockDataProvider);
+/** A minimal but structurally valid internal Snapshot body — passes validateSnapshot. */
+const validMinimalSnapshot = () => ({
+  objects: [{ id: 'o1' }],
+  works: [{ id: 'w1', objectId: 'o1' }],
+  contractors: [],
+  dependencies: [],
+  inspections: [],
 });
 
-test('provider selection: an unrecognised value fails closed instead of guessing', () => {
-  assert.throws(
-    () => selectDataProvider('production'),
-    /Unknown VITE_DATA_PROVIDER value: "production"/,
-  );
+/* --------------------------------------------------------------------- *
+ * F6-01 — provider selection fails closed outside development           *
+ * --------------------------------------------------------------------- */
+
+test('provider selection: an explicit value always wins, in development or not', () => {
+  assert.equal(selectDataProvider('real', true), realDataProvider);
+  assert.equal(selectDataProvider('real', false), realDataProvider);
+  assert.equal(selectDataProvider('mock', true), mockDataProvider);
+  assert.equal(selectDataProvider('mock', false), mockDataProvider);
 });
+
+test('provider selection: unset/empty/whitespace defaults to mock only in development', () => {
+  assert.equal(selectDataProvider(undefined, true), mockDataProvider);
+  assert.equal(selectDataProvider('', true), mockDataProvider);
+  assert.equal(selectDataProvider('   ', true), mockDataProvider);
+});
+
+test('provider selection: unset/empty/whitespace outside development is a configuration error, not mock', () => {
+  for (const rawMode of [undefined, '', '   ']) {
+    assert.throws(
+      () => selectDataProvider(rawMode, false),
+      /VITE_DATA_PROVIDER is not set/,
+      `expected a throw for ${JSON.stringify(rawMode)}`,
+    );
+  }
+});
+
+test('provider selection: an unrecognised value fails closed regardless of environment', () => {
+  assert.throws(() => selectDataProvider('production', true), /Unknown VITE_DATA_PROVIDER value: "production"/);
+  assert.throws(() => selectDataProvider('production', false), /Unknown VITE_DATA_PROVIDER value: "production"/);
+});
+
+/* --------------------------------------------------------------------- *
+ * realDataProvider — transport, auth header, HTTP error handling         *
+ * --------------------------------------------------------------------- */
 
 test('realDataProvider sends the session token as a bearer header to /api/snapshot', async () => {
   const restoreStorage = stubSessionStorage('tok-123');
-  const snapshotBody = { objects: [], works: [], contractors: [], dependencies: [] };
-  const { calls, restore } = stubFetch(async () => json(200, snapshotBody));
+  const { calls, restore } = stubFetch(async () => json(200, validMinimalSnapshot()));
   try {
-    const result = await realDataProvider.getSnapshot();
-    assert.deepEqual(result, snapshotBody);
+    await realDataProvider.getSnapshot();
     assert.equal(calls.length, 1);
     assert.equal(calls[0].input, '/api/snapshot');
     const headers = calls[0].init?.headers as Record<string, string>;
@@ -77,9 +111,7 @@ test('realDataProvider sends the session token as a bearer header to /api/snapsh
 
 test('realDataProvider sends no Authorization header when no session token is present', async () => {
   const restoreStorage = stubSessionStorage(null);
-  const { calls, restore } = stubFetch(async () =>
-    json(200, { objects: [], works: [], contractors: [], dependencies: [] }),
-  );
+  const { calls, restore } = stubFetch(async () => json(200, validMinimalSnapshot()));
   try {
     await realDataProvider.getSnapshot();
     const headers = (calls[0].init?.headers ?? {}) as Record<string, string>;
@@ -104,6 +136,19 @@ test('realDataProvider surfaces the backend business message on auth failure, no
   }
 });
 
+test('realDataProvider rejects non-2xx HTML/text without leaking the body (proxy/infra errors)', async () => {
+  const restoreStorage = stubSessionStorage('tok');
+  const { restore } = stubFetch(
+    async () => new Response('<html>Bad Gateway</html>', { status: 502, headers: { 'content-type': 'text/html' } }),
+  );
+  try {
+    await assert.rejects(() => realDataProvider.getSnapshot(), (e: Error) => e.message === 'HTTP 502');
+  } finally {
+    restore();
+    restoreStorage();
+  }
+});
+
 test('realDataProvider rejects on transport failure — it never substitutes mock fixtures', async () => {
   const restoreStorage = stubSessionStorage('tok');
   const { restore } = stubFetch(async () => {
@@ -120,22 +165,78 @@ test('realDataProvider rejects on transport failure — it never substitutes moc
   }
 });
 
-test('realDataProvider returns exactly the parsed response — transport only, no fields added or dropped', async () => {
+/* --------------------------------------------------------------------- *
+ * F6-02 — malformed successful (2xx) responses are rejected, not trusted *
+ * --------------------------------------------------------------------- */
+
+test('realDataProvider: a fully-formed internal Snapshot passes through unchanged (representative fixture)', async () => {
   const restoreStorage = stubSessionStorage('tok');
   const snapshotBody = {
-    objects: [{ id: 'o1' }],
-    works: [{ id: 'w1' }],
+    objects: demoObjects,
+    works: demoWorks,
     contractors: [],
     dependencies: [],
-    inspections: [{ id: 'i1' }],
+    inspections: demoInspections,
   };
   const { restore } = stubFetch(async () => json(200, snapshotBody));
   try {
     const result = await realDataProvider.getSnapshot();
     assert.deepEqual(result, snapshotBody);
-    assert.equal(Object.keys(result as object).length, Object.keys(snapshotBody).length);
   } finally {
     restore();
     restoreStorage();
   }
 });
+
+test('realDataProvider: inspections: [] (a legitimate empty list) is accepted, not rejected', async () => {
+  const restoreStorage = stubSessionStorage('tok');
+  const { restore } = stubFetch(async () => json(200, validMinimalSnapshot()));
+  try {
+    const result = await realDataProvider.getSnapshot();
+    assert.deepEqual(result.inspections, []);
+  } finally {
+    restore();
+    restoreStorage();
+  }
+});
+
+const MALFORMED_CASES: Array<{ label: string; body: unknown }> = [
+  { label: 'empty object', body: {} },
+  { label: 'null body', body: null },
+  { label: 'objects is not an array', body: { ...validMinimalSnapshot(), objects: {} } },
+  { label: 'works is not an array', body: { ...validMinimalSnapshot(), works: {} } },
+  { label: 'contractors is not an array', body: { ...validMinimalSnapshot(), contractors: null } },
+  { label: 'dependencies is not an array', body: { ...validMinimalSnapshot(), dependencies: null } },
+  {
+    label: 'an object record without an id (corrupted used record)',
+    body: { ...validMinimalSnapshot(), objects: [{ name: 'no id' }] },
+  },
+  {
+    label: 'a work record without objectId (corrupted used record)',
+    body: { ...validMinimalSnapshot(), works: [{ id: 'w1' }] },
+  },
+  {
+    label: 'inspections missing entirely — must not be read as []',
+    body: (() => {
+      const { inspections, ...rest } = validMinimalSnapshot();
+      return rest;
+    })(),
+  },
+  { label: 'inspections: null — must not be read as []', body: { ...validMinimalSnapshot(), inspections: null } },
+];
+
+for (const { label, body } of MALFORMED_CASES) {
+  test(`realDataProvider rejects a malformed 2xx snapshot: ${label}`, async () => {
+    const restoreStorage = stubSessionStorage('tok');
+    const { restore } = stubFetch(async () => json(200, body));
+    try {
+      await assert.rejects(
+        () => realDataProvider.getSnapshot(),
+        (e: Error) => e.message === 'Неверный ответ сервера: искажённый снимок данных.',
+      );
+    } finally {
+      restore();
+      restoreStorage();
+    }
+  });
+}
