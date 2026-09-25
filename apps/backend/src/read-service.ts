@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import Decimal from 'decimal.js';
 import { pool, rows, one } from './db';
 import { Actor, requirePermission, objectAccess } from './security';
-import { Permission as P, ProgressCalculationService, ScheduleStatusService, PotentialClosingService, ObjectHealthService, defaultRisk } from '../../../packages/domain';
+import { Permission as P, ProgressCalculationService, ScheduleStatusService, PotentialClosingService, ObjectHealthService, PortionCompletionService, defaultRisk } from '../../../packages/domain';
 @Injectable()
 export class ReadService {
     async snapshot(a: Actor, filters: { contractorId?: string } = {}) {
@@ -35,15 +35,56 @@ export class ReadService {
         const photos = await rows(pool, 'SELECT * FROM inspection_photos WHERE tenant_id=$1 AND inspection_id=ANY($2::uuid[])', [t, inspections.map(i => i.id)]);
         const contractors = await rows(pool, 'SELECT * FROM contractors WHERE tenant_id=$1' + (a.role === 'CONTRACTOR_VIEWER' ? ' AND id=$2' : ''), a.role === 'CONTRACTOR_VIEWER' ? [t, a.contractorId ?? null] : [t]);
         const dependencies = await rows(pool, 'SELECT d.* FROM work_dependencies d JOIN works w ON w.id=d.successor_work_id AND w.tenant_id=d.tenant_id WHERE d.tenant_id=$1 AND w.object_id=ANY($2::uuid[])', [t, ids]);
+        // F8.1 Production Execution + Construction Control Foundation. Scoped by
+        // work id, not directly by object id — work_execution_units joins to
+        // works, quantity_portions/portion_quantity_confirmations chain from
+        // there. Omitted from the CONTRACTOR_VIEWER branch below, the same
+        // treatment inspections/issues already get for that role.
+        const workIds = works.map(w => w.id);
+        const executionUnits = await rows(pool, 'SELECT * FROM work_execution_units WHERE tenant_id=$1 AND object_work_id=ANY($2::uuid[])', [t, workIds]);
+        const unitIds = executionUnits.map(u => u.id);
+        const executionUnitLayers = await rows(pool, 'SELECT * FROM execution_unit_layers WHERE tenant_id=$1 AND execution_unit_id=ANY($2::uuid[]) ORDER BY sort_order', [t, unitIds]);
+        const portions = await rows(pool, 'SELECT * FROM quantity_portions WHERE tenant_id=$1 AND execution_unit_id=ANY($2::uuid[])', [t, unitIds]);
+        const portionConfirmations = await rows(pool, 'SELECT * FROM portion_quantity_confirmations WHERE tenant_id=$1 AND portion_id=ANY($2::uuid[]) ORDER BY recorded_at', [t, portions.map(p => p.id)]);
         const saved = await one(pool, 'SELECT * FROM risk_settings WHERE tenant_id=$1', [t]);
         const risk = { ...defaultRisk, ...saved };
         const today = new Date();
         const age = (d: any) => d ? Math.max(0, Math.floor((+today - +new Date(d)) / 86400000)) : 0;
-        const enriched = works.map(w => { const accepted = inspections.some(i => i.objectWorkId === w.id && i.status === 'ACCEPTED'); const docsReady = packages.some(p => p.objectWorkId === w.id && ['READY', 'TRANSFERRED_TO_SDO'].includes(p.status)); const cases = sdo.filter(s => s.objectWorkId === w.id); const closed = closings.filter(f => cases.some(s => s.id === f.sdoCaseId)).reduce((x, f) => x.add(f.amount), new Decimal(0)).toFixed(2); const financial = new PotentialClosingService().calculate([{ cost: w.estimatedCost, actual: w.actualQuantity, planned: w.plannedQuantity, closed, accepted, requiresInspection: w.requiresInspection, docsReady, transferred: cases.length > 0, calculated: cases.some(s => ['CALCULATED', 'READY_TO_CLOSE', 'CLOSED'].includes(s.status)) }]); const status = new ScheduleStatusService().calculate(w.plannedStartDate, w.plannedFinishDate, (!w.lastReportedAt && Number(w.actualQuantity) === 0) ? null : new ProgressCalculationService().calculate(w.actualQuantity, w.plannedQuantity), today, risk); const blockers = dependencies.filter(d => d.successorWorkId === w.id).flatMap(d => { const before = works.find(x => x.id === d.predecessorWorkId); const reasons = []; if (before && Number(before.actualQuantity) < Number(before.plannedQuantity))
-            reasons.push(`${before.name}: не завершена`); if (d.requiresAcceptance && !inspections.some(i => i.objectWorkId === d.predecessorWorkId && i.status === 'ACCEPTED'))
+        // F8.1 decision 8: acceptance aggregates from portions, never
+        // any-portion-accepted — computed once per work here, then read by BOTH
+        // the enriched map's own `accepted` field below AND the dependency
+        // blockers check further down, so the two can never drift apart (the
+        // exact bug shape F4's own corrective patches hit three times running
+        // on one function, fixed here by construction rather than by
+        // discipline). A work with no execution units keeps today's exact
+        // .some() computation, portion_id IS NULL — decision 6: Internal SC
+        // completion and Customer SC acceptance are kept apart as two
+        // separately-named results, never merged into one generic "accepted".
+        const latestConfirmation = (portionId: string, source: string) => { const own = portionConfirmations.filter(c => c.portionId === portionId && c.source === source); return own.length ? own[own.length - 1] : undefined; };
+        const portionAccepted = (portionId: string, inspectionType: string) => inspections.some(i => i.portionId === portionId && i.inspectionType === inspectionType && i.status === 'ACCEPTED');
+        const scCompletion = new PortionCompletionService();
+        const workScStatus = new Map<string, { internalScComplete: boolean; customerScAccepted: boolean | null }>(works.map(w => {
+            const units = executionUnits.filter(u => u.objectWorkId === w.id);
+            if (!units.length)
+                return [w.id, { internalScComplete: inspections.some(i => i.objectWorkId === w.id && i.portionId === null && i.inspectionType === 'INTERNAL_SC' && i.status === 'ACCEPTED'), customerScAccepted: null }];
+            const shape = units.map(u => ({ portions: portions.filter(p => p.executionUnitId === u.id).map(p => ({ internalScAccepted: portionAccepted(p.id, 'INTERNAL_SC'), customerScAccepted: portionAccepted(p.id, 'CUSTOMER_SC') })) }));
+            return [w.id, { internalScComplete: scCompletion.internalScComplete(shape), customerScAccepted: scCompletion.customerScAccepted(shape) }];
+        }));
+        const enriched = works.map(w => { const accepted = workScStatus.get(w.id)!.internalScComplete; const customerScAccepted = workScStatus.get(w.id)!.customerScAccepted; const docsReady = packages.some(p => p.objectWorkId === w.id && ['READY', 'TRANSFERRED_TO_SDO'].includes(p.status)); const cases = sdo.filter(s => s.objectWorkId === w.id); const closed = closings.filter(f => cases.some(s => s.id === f.sdoCaseId)).reduce((x, f) => x.add(f.amount), new Decimal(0)).toFixed(2); const financial = new PotentialClosingService().calculate([{ cost: w.estimatedCost, actual: w.actualQuantity, planned: w.plannedQuantity, closed, accepted, requiresInspection: w.requiresInspection, docsReady, transferred: cases.length > 0, calculated: cases.some(s => ['CALCULATED', 'READY_TO_CLOSE', 'CLOSED'].includes(s.status)) }]); const status = new ScheduleStatusService().calculate(w.plannedStartDate, w.plannedFinishDate, (!w.lastReportedAt && Number(w.actualQuantity) === 0) ? null : new ProgressCalculationService().calculate(w.actualQuantity, w.plannedQuantity), today, risk); const blockers = dependencies.filter(d => d.successorWorkId === w.id).flatMap(d => { const before = works.find(x => x.id === d.predecessorWorkId); const reasons = []; if (before && Number(before.actualQuantity) < Number(before.plannedQuantity))
+            reasons.push(`${before.name}: не завершена`); if (d.requiresAcceptance && !workScStatus.get(d.predecessorWorkId)?.internalScComplete)
             reasons.push('Нет допуска строительного контроля'); if (issues.some(i => i.objectWorkId === d.predecessorWorkId && i.severity === 'CRITICAL' && i.status !== 'CLOSED'))
             reasons.push('Критическое замечание'); if (d.requiresDocument && !documents.some(x => x.objectWorkId === d.predecessorWorkId && x.status === 'APPROVED'))
-            reasons.push('Не подтверждён обязательный документ'); return reasons; }); return { ...w, ...status, accepted, docsReady, closed, financial, blockers, stale: !w.lastReportedAt || age(w.lastReportedAt) > Number(risk.staleDays) }; });
+            reasons.push('Не подтверждён обязательный документ'); return reasons; }); return { ...w, ...status, accepted, customerScAccepted, docsReady, closed, financial, blockers, stale: !w.lastReportedAt || age(w.lastReportedAt) > Number(risk.staleDays) }; });
+        // Each portion's own current figures (latest per source — RP fact never
+        // overwritten by either SC figure, the three stay separately readable)
+        // plus whether it has a real ACCEPTED inspection of each type (an
+        // acceptance boolean must come from inspections.status, not merely from
+        // a confirmation row existing). Each unit's actualQuantity is derived,
+        // never stored (F8.1 decision 2) — the sum of its portions' own latest
+        // RP fact, so a unit with quantity not yet portioned under-reports
+        // rather than silently borrowing the work's own actualQuantity.
+        const portionsWithStatus = portions.map(p => ({ ...p, rpFactQuantity: latestConfirmation(p.id, 'RP_FACT')?.quantity ?? null, internalScAccepted: portionAccepted(p.id, 'INTERNAL_SC'), internalScConfirmedQuantity: latestConfirmation(p.id, 'INTERNAL_SC')?.quantity ?? null, customerScAccepted: portionAccepted(p.id, 'CUSTOMER_SC'), customerScConfirmedQuantity: latestConfirmation(p.id, 'CUSTOMER_SC')?.quantity ?? null }));
+        const executionUnitsWithTotals = executionUnits.map(u => ({ ...u, actualQuantity: portionsWithStatus.filter(p => p.executionUnitId === u.id).reduce((s, p) => s.add(p.rpFactQuantity ?? 0), new Decimal(0)).toFixed(4) }));
         const attentionRequired: any[] = [];
         for (const w of enriched) {
             const o = objects.find(x => x.id === w.objectId);
@@ -81,6 +122,6 @@ export class ReadService {
             const allowed = new Set(enriched.map(w => w.id));
             return { objects: objectList.map(({ contractValue, closed, potential, ...o }) => o), works: enriched.map(({ estimatedCost, closed, financial, ...w }) => w), contractors, dependencies: dependencies.filter(d => allowed.has(d.successorWorkId) && allowed.has(d.predecessorWorkId)) };
         }
-        return { objects: objectList, works: enriched, inspections, issues, packages, documents, sdo, closings, contractors, dependencies, dashboard, monthlyPlans: monthly, risk, photos };
+        return { objects: objectList, works: enriched, inspections, issues, packages, documents, sdo, closings, contractors, dependencies, dashboard, monthlyPlans: monthly, risk, photos, executionUnits: executionUnitsWithTotals, executionUnitLayers, portions: portionsWithStatus, portionConfirmations };
     }
 }

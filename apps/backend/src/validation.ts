@@ -24,3 +24,9 @@ export const workDto = z.object({ objectId: uuid, workTypeId: uuid, contractorId
 export const progressDto = z.object({ totalQuantity: qty, version, comment: text }).strict();
 export const issueDto = z.object({ title: text, description: text.optional(), severity: z.enum(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']), responsibleUserId: uuid, dueDate: date, version }).strict();
 export const closeDto = z.object({ sdoCaseId: uuid, amount: money.refine(v => Number(v) > 0), period: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/), closingDate: date, version, idempotencyKey: uuid }).strict();
+// F8.1 Production Execution + Construction Control Foundation.
+export const executionUnitDto = z.object({ objectWorkId: uuid, workTypeId: uuid, finishTypeId: uuid.optional(), executionConditions: text.optional(), location: text.optional(), contractorId: uuid, unit: text, plannedQuantity: qty.refine(v => Number(v) > 0) }).strict();
+export const executionUnitLayerDto = z.object({ sortOrder: z.number().int().nonnegative(), name: text }).strict();
+export const quantityPortionDto = z.object({ label: text, plannedQuantity: qty.refine(v => Number(v) > 0) }).strict();
+export const portionFactDto = z.object({ quantity: qty, version, comment: text.optional() }).strict();
+export const portionInspectionRequestDto = z.object({ inspectionType: z.enum(['INTERNAL_SC', 'CUSTOMER_SC']), version }).strict();

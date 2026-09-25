@@ -2,7 +2,7 @@ import { Injectable, BadRequestException, ForbiddenException, NotFoundException,
 import Decimal from 'decimal.js';
 import { pool, one, rows, insert, transaction } from './db';
 import { Actor, requirePermission, checkVersion, scoped, objectAccess, audit, ensure } from './security';
-import { Permission as P, ProgressCalculationService, ScheduleStatusService, WorkTransitionPolicy, PtoPackageValidationService, PotentialClosingService, ObjectHealthService, defaultRisk, AosrDraftEngine } from '../../../packages/domain';
+import { Permission as P, ProgressCalculationService, ScheduleStatusService, WorkTransitionPolicy, PtoPackageValidationService, PotentialClosingService, ObjectHealthService, defaultRisk, AosrDraftEngine, QuantityPortionPolicy } from '../../../packages/domain';
 @Injectable()
 export class ProductionService {
     async createObject(a: Actor, d: any) { requirePermission(a, P.OBJECT_CREATE); return transaction(async (c) => { ensure(d.plannedFinishDate >= d.startDate, 'Дата окончания раньше начала'); const pm = await scoped(c, 'users', d.projectManagerId, a); ensure(pm.role === 'PROJECT_MANAGER' && pm.isActive, 'Назначьте активного РП'); if (a.role === 'PROJECT_MANAGER')
@@ -53,4 +53,43 @@ export class ProductionService {
         ensure(existing.sdoCaseId === s.id && new Decimal(existing.amount).eq(d.amount) && existing.period === d.period && new Date(existing.closingDate).toISOString().slice(0, 10) === d.closingDate, 'Idempotency key уже использован с другими данными');
         return existing;
     } checkVersion(s, d.version); ensure(['CALCULATED', 'READY_TO_CLOSE'].includes(s.status), 'Стоимость ещё не рассчитана или дело закрыто'); const sum = await one(c, 'SELECT coalesce(sum(amount),0) AS amount FROM financial_closings WHERE tenant_id=$1 AND sdo_case_id=$2', [a.tenantId, s.id]); ensure(new Decimal(sum.amount).add(d.amount).lte(s.acceptedClosingValue), 'Сумма превышает доступное закрытие'); ensure(d.closingDate.slice(0, 7) === d.period, 'Период не соответствует дате закрытия'); const f = await insert(c, 'financial_closings', a.tenantId, { objectId: s.objectId, sdoCaseId: s.id, period: d.period, amount: d.amount, closingDate: d.closingDate, createdBy: a.id, idempotencyKey: d.idempotencyKey }); const all = new Decimal(sum.amount).add(d.amount).eq(s.acceptedClosingValue); await c.query("UPDATE sdo_cases SET status=$3,closed_at=CASE WHEN $3='CLOSED' THEN now() ELSE NULL END,version=version+1 WHERE tenant_id=$1 AND id=$2", [a.tenantId, s.id, all ? 'CLOSED' : 'READY_TO_CLOSE']); await audit(c, a, 'FinancialClosing', f.id, 'CREATE', null, f, 'FinancialClosingCreated'); return f; }); }
+    // ---------------------------------------------------------------------
+    // F8.1 Production Execution + Construction Control Foundation.
+    //
+    // Every method below is new; nothing above this line is touched. progress(),
+    // requestInspection() and inspectionAction() keep their exact F7 source, so a
+    // non-portioned work's behaviour cannot regress — there is no shared branch
+    // for a portion-aware path to leak into. inspectionAction() is also what
+    // Customer SC decisions go through unchanged (F8.1 decision 5: one
+    // inspections table, one workflow, distinguished only by inspection_type);
+    // it does not yet distinguish INTERNAL_SC from CUSTOMER_SC in its own body,
+    // so a Customer SC row is currently held to the exact same issues-closed and
+    // photo-required requirements as Internal SC — flagged in the F8.1 handoff
+    // as a point a later phase may need to branch, not silently assumed away.
+    // ---------------------------------------------------------------------
+    async createExecutionUnit(a: Actor, d: any) { requirePermission(a, P.EXECUTION_UNIT_MANAGE); return transaction(async (c) => { const w = await scoped(c, 'works', d.objectWorkId, a); await objectAccess(c, a, w.objectId, true); await scoped(c, 'work_types', d.workTypeId, a); if (d.finishTypeId)
+        await scoped(c, 'finish_types', d.finishTypeId, a); ensure(!!await one(c, 'SELECT id FROM object_contractors_active WHERE tenant_id=$1 AND object_id=$2 AND contractor_id=$3', [a.tenantId, w.objectId, d.contractorId]), 'Субподрядчик не назначен на объект'); const unit = await insert(c, 'work_execution_units', a.tenantId, d); await audit(c, a, 'ExecutionUnit', unit.id, 'CREATE', null, unit, 'ExecutionUnitCreated'); return unit; }); }
+    async addExecutionUnitLayer(a: Actor, unitId: string, d: any) { requirePermission(a, P.EXECUTION_UNIT_MANAGE); return transaction(async (c) => { const unit = await scoped(c, 'work_execution_units', unitId, a); const w = await scoped(c, 'works', unit.objectWorkId, a); await objectAccess(c, a, w.objectId, true); const layer = await insert(c, 'execution_unit_layers', a.tenantId, { executionUnitId: unitId, ...d }); await audit(c, a, 'ExecutionUnitLayer', layer.id, 'CREATE', null, layer); return layer; }); }
+    // D4: a candidate portion is rejected — never silently clamped — if it would
+    // push the unit's portion total past the unit's own planned_quantity. The
+    // unit row is locked FOR UPDATE for the duration of the sum-and-insert so two
+    // concurrent portion creations cannot both pass the check against the same
+    // stale sum.
+    async createQuantityPortion(a: Actor, unitId: string, d: any) { requirePermission(a, P.EXECUTION_UNIT_MANAGE); return transaction(async (c) => { const unit = await scoped(c, 'work_execution_units', unitId, a, true); const w = await scoped(c, 'works', unit.objectWorkId, a); await objectAccess(c, a, w.objectId, true); const sum = await one(c, 'SELECT coalesce(sum(planned_quantity),0) AS total FROM quantity_portions WHERE tenant_id=$1 AND execution_unit_id=$2', [a.tenantId, unitId]); ensure(new QuantityPortionPolicy().fits(unit.plannedQuantity, sum.total, d.plannedQuantity), 'Сумма объёма участков превышает плановый объём единицы исполнения'); const portion = await insert(c, 'quantity_portions', a.tenantId, { executionUnitId: unitId, ...d }); await audit(c, a, 'QuantityPortion', portion.id, 'CREATE', null, portion); return portion; }); }
+    // "RP enters fact" (F8.1 decision 7) — the portion-scoped analogue of
+    // progress(), on portion_quantity_confirmations (source RP_FACT) rather than
+    // work_progress/works.actual_quantity, which this leaves untouched. The
+    // freeze-after-submission rule from business rule 6 is preserved at the new
+    // granularity: once the portion has a non-rejected INTERNAL_SC inspection,
+    // its own fact is locked, exactly as a whole work's is today — but a
+    // sibling portion, or the work's own whole-work tracking, is never affected.
+    async recordPortionFact(a: Actor, portionId: string, d: any) { requirePermission(a, P.WORK_UPDATE_PROGRESS); return transaction(async (c) => { const portion = await scoped(c, 'quantity_portions', portionId, a, true); const unit = await scoped(c, 'work_execution_units', portion.executionUnitId, a); const w = await scoped(c, 'works', unit.objectWorkId, a); await objectAccess(c, a, w.objectId, true); checkVersion(portion, d.version); ensure(!await one(c, "SELECT id FROM inspections WHERE tenant_id=$1 AND portion_id=$2 AND inspection_type='INTERNAL_SC' AND status NOT IN ('REJECTED','NOT_SUBMITTED')", [a.tenantId, portionId]), 'После предъявления СК факт участка заблокирован. Требуется отдельная корректировка'); const confirmation = await insert(c, 'portion_quantity_confirmations', a.tenantId, { portionId, source: 'RP_FACT', quantity: d.quantity, recordedBy: a.id, comment: d.comment ?? null }); await c.query('UPDATE quantity_portions SET version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2', [a.tenantId, portionId]); await audit(c, a, 'QuantityPortion', portionId, 'RP_FACT', null, confirmation, 'WorkProgressUpdated'); return confirmation; }); }
+    // Internal SC and Customer SC both request through this one method (F8.1
+    // decision 5 — one workflow, not two): only inspectionType differs. "Для
+    // MVP предъявляется полный объём" (business rule 6) is preserved at the
+    // portion granularity, read from this portion's own latest RP_FACT
+    // confirmation — a sibling portion's fact never satisfies it. A previously
+    // REJECTED inspection of the same type does not block a fresh request; any
+    // other existing status does.
+    async requestPortionInspection(a: Actor, portionId: string, v: number, inspectionType: 'INTERNAL_SC' | 'CUSTOMER_SC') { requirePermission(a, P.INSPECTION_REQUEST); return transaction(async (c) => { const portion = await scoped(c, 'quantity_portions', portionId, a, true); checkVersion(portion, v); const unit = await scoped(c, 'work_execution_units', portion.executionUnitId, a); const w = await scoped(c, 'works', unit.objectWorkId, a); await objectAccess(c, a, w.objectId, true); const fact = await one(c, "SELECT quantity FROM portion_quantity_confirmations WHERE tenant_id=$1 AND portion_id=$2 AND source='RP_FACT' ORDER BY recorded_at DESC LIMIT 1", [a.tenantId, portionId]); ensure(!!fact && new Decimal(fact.quantity).gte(portion.plannedQuantity), 'Для MVP предъявляется полный объём участка'); ensure(!await one(c, "SELECT id FROM inspections WHERE tenant_id=$1 AND portion_id=$2 AND inspection_type=$3 AND status<>'REJECTED'", [a.tenantId, portionId, inspectionType]), 'Проверка уже предъявлена или принята'); const i = await insert(c, 'inspections', a.tenantId, { objectId: w.objectId, objectWorkId: w.id, portionId, inspectionType, requestedBy: a.id }); await c.query('UPDATE quantity_portions SET version=version+1 WHERE tenant_id=$1 AND id=$2', [a.tenantId, portionId]); await audit(c, a, 'Inspection', i.id, 'REQUEST', null, i, 'InspectionRequested'); return i; }); }
 }

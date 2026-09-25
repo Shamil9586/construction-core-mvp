@@ -14,6 +14,7 @@ import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { ObjectsModule } from './modules/objects/objects.module';
 import { WorksModule } from './modules/works/works.module';
 import { InspectionsModule } from './modules/inspections/inspections.module';
+import { ExecutionUnitsModule } from './modules/execution-units/execution-units.module';
 import { AttachmentsModule } from './modules/attachments/attachments.module';
 import { PtoModule } from './modules/pto/pto.module';
 import { SdoModule } from './modules/sdo/sdo.module';
@@ -30,7 +31,7 @@ class Errors implements ExceptionFilter {
     catch(error: any, host: ArgumentsHost) { const ctx = host.switchToHttp(), res = ctx.getResponse(), req = ctx.getRequest(); const status = error instanceof ZodError ? 400 : error instanceof HttpException ? error.getStatus() : ['23505', '23503', '23514', '22P02'].includes(error.code) ? 409 : 500; const message = error instanceof ZodError ? error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ') : status === 500 ? 'Внутренняя ошибка' : error instanceof HttpException ? error.message : 'Конфликт данных или нарушена связь'; if (status === 500)
         console.error(JSON.stringify({ level: 'error', requestId: req.requestId, errorType: error.constructor?.name, code: error.code })); res.status(status).json({ statusCode: status, message, requestId: req.requestId }); }
 }
-@Module({ imports: [HealthModule, AuthModule, BitrixModule, DashboardModule, ObjectsModule, WorksModule, InspectionsModule, AttachmentsModule, PtoModule, SdoModule, FinancialModule, ContractorsModule, DictionariesModule, UsersModule, MaterialsModule, AuditModule, NotificationsModule, ImportsModule] })
+@Module({ imports: [HealthModule, AuthModule, BitrixModule, DashboardModule, ObjectsModule, WorksModule, InspectionsModule, ExecutionUnitsModule, AttachmentsModule, PtoModule, SdoModule, FinancialModule, ContractorsModule, DictionariesModule, UsersModule, MaterialsModule, AuditModule, NotificationsModule, ImportsModule] })
 class AppModule {
 }
 /**

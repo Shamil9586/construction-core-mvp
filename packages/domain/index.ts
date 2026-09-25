@@ -24,10 +24,18 @@ export enum Permission {
     FINANCE_VIEW = 'FINANCE_VIEW',
     FINANCE_EDIT = 'FINANCE_EDIT',
     ADMIN_USERS = 'ADMIN_USERS',
-    ADMIN_DICTIONARIES = 'ADMIN_DICTIONARIES'
+    ADMIN_DICTIONARIES = 'ADMIN_DICTIONARIES',
+    // F8.1 — covers creating a work's execution units, their layers and their
+    // quantity portions (decision 7's "portions management", one bundle, one
+    // permission). Requesting/recording Internal SC and Customer SC reuse the
+    // existing INSPECTION_REQUEST/INSPECTION_ACCEPT/INSPECTION_REJECT below —
+    // Customer SC has no UI in F8.1 and no stated actor of its own yet, so it is
+    // gated by the same permission as Internal SC's own accept/reject rather than
+    // inventing an unrequested role split.
+    EXECUTION_UNIT_MANAGE = 'EXECUTION_UNIT_MANAGE'
 }
 const view = [Permission.OBJECT_VIEW, Permission.WORK_VIEW, Permission.PTO_VIEW, Permission.SDO_VIEW, Permission.FINANCE_VIEW];
-const grants: Record<Role, Permission[]> = { ADMIN: Object.values(Permission), GENERAL_DIRECTOR: view, TECHNICAL_DIRECTOR: [...view, Permission.OBJECT_CREATE, Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE], DEPARTMENT_HEAD: view, PROJECT_MANAGER: [...view, Permission.OBJECT_CREATE, Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE, Permission.WORK_UPDATE_PROGRESS, Permission.INSPECTION_REQUEST, Permission.ISSUE_RESOLVE], CONSTRUCTION_CONTROL: [...view, Permission.INSPECTION_ACCEPT, Permission.INSPECTION_REJECT, Permission.ISSUE_CREATE, Permission.ISSUE_VERIFY], PTO: [...view, Permission.PTO_EDIT, Permission.PTO_TRANSFER_SDO], SDO: [...view, Permission.SDO_EDIT, Permission.SDO_CLOSE, Permission.FINANCE_EDIT], CONTRACTOR_VIEWER: [Permission.OBJECT_VIEW, Permission.WORK_VIEW] };
+const grants: Record<Role, Permission[]> = { ADMIN: Object.values(Permission), GENERAL_DIRECTOR: view, TECHNICAL_DIRECTOR: [...view, Permission.OBJECT_CREATE, Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE, Permission.EXECUTION_UNIT_MANAGE], DEPARTMENT_HEAD: view, PROJECT_MANAGER: [...view, Permission.OBJECT_CREATE, Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE, Permission.EXECUTION_UNIT_MANAGE, Permission.WORK_UPDATE_PROGRESS, Permission.INSPECTION_REQUEST, Permission.ISSUE_RESOLVE], CONSTRUCTION_CONTROL: [...view, Permission.INSPECTION_ACCEPT, Permission.INSPECTION_REJECT, Permission.ISSUE_CREATE, Permission.ISSUE_VERIFY], PTO: [...view, Permission.PTO_EDIT, Permission.PTO_TRANSFER_SDO], SDO: [...view, Permission.SDO_EDIT, Permission.SDO_CLOSE, Permission.FINANCE_EDIT], CONTRACTOR_VIEWER: [Permission.OBJECT_VIEW, Permission.WORK_VIEW] };
 export const hasPermission = (role: Role, p: Permission) => grants[role]?.includes(p) ?? false;
 export const defaultRisk = { yellowVariance: -5, redVariance: -15, staleDays: 7, ptoDays: 5, sdoDays: 10, escalateTechnicalDays: 3, escalateDirectorDays: 7 };
 export class ProgressCalculationService {
@@ -118,7 +126,49 @@ export class EscalationService {
 export class ContractorPerformanceService {
     calculate(works: any[]) { return { works: works.length, delayed: works.filter(w => w.delayDays > 0).length, actualProgress: works.length ? works.reduce((s, w) => s + (w.actualProgress ?? 0), 0) / works.length : null }; }
 }
-export const domainEvents = ['WorkProgressUpdated', 'WorkDelayed', 'InspectionRequested', 'InspectionAccepted', 'InspectionRejected', 'IssueCreated', 'IssueResolved', 'ExecutivePackageReady', 'TransferredToSdo', 'SdoCalculated', 'FinancialClosingCreated', 'ObjectHealthChanged'] as const;
+// F8.1 Production Execution + Construction Control Foundation. Work stays the
+// central object (Construction Core Production Workflow Model v1.2.1, F8.1
+// Domain Contract v1.0): every service below hangs off an existing work, never
+// replaces it. No PTO/SDO/document/financial logic lives here — that stays out
+// of F8.1's scope, same as everywhere else in this file.
+export class QuantityPortionPolicy {
+    // F8.1 decision 4: a portion may cover only part of its unit's planned
+    // quantity; the sum of a unit's portions must never exceed it. A cross-row
+    // invariant (sums across sibling rows), so — like every other cross-row rule
+    // in this codebase — it is checked here as a pure function over values the
+    // service layer already fetched under a row lock, not as a SQL CHECK.
+    fits(unitPlannedQuantity: any, existingPortionsSum: any, candidateQuantity: any) { return new Decimal(existingPortionsSum).add(candidateQuantity).lte(unitPlannedQuantity); }
+}
+export class InternalScPolicy {
+    // F8.1 Domain Contract: "Mandatory for ООО СЗ «Гор-Строй» objects." No call
+    // site inside F8.1 itself — this is what a later PTO-preparation gate checks
+    // before allowing PTO prep to start on such an object; PTO stays out of
+    // F8.1's scope, so this is foundation for that gate, not a gate on its own
+    // yet. The literal organization name already appears in
+    // apps/backend/src/importer.ts for ГПО-sourced imports.
+    required(organizationName: string | null) { return organizationName === 'ООО СЗ «Гор-Строй»'; }
+}
+export class PortionCompletionService {
+    // F8.1 decision 8: acceptance aggregates from portions — never any-portion-
+    // accepted. Internal SC completion and Customer SC acceptance are two
+    // separate methods over two separate booleans, kept structurally apart
+    // rather than merged into one generic "accepted" (F8.1 final clarification
+    // 2) — a caller cannot conflate them without deliberately reading the wrong
+    // field, because there is no shared field to misread.
+    //
+    // A unit with zero portions — or a work with zero units — is never
+    // vacuously complete: `.every()` over an empty array is `true` in
+    // JavaScript, which is exactly the bug F4's `hasCompleteScheduleData`
+    // corrective patch had to fix for schedule data. The `.length > 0` guards
+    // below are that same fix, applied here from the start.
+    internalScComplete(units: { portions: { internalScAccepted: boolean }[] }[]): boolean {
+        return units.length > 0 && units.every(u => u.portions.length > 0 && u.portions.every(p => p.internalScAccepted));
+    }
+    customerScAccepted(units: { portions: { customerScAccepted: boolean }[] }[]): boolean {
+        return units.length > 0 && units.every(u => u.portions.length > 0 && u.portions.every(p => p.customerScAccepted));
+    }
+}
+export const domainEvents = ['WorkProgressUpdated', 'WorkDelayed', 'InspectionRequested', 'InspectionAccepted', 'InspectionRejected', 'IssueCreated', 'IssueResolved', 'ExecutivePackageReady', 'TransferredToSdo', 'SdoCalculated', 'FinancialClosingCreated', 'ObjectHealthChanged', 'ExecutionUnitCreated'] as const;
 export interface BitrixUserProvider {
     currentUser(token: string): Promise<any>;
 }
