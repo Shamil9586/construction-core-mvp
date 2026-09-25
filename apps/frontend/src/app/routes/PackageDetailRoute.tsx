@@ -16,10 +16,20 @@ import { RouteError, RouteForbidden, RouteLoading, RouteNotFound } from '../Rout
  * that resolves a package id into `PackageDetailViewModel` and wires its
  * actions — neither entry point builds its own copy.
  *
- * F8.2.1 Decision 3 — `actions` is built only for
- * `canManageDocumentation(session.user.role)` (PTO, and ADMIN — see that
- * predicate's own comment), otherwise `undefined`, which `PackageDetail`
- * already renders as fully read-only (no forms, no status button).
+ * F8.2.1 Corrective Patch (F8.2.1-02) — package management is part of the
+ * PTO Workspace (`canManageDocumentation`, the same gate `PtoRoute.tsx`
+ * uses), not a general internal destination: a role that can read
+ * documentation but not manage it (RP, SC, TD, DoC, CEO) gets the same
+ * "this is PTO's workspace" message `PtoRoute.tsx` shows, never the
+ * package's read-only detail — the package may well exist, but this route
+ * belongs to PTO, not to every role with documentation access. A role
+ * excluded from documentation entirely (SDO) still gets the original
+ * "no access" message.
+ *
+ * `actions` is built only for `canManageDocumentation(session.user.role)`
+ * (PTO, and ADMIN — see that predicate's own comment) — reachable now only
+ * by the same role the guard above already let through, kept as its own,
+ * independent gate rather than implied by having passed it.
  */
 export function PackageDetailRoute() {
   const { packageId } = useParams<{ packageId: string }>();
@@ -31,11 +41,16 @@ export function PackageDetailRoute() {
   if (state.status === 'Loading') return <RouteLoading />;
   if (state.status === 'Error') return <RouteError message={state.message} />;
 
-  // F8.2.1 — same guard as PtoRoute.tsx: a confirmed-excluded role (SDO)
-  // gets an explicit access-denied state, not "package not found" — the
-  // package may well exist, this session simply cannot see it.
-  if (session && !canAccessDocumentation(session.user.role)) {
-    return <RouteForbidden label="У вас нет доступа к исполнительной документации." />;
+  if (session && !canManageDocumentation(session.user.role)) {
+    return (
+      <RouteForbidden
+        label={
+          canAccessDocumentation(session.user.role)
+            ? 'Раздел «ПТО» — рабочая область ПТО. Статус исполнительной документации по работе доступен на странице работы.'
+            : 'У вас нет доступа к исполнительной документации.'
+        }
+      />
+    );
   }
 
   const pkg = (state.snapshot.documentationPackages ?? []).find((candidate) => candidate.id === packageId);

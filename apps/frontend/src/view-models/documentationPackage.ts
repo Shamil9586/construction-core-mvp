@@ -27,13 +27,15 @@ import { formatDate } from '../formatters';
 import { documentationPackageStatusPresentation, type StatusPresentation } from './status';
 
 /**
- * F8.2.1 Decision 5 — the single legal next status for the current one, or
- * `null` when there is none in this phase (RETURNED/CORRECTING/
- * ACCEPTED_BY_CUSTOMER: RETURNED is a dead end here, the other two are
- * unreachable — see packages/domain's own
- * isDocumentationStatusTransitionAllowed(), which this mirrors as the one
- * legal edge out of each status; the backend is still the sole authority
- * that actually enforces it, this only decides which single button to show.
+ * F8.2.1 Decision 5, extended by the F8.2.1-01 corrective patch — the single
+ * legal next status for the current one, or `null` when there is none in
+ * this phase (only ACCEPTED_BY_CUSTOMER — still not a PTO user action). The
+ * correction loop closes RETURNED's own dead end: RETURNED -> CORRECTING ->
+ * PRESENTED, and PRESENTED's own next status is still RETURNED, so the loop
+ * repeats on a second return. Mirrors packages/domain's own
+ * isDocumentationStatusTransitionAllowed() as the one legal edge out of each
+ * status; the backend is still the sole authority that actually enforces it,
+ * this only decides which single button to show.
  */
 export function nextDocumentationStatus(current: DocumentationPackageStatus): DocumentationPackageStatus | null {
   switch (current) {
@@ -46,7 +48,9 @@ export function nextDocumentationStatus(current: DocumentationPackageStatus): Do
     case 'PRESENTED':
       return 'RETURNED';
     case 'RETURNED':
+      return 'CORRECTING';
     case 'CORRECTING':
+      return 'PRESENTED';
     case 'ACCEPTED_BY_CUSTOMER':
       return null;
     default: {
@@ -67,6 +71,8 @@ export function nextDocumentationStatusLabel(next: DocumentationPackageStatus): 
       return 'Предъявить заказчику';
     case 'RETURNED':
       return 'Отметить возврат заказчиком';
+    case 'CORRECTING':
+      return 'Начать устранение замечаний';
     default:
       return 'Изменить статус';
   }

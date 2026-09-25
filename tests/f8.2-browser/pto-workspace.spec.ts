@@ -26,6 +26,10 @@ import { test, expect, type Page } from '@playwright/test';
  */
 
 const PM = { id: 'u-pm', tenantId: 't-1', name: 'Пётр Петров', role: 'PROJECT_MANAGER' };
+// F8.2.1 Corrective Patch (F8.2.1-02) — P01 is PTO's own workspace now; the
+// W01 tests below keep using PM (RP), whose documentation visibility there
+// is unchanged by that patch.
+const PTO = { id: 'u-pto', tenantId: 't-1', name: 'Ольга Морозова', role: 'PTO' };
 
 const OBJECT_A = 'object-a';
 const OBJECT_B = 'object-b';
@@ -35,14 +39,14 @@ const WORK_C = 'work-c';
 const PACKAGE_A = 'package-a';
 const PACKAGE_B = 'package-b';
 
-async function mockApi(page: Page, snapshot: unknown): Promise<void> {
+async function mockApi(page: Page, snapshot: unknown, actor: { id: string; tenantId: string; name: string; role: string } = PM): Promise<void> {
   await page.route(
     (url) => url.pathname.startsWith('/api/'),
     async (route) => {
       const request = route.request();
       const key = `${request.method()} ${new URL(request.url()).pathname}`;
       if (key === 'GET /api/me') {
-        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(PM) });
+        await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(actor) });
         return;
       }
       if (key === 'GET /api/snapshot') {
@@ -169,8 +173,10 @@ function buildSnapshot() {
 test('P01: lists every work with its object, documentation status and responsible PTO, and filters by object', async ({
   page,
 }) => {
+  // F8.2.1 Corrective Patch (F8.2.1-02) — P01 is PTO's own workspace; a
+  // PROJECT_MANAGER session no longer reaches this table at all.
   await seedSession(page, 'f8-2-browser-token');
-  await mockApi(page, buildSnapshot());
+  await mockApi(page, buildSnapshot(), PTO);
 
   await page.goto('/app.html/pto');
   await expect(page.getByRole('heading', { level: 1, name: 'Операции ПТО' })).toBeVisible();

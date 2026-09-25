@@ -50,6 +50,13 @@
   gap: var(--cc-p-space-4);
 }
 
+.rowActionStack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--cc-p-space-8);
+}
+
 .actionButton {
   flex: 0 0 auto;
   box-sizing: border-box;

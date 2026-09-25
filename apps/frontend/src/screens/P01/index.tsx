@@ -18,10 +18,13 @@ import styles from './P01.module.css';
  * every row read-only, no buttons at all — RP/SC/other oversight roles see
  * status and the reason for attention, never a control to act on it (Decision
  * 3: only PTO creates or manages packages). When present, a row with no
- * package gets "Создать пакет"; a row with one gets "Открыть", which
- * navigates to the package detail route (Step 4b) — the same destination and
- * the same `documentationApi` functions W01's own create/open actions
- * (Step 4c) call, per Decision 1's one-shared-implementation requirement.
+ * package gets "Создать пакет"; a row with one gets "Открыть" *and*
+ * "Создать ещё один пакет" (Corrective F8.2.1-03 — a work may have more than
+ * one Documentation Package, so the create action is never withdrawn just
+ * because one already exists), both navigating to the package detail route
+ * (Step 4b) — the same destination and the same `documentationApi` functions
+ * W01's own create/open actions (Step 4c) call, per Decision 1's
+ * one-shared-implementation requirement.
  */
 
 const workColumns: DataTableColumn[] = [
@@ -46,9 +49,12 @@ function errorMessage(error: unknown): string {
 function CreatePackageButton({
   objectWorkId,
   onCreate,
+  label = 'Создать пакет',
 }: {
   objectWorkId: string;
   onCreate: (objectWorkId: string) => Promise<void>;
+  /** Corrective F8.2.1-03 — "Создать ещё один пакет" when the work already has one. */
+  label?: string;
 }) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -68,7 +74,7 @@ function CreatePackageButton({
   return (
     <div className={styles.rowAction}>
       <button type="button" className={styles.actionButton} onClick={handleClick} disabled={pending}>
-        {pending ? 'Создание…' : 'Создать пакет'}
+        {pending ? 'Создание…' : label}
       </button>
       {error ? <span className={styles.errorText}>{error}</span> : null}
     </div>
@@ -104,17 +110,23 @@ function WorkRow({ row, actions }: { row: P01WorkRow; actions?: P01ActionHandler
         <span className={typeClass('body')}>{row.package?.responsible ?? '—'}</span>
       </td>
       <td className={[styles.cell, styles.alignEnd].join(' ')}>
-        {actions && !row.package ? (
-          <CreatePackageButton objectWorkId={row.objectWorkId} onCreate={actions.onCreatePackage} />
-        ) : null}
-        {actions && row.package ? (
-          <button
-            type="button"
-            className={styles.actionButton}
-            onClick={() => actions.onOpenPackage(row.package!.id)}
-          >
-            Открыть
-          </button>
+        {actions ? (
+          <div className={styles.rowActionStack}>
+            {row.package ? (
+              <button
+                type="button"
+                className={styles.actionButton}
+                onClick={() => actions.onOpenPackage(row.package!.id)}
+              >
+                Открыть
+              </button>
+            ) : null}
+            <CreatePackageButton
+              objectWorkId={row.objectWorkId}
+              onCreate={actions.onCreatePackage}
+              label={row.package ? 'Создать ещё один пакет' : 'Создать пакет'}
+            />
+          </div>
         ) : null}
       </td>
     </tr>

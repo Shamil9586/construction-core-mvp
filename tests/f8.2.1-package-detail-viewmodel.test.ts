@@ -221,8 +221,14 @@ test('package detail view-model: resolves object/work names, status and the sing
   assert.equal(vm.nextStatusLabel, 'Начать подготовку');
 });
 
-test('package detail view-model: a dead-end status (RETURNED) has no next status or label — no button to show', () => {
+test('package detail view-model (Corrective F8.2.1-01): RETURNED now leads into the correction loop, not a dead end — its next status is CORRECTING', () => {
   const vm = buildPackageDetailViewModel(basePackage({ status: 'RETURNED' }), baseObject(), baseWork(), [], [], [], [], [], []);
+  assert.equal(vm.nextStatus, 'CORRECTING');
+  assert.equal(vm.nextStatusLabel, 'Начать устранение замечаний');
+});
+
+test('package detail view-model (Corrective F8.2.1-01): ACCEPTED_BY_CUSTOMER is the only remaining dead end — no next status or label, no button to show', () => {
+  const vm = buildPackageDetailViewModel(basePackage({ status: 'ACCEPTED_BY_CUSTOMER' }), baseObject(), baseWork(), [], [], [], [], [], []);
   assert.equal(vm.nextStatus, null);
   assert.equal(vm.nextStatusLabel, null);
 });
@@ -291,12 +297,14 @@ test('documentTypeLabel and storageProviderLabel: pure mappings to the Russian l
   assert.equal(storageProviderLabel('EXTERNAL_REFERENCE'), 'Внешняя ссылка');
 });
 
-test('nextDocumentationStatus / nextDocumentationStatusLabel: mirrors exactly the backend\'s four-edge allow-list, nothing else reachable', () => {
+test('nextDocumentationStatus / nextDocumentationStatusLabel (Corrective F8.2.1-01): mirrors exactly the backend\'s six-edge allow-list including the correction loop, only ACCEPTED_BY_CUSTOMER unreachable', () => {
   assert.equal(nextDocumentationStatus('DRAFT'), 'PREPARING');
   assert.equal(nextDocumentationStatus('PREPARING'), 'READY_FOR_PRESENTATION');
   assert.equal(nextDocumentationStatus('READY_FOR_PRESENTATION'), 'PRESENTED');
   assert.equal(nextDocumentationStatus('PRESENTED'), 'RETURNED');
-  assert.equal(nextDocumentationStatus('CORRECTING'), null);
+  assert.equal(nextDocumentationStatus('RETURNED'), 'CORRECTING');
+  assert.equal(nextDocumentationStatus('CORRECTING'), 'PRESENTED');
   assert.equal(nextDocumentationStatus('ACCEPTED_BY_CUSTOMER'), null);
   assert.equal(nextDocumentationStatusLabel('PRESENTED'), 'Предъявить заказчику');
+  assert.equal(nextDocumentationStatusLabel('CORRECTING'), 'Начать устранение замечаний');
 });

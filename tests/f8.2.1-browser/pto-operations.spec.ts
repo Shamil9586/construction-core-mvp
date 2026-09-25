@@ -483,24 +483,89 @@ test('W01: "Создать пакет" creates a package and opens the same pack
   await expect(page.getByText('Черновик')).toBeVisible();
 });
 
-test('Role visibility: RP sees the queue and package status on P01 and W01, but no action buttons anywhere', async ({
+test('P01 (Corrective F8.2.1-03): a work with an existing package still offers "Создать ещё один пакет" alongside "Открыть", creating a second, distinct package', async ({
+  page,
+}) => {
+  const state = makeState(PTO, [draftPackage()]);
+  await seedSession(page, 'f8-2-1-browser-token-multi-p01');
+  await mockApi(page, state);
+
+  await page.goto('/app.html/pto');
+  const table = page.locator('table', { hasText: 'Очередь ПТО' });
+  const row = table.locator('tr', { hasText: 'Штукатурка стен' });
+  await expect(row.getByRole('button', { name: 'Открыть' })).toBeVisible();
+  await row.getByRole('button', { name: 'Создать ещё один пакет' }).click();
+
+  await expect(page.getByRole('heading', { level: 1, name: 'Штукатурка стен' })).toBeVisible();
+  await expect(page.getByText('Черновик', { exact: true })).toBeVisible();
+
+  expect(state.packages.length).toBe(2);
+  expect(state.packages[0]!.id).not.toBe(state.packages[1]!.id);
+  expect(state.packages.every((p) => p.objectWorkId === WORK_DRAFT)).toBe(true);
+});
+
+test('W01 (Corrective F8.2.1-03): a work with an existing package still offers "Создать ещё один пакет" alongside "Открыть пакет", creating a second, distinct package', async ({
+  page,
+}) => {
+  const state = makeState(PTO, [draftPackage()]);
+  await seedSession(page, 'f8-2-1-browser-token-multi-w01');
+  await mockApi(page, state);
+
+  await page.goto(`/app.html/object/${OBJECT_A}/work/${WORK_DRAFT}`);
+  const section = page.locator('section', { hasText: 'Исполнительная документация' });
+  await expect(section.getByRole('button', { name: 'Открыть пакет' })).toBeVisible();
+  await section.getByRole('button', { name: 'Создать ещё один пакет' }).click();
+
+  await expect(page.getByRole('heading', { level: 1, name: 'Штукатурка стен' })).toBeVisible();
+  await expect(page.getByText('Черновик', { exact: true })).toBeVisible();
+
+  expect(state.packages.length).toBe(2);
+  expect(state.packages[0]!.id).not.toBe(state.packages[1]!.id);
+});
+
+test('Role visibility (Corrective F8.2.1-02): RP has no "ПТО" nav item and no workspace access, but its W01 documentation visibility is completely unchanged', async ({
   page,
 }) => {
   const state = makeState(RP, [draftPackage()]);
   await seedSession(page, 'f8-2-1-browser-token-rp');
   await mockApi(page, state);
 
+  // W01 read visibility (Decision Lock's own explicit "do not remove"):
+  // status, responsible, no action buttons — the same as before this patch.
+  await page.goto(`/app.html/object/${OBJECT_A}/work/${WORK_DRAFT}`);
+  const section = page.locator('section', { hasText: 'Исполнительная документация' });
+  await expect(section.getByText('Черновик')).toBeVisible();
+  await expect(section.getByRole('button')).toHaveCount(0);
+
+  // The PTO Workspace itself is PTO's own working area, not RP's — no nav
+  // item, and direct navigation names whose workspace this is rather than
+  // rendering the table or an "access denied" message (RP does have
+  // documentation access, just not to this specific workspace).
+  await expect(page.getByRole('button', { name: 'ПТО' })).toHaveCount(0);
   await page.goto('/app.html/pto');
-  const table = page.locator('table', { hasText: 'Очередь ПТО' });
-  await expect(table.locator('tr', { hasText: 'Устройство кровли' })).toContainText('Нет пакета ИД');
-  await expect(table.locator('tr', { hasText: 'Штукатурка стен' })).toContainText('Черновик');
-  await expect(page.getByRole('button', { name: 'Создать пакет' })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'Открыть' })).toHaveCount(0);
+  await expect(page.getByText('Раздел «ПТО» — рабочая область ПТО.', { exact: false })).toBeVisible();
+  await expect(page.locator('table', { hasText: 'Очередь ПТО' })).toHaveCount(0);
+
+  await page.goto(`/app.html/pto/package/${draftPackage().id}`);
+  await expect(page.getByText('Раздел «ПТО» — рабочая область ПТО.', { exact: false })).toBeVisible();
+});
+
+test('Role visibility (Corrective F8.2.1-02): SC (CONSTRUCTION_CONTROL) also has no PTO Workspace access, with the same W01 visibility preserved', async ({
+  page,
+}) => {
+  const SC = { id: 'u-sc', tenantId: 't-1', name: 'Строганов Контролёв', role: 'CONSTRUCTION_CONTROL' };
+  const state = makeState(SC, [draftPackage()]);
+  await seedSession(page, 'f8-2-1-browser-token-sc');
+  await mockApi(page, state);
 
   await page.goto(`/app.html/object/${OBJECT_A}/work/${WORK_DRAFT}`);
   const section = page.locator('section', { hasText: 'Исполнительная документация' });
   await expect(section.getByText('Черновик')).toBeVisible();
   await expect(section.getByRole('button')).toHaveCount(0);
+
+  await expect(page.getByRole('button', { name: 'ПТО' })).toHaveCount(0);
+  await page.goto('/app.html/pto');
+  await expect(page.getByText('Раздел «ПТО» — рабочая область ПТО.', { exact: false })).toBeVisible();
 });
 
 test('Role visibility: SDO has no "ПТО" nav item, and direct navigation to /pto or a work\'s documentation section shows an explicit no-access state, never an empty or misleading one', async ({

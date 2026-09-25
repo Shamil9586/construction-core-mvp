@@ -3,7 +3,7 @@ import { Sidebar, typeClass, type NavItem } from '../design-system';
 import { ROUTE_PATHS } from './routePaths';
 import { RuntimeFooter } from './RuntimeFooter';
 import { useCoreRuntime } from './CoreRuntimeContext';
-import { canAccessDocumentation } from '../auth/internalRoles';
+import { canManageDocumentation } from '../auth/internalRoles';
 
 /**
  * The routing adapter `Sidebar`'s own doc comment asks for: "a screen — or a
@@ -45,11 +45,16 @@ export function AppSidebar() {
         ? 'pto'
         : '';
 
-  // F8.2.1 — "ПТО" is hidden only for a *confirmed* excluded role (SDO):
-  // no session at all (the mock/demo runtime) still shows it, unchanged from
-  // F8.2, since an absent session is not evidence of a real restriction —
-  // only a session whose own role `canAccessDocumentation` excludes is.
-  const items = session && !canAccessDocumentation(session.user.role) ? NAV_ITEMS.filter((item) => item.key !== 'pto') : NAV_ITEMS;
+  // F8.2.1 Corrective Patch (F8.2.1-02) — the PTO Workspace is PTO's own
+  // working area (and ADMIN's, per existing administration convention), not
+  // a general internal destination: "ПТО" is shown only to a *confirmed*
+  // `canManageDocumentation` role. Every other internal role (RP, SC, TD,
+  // DoC, CEO) sees documentation status through W01 instead, never through
+  // this nav item — that visibility is untouched, see WorkRoute.tsx's own
+  // `documentationVisible`. No session at all (the mock/demo runtime) still
+  // shows it, unchanged from F8.2, since an absent session is not evidence
+  // of a real restriction.
+  const items = session && !canManageDocumentation(session.user.role) ? NAV_ITEMS.filter((item) => item.key !== 'pto') : NAV_ITEMS;
 
   return (
     <Sidebar

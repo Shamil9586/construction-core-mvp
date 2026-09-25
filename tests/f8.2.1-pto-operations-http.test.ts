@@ -85,7 +85,7 @@ test('F8.2.1 HTTP: DRAFT -> PREPARING passes, DRAFT -> PRESENTED is refused (400
   }
 });
 
-test('F8.2.1 HTTP: the full allowed chain succeeds end to end — DRAFT -> PREPARING -> READY_FOR_PRESENTATION -> PRESENTED -> RETURNED', async () => {
+test('F8.2.1 HTTP (Corrective F8.2.1-01): the full allowed chain succeeds end to end — DRAFT -> PREPARING -> READY_FOR_PRESENTATION -> PRESENTED -> RETURNED -> CORRECTING -> PRESENTED, the correction loop', async () => {
   const { app, req, login } = await harness();
   try {
     const { work } = await setUpObjectAndWork(req, login, 'F821-CHAIN-' + Date.now(), 'F8.2.1 полная цепочка');
@@ -101,8 +101,45 @@ test('F8.2.1 HTTP: the full allowed chain succeeds end to end — DRAFT -> PREPA
     pkg = await req(`documentation-packages/${pkg.id}/status`, { status: 'RETURNED', version: pkg.version });
     assert.equal(pkg.status, 'RETURNED');
 
-    // RETURNED is a dead end in this phase.
+    // F8.2.1-01 — RETURNED is no longer a dead end: it now completes the
+    // correction loop back to PRESENTED.
+    pkg = await req(`documentation-packages/${pkg.id}/status`, { status: 'CORRECTING', version: pkg.version });
+    assert.equal(pkg.status, 'CORRECTING');
+    // CORRECTING does not skip back to READY_FOR_PRESENTATION.
+    await req(`documentation-packages/${pkg.id}/status`, { status: 'READY_FOR_PRESENTATION', version: pkg.version }, 400);
+    pkg = await req(`documentation-packages/${pkg.id}/status`, { status: 'PRESENTED', version: pkg.version });
+    assert.equal(pkg.status, 'PRESENTED');
+
+    // The loop can repeat: a second RETURNED -> CORRECTING -> PRESENTED pass.
+    pkg = await req(`documentation-packages/${pkg.id}/status`, { status: 'RETURNED', version: pkg.version });
+    pkg = await req(`documentation-packages/${pkg.id}/status`, { status: 'CORRECTING', version: pkg.version });
+    pkg = await req(`documentation-packages/${pkg.id}/status`, { status: 'PRESENTED', version: pkg.version });
+    assert.equal(pkg.status, 'PRESENTED');
+  } finally {
+    await app.close();
+  }
+});
+
+test('F8.2.1 HTTP (Corrective F8.2.1-01): CORRECTING is reachable only through RETURNED, never directly from DRAFT/PREPARING/READY_FOR_PRESENTATION/PRESENTED', async () => {
+  const { app, req, login } = await harness();
+  try {
+    const { work } = await setUpObjectAndWork(req, login, 'F821-CORR-GUARD-' + Date.now(), 'F8.2.1 защита CORRECTING');
+    const pto = await login('PTO');
+    const pkg = await req('documentation-packages', { objectWorkId: work.id, responsibleUserId: pto.id });
+
+    // DRAFT -> CORRECTING is not a listed edge.
     await req(`documentation-packages/${pkg.id}/status`, { status: 'CORRECTING', version: pkg.version }, 400);
+
+    const prepared = await req(`documentation-packages/${pkg.id}/status`, { status: 'PREPARING', version: pkg.version });
+    // PREPARING -> CORRECTING is not a listed edge either.
+    await req(`documentation-packages/${pkg.id}/status`, { status: 'CORRECTING', version: prepared.version }, 400);
+
+    const ready = await req(`documentation-packages/${pkg.id}/status`, { status: 'READY_FOR_PRESENTATION', version: prepared.version });
+    await req(`documentation-packages/${pkg.id}/status`, { status: 'CORRECTING', version: ready.version }, 400);
+
+    const presented = await req(`documentation-packages/${pkg.id}/status`, { status: 'PRESENTED', version: ready.version });
+    // PRESENTED must go through RETURNED first, not straight to CORRECTING.
+    await req(`documentation-packages/${pkg.id}/status`, { status: 'CORRECTING', version: presented.version }, 400);
   } finally {
     await app.close();
   }
@@ -163,6 +200,33 @@ test('F8.2.1 HTTP: the queue is excluded for SDO, same as the rest of F8.2\'s do
     await login('SDO');
     const snapshot = await req('snapshot');
     assert.equal(snapshot.documentationAttentionQueue, undefined);
+  } finally {
+    await app.close();
+  }
+});
+
+/* --------------------------------------------------------------------- *
+ * F8.2.1-03 (Corrective Patch) — a work may have multiple packages;        *
+ * the backend already allowed this (no uniqueness constraint), the UI     *
+ * fix is what's new. This is the backend's own direct confirmation of     *
+ * the claim "backend already supports this" the corrective patch made.   *
+ * --------------------------------------------------------------------- */
+
+test('F8.2.1 HTTP (Corrective F8.2.1-03): creating a second package for a work that already has one succeeds and returns a distinct id — no one-package-per-work constraint', async () => {
+  const { app, req, login } = await harness();
+  try {
+    const { work } = await setUpObjectAndWork(req, login, 'F821-MULTI-' + Date.now(), 'F8.2.1 несколько пакетов');
+    const pto = await login('PTO');
+    const first = await req('documentation-packages', { objectWorkId: work.id, responsibleUserId: pto.id });
+    const second = await req('documentation-packages', { objectWorkId: work.id, responsibleUserId: pto.id });
+
+    assert.notEqual(first.id, second.id);
+    assert.equal(second.objectWorkId, work.id);
+    assert.equal(second.status, 'DRAFT');
+
+    const snapshot = await req('snapshot');
+    const own = snapshot.documentationPackages.filter((p: any) => p.objectWorkId === work.id);
+    assert.equal(own.length, 2, 'both packages belong to the same work and both are visible');
   } finally {
     await app.close();
   }

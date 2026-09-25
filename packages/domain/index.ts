@@ -58,21 +58,24 @@ export const hasPermission = (role: Role, p: Permission) => grants[role]?.includ
 export function canAccessDocumentation(role: Role): boolean {
     return role !== 'SDO' && role !== 'CONTRACTOR_VIEWER';
 }
-// F8.2.1 Decision 5 — status transition rules: PTO drives DRAFT through
-// PRESENTED along exactly these four edges; nothing else is legal in this
-// phase, including a same-status no-op, any backward move, any skip-ahead,
-// and anything into or out of CORRECTING/ACCEPTED_BY_CUSTOMER (both
-// "belong to the next stage" per the Decision Lock — RETURNED is a dead
-// end here, not a step back into correcting it, since no outbound edge for
-// it is listed either). One allow-list, so the backend's own gate and any
-// UI enabling/disabling a status button read the identical rule.
+// F8.2.1 Decision 5, extended by the F8.2.1-01 corrective patch — PTO drives
+// DRAFT through PRESENTED, and a presented package the customer returns can
+// be corrected and presented again: RETURNED -> CORRECTING -> PRESENTED
+// closes that loop (repeatable — PRESENTED's own outbound edge is still
+// RETURNED, so a second return re-enters the same loop). Nothing else is
+// legal: no same-status no-op, no backward move, no skip-ahead, CORRECTING
+// is reachable only from RETURNED and leads only to PRESENTED (never back to
+// READY_FOR_PRESENTATION), and ACCEPTED_BY_CUSTOMER remains unreachable —
+// still not a PTO user action, per the Decision Lock. One allow-list, so the
+// backend's own gate and any UI enabling/disabling a status button read the
+// identical rule.
 const ALLOWED_DOCUMENTATION_STATUS_TRANSITIONS: Record<string, string[]> = {
     DRAFT: ['PREPARING'],
     PREPARING: ['READY_FOR_PRESENTATION'],
     READY_FOR_PRESENTATION: ['PRESENTED'],
     PRESENTED: ['RETURNED'],
-    RETURNED: [],
-    CORRECTING: [],
+    RETURNED: ['CORRECTING'],
+    CORRECTING: ['PRESENTED'],
     ACCEPTED_BY_CUSTOMER: [],
 };
 export function isDocumentationStatusTransitionAllowed(from: string, to: string): boolean {

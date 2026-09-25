@@ -15,8 +15,9 @@ import styles from './DocumentationSection.module.css';
  * renders status only — RP/SC/oversight roles see the package exactly as
  * F8.2 always showed it, never a control to create or open one (Decision 3).
  * A work with no package at all gets "Создать пакет"; a work with one or
- * more gets "Открыть пакет" per card — mirroring P01's own row-level rule
- * that a work is either "create" or "open", never both at once.
+ * more gets "Открыть пакет" per card *and* "Создать ещё один пакет"
+ * (Corrective F8.2.1-03 — a work may have more than one Documentation
+ * Package, so the create action stays available once one already exists).
  */
 
 export interface DocumentationSectionActionHandlers {
@@ -43,7 +44,14 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'Не удалось выполнить действие';
 }
 
-function CreatePackageButton({ onCreate }: { onCreate: () => Promise<void> }) {
+function CreatePackageButton({
+  onCreate,
+  label = 'Создать пакет',
+}: {
+  onCreate: () => Promise<void>;
+  /** Corrective F8.2.1-03 — "Создать ещё один пакет" when the work already has one. */
+  label?: string;
+}) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -61,11 +69,8 @@ function CreatePackageButton({ onCreate }: { onCreate: () => Promise<void> }) {
 
   return (
     <div className={styles.emptyAction}>
-      <span className={[styles.empty, typeClass('body')].join(' ')}>
-        Пакет исполнительной документации ещё не создан
-      </span>
       <button type="button" className={styles.actionButton} onClick={handleClick} disabled={pending}>
-        {pending ? 'Создание…' : 'Создать пакет'}
+        {pending ? 'Создание…' : label}
       </button>
       {error ? <span className={styles.errorText}>{error}</span> : null}
     </div>
@@ -114,13 +119,21 @@ export function DocumentationSection({ documentationPackages, actions, visible =
           Раздел недоступен для вашей роли
         </span>
       ) : documentationPackages.length > 0 ? (
-        <div className={styles.packageList}>
-          {documentationPackages.map((pkg) => (
-            <PackageCard key={pkg.id} pkg={pkg} onOpenPackage={actions?.onOpenPackage} />
-          ))}
-        </div>
+        <>
+          <div className={styles.packageList}>
+            {documentationPackages.map((pkg) => (
+              <PackageCard key={pkg.id} pkg={pkg} onOpenPackage={actions?.onOpenPackage} />
+            ))}
+          </div>
+          {actions ? <CreatePackageButton onCreate={actions.onCreatePackage} label="Создать ещё один пакет" /> : null}
+        </>
       ) : actions ? (
-        <CreatePackageButton onCreate={actions.onCreatePackage} />
+        <>
+          <span className={[styles.empty, typeClass('body')].join(' ')}>
+            Пакет исполнительной документации ещё не создан
+          </span>
+          <CreatePackageButton onCreate={actions.onCreatePackage} />
+        </>
       ) : (
         <span className={[styles.empty, typeClass('body')].join(' ')}>
           Пакет исполнительной документации ещё не создан

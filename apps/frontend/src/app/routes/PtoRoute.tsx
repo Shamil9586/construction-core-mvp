@@ -17,16 +17,24 @@ import { RouteError, RouteForbidden, RouteLoading } from '../RouteStatus';
  * component-local value lost on refresh or unshareable in a link) — a plain
  * `useState` would not survive either.
  *
- * `documentationPackages`/`documentationAttentionQueue` are `undefined` for a
- * role with no F8.2/F8.2.1 access (SDO) — read as empty arrays here, the same
- * "nothing to show" state an empty result set already renders, since a role
- * without this route in its own navigation should not see a special error for
- * data it was never going to have.
+ * F8.2.1 Corrective Patch (F8.2.1-02) — this workspace belongs to PTO (and
+ * ADMIN, per existing administration convention), not to every internal
+ * role with documentation access: the route itself is gated on
+ * `canManageDocumentation`, the same predicate that already gated its own
+ * actions. A role that can read documentation but not manage it (RP, SC,
+ * TD, DoC, CEO) gets an explicit "this is PTO's workspace" message naming
+ * W01 as the right place instead — never the read-only table this route
+ * showed before this patch. A role excluded from documentation entirely
+ * (SDO) gets the original "no access" message. No session at all (the
+ * mock/demo runtime) is unaffected by either check.
  *
  * F8.2.1 Decision 3 — only PTO creates or manages packages: `actions` is
  * built only when `canManageDocumentation(session.user.role)`, otherwise
  * `undefined`, which `PtoWorkspace` already renders as a fully read-only
- * table (see its own module comment). Creating a package posts through `documentationApi`
+ * table (see its own module comment) — reachable now only by the same role
+ * the guard above already let through, but the check is kept as its own,
+ * independent gate on the actions themselves, not implied by having passed
+ * the route guard. Creating a package posts through `documentationApi`
  * (Decision 1: the same module W01's own create/open action, Step 4c, calls)
  * then refetches and navigates straight to the new package's detail route —
  * `refetch()` is fire-and-forget by existing convention (`WorkRoute.tsx`), so
@@ -44,12 +52,16 @@ export function PtoRoute() {
   if (state.status === 'Loading') return <RouteLoading />;
   if (state.status === 'Error') return <RouteError message={state.message} />;
 
-  // F8.2.1 — SDO's snapshot never carries documentation data at all
-  // (`canAccessDocumentation`); without this guard the table would render
-  // every work as if nothing needed attention, a real, misleading claim,
-  // not merely an absent one. No session (mock/demo runtime) is unaffected.
-  if (session && !canAccessDocumentation(session.user.role)) {
-    return <RouteForbidden label="У вас нет доступа к разделу «ПТО»." />;
+  if (session && !canManageDocumentation(session.user.role)) {
+    return (
+      <RouteForbidden
+        label={
+          canAccessDocumentation(session.user.role)
+            ? 'Раздел «ПТО» — рабочая область ПТО. Статус исполнительной документации по работе доступен на странице работы.'
+            : 'У вас нет доступа к разделу «ПТО».'
+        }
+      />
+    );
   }
 
   const viewModel = buildP01ViewModel(
