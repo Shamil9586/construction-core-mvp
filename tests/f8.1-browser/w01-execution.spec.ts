@@ -175,6 +175,11 @@ function buildSnapshot(state: { portions: FakePortion[]; inspections: FakeInspec
         unit: 'м²',
         plannedQuantity: '300',
         actualQuantity: state.portions.reduce((sum, p) => sum + Number(p.rpFactQuantity ?? 0), 0).toFixed(4),
+        internalScStatus: (() => {
+          const acceptedSum = state.portions.filter((p) => p.internalScAccepted).reduce((sum, p) => sum + Number(p.plannedQuantity), 0);
+          return acceptedSum <= 0 ? 'NONE' : acceptedSum >= 300 ? 'COMPLETE' : 'PARTIAL';
+        })(),
+        customerScStatus: 'NONE',
       },
     ],
     executionUnitLayers: [],

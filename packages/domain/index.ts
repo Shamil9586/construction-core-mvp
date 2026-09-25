@@ -148,25 +148,78 @@ export class InternalScPolicy {
     // apps/backend/src/importer.ts for ГПО-sourced imports.
     required(organizationName: string | null) { return organizationName === 'ООО СЗ «Гор-Строй»'; }
 }
+// F8.1-02 corrective (Independent Review, not accepted first pass): a unit's
+// coverage by accepted portions, never merely "every portion that happens to
+// exist is accepted". A unit's planned quantity can be portioned gradually
+// (F8.1 decision 4), so a single 100 m² portion out of a 500 m² unit, itself
+// fully accepted, is real progress but not completion — the remaining 400 m²
+// was never portioned at all, and treating an incomplete portion set as
+// satisfied is the same shape of bug as an empty `.every()`, one level up.
+export type ScCoverageStatus = 'NONE' | 'PARTIAL' | 'COMPLETE';
 export class PortionCompletionService {
+    // NONE: nothing accepted (including no portions at all — an empty sum is
+    // zero, not "vacuously covered"). PARTIAL: some accepted quantity exists
+    // but does not yet reach the unit's own planned quantity — D4 already
+    // forbids portions summing past it, so "reaches" and "equals" coincide.
+    // COMPLETE: the accepted portions' own planned quantities cover it.
+    unitCoverage(unitPlannedQuantity: any, portions: { plannedQuantity: any; accepted: boolean }[]): ScCoverageStatus {
+        const acceptedQuantity = portions.filter(p => p.accepted).reduce((s, p) => s.add(p.plannedQuantity), new Decimal(0));
+        if (acceptedQuantity.lte(0))
+            return 'NONE';
+        return acceptedQuantity.gte(unitPlannedQuantity) ? 'COMPLETE' : 'PARTIAL';
+    }
+    private aggregate(statuses: ScCoverageStatus[]): ScCoverageStatus {
+        if (statuses.length === 0)
+            return 'NONE';
+        if (statuses.every(s => s === 'COMPLETE'))
+            return 'COMPLETE';
+        return statuses.every(s => s === 'NONE') ? 'NONE' : 'PARTIAL';
+    }
     // F8.1 decision 8: acceptance aggregates from portions — never any-portion-
-    // accepted. Internal SC completion and Customer SC acceptance are two
-    // separate methods over two separate booleans, kept structurally apart
-    // rather than merged into one generic "accepted" (F8.1 final clarification
-    // 2) — a caller cannot conflate them without deliberately reading the wrong
-    // field, because there is no shared field to misread.
-    //
-    // A unit with zero portions — or a work with zero units — is never
-    // vacuously complete: `.every()` over an empty array is `true` in
-    // JavaScript, which is exactly the bug F4's `hasCompleteScheduleData`
-    // corrective patch had to fix for schedule data. The `.length > 0` guards
-    // below are that same fix, applied here from the start.
-    internalScComplete(units: { portions: { internalScAccepted: boolean }[] }[]): boolean {
-        return units.length > 0 && units.every(u => u.portions.length > 0 && u.portions.every(p => p.internalScAccepted));
+    // accepted, and never any-created-portion-accepted either (the bug above).
+    // Internal SC completion and Customer SC acceptance are two separate
+    // methods over two separate booleans, kept structurally apart rather than
+    // merged into one generic "accepted" (F8.1 final clarification 2) — a
+    // caller cannot conflate them without deliberately reading the wrong
+    // field, because there is no shared field to misread. A work with zero
+    // units is never vacuously complete either — the same guard one level up.
+    internalScStatus(units: { plannedQuantity: any; portions: { plannedQuantity: any; internalScAccepted: boolean }[] }[]): ScCoverageStatus {
+        return this.aggregate(units.map(u => this.unitCoverage(u.plannedQuantity, u.portions.map(p => ({ plannedQuantity: p.plannedQuantity, accepted: p.internalScAccepted })))));
     }
-    customerScAccepted(units: { portions: { customerScAccepted: boolean }[] }[]): boolean {
-        return units.length > 0 && units.every(u => u.portions.length > 0 && u.portions.every(p => p.customerScAccepted));
+    customerScStatus(units: { plannedQuantity: any; portions: { plannedQuantity: any; customerScAccepted: boolean }[] }[]): ScCoverageStatus {
+        return this.aggregate(units.map(u => this.unitCoverage(u.plannedQuantity, u.portions.map(p => ({ plannedQuantity: p.plannedQuantity, accepted: p.customerScAccepted })))));
     }
+    internalScComplete(units: { plannedQuantity: any; portions: { plannedQuantity: any; internalScAccepted: boolean }[] }[]): boolean {
+        return this.internalScStatus(units) === 'COMPLETE';
+    }
+    customerScAccepted(units: { plannedQuantity: any; portions: { plannedQuantity: any; customerScAccepted: boolean }[] }[]): boolean {
+        return this.customerScStatus(units) === 'COMPLETE';
+    }
+}
+// F8.1-03 corrective: the one place that decides "is this work's Internal SC
+// complete" — a work with no execution units keeps exactly its pre-F8.1
+// whole-work-inspection flag (F7 behaviour, unchanged); a work with execution
+// units ignores that flag entirely (it can only ever be stale once units
+// exist — nothing keeps it in sync) and reads coverage instead. Called
+// identically by ReadService.snapshot() (the blockers a user sees) and
+// ProductionService.transition() (the gate a backend mutation is actually
+// held to), so the two can no longer diverge — they call the same function,
+// not two independent re-derivations of the same rule.
+export function resolveInternalScAccepted(wholeWorkAccepted: boolean, units: { plannedQuantity: any; portions: { plannedQuantity: any; internalScAccepted: boolean }[] }[]): boolean {
+    return units.length === 0 ? wholeWorkAccepted : new PortionCompletionService().internalScComplete(units);
+}
+// F8.1-04 corrective: the one place that decides a work's actual quantity —
+// legacy `works.actual_quantity`/`work_progress` for a work with no execution
+// units (F7 behaviour, unchanged); the sum of the execution units' own
+// (portion-derived) totals once any exist, ignoring the legacy figure
+// entirely so the two can never compete as two different "true" answers for
+// the same work. `unitActualQuantities` is each unit's own already-derived
+// total (ReadService.snapshot()'s executionUnitsWithTotals, or the
+// equivalent computed inline wherever a single work's units are fetched).
+export function resolveActualQuantity(legacyActualQuantity: any, unitActualQuantities: any[]): string {
+    if (unitActualQuantities.length === 0)
+        return new Decimal(legacyActualQuantity).toFixed(4);
+    return unitActualQuantities.reduce((sum, q) => sum.add(q ?? 0), new Decimal(0)).toFixed(4);
 }
 export const domainEvents = ['WorkProgressUpdated', 'WorkDelayed', 'InspectionRequested', 'InspectionAccepted', 'InspectionRejected', 'IssueCreated', 'IssueResolved', 'ExecutivePackageReady', 'TransferredToSdo', 'SdoCalculated', 'FinancialClosingCreated', 'ObjectHealthChanged', 'ExecutionUnitCreated'] as const;
 export interface BitrixUserProvider {

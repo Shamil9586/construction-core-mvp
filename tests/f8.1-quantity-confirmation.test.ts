@@ -78,16 +78,23 @@ test('F8.1: RP fact / Internal SC / Customer SC never overwrite each other, and 
   assert.equal(accepted.status, 'ACCEPTED');
   assert.equal(accepted.inspectionType, 'INTERNAL_SC');
 
-  // Internal SC's own accepted quantity is recorded separately from RP fact —
-  // this is application-level bookkeeping (ProductionService does not do this
-  // automatically inside inspectionAction(), which stays generic to both
-  // types); recorded directly here to prove the confirmation table's shape.
+  // F8.1-01 corrective (Independent Review, not accepted first pass):
+  // inspectionAction() itself now records Internal SC's own accepted
+  // quantity the moment it accepts a portion-scoped inspection — never
+  // application code calling it separately, and never a gap the confirmation
+  // history silently has. The confirmed quantity is the portion's latest
+  // RP_FACT at acceptance time (500 here); recordPortionFact()'s freeze
+  // guard (asserted above) already makes that the only fact value that can
+  // exist once an inspection is active, so this is not a second, independent
+  // input — it is what "accepting the presented portion" means.
   const internalConfirmation = await one(
     pool,
-    "INSERT INTO portion_quantity_confirmations(tenant_id,portion_id,source,quantity,inspection_id,recorded_by) VALUES($1,$2,'INTERNAL_SC',$3,$4,$5) RETURNING *",
-    [tenant.id, portion.id, '498', internalRequest.id, sk.id],
+    "SELECT * FROM portion_quantity_confirmations WHERE tenant_id=$1 AND portion_id=$2 AND source='INTERNAL_SC' ORDER BY recorded_at DESC LIMIT 1",
+    [tenant.id, portion.id],
   );
   assert.equal(internalConfirmation.source, 'INTERNAL_SC');
+  assert.equal(internalConfirmation.quantity, '500.0000');
+  assert.equal(internalConfirmation.inspectionId, internalRequest.id);
 
   // --- Customer SC: same table, same workflow, distinct type — registered by an internal employee ---
   const customerRequest = await service.requestPortionInspection(pm, portion.id, (await one(pool, 'SELECT version FROM quantity_portions WHERE tenant_id=$1 AND id=$2', [tenant.id, portion.id])).version, 'CUSTOMER_SC');
@@ -102,14 +109,17 @@ test('F8.1: RP fact / Internal SC / Customer SC never overwrite each other, and 
 
   const customerConfirmation = await one(
     pool,
-    "INSERT INTO portion_quantity_confirmations(tenant_id,portion_id,source,quantity,inspection_id,recorded_by) VALUES($1,$2,'CUSTOMER_SC',$3,$4,$5) RETURNING *",
-    [tenant.id, portion.id, '496', customerRequest.id, sk.id],
+    "SELECT * FROM portion_quantity_confirmations WHERE tenant_id=$1 AND portion_id=$2 AND source='CUSTOMER_SC' ORDER BY recorded_at DESC LIMIT 1",
+    [tenant.id, portion.id],
   );
+  assert.equal(customerConfirmation.source, 'CUSTOMER_SC');
+  assert.equal(customerConfirmation.quantity, '500.0000');
+  assert.equal(customerConfirmation.inspectionId, customerRequest.id);
 
-  // --- all three values remain separately: no overwrite, all three readable at once ---
+  // --- all three sources remain separately stored: no overwrite, no merge, all readable at once ---
   const history = await rows(
     pool,
-    'SELECT source, quantity, recorded_at FROM portion_quantity_confirmations WHERE tenant_id=$1 AND portion_id=$2 ORDER BY recorded_at',
+    'SELECT id, source, quantity, recorded_at FROM portion_quantity_confirmations WHERE tenant_id=$1 AND portion_id=$2 ORDER BY recorded_at',
     [tenant.id, portion.id],
   );
   // "Current" = latest row per source — the same shape read-service.ts already
@@ -118,13 +128,18 @@ test('F8.1: RP fact / Internal SC / Customer SC never overwrite each other, and 
   const latestBySource: Record<string, string> = {};
   for (const row of history) latestBySource[row.source] = row.quantity;
   assert.equal(latestBySource.RP_FACT, '500.0000');
-  assert.equal(latestBySource.INTERNAL_SC, '498.0000');
-  assert.equal(latestBySource.CUSTOMER_SC, '496.0000');
-  assert.notEqual(latestBySource.RP_FACT, latestBySource.INTERNAL_SC);
-  assert.notEqual(latestBySource.INTERNAL_SC, latestBySource.CUSTOMER_SC);
+  assert.equal(latestBySource.INTERNAL_SC, '500.0000');
+  assert.equal(latestBySource.CUSTOMER_SC, '500.0000');
+  // The three sources coinciding numerically here (nothing changed RP_FACT
+  // between the two SC acceptances — the freeze guard forbids it) is not the
+  // same claim as "merged". The real invariant is storage independence: three
+  // distinct rows, three distinct ids, each linked to its own inspection —
+  // never one row updated in place to hold whichever source acted last.
+  assert.equal(new Set(history.map((h: any) => h.id)).size, 4, 'four distinct row identities, not fewer via an update-in-place');
+  assert.equal(internalConfirmation.id !== customerConfirmation.id, true, 'Internal SC and Customer SC each got their own row, not a shared one');
   // The partial 300 entry is still there too — nothing was overwritten, ever.
   assert.ok(history.some((h: any) => h.source === 'RP_FACT' && h.quantity === '300.0000'));
-  assert.equal(history.length, 4, 'RP_FACT x2 (300, 500) + INTERNAL_SC + CUSTOMER_SC — no row lost, none merged');
+  assert.equal(history.length, 4, 'RP_FACT x2 (300, 500) + auto-recorded INTERNAL_SC + auto-recorded CUSTOMER_SC — no row lost, none merged');
 
   // --- immutability: the trigger actually rejects UPDATE and DELETE, not just exists ---
   await assert.rejects(
@@ -136,7 +151,7 @@ test('F8.1: RP fact / Internal SC / Customer SC never overwrite each other, and 
     /Append-only history/,
   );
   const stillThere = await one(pool, 'SELECT quantity FROM portion_quantity_confirmations WHERE tenant_id=$1 AND id=$2', [tenant.id, internalConfirmation.id]);
-  assert.equal(stillThere.quantity, '498.0000', 'the rejected UPDATE must not have partially applied');
+  assert.equal(stillThere.quantity, '500.0000', 'the rejected UPDATE must not have partially applied');
 
   // --- CHECK constraints reject bad data, not just accept good data ---
   await assert.rejects(

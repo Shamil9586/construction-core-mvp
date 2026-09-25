@@ -105,6 +105,8 @@ function baseUnit(overrides: Partial<WorkExecutionUnit> = {}): WorkExecutionUnit
     location: '1 этаж',
     contractorId: 'contractor-1',
     unit: 'м²',
+    internalScStatus: 'NONE',
+    customerScStatus: 'NONE',
     plannedQuantity: '500',
     actualQuantity: '0',
     ...overrides,

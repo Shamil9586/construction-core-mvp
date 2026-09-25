@@ -28,6 +28,46 @@ function hasStringOrNullField(record: Record<string, unknown>, field: string): b
   return isStringOrNull(record[field]);
 }
 
+function isBoolean(value: unknown): value is boolean {
+  return typeof value === 'boolean';
+}
+
+function hasBooleanField(record: Record<string, unknown>, field: string): boolean {
+  return isBoolean(record[field]);
+}
+
+function isBooleanOrNull(value: unknown): value is boolean | null {
+  return isBoolean(value) || value === null;
+}
+
+/**
+ * A `numeric(20,4)` column as the backend sends it: a string the app parses
+ * with `Number()`/`decimal.js`, never `NaN`, `Infinity` or a non-numeric
+ * string such as `"abc"` (F8.1-05's own example of what must not pass).
+ */
+function isNumericString(value: unknown): value is string {
+  return isString(value) && value.trim() !== '' && Number.isFinite(Number(value));
+}
+
+function isNumericStringOrNull(value: unknown): value is string | null {
+  return isNumericString(value) || value === null;
+}
+
+function hasNumericField(record: Record<string, unknown>, field: string): boolean {
+  return isNumericString(record[field]);
+}
+
+function hasNumericOrNullField(record: Record<string, unknown>, field: string): boolean {
+  return isNumericStringOrNull(record[field]);
+}
+
+const SC_COVERAGE_STATUSES = new Set(['NONE', 'PARTIAL', 'COMPLETE']);
+
+/** Unlike `scheduleStatus`/`status`, a closed set the backend actually enforces — see `ScCoverageStatus`. */
+function hasScCoverageStatusField(record: Record<string, unknown>, field: string): boolean {
+  return isString(record[field]) && SC_COVERAGE_STATUSES.has(record[field] as string);
+}
+
 const MALFORMED_SNAPSHOT_MESSAGE = 'Неверный ответ сервера: искажённый снимок данных.';
 
 function fail(): never {
@@ -83,13 +123,26 @@ function fail(): never {
  * `confirmationFromInspectionStatus` already have a documented, deliberate
  * `default` arm that reads an unrecognised value as neutral rather than an
  * error (see `status.ts`'s own corrective notes) — hard-rejecting them here
- * would fight that existing, accepted design, not extend it. Percentages,
- * quantities, dates and `lastReportedAt` are read through helpers
- * (`formatters/*`, `??`, `!== null`) that already handle `null`/`undefined`/
- * an unexpected value without throwing — unchanged, and not re-validated
- * here. `requestedAt` (inspections) is a sort key only, not an identity or
- * status field, and a wrong value there cannot crash or corrupt identity —
- * only reorder a list — so it is left alone too.
+ * would fight that existing, accepted design, not extend it. Dates and
+ * `requestedAt` (inspections) are sort/display keys only, not identity or
+ * status fields, and a wrong value there cannot crash or corrupt identity —
+ * only reorder a list or show a dash — so they are left alone too.
+ *
+ * F8.1-05 corrective (Independent Review, not accepted first pass): every
+ * *other* quantity, boolean and coverage-status field the F8.1 execution
+ * section reads WAS left unchecked on the same "formatters already degrade
+ * safely" reasoning above — true for crash-safety, but the Review's actual
+ * complaint was correctness, not crashes: `formatMeasure('abc' as Numeric,
+ * ...)` does not throw, it silently renders a dash, so a portion whose
+ * `plannedQuantity` arrived as `"abc"` (a genuine transport defect, not a
+ * real business value) would read as "no data" — indistinguishable from a
+ * portion nobody has touched yet, exactly the "Unknown != positive" /
+ * "Invalid data != accepted state" confusion F8.1's own semantic rules
+ * forbid. `internalScAccepted`/`customerScAccepted` are worse: a stray
+ * string `"false"` is *truthy* in JavaScript, so an unguarded read of it as
+ * a boolean silently reports acceptance that never happened — the literal
+ * example the corrective task names. These are now hard-checked wherever
+ * they appear, same as `blockers`/`customerName` above.
  */
 export function validateSnapshot(value: unknown): Snapshot {
   if (!isPlainObject(value)) fail();
@@ -113,6 +166,11 @@ export function validateSnapshot(value: unknown): Snapshot {
     if (!hasStringField(work, 'contractor')) fail();
     if (!hasStringField(work, 'unit')) fail();
     if (!isStringArray(work.blockers)) fail();
+    // F8.1-05 — optional (CONTRACTOR_VIEWER/pre-F8.1 fixtures may omit it
+    // entirely, same reasoning as executionUnits/portions below), but a
+    // present value must be a real boolean or null, never the literal
+    // string "false" (truthy, and the Review's own example).
+    if (work.customerScAccepted !== undefined && !isBooleanOrNull(work.customerScAccepted)) fail();
   }
 
   if (!isObjectArray(value.contractors)) fail();
@@ -148,6 +206,10 @@ export function validateSnapshot(value: unknown): Snapshot {
       if (!hasStringField(unit, 'unit')) fail();
       if (!hasStringOrNullField(unit, 'location')) fail();
       if (!hasStringOrNullField(unit, 'executionConditions')) fail();
+      if (!hasNumericField(unit, 'plannedQuantity')) fail();
+      if (!hasNumericField(unit, 'actualQuantity')) fail();
+      if (!hasScCoverageStatusField(unit, 'internalScStatus')) fail();
+      if (!hasScCoverageStatusField(unit, 'customerScStatus')) fail();
     }
   }
 
@@ -157,6 +219,12 @@ export function validateSnapshot(value: unknown): Snapshot {
       if (!hasStringField(portion, 'id')) fail();
       if (!hasStringField(portion, 'executionUnitId')) fail();
       if (!hasStringField(portion, 'label')) fail();
+      if (!hasNumericField(portion, 'plannedQuantity')) fail();
+      if (!hasNumericOrNullField(portion, 'rpFactQuantity')) fail();
+      if (!hasNumericOrNullField(portion, 'internalScConfirmedQuantity')) fail();
+      if (!hasNumericOrNullField(portion, 'customerScConfirmedQuantity')) fail();
+      if (!hasBooleanField(portion, 'internalScAccepted')) fail();
+      if (!hasBooleanField(portion, 'customerScAccepted')) fail();
     }
   }
 

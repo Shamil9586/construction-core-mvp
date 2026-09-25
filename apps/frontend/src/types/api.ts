@@ -77,6 +77,17 @@ export type InspectionType = Known<'INTERNAL_SC' | 'CUSTOMER_SC'>;
 /** Constrained by a CHECK on `portion_quantity_confirmations.source` (F8.1). */
 export type PortionConfirmationSource = Known<'RP_FACT' | 'INTERNAL_SC' | 'CUSTOMER_SC'>;
 
+/**
+ * F8.1-02 corrective (Independent Review) — an execution unit's coverage by
+ * accepted portions: `PortionCompletionService.unitCoverage()`'s own output
+ * (packages/domain), never a plain boolean. `NONE`/`PARTIAL`/`COMPLETE` are
+ * a closed set the backend actually enforces (unlike `InspectionStatus` and
+ * friends, which are `Known<T>` because their DB columns are unconstrained
+ * text) — validateSnapshot.ts hard-rejects anything else, it does not fall
+ * back to a neutral reading.
+ */
+export type ScCoverageStatus = 'NONE' | 'PARTIAL' | 'COMPLETE';
+
 /* ---------------------------------------------------------------------- *
  * Conventional sets — text columns, not database-constrained              *
  * ---------------------------------------------------------------------- */
@@ -424,6 +435,9 @@ export interface WorkExecutionUnit extends Versioned {
   unit: string;
   plannedQuantity: Numeric;
   actualQuantity: Numeric;
+  /** F8.1-02 corrective — coverage by accepted portions; see `ScCoverageStatus`. */
+  internalScStatus: ScCoverageStatus;
+  customerScStatus: ScCoverageStatus;
 }
 
 /** F8.1 — one ordered layer of a Work Execution Unit's composition. */
