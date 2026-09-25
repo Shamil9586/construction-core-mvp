@@ -1,6 +1,7 @@
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Sidebar, typeClass, type NavItem } from '../design-system';
 import { ROUTE_PATHS } from './routePaths';
+import { RuntimeFooter } from './RuntimeFooter';
 
 /**
  * The routing adapter `Sidebar`'s own doc comment asks for: "a screen — or a
@@ -13,6 +14,12 @@ import { ROUTE_PATHS } from './routePaths';
  * actually routes (C01). Object/work screens are drill-down, reached from
  * C01/O01, not separate sidebar sections — inventing more items here would
  * be navigation for sections this phase does not implement.
+ *
+ * F7: the footer is no longer the fixed «F5 · типизированные демо-данные»,
+ * which stayed on screen even over real backend data. `RuntimeFooter` states
+ * the data source this build actually uses and, when a session exists, whose
+ * it is and the action that ends it — through the same `footer` slot, so
+ * `Sidebar` is unchanged.
  */
 const NAV_ITEMS: NavItem[] = [{ key: 'company', label: 'Портфель' }];
 
@@ -36,7 +43,7 @@ export function AppSidebar() {
       onNavigate={(key) => {
         if (key === 'company') navigate(ROUTE_PATHS.company);
       }}
-      footer={<span>F5 · типизированные демо-данные</span>}
+      footer={<RuntimeFooter />}
     />
   );
 }

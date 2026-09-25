@@ -110,6 +110,34 @@ export interface Actor {
   contractorId?: Uuid;
 }
 
+/**
+ * `GET /health` — public, unauthenticated (health.controller.ts). `authMode` is
+ * the backend's own `AUTH_MODE`; `createApp()` refuses to start with anything
+ * but `mock` or `bitrix`, and refuses `mock` under `NODE_ENV=production`
+ * (apps/backend/src/main.ts). It is the existing way for a client to tell a
+ * mock-auth test environment from the Bitrix24 production one.
+ */
+export interface HealthResponse {
+  status: string;
+  authMode: Known<'mock' | 'bitrix'>;
+  databaseMode: string;
+}
+
+/**
+ * `POST /auth/mock` — the value of `session()` (apps/backend/src/security.ts):
+ * a new opaque bearer token and the actor it belongs to. Only served when the
+ * backend runs with `AUTH_MODE=mock`.
+ */
+export interface SessionGrant {
+  token: string;
+  user: { id: Uuid; name: string; role: Role; tenantId: Uuid };
+}
+
+/** `POST /auth/logout` — deletes the caller's own `sessions` row. */
+export interface LogoutResponse {
+  loggedOut: true;
+}
+
 /** `GET /users` — deliberately a narrow projection, not the full user row. */
 export interface UserSummary {
   id: Uuid;

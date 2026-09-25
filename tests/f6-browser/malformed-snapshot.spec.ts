@@ -43,6 +43,17 @@ async function seedSession(page: Page): Promise<void> {
   await page.addInitScript(() => {
     window.sessionStorage.setItem('session', 'f6-browser-regression-token');
   });
+  // F7: the real data source now validates the tab's session through the
+  // existing GET /api/me before it loads any data (app/SessionGate.tsx), so
+  // that request is intercepted too — with an internal-role actor, so every
+  // assertion below still exercises the F6 snapshot path it was written for.
+  await page.route('**/api/me', (route: Route) =>
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ id: 'f6-actor', tenantId: 'f6-tenant', name: 'F6 Regression', role: 'GENERAL_DIRECTOR' }),
+    }),
+  );
 }
 
 async function interceptSnapshot(page: Page, body: unknown): Promise<void> {

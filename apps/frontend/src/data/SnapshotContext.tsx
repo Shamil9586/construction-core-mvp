@@ -1,6 +1,7 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { Snapshot } from '../types/api';
 import type { DataProvider } from './DataProvider';
+import { AuthenticationError } from '../auth/AuthenticationError';
 
 /**
  * The data boundary's runtime home.
@@ -21,11 +22,27 @@ const SnapshotContext = createContext<SnapshotState | undefined>(undefined);
 
 export interface SnapshotProviderProps {
   provider: DataProvider;
+  /**
+   * F7 — where a session failure goes instead of becoming a data `Error`. A
+   * provider that rejects with `AuthenticationError` (HTTP 401: the session
+   * ended) is not reporting broken data, so when this handler is supplied the
+   * state stays `Loading` and the handler is called; the session layer above
+   * then replaces this whole subtree with its expired-session state. Every
+   * other rejection still becomes `Error`, exactly as before.
+   */
+  onAuthenticationError?: (error: AuthenticationError) => void;
   children: ReactNode;
 }
 
-export function SnapshotProvider({ provider, children }: SnapshotProviderProps) {
+export function SnapshotProvider({ provider, onAuthenticationError, children }: SnapshotProviderProps) {
   const [state, setState] = useState<SnapshotState>({ status: 'Loading' });
+
+  // Held in a ref so a new callback identity on re-render never re-runs the
+  // fetch below — the snapshot is still fetched once per provider (F5/F6).
+  const onAuthenticationErrorRef = useRef(onAuthenticationError);
+  useEffect(() => {
+    onAuthenticationErrorRef.current = onAuthenticationError;
+  }, [onAuthenticationError]);
 
   useEffect(() => {
     let cancelled = false;
@@ -37,12 +54,16 @@ export function SnapshotProvider({ provider, children }: SnapshotProviderProps) 
         if (!cancelled) setState({ status: 'Ready', snapshot });
       })
       .catch((error: unknown) => {
-        if (!cancelled) {
-          setState({
-            status: 'Error',
-            message: error instanceof Error ? error.message : String(error),
-          });
+        if (cancelled) return;
+        const handleAuthenticationError = onAuthenticationErrorRef.current;
+        if (error instanceof AuthenticationError && handleAuthenticationError) {
+          handleAuthenticationError(error);
+          return;
         }
+        setState({
+          status: 'Error',
+          message: error instanceof Error ? error.message : String(error),
+        });
       });
 
     return () => {

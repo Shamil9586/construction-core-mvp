@@ -9,6 +9,21 @@
       header_up Host {upstream_hostport}
     }
   }
+  # F7 — internal Core entry. /app.html and every client route under it
+  # (/app.html/company, /app.html/object/<id>, /app.html/object/<id>/work/<id>)
+  # are answered with app.html itself, never with the legacy index.html
+  # fallback below. app.html exists only in a build made with
+  # `npm run build:core`; in any other build file_server answers 404, so a
+  # Core URL fails explicitly instead of silently rendering the legacy app.
+  # The Content-Security-Policy is the same policy as the handle below —
+  # keep the two identical.
+  @core path /app.html /app.html/*
+  handle @core {
+    header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'self' {$BITRIX_FRAME_ORIGIN:https://invalid.example}; base-uri 'self'; object-src 'none'"
+    root * /srv
+    rewrite * /app.html
+    file_server
+  }
   handle {
     header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'self' {$BITRIX_FRAME_ORIGIN:https://invalid.example}; base-uri 'self'; object-src 'none'"
     root * /srv

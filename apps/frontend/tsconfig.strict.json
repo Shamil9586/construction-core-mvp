@@ -23,6 +23,7 @@
     "src/screens/**/*",
     "src/preview/**/*",
     "src/app/**/*",
-    "src/data/**/*"
+    "src/data/**/*",
+    "src/auth/**/*"
   ]
 }
