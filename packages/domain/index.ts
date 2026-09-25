@@ -32,11 +32,32 @@ export enum Permission {
     // Customer SC has no UI in F8.1 and no stated actor of its own yet, so it is
     // gated by the same permission as Internal SC's own accept/reject rather than
     // inventing an unrequested role split.
-    EXECUTION_UNIT_MANAGE = 'EXECUTION_UNIT_MANAGE'
+    EXECUTION_UNIT_MANAGE = 'EXECUTION_UNIT_MANAGE',
+    // F8.2 — covers every PTO mutation on a Documentation Package: create
+    // package, edit package, link a portion, create a document, create a
+    // version, change status (F8.2 Architecture Contract's own bundle,
+    // mirroring EXECUTION_UNIT_MANAGE above). Deliberately its own permission,
+    // not PTO_EDIT: PTO_EDIT is the pre-F8.1 executive_packages/SDO-transfer
+    // pipeline (packageAction() 'transfer-sdo' in service.ts), which F8.2 must
+    // not touch or extend. Read access has no permission of its own — every
+    // viewing role already has OBJECT_VIEW; who is actually excluded (SDO,
+    // CONTRACTOR_VIEWER — "SDO: No F8.2 access") is decided once by
+    // canAccessDocumentation() below, not by a permission bit PTO_VIEW-style
+    // grants would give SDO anyway (SDO already holds PTO_VIEW via `view`).
+    DOCUMENTATION_MANAGE = 'DOCUMENTATION_MANAGE'
 }
 const view = [Permission.OBJECT_VIEW, Permission.WORK_VIEW, Permission.PTO_VIEW, Permission.SDO_VIEW, Permission.FINANCE_VIEW];
-const grants: Record<Role, Permission[]> = { ADMIN: Object.values(Permission), GENERAL_DIRECTOR: view, TECHNICAL_DIRECTOR: [...view, Permission.OBJECT_CREATE, Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE, Permission.EXECUTION_UNIT_MANAGE], DEPARTMENT_HEAD: view, PROJECT_MANAGER: [...view, Permission.OBJECT_CREATE, Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE, Permission.EXECUTION_UNIT_MANAGE, Permission.WORK_UPDATE_PROGRESS, Permission.INSPECTION_REQUEST, Permission.ISSUE_RESOLVE], CONSTRUCTION_CONTROL: [...view, Permission.INSPECTION_ACCEPT, Permission.INSPECTION_REJECT, Permission.ISSUE_CREATE, Permission.ISSUE_VERIFY], PTO: [...view, Permission.PTO_EDIT, Permission.PTO_TRANSFER_SDO], SDO: [...view, Permission.SDO_EDIT, Permission.SDO_CLOSE, Permission.FINANCE_EDIT], CONTRACTOR_VIEWER: [Permission.OBJECT_VIEW, Permission.WORK_VIEW] };
+const grants: Record<Role, Permission[]> = { ADMIN: Object.values(Permission), GENERAL_DIRECTOR: view, TECHNICAL_DIRECTOR: [...view, Permission.OBJECT_CREATE, Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE, Permission.EXECUTION_UNIT_MANAGE], DEPARTMENT_HEAD: view, PROJECT_MANAGER: [...view, Permission.OBJECT_CREATE, Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE, Permission.EXECUTION_UNIT_MANAGE, Permission.WORK_UPDATE_PROGRESS, Permission.INSPECTION_REQUEST, Permission.ISSUE_RESOLVE], CONSTRUCTION_CONTROL: [...view, Permission.INSPECTION_ACCEPT, Permission.INSPECTION_REJECT, Permission.ISSUE_CREATE, Permission.ISSUE_VERIFY], PTO: [...view, Permission.PTO_EDIT, Permission.PTO_TRANSFER_SDO, Permission.DOCUMENTATION_MANAGE], SDO: [...view, Permission.SDO_EDIT, Permission.SDO_CLOSE, Permission.FINANCE_EDIT], CONTRACTOR_VIEWER: [Permission.OBJECT_VIEW, Permission.WORK_VIEW] };
 export const hasPermission = (role: Role, p: Permission) => grants[role]?.includes(p) ?? false;
+// F8.2 Architecture Contract: "SDO: No F8.2 access" and no contractor portal
+// — the one place that decides who may see Executive Documentation data at
+// all, called identically by ReadService.snapshot() (what a role's payload
+// actually contains) and the dedicated documentation-packages list route,
+// so the two cannot independently drift on who this excludes (the same
+// discipline resolveInternalScAccepted() already enforces for F8.1).
+export function canAccessDocumentation(role: Role): boolean {
+    return role !== 'SDO' && role !== 'CONTRACTOR_VIEWER';
+}
 export const defaultRisk = { yellowVariance: -5, redVariance: -15, staleDays: 7, ptoDays: 5, sdoDays: 10, escalateTechnicalDays: 3, escalateDirectorDays: 7 };
 export class ProgressCalculationService {
     calculate(actual: any, planned: any) { return new Decimal(planned).gt(0) ? Decimal.min(100, Decimal.max(0, new Decimal(actual).div(planned).mul(100))).toNumber() : null; }

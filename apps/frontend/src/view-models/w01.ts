@@ -58,6 +58,8 @@
 
 import Decimal from 'decimal.js';
 import type {
+  DocumentationPackage,
+  DocumentationPackagePortion,
   Inspection,
   InspectionStatus,
   ObjectSummary,
@@ -66,7 +68,7 @@ import type {
   WorkExecutionUnit,
 } from '../types/api';
 import { formatDate, formatMeasure, formatQuantityWithUnit, type Measure } from '../formatters';
-import { workStatusPresentation, type StatusPresentation } from './status';
+import { documentationPackageStatusPresentation, workStatusPresentation, type StatusPresentation } from './status';
 
 export type WorkConfirmation =
   | { kind: 'NotSubmitted' }
@@ -292,6 +294,38 @@ function buildW01ExecutionUnits(
     .map((unit) => buildW01ExecutionUnitViewModel(unit, portions, inspections));
 }
 
+/**
+ * F8.2 — one Documentation Package covering this work, as W01's own
+ * "Исполнительная документация" section shows it: existence (by appearing
+ * at all), status, how many Quantity Portions it currently covers, and the
+ * responsible PTO employee. Read-only here by design (F8.2 Foundation scope
+ * for W01 is display only) — `status`/`responsible` never feed back into
+ * `readiness`/`confirmation` above, or the other way around (BR-02/BR-03):
+ * this is its own, structurally separate slot on the view-model, the same
+ * "contours stay separate" discipline `executionUnits` already gets.
+ */
+export interface W01DocumentationPackageViewModel {
+  id: string;
+  status: StatusPresentation;
+  responsible: string;
+  coveredPortionCount: number;
+}
+
+function buildW01DocumentationPackages(
+  work: Work,
+  documentationPackages: DocumentationPackage[],
+  documentationPackagePortions: DocumentationPackagePortion[],
+): W01DocumentationPackageViewModel[] {
+  return documentationPackages
+    .filter((pkg) => pkg.objectWorkId === work.id)
+    .map((pkg) => ({
+      id: pkg.id,
+      status: documentationPackageStatusPresentation(pkg.status),
+      responsible: pkg.responsible,
+      coveredPortionCount: documentationPackagePortions.filter((link) => link.documentationPackageId === pkg.id).length,
+    }));
+}
+
 export interface W01Schedule {
   plannedStart: string;
   plannedFinish: string;
@@ -315,6 +349,8 @@ export interface W01ViewModel {
   schedule: W01Schedule;
   /** F8.1 — empty for a work with no execution units, exactly like today. */
   executionUnits: W01ExecutionUnitViewModel[];
+  /** F8.2 — every Documentation Package covering this work; empty when none has been created yet. */
+  documentationPackages: W01DocumentationPackageViewModel[];
 }
 
 export function buildW01ViewModel(
@@ -323,6 +359,8 @@ export function buildW01ViewModel(
   inspections: Inspection[] = [],
   executionUnits: WorkExecutionUnit[] = [],
   portions: QuantityPortion[] = [],
+  documentationPackages: DocumentationPackage[] = [],
+  documentationPackagePortions: DocumentationPackagePortion[] = [],
 ): W01ViewModel {
   const factReported = work.lastReportedAt !== null;
 
@@ -367,5 +405,6 @@ export function buildW01ViewModel(
       actualFinish: formatDate(work.actualFinishDate),
     },
     executionUnits: buildW01ExecutionUnits(work, executionUnits, portions, inspections),
+    documentationPackages: buildW01DocumentationPackages(work, documentationPackages, documentationPackagePortions),
   };
 }

@@ -13,6 +13,8 @@ export const ROUTE_PATHS = {
   company: '/company',
   object: '/object/:objectId',
   work: '/object/:objectId/work/:workId',
+  /** F8.2 — P01, PTO Workspace: a separate top-level destination, not part of the object drill-down chain. */
+  pto: '/pto',
 } as const;
 
 export function objectPath(objectId: string): string {

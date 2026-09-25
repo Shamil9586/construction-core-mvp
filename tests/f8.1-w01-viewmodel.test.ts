@@ -7,6 +7,8 @@ import {
   parseConfirmedQuantityInput,
 } from '../apps/frontend/src/view-models/w01';
 import type {
+  DocumentationPackage,
+  DocumentationPackagePortion,
   Inspection,
   ObjectSummary,
   QuantityPortion,
@@ -129,6 +131,38 @@ function basePortion(overrides: Partial<QuantityPortion> = {}): QuantityPortion 
     internalScConfirmedQuantity: null,
     customerScAccepted: false,
     customerScConfirmedQuantity: null,
+    ...overrides,
+  };
+}
+
+function baseDocumentationPackage(overrides: Partial<DocumentationPackage> = {}): DocumentationPackage {
+  return {
+    id: 'package-1',
+    tenantId: 'tenant-1',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+    version: 1,
+    objectId: 'object-1',
+    objectWorkId: 'work-1',
+    status: 'DRAFT',
+    responsibleUserId: 'pto-1',
+    responsible: 'Ольга Морозова',
+    createdBy: 'pto-1',
+    ...overrides,
+  };
+}
+
+function baseDocumentationPackagePortion(
+  overrides: Partial<DocumentationPackagePortion> = {},
+): DocumentationPackagePortion {
+  return {
+    id: 'link-1',
+    tenantId: 'tenant-1',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+    version: 1,
+    documentationPackageId: 'package-1',
+    quantityPortionId: 'portion-1',
     ...overrides,
   };
 }
@@ -353,4 +387,71 @@ test('parseConfirmedQuantityInput: a plain positive number, with or without surr
   const b = parseConfirmedQuantityInput('  150.5  ');
   assert.equal(b.ok, true);
   assert.equal(b.ok && b.value, 150.5);
+});
+
+/**
+ * F8.2 (W01 Integration) — "Исполнительная документация" section data:
+ * package existence, status, covered portions, responsible PTO. BR-02/BR-03
+ * (documentation never influences physical readiness, progress or quantity
+ * confirmation) is checked here at the view-model boundary: building the
+ * same work with and without a documentation package must not change any of
+ * `plan`/`fact`/`readiness`/`confirmation`/`executionUnits` — only the new
+ * `documentationPackages` slice differs.
+ */
+test('F8.2 W01 view-model: a work with no Documentation Package has an empty documentationPackages list', () => {
+  const vm = buildW01ViewModel(baseWork(), baseObject(), [], [], [], [], []);
+  assert.deepEqual(vm.documentationPackages, []);
+});
+
+test('F8.2 W01 view-model: a Documentation Package covering this work reports its status, responsible PTO and covered portion count', () => {
+  const pkg = baseDocumentationPackage({ status: 'PREPARING' });
+  const link = baseDocumentationPackagePortion();
+  const vm = buildW01ViewModel(baseWork(), baseObject(), [], [], [], [pkg], [link]);
+  assert.equal(vm.documentationPackages.length, 1);
+  assert.equal(vm.documentationPackages[0]!.id, 'package-1');
+  assert.equal(vm.documentationPackages[0]!.status.label, 'В подготовке');
+  assert.equal(vm.documentationPackages[0]!.responsible, 'Ольга Морозова');
+  assert.equal(vm.documentationPackages[0]!.coveredPortionCount, 1);
+});
+
+test('F8.2 W01 view-model: a Documentation Package covering a *different* work is excluded, the same scoping executionUnits already gets', () => {
+  const foreignPackage = baseDocumentationPackage({ id: 'package-2', objectWorkId: 'work-2' });
+  const vm = buildW01ViewModel(baseWork(), baseObject(), [], [], [], [foreignPackage], []);
+  assert.deepEqual(vm.documentationPackages, []);
+});
+
+test('F8.2 W01 view-model: coveredPortionCount only counts links for *this* package, not a sibling package\'s own links', () => {
+  const pkgA = baseDocumentationPackage({ id: 'package-a' });
+  const pkgB = baseDocumentationPackage({ id: 'package-b' });
+  const links = [
+    baseDocumentationPackagePortion({ id: 'link-a1', documentationPackageId: 'package-a', quantityPortionId: 'portion-1' }),
+    baseDocumentationPackagePortion({ id: 'link-a2', documentationPackageId: 'package-a', quantityPortionId: 'portion-2' }),
+    baseDocumentationPackagePortion({ id: 'link-b1', documentationPackageId: 'package-b', quantityPortionId: 'portion-3' }),
+  ];
+  const vm = buildW01ViewModel(baseWork(), baseObject(), [], [], [], [pkgA, pkgB], links);
+  const rowA = vm.documentationPackages.find((row) => row.id === 'package-a')!;
+  const rowB = vm.documentationPackages.find((row) => row.id === 'package-b')!;
+  assert.equal(rowA.coveredPortionCount, 2);
+  assert.equal(rowB.coveredPortionCount, 1);
+});
+
+test('F8.2 W01 view-model: BR-02/BR-03 — a Documentation Package never changes plan/fact/readiness/confirmation/executionUnits', () => {
+  const work = baseWork({ actualProgress: 50, accepted: false });
+  const object = baseObject();
+  const withoutPackage = buildW01ViewModel(work, object, [], [], [], [], []);
+  const withPackage = buildW01ViewModel(
+    work,
+    object,
+    [],
+    [],
+    [],
+    [baseDocumentationPackage({ status: 'ACCEPTED_BY_CUSTOMER' })],
+    [],
+  );
+  assert.deepEqual(withPackage.plan, withoutPackage.plan);
+  assert.deepEqual(withPackage.fact, withoutPackage.fact);
+  assert.equal(withPackage.readiness, withoutPackage.readiness);
+  assert.deepEqual(withPackage.confirmation, withoutPackage.confirmation);
+  assert.deepEqual(withPackage.executionUnits, withoutPackage.executionUnits);
+  assert.notDeepEqual(withPackage.documentationPackages, withoutPackage.documentationPackages);
 });

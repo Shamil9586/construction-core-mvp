@@ -35,3 +35,17 @@ export const portionInspectionRequestDto = z.object({ inspectionType: z.enum(['I
 // inspection has none to confirm) but required by inspectionAction() itself
 // the moment the inspection is portion-scoped; never defaulted from RP_FACT.
 export const inspectionAcceptDto = z.object({ version, comment: text, quantity: qty.optional() }).strict();
+// F8.2 PTO / Executive Documentation Foundation.
+export const documentationPackageDto = z.object({ objectWorkId: uuid, responsibleUserId: uuid }).strict();
+export const documentationPackageEditDto = z.object({ responsibleUserId: uuid, version }).strict();
+export const documentationPackagePortionDto = z.object({ quantityPortionId: uuid }).strict();
+// GENERAL_WORK_LOG is deliberately absent — F8.2 Document Types MVP allows
+// exactly AOSR/ACT_CERTIFICATE/EXECUTIVE_SCHEME, the same set the DB's own
+// CHECK constraint enforces (infra/007_documentation_foundation.sql).
+export const documentationDocumentDto = z.object({ type: z.enum(['AOSR', 'ACT_CERTIFICATE', 'EXECUTIVE_SCHEME']) }).strict();
+// BITRIX_DISK is deliberately absent — future compatibility only, not
+// implemented here (no file upload, no archive, no PDF viewer). A
+// storageReference is required exactly when storageProvider is
+// EXTERNAL_REFERENCE, mirroring the DB's own pairing CHECK.
+export const documentationVersionDto = z.object({ storageProvider: z.enum(['NONE', 'EXTERNAL_REFERENCE']), storageReference: text.optional(), comment: text.optional() }).strict().refine(d => (d.storageProvider === 'EXTERNAL_REFERENCE') === (d.storageReference !== undefined), 'Ссылка на документ обязательна только для EXTERNAL_REFERENCE');
+export const documentationPackageStatusDto = z.object({ status: z.enum(['DRAFT', 'PREPARING', 'READY_FOR_PRESENTATION', 'PRESENTED', 'RETURNED', 'CORRECTING', 'ACCEPTED_BY_CUSTOMER']), version, comment: text.optional() }).strict();

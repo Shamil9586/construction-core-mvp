@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import Decimal from 'decimal.js';
 import { pool, rows, one } from './db';
 import { Actor, requirePermission, objectAccess } from './security';
-import { Permission as P, ProgressCalculationService, ScheduleStatusService, PotentialClosingService, ObjectHealthService, PortionCompletionService, defaultRisk, resolveInternalScAccepted, resolveActualQuantity } from '../../../packages/domain';
+import { Permission as P, ProgressCalculationService, ScheduleStatusService, PotentialClosingService, ObjectHealthService, PortionCompletionService, defaultRisk, resolveInternalScAccepted, resolveActualQuantity, canAccessDocumentation } from '../../../packages/domain';
 @Injectable()
 export class ReadService {
     async snapshot(a: Actor, filters: { contractorId?: string } = {}) {
@@ -46,6 +46,21 @@ export class ReadService {
         const executionUnitLayers = await rows(pool, 'SELECT * FROM execution_unit_layers WHERE tenant_id=$1 AND execution_unit_id=ANY($2::uuid[]) ORDER BY sort_order', [t, unitIds]);
         const portions = await rows(pool, 'SELECT * FROM quantity_portions WHERE tenant_id=$1 AND execution_unit_id=ANY($2::uuid[])', [t, unitIds]);
         const portionConfirmations = await rows(pool, 'SELECT * FROM portion_quantity_confirmations WHERE tenant_id=$1 AND portion_id=ANY($2::uuid[]) ORDER BY recorded_at', [t, portions.map(p => p.id)]);
+        // F8.2 PTO / Executive Documentation Foundation. Scoped by work id, the
+        // same as execution units above — a Documentation Package hangs off a
+        // work, never directly off an object. Fetched unconditionally;
+        // canAccessDocumentation() (packages/domain) decides below whether the
+        // final payload actually carries it — SDO has no F8.2 access at all
+        // ("SDO: No F8.2 access"), and CONTRACTOR_VIEWER already gets none of
+        // F8.1 either, via its own early return further down.
+        // `responsible` is a JOINed display name, the same treatment works.responsible/objects.responsible already get — P01/W01 render a name, not a raw responsibleUserId.
+        const documentationPackages = await rows(pool, 'SELECT dp.*,u.name AS responsible FROM documentation_packages dp JOIN users u ON u.id=dp.responsible_user_id AND u.tenant_id=dp.tenant_id WHERE dp.tenant_id=$1 AND dp.object_work_id=ANY($2::uuid[])', [t, workIds]);
+        const documentationPackageIds = documentationPackages.map(p => p.id);
+        const documentationPackagePortions = await rows(pool, 'SELECT * FROM documentation_package_portions WHERE tenant_id=$1 AND documentation_package_id=ANY($2::uuid[])', [t, documentationPackageIds]);
+        const documentationDocuments = await rows(pool, 'SELECT * FROM documentation_documents WHERE tenant_id=$1 AND documentation_package_id=ANY($2::uuid[])', [t, documentationPackageIds]);
+        const documentationDocumentIds = documentationDocuments.map(d => d.id);
+        const documentationVersions = await rows(pool, 'SELECT * FROM documentation_document_versions WHERE tenant_id=$1 AND documentation_document_id=ANY($2::uuid[]) ORDER BY version_number', [t, documentationDocumentIds]);
+        const documentationStatusHistory = await rows(pool, 'SELECT * FROM documentation_package_status_history WHERE tenant_id=$1 AND documentation_package_id=ANY($2::uuid[]) ORDER BY changed_at', [t, documentationPackageIds]);
         const saved = await one(pool, 'SELECT * FROM risk_settings WHERE tenant_id=$1', [t]);
         const risk = { ...defaultRisk, ...saved };
         const today = new Date();
@@ -147,6 +162,7 @@ export class ReadService {
             const allowed = new Set(enriched.map(w => w.id));
             return { objects: objectList.map(({ contractValue, closed, potential, ...o }) => o), works: enriched.map(({ estimatedCost, closed, financial, ...w }) => w), contractors, dependencies: dependencies.filter(d => allowed.has(d.successorWorkId) && allowed.has(d.predecessorWorkId)) };
         }
-        return { objects: objectList, works: enriched, inspections, issues, packages, documents, sdo, closings, contractors, dependencies, dashboard, monthlyPlans: monthly, risk, photos, executionUnits: executionUnitsWithTotals, executionUnitLayers, portions: portionsWithStatus, portionConfirmations };
+        const documentationVisible = canAccessDocumentation(a.role);
+        return { objects: objectList, works: enriched, inspections, issues, packages, documents, sdo, closings, contractors, dependencies, dashboard, monthlyPlans: monthly, risk, photos, executionUnits: executionUnitsWithTotals, executionUnitLayers, portions: portionsWithStatus, portionConfirmations, documentationPackages: documentationVisible ? documentationPackages : undefined, documentationPackagePortions: documentationVisible ? documentationPackagePortions : undefined, documentationDocuments: documentationVisible ? documentationDocuments : undefined, documentationVersions: documentationVisible ? documentationVersions : undefined, documentationStatusHistory: documentationVisible ? documentationStatusHistory : undefined };
     }
 }

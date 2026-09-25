@@ -27,7 +27,9 @@ export async function rows(c: any, sql: string, args: any[] = []) { return (awai
 export async function one(c: any, sql: string, args: any[] = []) { return (await rows(c, sql, args))[0]; }
 const tables = new Set(['users', 'contractors', 'objects', 'object_contractors', 'work_categories', 'work_types', 'work_templates', 'works', 'work_dependencies', 'work_progress', 'inspections', 'issues', 'attachments', 'inspection_photos', 'materials', 'material_batches', 'material_documents', 'work_materials', 'executive_documents', 'executive_packages', 'package_documents', 'pto_transfers', 'sdo_cases', 'financial_closings', 'monthly_plans', 'audit_logs', 'domain_events', 'notifications', 'dictionary_items', 'risk_settings', 'bitrix_installations', 'sessions', 'import_reports',
     // F8.1 Production Execution + Construction Control Foundation.
-    'finish_types', 'work_execution_units', 'execution_unit_layers', 'quantity_portions', 'portion_quantity_confirmations']);
+    'finish_types', 'work_execution_units', 'execution_unit_layers', 'quantity_portions', 'portion_quantity_confirmations',
+    // F8.2 PTO / Executive Documentation Foundation.
+    'documentation_packages', 'documentation_package_portions', 'documentation_documents', 'documentation_document_versions', 'documentation_package_status_history']);
 export async function insert(c: any, table: string, tenantId: string, data: any) { if (!tables.has(table))
     throw Error('Invalid table'); const d = { tenant_id: tenantId, ...Object.fromEntries(Object.entries(data).map(([k, v]) => [k.replace(/[A-Z]/g, x => '_' + x.toLowerCase()), v])) }; const keys = Object.keys(d); if (keys.some(k => !/^[a-z_]+$/.test(k)))
     throw Error('Invalid column'); return one(c, `INSERT INTO ${table} (${keys.join(',')}) VALUES (${keys.map((_, i) => '$' + (i + 1)).join(',')}) RETURNING *`, Object.values(d)); }

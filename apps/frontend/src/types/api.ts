@@ -482,6 +482,85 @@ export interface PortionQuantityConfirmation extends Versioned {
   comment: string | null;
 }
 
+/**
+ * F8.2 — a Documentation Package's status, constrained by a CHECK on
+ * `documentation_packages.status` (infra/007). A closed set the backend
+ * actually enforces, same treatment as `ScCoverageStatus`.
+ */
+export type DocumentationPackageStatus =
+  | 'DRAFT'
+  | 'PREPARING'
+  | 'READY_FOR_PRESENTATION'
+  | 'PRESENTED'
+  | 'RETURNED'
+  | 'CORRECTING'
+  | 'ACCEPTED_BY_CUSTOMER';
+
+/** F8.2 Document Types MVP — constrained by a CHECK on `documentation_documents.type`. GENERAL_WORK_LOG is deliberately not a member. */
+export type DocumentationDocumentType = 'AOSR' | 'ACT_CERTIFICATE' | 'EXECUTIVE_SCHEME';
+
+/** F8.2 Storage Reference layer — constrained by a CHECK on `documentation_document_versions.storage_provider`. BITRIX_DISK is future compatibility, not yet a legal value. */
+export type StorageProvider = 'NONE' | 'EXTERNAL_REFERENCE';
+
+/**
+ * F8.2 PTO / Executive Documentation Foundation — a Documentation Package.
+ * Hangs off a work (`objectWorkId`), never off a portion or an execution
+ * unit directly; which portions it covers is the separate
+ * `DocumentationPackagePortion` join below. `status` never derives from and
+ * never feeds F8.1's production/SC model (BR-01/BR-02/BR-03) — a work can
+ * read `accepted: true` while its own package still reads `DRAFT`, and
+ * neither figure corrects the other.
+ */
+export interface DocumentationPackage extends Versioned {
+  objectId: Uuid;
+  objectWorkId: Uuid;
+  status: DocumentationPackageStatus;
+  responsibleUserId: Uuid;
+  /** Joined display name for `responsibleUserId` — there is no `users` collection on `Snapshot` to resolve it against client-side. */
+  responsible: string;
+  createdBy: Uuid;
+}
+
+/** F8.2 — Package <-> Quantity Portion relation. Many-to-many: a package may cover several portions, and nothing forbids a portion being referenced by more than one package. */
+export interface DocumentationPackagePortion extends Versioned {
+  documentationPackageId: Uuid;
+  quantityPortionId: Uuid;
+}
+
+/** F8.2 — a Documentation Document *slot* inside a package (e.g. "the AOSR"); its actual content lives in its `DocumentationVersion` rows, never here. */
+export interface DocumentationDocument extends Versioned {
+  documentationPackageId: Uuid;
+  type: DocumentationDocumentType;
+  createdBy: Uuid;
+}
+
+/**
+ * F8.2 — one immutable version of a Documentation Document, carrying the
+ * Storage Reference layer. `storageReference` is null exactly when
+ * `storageProvider` is `NONE`, and a plain external URL/reference string
+ * when it is `EXTERNAL_REFERENCE` — never a file upload, an archive or a
+ * viewer (F8.2 Storage Strategy). `versionNumber` is sequential per document
+ * and never reused; a later version never overwrites an earlier one.
+ */
+export interface DocumentationVersion extends Versioned {
+  documentationDocumentId: Uuid;
+  versionNumber: number;
+  storageProvider: StorageProvider;
+  storageReference: string | null;
+  comment: string | null;
+  createdBy: Uuid;
+}
+
+/** F8.2 — one row of a Documentation Package's append-only status history (`POST documentation-packages/:id/status`). Immutable by database trigger, same as `PortionQuantityConfirmation`. */
+export interface DocumentationStatusHistoryEntry extends Versioned {
+  documentationPackageId: Uuid;
+  fromStatus: DocumentationPackageStatus;
+  toStatus: DocumentationPackageStatus;
+  changedBy: Uuid;
+  changedAt: Timestamp;
+  comment: string | null;
+}
+
 export interface RiskSettings extends Versioned {
   yellowVariance: Numeric;
   redVariance: Numeric;
@@ -598,6 +677,17 @@ export interface Snapshot {
   executionUnitLayers?: ExecutionUnitLayer[];
   portions?: QuantityPortion[];
   portionConfirmations?: PortionQuantityConfirmation[];
+  /**
+   * F8.2 — omitted for `CONTRACTOR_VIEWER` (same reduced payload as above)
+   * and, deliberately, for `SDO` too: `canAccessDocumentation()`
+   * (packages/domain) is the one place that decides this, so the backend's
+   * per-role visibility and this optionality cannot silently drift apart.
+   */
+  documentationPackages?: DocumentationPackage[];
+  documentationPackagePortions?: DocumentationPackagePortion[];
+  documentationDocuments?: DocumentationDocument[];
+  documentationVersions?: DocumentationVersion[];
+  documentationStatusHistory?: DocumentationStatusHistoryEntry[];
 }
 
 /** `GET /objects/:id` — note it carries no ИД, СДО or closing data. */

@@ -34,7 +34,7 @@
  * never the problem.
  */
 
-import type { ScheduleStatus, Work } from '../types/api';
+import type { DocumentationPackageStatus, ScheduleStatus, Work } from '../types/api';
 
 export type ScheduleVariant = 'OnTrack' | 'Delayed' | 'Attention' | 'Blocked' | 'Neutral';
 
@@ -86,4 +86,40 @@ export const NO_SCHEDULE_STATUS: StatusPresentation = { variant: 'Neutral', labe
 export function workStatusPresentation(work: Pick<Work, 'scheduleStatus' | 'blockers'>): StatusPresentation {
   if (work.blockers.length > 0) return { variant: 'Blocked', label: 'Заблокировано' };
   return scheduleStatusPresentation(work.scheduleStatus);
+}
+
+/**
+ * F8.2 — a Documentation Package's own status, a distinct contour from
+ * `scheduleStatus`/`ScCoverageStatus` (Design Rules: "Contours stay
+ * separate... no combined 'Готово' indicator anywhere"). `DRAFT`/`PREPARING`
+ * are in-progress and read `Neutral` — not yet a problem, not yet a result.
+ * `RETURNED`/`CORRECTING` read `Attention`: the customer sent the package
+ * back, or it is being corrected in response — real, current work to do,
+ * same amber D-07 already reserves for that meaning elsewhere.
+ * `READY_FOR_PRESENTATION`/`PRESENTED`/`ACCEPTED_BY_CUSTOMER` read `OnTrack`:
+ * each is a genuine forward step, never a claim about the underlying work's
+ * own physical readiness or SC acceptance (BR-02/BR-03) — this switches on
+ * `DocumentationPackageStatus` alone.
+ */
+export function documentationPackageStatusPresentation(status: DocumentationPackageStatus): StatusPresentation {
+  switch (status) {
+    case 'DRAFT':
+      return { variant: 'Neutral', label: 'Черновик' };
+    case 'PREPARING':
+      return { variant: 'Neutral', label: 'В подготовке' };
+    case 'READY_FOR_PRESENTATION':
+      return { variant: 'OnTrack', label: 'Готово к предъявлению' };
+    case 'PRESENTED':
+      return { variant: 'OnTrack', label: 'Предъявлено заказчику' };
+    case 'RETURNED':
+      return { variant: 'Attention', label: 'Возвращено заказчиком' };
+    case 'CORRECTING':
+      return { variant: 'Attention', label: 'Устраняются замечания' };
+    case 'ACCEPTED_BY_CUSTOMER':
+      return { variant: 'OnTrack', label: 'Принято заказчиком' };
+    default: {
+      const exhaustive: never = status;
+      return exhaustive;
+    }
+  }
 }

@@ -68,6 +68,24 @@ function hasScCoverageStatusField(record: Record<string, unknown>, field: string
   return isString(record[field]) && SC_COVERAGE_STATUSES.has(record[field] as string);
 }
 
+/** F8.2 — `DocumentationPackageStatus`, closed and DB-enforced, same treatment as `ScCoverageStatus`. */
+const DOCUMENTATION_PACKAGE_STATUSES = new Set(['DRAFT', 'PREPARING', 'READY_FOR_PRESENTATION', 'PRESENTED', 'RETURNED', 'CORRECTING', 'ACCEPTED_BY_CUSTOMER']);
+function hasDocumentationPackageStatusField(record: Record<string, unknown>, field: string): boolean {
+  return isString(record[field]) && DOCUMENTATION_PACKAGE_STATUSES.has(record[field] as string);
+}
+
+/** F8.2 — `DocumentationDocumentType`, closed and DB-enforced. GENERAL_WORK_LOG is deliberately absent. */
+const DOCUMENTATION_DOCUMENT_TYPES = new Set(['AOSR', 'ACT_CERTIFICATE', 'EXECUTIVE_SCHEME']);
+function hasDocumentationDocumentTypeField(record: Record<string, unknown>, field: string): boolean {
+  return isString(record[field]) && DOCUMENTATION_DOCUMENT_TYPES.has(record[field] as string);
+}
+
+/** F8.2 — `StorageProvider`, closed and DB-enforced. BITRIX_DISK is future compatibility, not yet legal. */
+const STORAGE_PROVIDERS = new Set(['NONE', 'EXTERNAL_REFERENCE']);
+function hasStorageProviderField(record: Record<string, unknown>, field: string): boolean {
+  return isString(record[field]) && STORAGE_PROVIDERS.has(record[field] as string);
+}
+
 const MALFORMED_SNAPSHOT_MESSAGE = 'Неверный ответ сервера: искажённый снимок данных.';
 
 function fail(): never {
@@ -225,6 +243,58 @@ export function validateSnapshot(value: unknown): Snapshot {
       if (!hasNumericOrNullField(portion, 'customerScConfirmedQuantity')) fail();
       if (!hasBooleanField(portion, 'internalScAccepted')) fail();
       if (!hasBooleanField(portion, 'customerScAccepted')) fail();
+    }
+  }
+
+  // F8.2 — same treatment as executionUnits/portions above: genuinely
+  // optional (SDO and CONTRACTOR_VIEWER omit all five entirely —
+  // canAccessDocumentation(), packages/domain), but a *present* value's own
+  // identity/status/type fields are checked, since those are what P01 and
+  // W01's documentation block render directly as JSX or switch on.
+  if (value.documentationPackages !== undefined) {
+    if (!isObjectArray(value.documentationPackages)) fail();
+    for (const pkg of value.documentationPackages) {
+      if (!hasStringField(pkg, 'id')) fail();
+      if (!hasStringField(pkg, 'objectId')) fail();
+      if (!hasStringField(pkg, 'objectWorkId')) fail();
+      if (!hasStringField(pkg, 'responsibleUserId')) fail();
+      if (!hasStringField(pkg, 'responsible')) fail();
+      if (!hasDocumentationPackageStatusField(pkg, 'status')) fail();
+    }
+  }
+
+  if (value.documentationPackagePortions !== undefined) {
+    if (!isObjectArray(value.documentationPackagePortions)) fail();
+    for (const link of value.documentationPackagePortions) {
+      if (!hasStringField(link, 'documentationPackageId')) fail();
+      if (!hasStringField(link, 'quantityPortionId')) fail();
+    }
+  }
+
+  if (value.documentationDocuments !== undefined) {
+    if (!isObjectArray(value.documentationDocuments)) fail();
+    for (const doc of value.documentationDocuments) {
+      if (!hasStringField(doc, 'id')) fail();
+      if (!hasStringField(doc, 'documentationPackageId')) fail();
+      if (!hasDocumentationDocumentTypeField(doc, 'type')) fail();
+    }
+  }
+
+  if (value.documentationVersions !== undefined) {
+    if (!isObjectArray(value.documentationVersions)) fail();
+    for (const version of value.documentationVersions) {
+      if (!hasStringField(version, 'documentationDocumentId')) fail();
+      if (!hasStorageProviderField(version, 'storageProvider')) fail();
+      if (!hasStringOrNullField(version, 'storageReference')) fail();
+    }
+  }
+
+  if (value.documentationStatusHistory !== undefined) {
+    if (!isObjectArray(value.documentationStatusHistory)) fail();
+    for (const entry of value.documentationStatusHistory) {
+      if (!hasStringField(entry, 'documentationPackageId')) fail();
+      if (!hasDocumentationPackageStatusField(entry, 'fromStatus')) fail();
+      if (!hasDocumentationPackageStatusField(entry, 'toStatus')) fail();
     }
   }
 

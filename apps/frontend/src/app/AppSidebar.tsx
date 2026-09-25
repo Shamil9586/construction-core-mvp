@@ -10,10 +10,13 @@ import { RuntimeFooter } from './RuntimeFooter';
  * never needs to change when the router does." This is that adapter —
  * `Sidebar` itself stays exactly as F3 shipped it, with no router dependency.
  *
- * One item, `company`, because that is the one top-level destination F5
- * actually routes (C01). Object/work screens are drill-down, reached from
- * C01/O01, not separate sidebar sections — inventing more items here would
- * be navigation for sections this phase does not implement.
+ * Two items: `company`, the one top-level destination F5 originally routed
+ * (C01) — object/work screens are drill-down, reached from C01/O01, not
+ * separate sidebar sections — and `pto` (F8.2), P01's own top-level
+ * workspace, explicitly asked for as a separate destination rather than a
+ * drill-down from an object. Inventing further items beyond what a phase
+ * actually routes would still be navigation for sections that phase does
+ * not implement.
  *
  * F7: the footer is no longer the fixed «F5 · типизированные демо-данные»,
  * which stayed on screen even over real backend data. `RuntimeFooter` states
@@ -21,7 +24,10 @@ import { RuntimeFooter } from './RuntimeFooter';
  * it is and the action that ends it — through the same `footer` slot, so
  * `Sidebar` is unchanged.
  */
-const NAV_ITEMS: NavItem[] = [{ key: 'company', label: 'Портфель' }];
+const NAV_ITEMS: NavItem[] = [
+  { key: 'company', label: 'Портфель' },
+  { key: 'pto', label: 'ПТО' },
+];
 
 export function AppSidebar() {
   const location = useLocation();
@@ -32,7 +38,9 @@ export function AppSidebar() {
   const activeKey =
     location.pathname === ROUTE_PATHS.company || location.pathname.startsWith('/object/')
       ? 'company'
-      : '';
+      : location.pathname === ROUTE_PATHS.pto
+        ? 'pto'
+        : '';
 
   return (
     <Sidebar
@@ -42,6 +50,7 @@ export function AppSidebar() {
       activeKey={activeKey}
       onNavigate={(key) => {
         if (key === 'company') navigate(ROUTE_PATHS.company);
+        if (key === 'pto') navigate(ROUTE_PATHS.pto);
       }}
       footer={<RuntimeFooter />}
     />

@@ -10,6 +10,7 @@ import {
 } from '../../design-system';
 import type { W01ViewModel, WorkConfirmation } from '../../view-models/w01';
 import { ExecutionSection, type W01ActionHandlers } from './ExecutionSection';
+import { DocumentationSection } from './DocumentationSection';
 import styles from './W01.module.css';
 
 /**
@@ -198,6 +199,8 @@ export function WorkCard({
       ) : null}
 
       <ExecutionSection executionUnits={viewModel.executionUnits} actions={actions} />
+
+      <DocumentationSection documentationPackages={viewModel.documentationPackages} />
     </AppShell>
   );
 }
