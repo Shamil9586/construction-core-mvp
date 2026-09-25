@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import type { Snapshot } from '../types/api';
 import type { DataProvider } from './DataProvider';
 import { AuthenticationError } from '../auth/AuthenticationError';
@@ -19,6 +19,16 @@ export type SnapshotState =
   | { status: 'Error'; message: string };
 
 const SnapshotContext = createContext<SnapshotState | undefined>(undefined);
+
+/**
+ * F8.1 — a second, separate context for re-running the same fetch on demand,
+ * so a mutation (recording RP fact, registering an Internal SC decision) can
+ * make its effect visible without a full page reload. Kept apart from
+ * `SnapshotState` rather than added as a field on it: every existing
+ * `useSnapshot()` call site (C01, O01, W01's own read side) is untouched by
+ * this, since nothing reads the new context until a caller asks for it.
+ */
+const SnapshotRefetchContext = createContext<(() => void) | undefined>(undefined);
 
 export interface SnapshotProviderProps {
   provider: DataProvider;
@@ -44,17 +54,26 @@ export function SnapshotProvider({ provider, onAuthenticationError, children }: 
     onAuthenticationErrorRef.current = onAuthenticationError;
   }, [onAuthenticationError]);
 
-  useEffect(() => {
-    let cancelled = false;
+  // F8.1 — a generation counter rather than the original single `cancelled`
+  // flag, because `load` can now run more than once per mount (the initial
+  // fetch, plus any number of manual refetches): only the most recently
+  // started call may ever commit state, so an older in-flight response that
+  // resolves after a newer one was already started must be ignored, not
+  // just one that resolves after unmount.
+  const generationRef = useRef(0);
+
+  const load = useCallback(() => {
+    const generation = ++generationRef.current;
     setState({ status: 'Loading' });
 
     provider
       .getSnapshot()
       .then((snapshot) => {
-        if (!cancelled) setState({ status: 'Ready', snapshot });
+        if (generationRef.current !== generation) return;
+        setState({ status: 'Ready', snapshot });
       })
       .catch((error: unknown) => {
-        if (cancelled) return;
+        if (generationRef.current !== generation) return;
         const handleAuthenticationError = onAuthenticationErrorRef.current;
         if (error instanceof AuthenticationError && handleAuthenticationError) {
           handleAuthenticationError(error);
@@ -65,13 +84,20 @@ export function SnapshotProvider({ provider, onAuthenticationError, children }: 
           message: error instanceof Error ? error.message : String(error),
         });
       });
-
-    return () => {
-      cancelled = true;
-    };
   }, [provider]);
 
-  return <SnapshotContext.Provider value={state}>{children}</SnapshotContext.Provider>;
+  useEffect(() => {
+    load();
+    return () => {
+      generationRef.current += 1;
+    };
+  }, [load]);
+
+  return (
+    <SnapshotContext.Provider value={state}>
+      <SnapshotRefetchContext.Provider value={load}>{children}</SnapshotRefetchContext.Provider>
+    </SnapshotContext.Provider>
+  );
 }
 
 export function useSnapshot(): SnapshotState {
@@ -80,4 +106,13 @@ export function useSnapshot(): SnapshotState {
     throw new Error('useSnapshot must be used within a SnapshotProvider');
   }
   return state;
+}
+
+/** F8.1 — re-runs the same `getSnapshot()` fetch; see `SnapshotRefetchContext` above. */
+export function useRefetchSnapshot(): () => void {
+  const load = useContext(SnapshotRefetchContext);
+  if (!load) {
+    throw new Error('useRefetchSnapshot must be used within a SnapshotProvider');
+  }
+  return load;
 }

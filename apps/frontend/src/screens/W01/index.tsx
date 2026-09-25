@@ -9,6 +9,7 @@ import {
   typeClass,
 } from '../../design-system';
 import type { W01ViewModel, WorkConfirmation } from '../../view-models/w01';
+import { ExecutionSection, type W01ActionHandlers } from './ExecutionSection';
 import styles from './W01.module.css';
 
 /**
@@ -31,6 +32,14 @@ export interface W01Props {
   onNavigateHome: () => void;
   onSelectObject: (objectId: string) => void;
   className?: string;
+  /**
+   * F8.1 (Phase 4) — the execution-unit/portion actions below. Omitted in
+   * the design-system preview (`preview/Gallery.tsx` renders `WorkCard`
+   * directly, with no data boundary to mutate through) and whenever there is
+   * no real session (`app/routes/WorkRoute.tsx`'s mock-runtime case) — either
+   * way `ExecutionSection` then renders status only, no forms.
+   */
+  actions?: W01ActionHandlers;
 }
 
 function ConfirmationStatus({
@@ -97,6 +106,7 @@ export function WorkCard({
   onNavigateHome,
   onSelectObject,
   className,
+  actions,
 }: W01Props) {
   return (
     <AppShell sidebar={sidebar} topbar={topbar} className={className}>
@@ -186,6 +196,8 @@ export function WorkCard({
           </div>
         </section>
       ) : null}
+
+      <ExecutionSection executionUnits={viewModel.executionUnits} actions={actions} />
     </AppShell>
   );
 }

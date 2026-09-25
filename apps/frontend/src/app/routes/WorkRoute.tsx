@@ -1,7 +1,10 @@
 import { useNavigate, useParams } from 'react-router-dom';
 import { WorkCard } from '../../screens/W01';
+import type { W01ActionHandlers } from '../../screens/W01/ExecutionSection';
 import { buildW01ViewModel } from '../../view-models/w01';
-import { useSnapshot } from '../../data/SnapshotContext';
+import { useRefetchSnapshot, useSnapshot } from '../../data/SnapshotContext';
+import * as executionUnitsApi from '../../data/executionUnitsApi';
+import { useCoreRuntime } from '../CoreRuntimeContext';
 import { AppSidebar } from '../AppSidebar';
 import { ROUTE_PATHS, objectPath } from '../routePaths';
 import { RouteError, RouteLoading, RouteNotFound } from '../RouteStatus';
@@ -15,6 +18,8 @@ import { RouteError, RouteLoading, RouteNotFound } from '../RouteStatus';
 export function WorkRoute() {
   const { objectId, workId } = useParams<{ objectId: string; workId: string }>();
   const state = useSnapshot();
+  const refetch = useRefetchSnapshot();
+  const { session } = useCoreRuntime();
   const navigate = useNavigate();
 
   if (state.status === 'Loading') return <RouteLoading />;
@@ -26,7 +31,48 @@ export function WorkRoute() {
   );
   if (!object || !work) return <RouteNotFound label="Работа не найдена" />;
 
-  const viewModel = buildW01ViewModel(work, object, state.snapshot.inspections ?? []);
+  const viewModel = buildW01ViewModel(
+    work,
+    object,
+    state.snapshot.inspections ?? [],
+    state.snapshot.executionUnits ?? [],
+    state.snapshot.portions ?? [],
+  );
+
+  // F8.1 (Phase 4) — no session (the mock/demo runtime, `App.tsx`'s
+  // `MOCK_RUNTIME`) means no real backend to mutate through, exactly like
+  // that runtime is already read-only everywhere else; `WorkCard` renders
+  // status only when `actions` is left undefined. Each handler refetches on
+  // success only — a rejected mutation leaves the snapshot exactly as it
+  // was, and the calling form shows the backend's own error inline.
+  const actions: W01ActionHandlers | undefined = session
+    ? {
+        onRecordFact: async (portionId, quantity, version, comment) => {
+          await executionUnitsApi.recordPortionFact(portionId, quantity, version, comment);
+          refetch();
+        },
+        onCreatePortion: async (executionUnitId, label, plannedQuantity) => {
+          await executionUnitsApi.createQuantityPortion(executionUnitId, label, plannedQuantity);
+          refetch();
+        },
+        onRequestInternalSc: async (portionId, version) => {
+          await executionUnitsApi.requestInternalScInspection(portionId, version);
+          refetch();
+        },
+        onRegisterInternalScDecision: async (inspectionId, version, decision, comment, photo) => {
+          const attachment = await executionUnitsApi.uploadInspectionPhotoAttachment(
+            photo.fileName,
+            photo.mimeType,
+            photo.base64,
+          );
+          await executionUnitsApi.attachInspectionPhoto(inspectionId, attachment.id);
+          await (decision === 'accept'
+            ? executionUnitsApi.acceptInspection(inspectionId, version, comment)
+            : executionUnitsApi.rejectInspection(inspectionId, version, comment));
+          refetch();
+        },
+      }
+    : undefined;
 
   return (
     <WorkCard
@@ -34,6 +80,7 @@ export function WorkRoute() {
       sidebar={<AppSidebar />}
       onNavigateHome={() => navigate(ROUTE_PATHS.company)}
       onSelectObject={(id) => navigate(objectPath(id))}
+      actions={actions}
     />
   );
 }

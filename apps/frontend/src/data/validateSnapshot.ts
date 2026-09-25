@@ -127,5 +127,38 @@ export function validateSnapshot(value: unknown): Snapshot {
     if (!hasStringField(inspection, 'status')) fail();
   }
 
+  // F8.1 — unlike `inspections` above, left genuinely optional: absent
+  // entirely passes (a pre-F8.1 fixture, or any other snapshot fixture
+  // written before these four collections existed, is not a transport
+  // defect), but a *present* value is still checked, for the same two
+  // reasons `blockers` and `customerName`/`organizationName` are above —
+  // `label` and `unit` are rendered directly as JSX text
+  // (screens/W01/ExecutionSection.tsx), and `location`/`executionConditions`
+  // go through `joinMeta`, which calls `.trim()` on each non-null part.
+  // Quantities and the two accepted flags are read through
+  // `formatMeasure`/truthiness, already null/wrong-type safe, and so stay
+  // unchecked — the same line `scheduleStatus` and `plannedProgress` already
+  // draw above. A real backend response always includes them (possibly
+  // empty) for every internal role, so this costs nothing there.
+  if (value.executionUnits !== undefined) {
+    if (!isObjectArray(value.executionUnits)) fail();
+    for (const unit of value.executionUnits) {
+      if (!hasStringField(unit, 'id')) fail();
+      if (!hasStringField(unit, 'objectWorkId')) fail();
+      if (!hasStringField(unit, 'unit')) fail();
+      if (!hasStringOrNullField(unit, 'location')) fail();
+      if (!hasStringOrNullField(unit, 'executionConditions')) fail();
+    }
+  }
+
+  if (value.portions !== undefined) {
+    if (!isObjectArray(value.portions)) fail();
+    for (const portion of value.portions) {
+      if (!hasStringField(portion, 'id')) fail();
+      if (!hasStringField(portion, 'executionUnitId')) fail();
+      if (!hasStringField(portion, 'label')) fail();
+    }
+  }
+
   return value as unknown as Snapshot;
 }

@@ -16,6 +16,7 @@
     "test:ds": "playwright test --config playwright.ds.config.ts",
     "test:f6-browser": "playwright test --config playwright.f6.config.ts",
     "test:f7-browser": "playwright test --config playwright.f7.config.ts",
+    "test:f8.1-browser": "playwright test --config playwright.f8.1.config.ts",
     "test:f7-prod": "playwright test --config playwright.f7-prod.config.ts"
   },
   "dependencies": {

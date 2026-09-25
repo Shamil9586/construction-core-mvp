@@ -71,6 +71,12 @@ export type PlanType = 'INTERMEDIATE' | 'FINAL';
 /** Constrained by a CHECK on `work_dependencies.dependency_type`. */
 export type DependencyType = 'FINISH_TO_START';
 
+/** Constrained by a CHECK on `inspections.inspection_type` (F8.1). */
+export type InspectionType = Known<'INTERNAL_SC' | 'CUSTOMER_SC'>;
+
+/** Constrained by a CHECK on `portion_quantity_confirmations.source` (F8.1). */
+export type PortionConfirmationSource = Known<'RP_FACT' | 'INTERNAL_SC' | 'CUSTOMER_SC'>;
+
 /* ---------------------------------------------------------------------- *
  * Conventional sets — text columns, not database-constrained              *
  * ---------------------------------------------------------------------- */
@@ -252,6 +258,16 @@ export interface Work extends Versioned {
   estimatedCost?: Numeric;
   closed?: Numeric;
   financial?: WorkFinancial;
+  /**
+   * F8.1 — whether every portion of every execution unit on this work has a
+   * separate, accepted Customer SC inspection. `null` when the work has no
+   * execution units at all (F8.1 does not apply to it); never derived from
+   * `accepted` (Internal SC), which is a different control with its own
+   * confirmation history (F8.1 clarification 2). Optional only so existing
+   * object literals typed as `Work` (demo fixtures, tests predating F8.1)
+   * need no change — a real snapshot always sends it.
+   */
+  customerScAccepted?: boolean | null;
 }
 
 /** `GET /works/:id/progress` — append-only, immutable by database trigger. */
@@ -284,6 +300,15 @@ export interface Inspection extends Versioned {
   decision: string | null;
   comment: string | null;
   acceptedAt: Timestamp | null;
+  /**
+   * F8.1 — `null` for a whole-work inspection (every inspection predating
+   * F8.1, and any work with no execution units); set for one raised against
+   * a single Quantity Portion. Optional for the same reason as
+   * `Work.customerScAccepted` — a real snapshot always sends it.
+   */
+  portionId?: Uuid | null;
+  /** F8.1 — defaults to `INTERNAL_SC` at the database for every pre-F8.1 row. */
+  inspectionType?: InspectionType;
 }
 
 export interface Issue extends Versioned {
@@ -373,6 +398,74 @@ export interface InspectionPhoto extends Versioned {
   attachmentId: Uuid;
   uploadedBy: Uuid;
   metadata: unknown;
+}
+
+/**
+ * F8.1 — a Work Execution Unit: the concrete production unit within a work
+ * (`work type; finishing type; layer structure; execution conditions;
+ * location; contractor; measurement unit; planned quantity`, Domain Contract
+ * v1.0). `finishTypeId`/`executionConditions`/`location` are frequently
+ * absent — a unit does not always narrow every attribute.
+ *
+ * `actualQuantity` is not a stored column: `ReadService.snapshot()` derives
+ * it as the sum of its portions' latest RP_FACT confirmations (F8.1 decision
+ * 2 — no conflicting stored totals). There is no `workTypeId`/`finishTypeId`
+ * name here because `GET /dictionaries` does not join one; resolving it is a
+ * capability this snapshot does not have yet, not a value this particular
+ * unit happens to be missing.
+ */
+export interface WorkExecutionUnit extends Versioned {
+  objectWorkId: Uuid;
+  workTypeId: Uuid;
+  finishTypeId: Uuid | null;
+  executionConditions: string | null;
+  location: string | null;
+  contractorId: Uuid;
+  unit: string;
+  plannedQuantity: Numeric;
+  actualQuantity: Numeric;
+}
+
+/** F8.1 — one ordered layer of a Work Execution Unit's composition. */
+export interface ExecutionUnitLayer extends Versioned {
+  executionUnitId: Uuid;
+  sortOrder: number;
+  name: string;
+}
+
+/**
+ * F8.1 — a Quantity Portion: a measurable part of a Work Execution Unit that
+ * can be presented, inspected and tracked independently (Domain Contract
+ * v1.0). The three confirmation fields are `ReadService.snapshot()`'s own
+ * derived read of `portion_quantity_confirmations`' latest row per source —
+ * RP fact, Internal SC and Customer SC never overwrite one another (F8.1
+ * "Quantity confirmation history"), so all three can disagree and all three
+ * are shown, never merged into one number.
+ */
+export interface QuantityPortion extends Versioned {
+  executionUnitId: Uuid;
+  label: string;
+  plannedQuantity: Numeric;
+  rpFactQuantity: Numeric | null;
+  internalScAccepted: boolean;
+  internalScConfirmedQuantity: Numeric | null;
+  customerScAccepted: boolean;
+  customerScConfirmedQuantity: Numeric | null;
+}
+
+/**
+ * F8.1 — one row of a Quantity Portion's append-only confirmation history
+ * (`POST portions/:id/fact`, or one accepted inspection's confirmed
+ * quantity). Immutable by database trigger, same as `WorkProgressEntry`.
+ */
+export interface PortionQuantityConfirmation extends Versioned {
+  portionId: Uuid;
+  source: PortionConfirmationSource;
+  quantity: Numeric;
+  inspectionId: Uuid | null;
+  recordedBy: Uuid;
+  recordedAt: Timestamp;
+  comment: string | null;
 }
 
 export interface RiskSettings extends Versioned {
@@ -486,6 +579,11 @@ export interface Snapshot {
   monthlyPlans?: MonthlyPlan[];
   risk?: RiskSettings;
   photos?: InspectionPhoto[];
+  /** F8.1 — omitted for `CONTRACTOR_VIEWER`, same as `inspections`/`issues`. */
+  executionUnits?: WorkExecutionUnit[];
+  executionUnitLayers?: ExecutionUnitLayer[];
+  portions?: QuantityPortion[];
+  portionConfirmations?: PortionQuantityConfirmation[];
 }
 
 /** `GET /objects/:id` — note it carries no ИД, СДО or closing data. */
