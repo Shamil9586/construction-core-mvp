@@ -2,6 +2,8 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { Sidebar, typeClass, type NavItem } from '../design-system';
 import { ROUTE_PATHS } from './routePaths';
 import { RuntimeFooter } from './RuntimeFooter';
+import { useCoreRuntime } from './CoreRuntimeContext';
+import { canAccessDocumentation } from '../auth/internalRoles';
 
 /**
  * The routing adapter `Sidebar`'s own doc comment asks for: "a screen — or a
@@ -32,6 +34,7 @@ const NAV_ITEMS: NavItem[] = [
 export function AppSidebar() {
   const location = useLocation();
   const navigate = useNavigate();
+  const { session } = useCoreRuntime();
 
   // /company and every /object/... route (O01, W01) are all part of the one
   // portfolio section this sidebar represents — none of them get their own item.
@@ -42,11 +45,17 @@ export function AppSidebar() {
         ? 'pto'
         : '';
 
+  // F8.2.1 — "ПТО" is hidden only for a *confirmed* excluded role (SDO):
+  // no session at all (the mock/demo runtime) still shows it, unchanged from
+  // F8.2, since an absent session is not evidence of a real restriction —
+  // only a session whose own role `canAccessDocumentation` excludes is.
+  const items = session && !canAccessDocumentation(session.user.role) ? NAV_ITEMS.filter((item) => item.key !== 'pto') : NAV_ITEMS;
+
   return (
     <Sidebar
       brand={<span className={typeClass('ui-strong')}>Contour</span>}
       caption="ПРОИЗВОДСТВЕННЫЙ КОНТРОЛЬ"
-      items={NAV_ITEMS}
+      items={items}
       activeKey={activeKey}
       onNavigate={(key) => {
         if (key === 'company') navigate(ROUTE_PATHS.company);

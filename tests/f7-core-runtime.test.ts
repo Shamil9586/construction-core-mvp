@@ -2,11 +2,12 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { roles as domainRoles } from '../packages/domain';
+import { Permission, hasPermission, roles as domainRoles } from '../packages/domain';
 import {
   EXTERNAL_PARTICIPANT_ROLE,
   INTERNAL_CORE_ROLES,
   INTERNAL_ROLE_LABELS,
+  canManageDocumentation,
   classifyCoreRole,
   isInternalCoreRole,
 } from '../apps/frontend/src/auth/internalRoles';
@@ -128,6 +129,22 @@ test('role classification: internal / external / unrecognised — an unknown rol
   assert.deepEqual(classifyCoreRole('SOME_FUTURE_ROLE'), { kind: 'Unrecognized' });
   assert.deepEqual(classifyCoreRole('general_director'), { kind: 'Unrecognized' });
   assert.deepEqual(classifyCoreRole(''), { kind: 'Unrecognized' });
+});
+
+test('canManageDocumentation: agrees with the backend\'s own DOCUMENTATION_MANAGE grant for every domain role, so the frontend action-gating can never quietly drift from what the backend actually enforces', () => {
+  for (const role of domainRoles) {
+    assert.equal(
+      canManageDocumentation(role),
+      hasPermission(role, Permission.DOCUMENTATION_MANAGE),
+      `canManageDocumentation(${role}) disagrees with the backend's own grant`,
+    );
+  }
+  assert.equal(canManageDocumentation('PTO'), true);
+  assert.equal(canManageDocumentation('ADMIN'), true);
+  assert.equal(canManageDocumentation('SDO'), false);
+  assert.equal(canManageDocumentation('PROJECT_MANAGER'), false);
+  assert.equal(canManageDocumentation('CONSTRUCTION_CONTROL'), false);
+  assert.equal(canManageDocumentation('unrecognized-role'), false);
 });
 
 test('session state: an internal actor is Authenticated; CONTRACTOR_VIEWER and unknown roles are Unavailable, never Authenticated', () => {

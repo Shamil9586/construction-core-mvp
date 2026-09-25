@@ -86,6 +86,12 @@ function hasStorageProviderField(record: Record<string, unknown>, field: string)
   return isString(record[field]) && STORAGE_PROVIDERS.has(record[field] as string);
 }
 
+/** F8.2.1 — `DocumentationAttentionLevel`. Only RED/YELLOW ever reach the wire — a cleared (NONE) work is simply absent from the queue, never sent with a level. */
+const DOCUMENTATION_ATTENTION_LEVELS = new Set(['RED', 'YELLOW']);
+function hasDocumentationAttentionLevelField(record: Record<string, unknown>, field: string): boolean {
+  return isString(record[field]) && DOCUMENTATION_ATTENTION_LEVELS.has(record[field] as string);
+}
+
 const MALFORMED_SNAPSHOT_MESSAGE = 'Неверный ответ сервера: искажённый снимок данных.';
 
 function fail(): never {
@@ -295,6 +301,25 @@ export function validateSnapshot(value: unknown): Snapshot {
       if (!hasStringField(entry, 'documentationPackageId')) fail();
       if (!hasDocumentationPackageStatusField(entry, 'fromStatus')) fail();
       if (!hasDocumentationPackageStatusField(entry, 'toStatus')) fail();
+    }
+  }
+
+  // F8.2.1 Decision 4 — the PTO Attention Queue. `objectName` is nullable
+  // (a work whose object could not be joined reads as null, never a thrown
+  // error); `reason` is rendered directly as JSX text, `level` is switched
+  // on for the queue's colour, so both are hard-checked the same as every
+  // other closed-set/rendered field above.
+  if (value.documentationAttentionQueue !== undefined) {
+    if (!isObjectArray(value.documentationAttentionQueue)) fail();
+    for (const item of value.documentationAttentionQueue) {
+      if (!hasStringField(item, 'objectId')) fail();
+      if (!hasStringOrNullField(item, 'objectName')) fail();
+      if (!hasStringField(item, 'objectWorkId')) fail();
+      if (!hasStringField(item, 'workName')) fail();
+      if (!hasDocumentationAttentionLevelField(item, 'level')) fail();
+      if (!hasStringField(item, 'reason')) fail();
+      if (!hasStringOrNullField(item, 'responsible')) fail();
+      if (!hasStringOrNullField(item, 'packageId')) fail();
     }
   }
 

@@ -2,7 +2,7 @@ import { Injectable, BadRequestException, ForbiddenException, NotFoundException,
 import Decimal from 'decimal.js';
 import { pool, one, rows, insert, transaction } from './db';
 import { Actor, requirePermission, checkVersion, scoped, objectAccess, audit, ensure } from './security';
-import { Permission as P, ProgressCalculationService, ScheduleStatusService, WorkTransitionPolicy, PtoPackageValidationService, PotentialClosingService, ObjectHealthService, defaultRisk, AosrDraftEngine, QuantityPortionPolicy, resolveInternalScAccepted, resolveActualQuantity } from '../../../packages/domain';
+import { Permission as P, ProgressCalculationService, ScheduleStatusService, WorkTransitionPolicy, PtoPackageValidationService, PotentialClosingService, ObjectHealthService, defaultRisk, AosrDraftEngine, QuantityPortionPolicy, resolveInternalScAccepted, resolveActualQuantity, isDocumentationStatusTransitionAllowed } from '../../../packages/domain';
 @Injectable()
 export class ProductionService {
     async createObject(a: Actor, d: any) { requirePermission(a, P.OBJECT_CREATE); return transaction(async (c) => { ensure(d.plannedFinishDate >= d.startDate, 'Дата окончания раньше начала'); const pm = await scoped(c, 'users', d.projectManagerId, a); ensure(pm.role === 'PROJECT_MANAGER' && pm.isActive, 'Назначьте активного РП'); if (a.role === 'PROJECT_MANAGER')
@@ -191,9 +191,13 @@ export class ProductionService {
     async createDocumentationVersion(a: Actor, documentId: string, d: any) { requirePermission(a, P.DOCUMENTATION_MANAGE); return transaction(async (c) => { const doc = await scoped(c, 'documentation_documents', documentId, a, true); const pkg = await scoped(c, 'documentation_packages', doc.documentationPackageId, a); const w = await scoped(c, 'works', pkg.objectWorkId, a); await objectAccess(c, a, w.objectId, true); ensure((d.storageProvider === 'EXTERNAL_REFERENCE') === (d.storageReference !== undefined && d.storageReference !== null), 'Ссылка на документ обязательна только для EXTERNAL_REFERENCE'); const max = await one(c, 'SELECT coalesce(max(version_number),0) AS n FROM documentation_document_versions WHERE tenant_id=$1 AND documentation_document_id=$2', [a.tenantId, documentId]); const version = await insert(c, 'documentation_document_versions', a.tenantId, { documentationDocumentId: documentId, versionNumber: Number(max.n) + 1, storageProvider: d.storageProvider, storageReference: d.storageReference ?? null, comment: d.comment ?? null, createdBy: a.id }); await audit(c, a, 'DocumentationDocumentVersion', version.id, 'CREATE', null, version); return version; }); }
     // Status history (F8.2 Decision Lock): every change is appended, never
     // overwritten — see documentation_package_status_history's own
-    // immutable_history() trigger. No transition graph is enforced beyond the
-    // 7-value CHECK: the Foundation contract names the status set, not an
-    // order between them, and inventing one here would be a rule the contract
-    // never asked for.
-    async changeDocumentationPackageStatus(a: Actor, id: string, d: any) { requirePermission(a, P.DOCUMENTATION_MANAGE); return transaction(async (c) => { const pkg = await scoped(c, 'documentation_packages', id, a, true); const w = await scoped(c, 'works', pkg.objectWorkId, a); await objectAccess(c, a, w.objectId, true); checkVersion(pkg, d.version); const n = await one(c, 'UPDATE documentation_packages SET status=$3,version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2 RETURNING *', [a.tenantId, id, d.status]); await insert(c, 'documentation_package_status_history', a.tenantId, { documentationPackageId: id, fromStatus: pkg.status, toStatus: d.status, changedBy: a.id, comment: d.comment ?? null }); await audit(c, a, 'DocumentationPackage', id, 'STATUS_CHANGE', pkg, n); return n; }); }
+    // immutable_history() trigger.
+    //
+    // F8.2.1 Decision 5: the transition graph is now enforced —
+    // isDocumentationStatusTransitionAllowed() (packages/domain) is the one
+    // allow-list, so a disallowed move (DRAFT -> PRESENTED, any backward or
+    // skip-ahead step, anything touching CORRECTING/ACCEPTED_BY_CUSTOMER) is
+    // refused before the UPDATE runs, not merely restricted by the CHECK's
+    // set membership.
+    async changeDocumentationPackageStatus(a: Actor, id: string, d: any) { requirePermission(a, P.DOCUMENTATION_MANAGE); return transaction(async (c) => { const pkg = await scoped(c, 'documentation_packages', id, a, true); const w = await scoped(c, 'works', pkg.objectWorkId, a); await objectAccess(c, a, w.objectId, true); checkVersion(pkg, d.version); ensure(isDocumentationStatusTransitionAllowed(pkg.status, d.status), `Недопустимый переход статуса: ${pkg.status} → ${d.status}`); const n = await one(c, 'UPDATE documentation_packages SET status=$3,version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2 RETURNING *', [a.tenantId, id, d.status]); await insert(c, 'documentation_package_status_history', a.tenantId, { documentationPackageId: id, fromStatus: pkg.status, toStatus: d.status, changedBy: a.id, comment: d.comment ?? null }); await audit(c, a, 'DocumentationPackage', id, 'STATUS_CHANGE', pkg, n); return n; }); }
 }

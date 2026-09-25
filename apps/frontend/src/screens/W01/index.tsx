@@ -10,7 +10,7 @@ import {
 } from '../../design-system';
 import type { W01ViewModel, WorkConfirmation } from '../../view-models/w01';
 import { ExecutionSection, type W01ActionHandlers } from './ExecutionSection';
-import { DocumentationSection } from './DocumentationSection';
+import { DocumentationSection, type DocumentationSectionActionHandlers } from './DocumentationSection';
 import styles from './W01.module.css';
 
 /**
@@ -41,6 +41,16 @@ export interface W01Props {
    * way `ExecutionSection` then renders status only, no forms.
    */
   actions?: W01ActionHandlers;
+  /**
+   * F8.2.1 — create/open a Documentation Package. Omitted for the same
+   * reasons `actions` is, and additionally whenever the session's own role
+   * is not `canManageDocumentation` (RP/SC/oversight roles never get this,
+   * unlike `actions` above, which any session gets — see
+   * `WorkRoute.tsx`).
+   */
+  documentationActions?: DocumentationSectionActionHandlers;
+  /** F8.2.1 — `false` only for a confirmed excluded role (SDO); see `DocumentationSection`'s own prop comment. */
+  documentationVisible?: boolean;
 }
 
 function ConfirmationStatus({
@@ -108,6 +118,8 @@ export function WorkCard({
   onSelectObject,
   className,
   actions,
+  documentationActions,
+  documentationVisible,
 }: W01Props) {
   return (
     <AppShell sidebar={sidebar} topbar={topbar} className={className}>
@@ -200,7 +212,11 @@ export function WorkCard({
 
       <ExecutionSection executionUnits={viewModel.executionUnits} actions={actions} />
 
-      <DocumentationSection documentationPackages={viewModel.documentationPackages} />
+      <DocumentationSection
+        documentationPackages={viewModel.documentationPackages}
+        actions={documentationActions}
+        visible={documentationVisible}
+      />
     </AppShell>
   );
 }

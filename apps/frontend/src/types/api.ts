@@ -561,6 +561,28 @@ export interface DocumentationStatusHistoryEntry extends Versioned {
   comment: string | null;
 }
 
+/** F8.2.1 Decision 4 — a Documentation Package's own three-tier urgency, `resolveDocumentationAttention()`'s output (packages/domain). `NONE` items are left out of the queue entirely rather than sent with this level. */
+export type DocumentationAttentionLevel = 'RED' | 'YELLOW';
+
+/**
+ * F8.2.1 — one row of the PTO Attention Queue: a work whose documentation
+ * still needs PTO's attention, `ReadService.snapshot()`'s own computed
+ * array (not a row from any table). `responsible` is `null` exactly when
+ * `objectWorkId` has no Documentation Package at all yet — there is no PTO
+ * to name.
+ */
+export interface DocumentationAttentionItem {
+  objectId: Uuid;
+  objectName: string | null;
+  objectWorkId: Uuid;
+  workName: string;
+  level: DocumentationAttentionLevel;
+  reason: string;
+  responsible: string | null;
+  /** The package this row is actually about — `null` exactly when `responsible` is (no package exists yet to open, only to create). */
+  packageId: Uuid | null;
+}
+
 export interface RiskSettings extends Versioned {
   yellowVariance: Numeric;
   redVariance: Numeric;
@@ -688,6 +710,8 @@ export interface Snapshot {
   documentationDocuments?: DocumentationDocument[];
   documentationVersions?: DocumentationVersion[];
   documentationStatusHistory?: DocumentationStatusHistoryEntry[];
+  /** F8.2.1 — same visibility as the other documentation fields (omitted for SDO/CONTRACTOR_VIEWER). Only works still needing attention appear; a cleared work is simply absent. */
+  documentationAttentionQueue?: DocumentationAttentionItem[];
 }
 
 /** `GET /objects/:id` — note it carries no ИД, СДО or closing data. */

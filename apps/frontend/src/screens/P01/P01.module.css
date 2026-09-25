@@ -42,3 +42,36 @@
 .secondary {
   color: var(--cc-text-secondary);
 }
+
+.rowAction {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--cc-p-space-4);
+}
+
+.actionButton {
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  padding: var(--cc-p-space-8) var(--cc-button-padding-x);
+  border: var(--cc-border-width) solid transparent;
+  border-radius: var(--cc-button-radius);
+  background: var(--cc-action-primary);
+  color: var(--cc-text-on-action);
+  font: inherit;
+  cursor: pointer;
+}
+
+.actionButton:hover:not(:disabled) {
+  background: var(--cc-action-primary-hover);
+}
+
+.actionButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.errorText {
+  color: var(--cc-status-blocked-text);
+  text-align: end;
+}

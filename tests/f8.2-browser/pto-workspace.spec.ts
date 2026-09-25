@@ -16,6 +16,13 @@ import { test, expect, type Page } from '@playwright/test';
  * and tests/f8.2-documentation-http.test.ts; this file's job is only to
  * prove the UI reads the shared snapshot correctly and renders what a user
  * actually sees.
+ *
+ * F8.2.1 note: P01 was redesigned from a package-only list to a work-centric
+ * table (one row per work, folding in the PTO Attention Queue) — this file's
+ * own assertions were updated to match that reality (title, heading, no more
+ * portion-count column). The attention queue itself, the create/open
+ * actions, the package detail screen and role visibility (PTO/RP/SC/SDO) are
+ * covered by tests/f8.2.1-browser/, not duplicated here.
  */
 
 const PM = { id: 'u-pm', tenantId: 't-1', name: 'Пётр Петров', role: 'PROJECT_MANAGER' };
@@ -159,16 +166,16 @@ function buildSnapshot() {
   };
 }
 
-test('P01: lists every package with its work, object, status and responsible PTO, and filters by object', async ({
+test('P01: lists every work with its object, documentation status and responsible PTO, and filters by object', async ({
   page,
 }) => {
   await seedSession(page, 'f8-2-browser-token');
   await mockApi(page, buildSnapshot());
 
   await page.goto('/app.html/pto');
-  await expect(page.getByRole('heading', { level: 1, name: 'Исполнительная документация' })).toBeVisible();
+  await expect(page.getByRole('heading', { level: 1, name: 'Операции ПТО' })).toBeVisible();
 
-  const table = page.locator('table', { hasText: 'Пакеты исполнительной документации' });
+  const table = page.locator('table', { hasText: 'Очередь ПТО' });
   await expect(table).toBeVisible();
 
   const rowA = table.locator('tr', { hasText: 'Штукатурка стен' });
@@ -176,7 +183,6 @@ test('P01: lists every package with its work, object, status and responsible PTO
   await expect(rowA).toContainText('Школа на 550 мест');
   await expect(rowA).toContainText('В подготовке');
   await expect(rowA).toContainText('Ольга Морозова');
-  await expect(rowA).toContainText('1');
 
   const rowB = table.locator('tr', { hasText: 'Кладка стен' });
   await expect(rowB).toBeVisible();

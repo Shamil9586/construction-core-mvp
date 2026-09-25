@@ -1,38 +1,81 @@
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { AppShell, DataTable, PageHeader, StatusBadge, typeClass } from '../../design-system';
 import type { DataTableColumn } from '../../design-system';
-import type { P01PackageRow, P01ViewModel } from '../../view-models/p01';
-import { P01_NO_PACKAGES_FOR_OBJECT_LABEL, P01_NO_PACKAGES_LABEL } from '../../view-models/p01';
+import type { P01WorkRow, P01ViewModel } from '../../view-models/p01';
+import { P01_NO_WORKS_FOR_OBJECT_LABEL, P01_NO_WORKS_LABEL } from '../../view-models/p01';
 import styles from './P01.module.css';
 
 /**
- * P01 — PTO Workspace.
+ * P01 — PTO Operations.
  *
- * F8.2 MVP: a package list, filterable by object, showing status, the
- * responsible PTO employee and how many Quantity Portions each package
- * currently covers. Reuses `AppShell`/`PageHeader`/`DataTable`/`StatusBadge`
- * exactly as C01/O01/W01 do; the object filter is a plain `<select>` styled
- * with the same `--cc-*` tokens `ExecutionSection.tsx` (F8.1) already uses
- * for its own local form controls — the design system has no select control
- * to build this from, the same reason that screen's controls are local too.
+ * F8.2.1 redesign: one row per work, not per package (see `view-models/p01.ts`
+ * for why) — the PTO Attention Queue (Decision 4) and the former F8.2
+ * package list are now the same table. A work with no package at all is a
+ * real row here, not simply absent.
  *
- * Read-only by design: F8.2's Foundation scope for this screen is display
- * only (package existence, status, covered portions, responsible PTO) —
- * creating or editing a package, linking a portion, or changing status are
- * PTO actions the Foundation contract does not ask P01's own UI to expose
- * yet; the backend routes exist (documentation.controller.ts) for a later
- * pass to wire up.
+ * `actions` follows the same convention `ExecutionSection.tsx` (F8.1)
+ * established: `undefined` (no session, or a role other than PTO) renders
+ * every row read-only, no buttons at all — RP/SC/other oversight roles see
+ * status and the reason for attention, never a control to act on it (Decision
+ * 3: only PTO creates or manages packages). When present, a row with no
+ * package gets "Создать пакет"; a row with one gets "Открыть", which
+ * navigates to the package detail route (Step 4b) — the same destination and
+ * the same `documentationApi` functions W01's own create/open actions
+ * (Step 4c) call, per Decision 1's one-shared-implementation requirement.
  */
 
-const documentationPackageColumns: DataTableColumn[] = [
+const workColumns: DataTableColumn[] = [
   { key: 'work', header: 'Работа', width: 'fill' },
-  { key: 'object', header: 'Объект', width: 240 },
-  { key: 'status', header: 'Статус', width: 220 },
-  { key: 'responsible', header: 'Ответственный ПТО', width: 200 },
-  { key: 'portions', header: 'Участки', width: 100, align: 'end' },
+  { key: 'object', header: 'Объект', width: 200 },
+  { key: 'status', header: 'Статус ИД', width: 200 },
+  { key: 'attention', header: 'Требует внимания', width: 260 },
+  { key: 'responsible', header: 'Ответственный ПТО', width: 180 },
+  { key: 'actions', header: '', width: 160, align: 'end' },
 ];
 
-function PackageRow({ row }: { row: P01PackageRow }) {
+export interface P01ActionHandlers {
+  /** Creates a package for a work with none yet, then navigates to its detail route. */
+  onCreatePackage: (objectWorkId: string) => Promise<void>;
+  onOpenPackage: (packageId: string) => void;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : 'Не удалось выполнить действие';
+}
+
+function CreatePackageButton({
+  objectWorkId,
+  onCreate,
+}: {
+  objectWorkId: string;
+  onCreate: (objectWorkId: string) => Promise<void>;
+}) {
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleClick() {
+    setPending(true);
+    setError(null);
+    try {
+      await onCreate(objectWorkId);
+    } catch (submitError) {
+      setError(errorMessage(submitError));
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <div className={styles.rowAction}>
+      <button type="button" className={styles.actionButton} onClick={handleClick} disabled={pending}>
+        {pending ? 'Создание…' : 'Создать пакет'}
+      </button>
+      {error ? <span className={styles.errorText}>{error}</span> : null}
+    </div>
+  );
+}
+
+function WorkRow({ row, actions }: { row: P01WorkRow; actions?: P01ActionHandlers }) {
   return (
     <tr className={styles.row}>
       <td className={styles.cell}>
@@ -42,13 +85,37 @@ function PackageRow({ row }: { row: P01PackageRow }) {
         <span className={[typeClass('body'), styles.secondary].join(' ')}>{row.objectName}</span>
       </td>
       <td className={styles.cell}>
-        <StatusBadge variant={row.status.variant}>{row.status.label}</StatusBadge>
+        {row.package ? (
+          <StatusBadge variant={row.package.status.variant}>{row.package.status.label}</StatusBadge>
+        ) : (
+          <span className={[typeClass('body'), styles.secondary].join(' ')}>Пакет не создан</span>
+        )}
       </td>
       <td className={styles.cell}>
-        <span className={typeClass('body')}>{row.responsible}</span>
+        {row.attentionLevel ? (
+          <span className={typeClass('body')}>
+            {row.attentionLevel === 'RED' ? '🔴' : '🟡'} {row.attentionReason}
+          </span>
+        ) : (
+          <span className={[typeClass('body'), styles.secondary].join(' ')}>—</span>
+        )}
+      </td>
+      <td className={styles.cell}>
+        <span className={typeClass('body')}>{row.package?.responsible ?? '—'}</span>
       </td>
       <td className={[styles.cell, styles.alignEnd].join(' ')}>
-        <span className={typeClass('body')}>{row.coveredPortionCount || '—'}</span>
+        {actions && !row.package ? (
+          <CreatePackageButton objectWorkId={row.objectWorkId} onCreate={actions.onCreatePackage} />
+        ) : null}
+        {actions && row.package ? (
+          <button
+            type="button"
+            className={styles.actionButton}
+            onClick={() => actions.onOpenPackage(row.package!.id)}
+          >
+            Открыть
+          </button>
+        ) : null}
       </td>
     </tr>
   );
@@ -61,6 +128,8 @@ export interface P01Props {
   /** `null` (the default control state) means "all objects" — no filter applied. */
   selectedObjectId: string | null;
   onSelectObjectFilter: (objectId: string | null) => void;
+  /** Omitted (no session, or a role other than PTO) renders every row read-only. */
+  actions?: P01ActionHandlers;
   className?: string;
 }
 
@@ -70,21 +139,22 @@ export function PtoWorkspace({
   topbar,
   selectedObjectId,
   onSelectObjectFilter,
+  actions,
   className,
 }: P01Props) {
   const rows =
     selectedObjectId === null
-      ? viewModel.packages
-      : viewModel.packages.filter((row) => row.objectId === selectedObjectId);
+      ? viewModel.rows
+      : viewModel.rows.filter((row) => row.objectId === selectedObjectId);
 
-  const emptyLabel = selectedObjectId === null ? P01_NO_PACKAGES_LABEL : P01_NO_PACKAGES_FOR_OBJECT_LABEL;
+  const emptyLabel = selectedObjectId === null ? P01_NO_WORKS_LABEL : P01_NO_WORKS_FOR_OBJECT_LABEL;
 
   return (
     <AppShell sidebar={sidebar} topbar={topbar} className={className}>
       <PageHeader
         eyebrow="ПТО"
-        title="Исполнительная документация"
-        description="Пакеты документации по объектам: статус, покрытые участки, ответственный ПТО."
+        title="Операции ПТО"
+        description="Работы по объектам: статус исполнительной документации, что требует внимания, ответственный ПТО."
       />
 
       <div className={styles.filterRow}>
@@ -107,14 +177,14 @@ export function PtoWorkspace({
       </div>
 
       <DataTable
-        columns={documentationPackageColumns}
-        title="Пакеты исполнительной документации"
-        context={`${rows.length} из ${viewModel.packages.length} пакетов`}
+        columns={workColumns}
+        title="Очередь ПТО"
+        context={`${rows.length} из ${viewModel.rows.length} работ`}
         state={rows.length === 0 ? 'Empty' : 'Default'}
         emptyLabel={emptyLabel}
       >
         {rows.map((row) => (
-          <PackageRow key={row.id} row={row} />
+          <WorkRow key={row.objectWorkId} row={row} actions={actions} />
         ))}
       </DataTable>
     </AppShell>

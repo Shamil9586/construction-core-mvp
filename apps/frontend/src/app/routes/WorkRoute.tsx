@@ -1,12 +1,15 @@
 import { useNavigate, useParams } from 'react-router-dom';
 import { WorkCard } from '../../screens/W01';
 import type { W01ActionHandlers } from '../../screens/W01/ExecutionSection';
+import type { DocumentationSectionActionHandlers } from '../../screens/W01/DocumentationSection';
 import { buildW01ViewModel } from '../../view-models/w01';
 import { useRefetchSnapshot, useSnapshot } from '../../data/SnapshotContext';
 import * as executionUnitsApi from '../../data/executionUnitsApi';
+import * as documentationApi from '../../data/documentationApi';
 import { useCoreRuntime } from '../CoreRuntimeContext';
+import { canAccessDocumentation, canManageDocumentation } from '../../auth/internalRoles';
 import { AppSidebar } from '../AppSidebar';
-import { ROUTE_PATHS, objectPath } from '../routePaths';
+import { ROUTE_PATHS, objectPath, packagePath } from '../routePaths';
 import { RouteError, RouteLoading, RouteNotFound } from '../RouteStatus';
 
 /**
@@ -76,6 +79,28 @@ export function WorkRoute() {
       }
     : undefined;
 
+  // F8.2.1 Decision 1/3 — the same `documentationApi` functions and the same
+  // package detail destination P01's own actions use (`PtoRoute.tsx`), never
+  // a second, screen-local copy; gated by `canManageDocumentation`, unlike
+  // `actions` above, which any session gets regardless of role.
+  const documentationActions: DocumentationSectionActionHandlers | undefined =
+    session && canManageDocumentation(session.user.role)
+      ? {
+          onCreatePackage: async () => {
+            const pkg = await documentationApi.createDocumentationPackage(work.id, session.user.id);
+            refetch();
+            navigate(packagePath(pkg.id));
+          },
+          onOpenPackage: (packageId) => {
+            navigate(packagePath(packageId));
+          },
+        }
+      : undefined;
+
+  // F8.2.1 — no session (mock/demo runtime) stays visible, unchanged from
+  // F8.2; a confirmed excluded role (SDO) is the only case this hides.
+  const documentationVisible = session === null || canAccessDocumentation(session.user.role);
+
   return (
     <WorkCard
       viewModel={viewModel}
@@ -83,6 +108,8 @@ export function WorkRoute() {
       onNavigateHome={() => navigate(ROUTE_PATHS.company)}
       onSelectObject={(id) => navigate(objectPath(id))}
       actions={actions}
+      documentationActions={documentationActions}
+      documentationVisible={documentationVisible}
     />
   );
 }

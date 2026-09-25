@@ -58,6 +58,67 @@ export const hasPermission = (role: Role, p: Permission) => grants[role]?.includ
 export function canAccessDocumentation(role: Role): boolean {
     return role !== 'SDO' && role !== 'CONTRACTOR_VIEWER';
 }
+// F8.2.1 Decision 5 — status transition rules: PTO drives DRAFT through
+// PRESENTED along exactly these four edges; nothing else is legal in this
+// phase, including a same-status no-op, any backward move, any skip-ahead,
+// and anything into or out of CORRECTING/ACCEPTED_BY_CUSTOMER (both
+// "belong to the next stage" per the Decision Lock — RETURNED is a dead
+// end here, not a step back into correcting it, since no outbound edge for
+// it is listed either). One allow-list, so the backend's own gate and any
+// UI enabling/disabling a status button read the identical rule.
+const ALLOWED_DOCUMENTATION_STATUS_TRANSITIONS: Record<string, string[]> = {
+    DRAFT: ['PREPARING'],
+    PREPARING: ['READY_FOR_PRESENTATION'],
+    READY_FOR_PRESENTATION: ['PRESENTED'],
+    PRESENTED: ['RETURNED'],
+    RETURNED: [],
+    CORRECTING: [],
+    ACCEPTED_BY_CUSTOMER: [],
+};
+export function isDocumentationStatusTransitionAllowed(from: string, to: string): boolean {
+    return ALLOWED_DOCUMENTATION_STATUS_TRANSITIONS[from]?.includes(to) ?? false;
+}
+// F8.2.1 Decision 4 — PTO Attention Queue: the one place that classifies a
+// work's documentation readiness into the three-tier signal the queue
+// shows, called identically by ReadService.snapshot() (what the queue
+// displays) and — if a future pass needs it — any other caller, so the
+// rule cannot be re-derived differently in two places (the same discipline
+// resolveInternalScAccepted() already enforces for F8.1). A work is
+// classified by the worst (most urgent) of its own packages' individual
+// levels: one still-preparing or returned package keeps the whole work in
+// the queue even if a sibling package is already presented. A work with no
+// package at all is RED, the same urgency as one returned by the customer —
+// both need PTO to start work now.
+export type DocumentationAttentionLevel = 'RED' | 'YELLOW' | 'NONE';
+export interface DocumentationAttentionResult {
+    level: DocumentationAttentionLevel;
+    reason: string | null;
+}
+function packageStatusAttention(status: string): DocumentationAttentionResult {
+    switch (status) {
+        case 'DRAFT':
+        case 'PREPARING':
+            return { level: 'YELLOW', reason: 'Документы формируются' };
+        case 'CORRECTING':
+            return { level: 'YELLOW', reason: 'Устраняются замечания' };
+        case 'RETURNED':
+            return { level: 'RED', reason: 'Возвращено заказчиком' };
+        case 'READY_FOR_PRESENTATION':
+        case 'PRESENTED':
+        case 'ACCEPTED_BY_CUSTOMER':
+            return { level: 'NONE', reason: null };
+        default:
+            return { level: 'NONE', reason: null };
+    }
+}
+const DOCUMENTATION_ATTENTION_RANK: Record<DocumentationAttentionLevel, number> = { RED: 0, YELLOW: 1, NONE: 2 };
+export function resolveDocumentationAttention(packageStatuses: string[]): DocumentationAttentionResult {
+    if (packageStatuses.length === 0)
+        return { level: 'RED', reason: 'Нет пакета ИД' };
+    return packageStatuses
+        .map(packageStatusAttention)
+        .reduce((worst, current) => (DOCUMENTATION_ATTENTION_RANK[current.level] < DOCUMENTATION_ATTENTION_RANK[worst.level] ? current : worst));
+}
 export const defaultRisk = { yellowVariance: -5, redVariance: -15, staleDays: 7, ptoDays: 5, sdoDays: 10, escalateTechnicalDays: 3, escalateDirectorDays: 7 };
 export class ProgressCalculationService {
     calculate(actual: any, planned: any) { return new Decimal(planned).gt(0) ? Decimal.min(100, Decimal.max(0, new Decimal(actual).div(planned).mul(100))).toNumber() : null; }

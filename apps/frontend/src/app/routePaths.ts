@@ -15,6 +15,8 @@ export const ROUTE_PATHS = {
   work: '/object/:objectId/work/:workId',
   /** F8.2 — P01, PTO Workspace: a separate top-level destination, not part of the object drill-down chain. */
   pto: '/pto',
+  /** F8.2.1 — Documentation Package detail: reachable from both P01 and W01 (Decision 1, one shared destination). */
+  package: '/pto/package/:packageId',
 } as const;
 
 export function objectPath(objectId: string): string {
@@ -23,4 +25,8 @@ export function objectPath(objectId: string): string {
 
 export function workPath(objectId: string, workId: string): string {
   return `/object/${encodeURIComponent(objectId)}/work/${encodeURIComponent(workId)}`;
+}
+
+export function packagePath(packageId: string): string {
+  return `/pto/package/${encodeURIComponent(packageId)}`;
 }

@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import Decimal from 'decimal.js';
 import { pool, rows, one } from './db';
 import { Actor, requirePermission, objectAccess } from './security';
-import { Permission as P, ProgressCalculationService, ScheduleStatusService, PotentialClosingService, ObjectHealthService, PortionCompletionService, defaultRisk, resolveInternalScAccepted, resolveActualQuantity, canAccessDocumentation } from '../../../packages/domain';
+import { Permission as P, ProgressCalculationService, ScheduleStatusService, PotentialClosingService, ObjectHealthService, PortionCompletionService, defaultRisk, resolveInternalScAccepted, resolveActualQuantity, canAccessDocumentation, resolveDocumentationAttention } from '../../../packages/domain';
 @Injectable()
 export class ReadService {
     async snapshot(a: Actor, filters: { contractorId?: string } = {}) {
@@ -61,6 +61,26 @@ export class ReadService {
         const documentationDocumentIds = documentationDocuments.map(d => d.id);
         const documentationVersions = await rows(pool, 'SELECT * FROM documentation_document_versions WHERE tenant_id=$1 AND documentation_document_id=ANY($2::uuid[]) ORDER BY version_number', [t, documentationDocumentIds]);
         const documentationStatusHistory = await rows(pool, 'SELECT * FROM documentation_package_status_history WHERE tenant_id=$1 AND documentation_package_id=ANY($2::uuid[]) ORDER BY changed_at', [t, documentationPackageIds]);
+        // F8.2.1 Decision 4 — PTO Attention Queue: one item per work whose
+        // documentation still needs PTO's attention (resolveDocumentationAttention()
+        // — packages/domain — is the sole classifier, so this can't drift from
+        // any other caller of the same rule). A work with an attention level of
+        // NONE is left out entirely — "cleared" means absent, not present with
+        // a neutral level, matching how blockers/attentionRequired already omit
+        // problem-free rows rather than listing them with an empty reason.
+        const documentationAttentionQueue = works.map(w => {
+            const ownPackages = documentationPackages.filter(p => p.objectWorkId === w.id);
+            const attention = resolveDocumentationAttention(ownPackages.map(p => p.status));
+            if (attention.level === 'NONE')
+                return null;
+            const o = objects.find(x => x.id === w.objectId);
+            const worstPackage = ownPackages.find(p => resolveDocumentationAttention([p.status]).level === attention.level);
+            // `packageId` lets P01/W01 link straight to the package this row is
+            // actually about, without re-deriving "which package is worst"
+            // client-side — null when the work has no package to open at all
+            // (the RED "Create" case, not an "Open" one).
+            return { objectId: w.objectId, objectName: o ? o.name : null, objectWorkId: w.id, workName: w.name, level: attention.level, reason: attention.reason, responsible: worstPackage ? worstPackage.responsible : null, packageId: worstPackage ? worstPackage.id : null };
+        }).filter(item => item !== null);
         const saved = await one(pool, 'SELECT * FROM risk_settings WHERE tenant_id=$1', [t]);
         const risk = { ...defaultRisk, ...saved };
         const today = new Date();
@@ -163,6 +183,6 @@ export class ReadService {
             return { objects: objectList.map(({ contractValue, closed, potential, ...o }) => o), works: enriched.map(({ estimatedCost, closed, financial, ...w }) => w), contractors, dependencies: dependencies.filter(d => allowed.has(d.successorWorkId) && allowed.has(d.predecessorWorkId)) };
         }
         const documentationVisible = canAccessDocumentation(a.role);
-        return { objects: objectList, works: enriched, inspections, issues, packages, documents, sdo, closings, contractors, dependencies, dashboard, monthlyPlans: monthly, risk, photos, executionUnits: executionUnitsWithTotals, executionUnitLayers, portions: portionsWithStatus, portionConfirmations, documentationPackages: documentationVisible ? documentationPackages : undefined, documentationPackagePortions: documentationVisible ? documentationPackagePortions : undefined, documentationDocuments: documentationVisible ? documentationDocuments : undefined, documentationVersions: documentationVisible ? documentationVersions : undefined, documentationStatusHistory: documentationVisible ? documentationStatusHistory : undefined };
+        return { objects: objectList, works: enriched, inspections, issues, packages, documents, sdo, closings, contractors, dependencies, dashboard, monthlyPlans: monthly, risk, photos, executionUnits: executionUnitsWithTotals, executionUnitLayers, portions: portionsWithStatus, portionConfirmations, documentationPackages: documentationVisible ? documentationPackages : undefined, documentationPackagePortions: documentationVisible ? documentationPackagePortions : undefined, documentationDocuments: documentationVisible ? documentationDocuments : undefined, documentationVersions: documentationVisible ? documentationVersions : undefined, documentationStatusHistory: documentationVisible ? documentationStatusHistory : undefined, documentationAttentionQueue: documentationVisible ? documentationAttentionQueue : undefined };
     }
 }

@@ -32,3 +32,18 @@ export function RouteNotFound({ label }: { label: string }) {
     </AppShell>
   );
 }
+
+/**
+ * F8.2.1 — a role this route is confirmed to exclude (SDO on `/pto` or
+ * `/pto/package/:id`, per `canAccessDocumentation`), distinct from
+ * `RouteNotFound`: the destination exists, this session simply has no access
+ * to it, so the message says that rather than implying the data itself is
+ * missing.
+ */
+export function RouteForbidden({ label }: { label: string }) {
+  return (
+    <AppShell sidebar={<AppSidebar />}>
+      <p className={typeClass('body')}>{label}</p>
+    </AppShell>
+  );
+}

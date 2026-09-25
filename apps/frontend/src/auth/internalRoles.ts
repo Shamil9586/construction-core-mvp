@@ -63,3 +63,34 @@ export function classifyCoreRole(role: string): CoreRoleAccess {
   if (role === EXTERNAL_PARTICIPANT_ROLE) return { kind: 'External' };
   return { kind: 'Unrecognized' };
 }
+
+/**
+ * F8.2.1 — mirrors the backend's own `canAccessDocumentation()`
+ * (`packages/domain`): SDO has no F8.2/F8.2.1 access at all ("SDO: Нет
+ * доступа"), and `CONTRACTOR_VIEWER` is the external-participant role Core
+ * does not serve to begin with (`classifyCoreRole`, above). Used to hide the
+ * "ПТО" sidebar item and to show an explicit access-denied state instead of
+ * a P01 table, package detail screen or W01 documentation section that would
+ * otherwise render as if nothing needed attention or no package existed yet
+ * — a real, misleading claim, not merely an absent one, for a role whose
+ * snapshot never carries this data at all.
+ */
+export function canAccessDocumentation(role: string): boolean {
+  return role !== 'SDO' && role !== 'CONTRACTOR_VIEWER';
+}
+
+/**
+ * F8.2.1 Decision 3 — only PTO creates or manages a Documentation Package,
+ * its documents, versions and status; every other role's own access is
+ * view-only or none. ADMIN is included because it already holds every
+ * backend permission including `DOCUMENTATION_MANAGE` (`packages/domain`'s
+ * own `grants` table grants it `Object.values(Permission)`) — omitting it
+ * here would leave an ADMIN session unable to use a feature the backend
+ * already lets it use. One shared predicate (Decision 1) for P01, the
+ * package detail screen and W01's own create/open actions; the backend
+ * remains the sole enforcer regardless — this only decides which controls a
+ * route renders.
+ */
+export function canManageDocumentation(role: string): boolean {
+  return role === 'PTO' || role === 'ADMIN';
+}
