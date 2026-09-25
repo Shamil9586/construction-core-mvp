@@ -83,7 +83,7 @@ test('F8.1-02: 500 planned / 100 portioned+accepted is PARTIAL, not COMPLETE; fu
     await login('CONSTRUCTION_CONTROL');
     const uploadA = await req('attachments', { fileName: 'a.png', mimeType: 'image/png', base64: PNG_BASE64 });
     await req(`inspections/${requestA.id}/photos`, { attachmentId: uploadA.id });
-    await req(`inspections/${requestA.id}/accept`, { version: requestA.version, comment: 'Секция A принята' });
+    await req(`inspections/${requestA.id}/accept`, { version: requestA.version, comment: 'Секция A принята', quantity: 100 });
 
     const partial = await req('snapshot');
     const unitPartial = partial.executionUnits.find((u: any) => u.id === unit.id);
@@ -99,7 +99,7 @@ test('F8.1-02: 500 planned / 100 portioned+accepted is PARTIAL, not COMPLETE; fu
     await login('CONSTRUCTION_CONTROL');
     const uploadB = await req('attachments', { fileName: 'b.png', mimeType: 'image/png', base64: PNG_BASE64 });
     await req(`inspections/${requestB.id}/photos`, { attachmentId: uploadB.id });
-    await req(`inspections/${requestB.id}/accept`, { version: requestB.version, comment: 'Секция B принята' });
+    await req(`inspections/${requestB.id}/accept`, { version: requestB.version, comment: 'Секция B принята', quantity: 400 });
 
     const complete = await req('snapshot');
     const unitComplete = complete.executionUnits.find((u: any) => u.id === unit.id);
@@ -162,7 +162,7 @@ test('F8.1-03: GET .../transition and the read model blockers agree, for a parti
     await login('CONSTRUCTION_CONTROL');
     const uploadA = await req('attachments', { fileName: 'a.png', mimeType: 'image/png', base64: PNG_BASE64 });
     await req(`inspections/${requestA.id}/photos`, { attachmentId: uploadA.id });
-    await req(`inspections/${requestA.id}/accept`, { version: requestA.version, comment: 'A принята' });
+    await req(`inspections/${requestA.id}/accept`, { version: requestA.version, comment: 'A принята', quantity: 300 });
 
     // Portion B stays untouched — the predecessor is only partially accepted.
     await login('PROJECT_MANAGER');
@@ -185,7 +185,7 @@ test('F8.1-03: GET .../transition and the read model blockers agree, for a parti
     await login('CONSTRUCTION_CONTROL');
     const uploadB = await req('attachments', { fileName: 'b.png', mimeType: 'image/png', base64: PNG_BASE64 });
     await req(`inspections/${requestB.id}/photos`, { attachmentId: uploadB.id });
-    await req(`inspections/${requestB.id}/accept`, { version: requestB.version, comment: 'B принята' });
+    await req(`inspections/${requestB.id}/accept`, { version: requestB.version, comment: 'B принята', quantity: 200 });
 
     await login('PROJECT_MANAGER');
     const transitionComplete = await req(`works/${successor.id}/transition`);

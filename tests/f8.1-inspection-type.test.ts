@@ -75,9 +75,9 @@ test('F8.1: Customer SC only ever attaches to a portion; whole-work Internal SC 
   // --- issues and photos, already generic over inspections.id, work for Customer SC with no new code ---
   const unit = await service.createExecutionUnit(pm, {
     objectWorkId: bareWork.id,
-    workTypeId: (await one(pool, 'SELECT id FROM work_types WHERE tenant_id=$1 LIMIT 1', [tenant.id])).id,
+    workTypeId: bareWork.workTypeId,
     contractorId: bareWork.contractorId,
-    unit: 'м²',
+    unit: bareWork.unit,
     plannedQuantity: '100',
   });
   const portion = await service.createQuantityPortion(pm, unit.id, { label: 'Участок для заказчика', plannedQuantity: '100' });

@@ -65,8 +65,15 @@ export function attachInspectionPhoto(inspectionId: Uuid, attachmentId: Uuid): P
   return post(`inspections/${inspectionId}/photos`, { attachmentId });
 }
 
-export function acceptInspection(inspectionId: Uuid, version: number, comment: string): Promise<Inspection> {
-  return post(`inspections/${inspectionId}/accept`, { version, comment });
+/**
+ * F8.1-01 corrective, second pass (Independent Re-Review) — `quantity` is
+ * the inspector's own independently confirmed figure, required by the
+ * backend whenever the inspection is portion-scoped (never defaulted or
+ * copied from RP_FACT there); omitted for a whole-work inspection, which
+ * has no portion to confirm a quantity against.
+ */
+export function acceptInspection(inspectionId: Uuid, version: number, comment: string, quantity?: number): Promise<Inspection> {
+  return post(`inspections/${inspectionId}/accept`, { version, comment, quantity });
 }
 
 export function rejectInspection(inspectionId: Uuid, version: number, comment: string): Promise<Inspection> {

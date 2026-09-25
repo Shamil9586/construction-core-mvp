@@ -59,7 +59,7 @@ export function WorkRoute() {
           await executionUnitsApi.requestInternalScInspection(portionId, version);
           refetch();
         },
-        onRegisterInternalScDecision: async (inspectionId, version, decision, comment, photo) => {
+        onRegisterInternalScDecision: async (inspectionId, version, decision, comment, photo, quantity) => {
           const attachment = await executionUnitsApi.uploadInspectionPhotoAttachment(
             photo.fileName,
             photo.mimeType,
@@ -67,7 +67,7 @@ export function WorkRoute() {
           );
           await executionUnitsApi.attachInspectionPhoto(inspectionId, attachment.id);
           await (decision === 'accept'
-            ? executionUnitsApi.acceptInspection(inspectionId, version, comment)
+            ? executionUnitsApi.acceptInspection(inspectionId, version, comment, quantity)
             : executionUnitsApi.rejectInspection(inspectionId, version, comment));
           refetch();
         },

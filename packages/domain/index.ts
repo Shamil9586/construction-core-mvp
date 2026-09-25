@@ -213,13 +213,26 @@ export function resolveInternalScAccepted(wholeWorkAccepted: boolean, units: { p
 // units (F7 behaviour, unchanged); the sum of the execution units' own
 // (portion-derived) totals once any exist, ignoring the legacy figure
 // entirely so the two can never compete as two different "true" answers for
-// the same work. `unitActualQuantities` is each unit's own already-derived
-// total (ReadService.snapshot()'s executionUnitsWithTotals, or the
-// equivalent computed inline wherever a single work's units are fetched).
-export function resolveActualQuantity(legacyActualQuantity: any, unitActualQuantities: any[]): string {
-    if (unitActualQuantities.length === 0)
+// the same work.
+//
+// F8.1-04 corrective, second pass (Independent Re-Review, Patch 2): summing
+// every unit's total assumed every unit shared the work's own measurement
+// unit — nothing enforced that, so an execution unit created in м³ under a
+// work measured in м² would have silently combined into one meaningless
+// figure. `units` now carries each unit's own `unit` string alongside its
+// total, and only units whose `unit` matches `workUnit` are summed; a
+// mismatched one is excluded, never added in. createExecutionUnit()
+// (service.ts) is the primary prevention — a unit cannot be created with a
+// different measurement unit or work type than its parent work — this is
+// the aggregate's own defence regardless of how a unit reached it. Units
+// exist but none are compatible reads as zero, not the (necessarily stale,
+// once any execution unit exists — see progress()'s own guard) legacy
+// figure — resurfacing it would be exactly the "two competing truths" this
+// function exists to prevent.
+export function resolveActualQuantity(legacyActualQuantity: any, workUnit: string, units: { unit: string; actualQuantity: any }[]): string {
+    if (units.length === 0)
         return new Decimal(legacyActualQuantity).toFixed(4);
-    return unitActualQuantities.reduce((sum, q) => sum.add(q ?? 0), new Decimal(0)).toFixed(4);
+    return units.filter(u => u.unit === workUnit).reduce((sum, u) => sum.add(u.actualQuantity ?? 0), new Decimal(0)).toFixed(4);
 }
 export const domainEvents = ['WorkProgressUpdated', 'WorkDelayed', 'InspectionRequested', 'InspectionAccepted', 'InspectionRejected', 'IssueCreated', 'IssueResolved', 'ExecutivePackageReady', 'TransferredToSdo', 'SdoCalculated', 'FinancialClosingCreated', 'ObjectHealthChanged', 'ExecutionUnitCreated'] as const;
 export interface BitrixUserProvider {

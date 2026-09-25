@@ -30,3 +30,8 @@ export const executionUnitLayerDto = z.object({ sortOrder: z.number().int().nonn
 export const quantityPortionDto = z.object({ label: text, plannedQuantity: qty.refine(v => Number(v) > 0) }).strict();
 export const portionFactDto = z.object({ quantity: qty, version, comment: text.optional() }).strict();
 export const portionInspectionRequestDto = z.object({ inspectionType: z.enum(['INTERNAL_SC', 'CUSTOMER_SC']), version }).strict();
+// F8.1-01 corrective, second pass (Independent Re-Review, Patch 2): `quantity`
+// is the inspector's own confirmed figure — optional here (a whole-work
+// inspection has none to confirm) but required by inspectionAction() itself
+// the moment the inspection is portion-scoped; never defaulted from RP_FACT.
+export const inspectionAcceptDto = z.object({ version, comment: text, quantity: qty.optional() }).strict();

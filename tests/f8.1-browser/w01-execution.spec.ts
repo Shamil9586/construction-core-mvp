@@ -258,12 +258,19 @@ test('F8.1 golden path: add a portion, enter RP fact, request and register an In
 
     'POST /api/inspections/inspection-1/photos': () => ({ status: 201, body: { id: 'photo-1' } }),
 
-    'POST /api/inspections/inspection-1/accept': () => {
+    // F8.1-01 corrective, second pass: mirrors the real backend's own
+    // contract — quantity is required and is whatever the caller supplied,
+    // never a copy of RP_FACT.
+    'POST /api/inspections/inspection-1/accept': (request) => {
+      const body = request.postDataJSON() as { quantity?: number };
+      if (body.quantity === undefined || body.quantity === null) {
+        return { status: 400, body: { statusCode: 400, message: 'Укажите подтверждённый объём' } };
+      }
       const inspection = state.inspections.find((i) => i.id === 'inspection-1')!;
       inspection.status = 'ACCEPTED';
       const portion = state.portions.find((p) => p.id === inspection.portionId)!;
       portion.internalScAccepted = true;
-      portion.internalScConfirmedQuantity = portion.rpFactQuantity;
+      portion.internalScConfirmedQuantity = String(body.quantity);
       portion.version += 1;
       return { status: 201, body: inspection };
     },
@@ -299,6 +306,9 @@ test('F8.1 golden path: add a portion, enter RP fact, request and register an In
   await portionRow
     .getByLabel('Фотофиксация проверки участка Секция A')
     .setInputFiles({ name: 'photo.png', mimeType: 'image/png', buffer: Buffer.from(PNG_BASE64, 'base64') });
+  // Deliberately different from the 300 m² RP fact — the inspector's own,
+  // independently confirmed figure, per F8.1-01's corrective second pass.
+  await portionRow.getByLabel('Подтверждённый объём по участку Секция A').fill('298');
   await portionRow.getByLabel('Комментарий к решению по участку Секция A').fill('Секция принята');
   await portionRow.getByRole('button', { name: 'Принять' }).click();
 
@@ -308,6 +318,8 @@ test('F8.1 golden path: add a portion, enter RP fact, request and register an In
 
   expect(state.portions).toHaveLength(1);
   expect(state.portions[0]!.internalScAccepted).toBe(true);
+  // Must be the inspector's own figure, never a copy of RP_FACT (300).
+  expect(state.portions[0]!.internalScConfirmedQuantity).toBe('298');
   expect(state.inspections).toHaveLength(1);
   expect(state.inspections[0]!.status).toBe('ACCEPTED');
 });

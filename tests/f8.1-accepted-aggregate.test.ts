@@ -69,7 +69,7 @@ test('F8.1: a partially-accepted predecessor blocks its successor via work_depen
     await login('CONSTRUCTION_CONTROL');
     const upload = await req('attachments', { fileName: 'a.png', mimeType: 'image/png', base64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aF9sAAAAASUVORK5CYII=' });
     await req(`inspections/${requestA.id}/photos`, { attachmentId: upload.id });
-    await req(`inspections/${requestA.id}/accept`, { version: requestA.version, comment: 'Секция A принята' });
+    await req(`inspections/${requestA.id}/accept`, { version: requestA.version, comment: 'Секция A принята', quantity: 300 });
 
     // Portion B: full fact, requested, but left WAITING — deliberately not accepted.
     await login('PROJECT_MANAGER');
@@ -92,7 +92,7 @@ test('F8.1: a partially-accepted predecessor blocks its successor via work_depen
     const requestB = (await req('snapshot')).inspections.find((i: any) => i.portionId === portionB.id);
     const uploadB = await req('attachments', { fileName: 'b.png', mimeType: 'image/png', base64: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aF9sAAAAASUVORK5CYII=' });
     await req(`inspections/${requestB.id}/photos`, { attachmentId: uploadB.id });
-    await req(`inspections/${requestB.id}/accept`, { version: requestB.version, comment: 'Секция B принята' });
+    await req(`inspections/${requestB.id}/accept`, { version: requestB.version, comment: 'Секция B принята', quantity: 200 });
 
     const after = await req('snapshot');
     const predecessorAfter = after.works.find((w: any) => w.id === predecessor.id);

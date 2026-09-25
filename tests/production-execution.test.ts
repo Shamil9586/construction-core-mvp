@@ -224,14 +224,34 @@ test('resolveInternalScAccepted: with execution units, the whole-work flag is ig
 /* --------------------------------------------------------------------- *
  * F8.1-04 — resolveActualQuantity: execution units, once they exist on a *
  * work, are its sole production fact source; the legacy figure is used   *
- * only when there are none.                                              *
+ * only when there are none. F8.1-04 corrective, second pass (Independent *
+ * Re-Review, Patch 2): summing every unit's own total blindly assumed    *
+ * every unit shared the work's own measurement unit — nothing enforced   *
+ * that. A unit whose `unit` string disagrees with the work's own is      *
+ * excluded from the sum, not silently combined into it (м² + м³ is not a *
+ * quantity). createExecutionUnit() (service.ts) is the primary           *
+ * prevention; this is the aggregate's own defence for anything that      *
+ * reaches it regardless.                                                 *
  * --------------------------------------------------------------------- */
 
 test('resolveActualQuantity: no execution units returns the legacy figure unchanged', () => {
-  assert.equal(resolveActualQuantity('250.5000', []), '250.5000');
+  assert.equal(resolveActualQuantity('250.5000', 'м²', []), '250.5000');
 });
 
-test('resolveActualQuantity: with execution units, the legacy figure is ignored and the unit totals are summed', () => {
-  assert.equal(resolveActualQuantity('999', ['300', '150']), '450.0000');
-  assert.equal(resolveActualQuantity('0', ['0']), '0.0000');
+test('resolveActualQuantity: with execution units sharing the work\'s own unit, the legacy figure is ignored and the totals are summed', () => {
+  assert.equal(resolveActualQuantity('999', 'м²', [{ unit: 'м²', actualQuantity: '300' }, { unit: 'м²', actualQuantity: '150' }]), '450.0000');
+  assert.equal(resolveActualQuantity('0', 'м²', [{ unit: 'м²', actualQuantity: '0' }]), '0.0000');
+});
+
+test('resolveActualQuantity: a unit measured in a different unit is excluded from the sum, not blindly aggregated — the Review\'s own м² + м³ example', () => {
+  const mixed = [
+    { unit: 'м²', actualQuantity: '300' },
+    { unit: 'м³', actualQuantity: '150' },
+  ];
+  assert.equal(resolveActualQuantity('999', 'м²', mixed), '300.0000', 'only the м² unit counts; the м³ one must not be added in');
+});
+
+test('resolveActualQuantity: execution units exist but none share the work\'s own unit — reads as zero, never the stale legacy figure', () => {
+  const incompatibleOnly = [{ unit: 'м³', actualQuantity: '500' }];
+  assert.equal(resolveActualQuantity('999', 'м²', incompatibleOnly), '0.0000');
 });

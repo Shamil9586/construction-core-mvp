@@ -93,7 +93,7 @@ export class ReadService {
                 return [w.id, { actualQuantity: w.actualQuantity, lastReportedAt: w.lastReportedAt }];
             const ownPortionIds = new Set(portionsWithStatus.filter(p => units.some(u => u.id === p.executionUnitId)).map(p => p.id));
             const factTimestamps = portionConfirmations.filter(c => c.source === 'RP_FACT' && ownPortionIds.has(c.portionId)).map(c => c.recordedAt).sort();
-            return [w.id, { actualQuantity: resolveActualQuantity(w.actualQuantity, units.map(u => u.actualQuantity)), lastReportedAt: factTimestamps.length ? factTimestamps[factTimestamps.length - 1] : null }];
+            return [w.id, { actualQuantity: resolveActualQuantity(w.actualQuantity, w.unit, units.map(u => ({ unit: u.unit, actualQuantity: u.actualQuantity }))), lastReportedAt: factTimestamps.length ? factTimestamps[factTimestamps.length - 1] : null }];
         }));
         const workScStatus = new Map<string, { internalScComplete: boolean; customerScAccepted: boolean | null }>(works.map(w => {
             const units = executionUnitsWithTotals.filter(u => u.objectWorkId === w.id);

@@ -27,12 +27,19 @@ export interface W01ActionHandlers {
   onRecordFact: (portionId: string, quantity: number, version: number, comment: string) => Promise<void>;
   onCreatePortion: (executionUnitId: string, label: string, plannedQuantity: number) => Promise<void>;
   onRequestInternalSc: (portionId: string, version: number) => Promise<void>;
+  /**
+   * `quantity` is the inspector's own independently confirmed figure —
+   * required by the backend for `decision: 'accept'` (never defaulted or
+   * copied from RP fact there), `undefined` for `decision: 'reject'`, which
+   * confirms nothing.
+   */
   onRegisterInternalScDecision: (
     inspectionId: string,
     version: number,
     decision: 'accept' | 'reject',
     comment: string,
     photo: { fileName: string; mimeType: 'image/png' | 'image/jpeg'; base64: string },
+    quantity?: number,
   ) => Promise<void>;
 }
 
@@ -165,10 +172,12 @@ function InternalScDecisionForm({
     decision: 'accept' | 'reject',
     comment: string,
     photo: { fileName: string; mimeType: 'image/png' | 'image/jpeg'; base64: string },
+    quantity?: number,
   ) => Promise<void>;
 }) {
   const [comment, setComment] = useState('');
   const [file, setFile] = useState<File | null>(null);
+  const [quantity, setQuantity] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -185,13 +194,25 @@ function InternalScDecisionForm({
       setError('Только PNG или JPEG');
       return;
     }
+    // F8.1-01 corrective, second pass — required for accept, the
+    // inspector's own independently confirmed figure, never a copy of RP
+    // fact; irrelevant for reject, which confirms nothing.
+    let parsedQuantity: number | undefined;
+    if (decision === 'accept') {
+      parsedQuantity = Number(quantity);
+      if (!Number.isFinite(parsedQuantity) || parsedQuantity < 0) {
+        setError('Укажите подтверждённый объём');
+        return;
+      }
+    }
     setPending(true);
     setError(null);
     try {
       const base64 = await readFileAsBase64(file);
-      await onSubmit(decision, comment.trim(), { fileName: file.name, mimeType: file.type, base64 });
+      await onSubmit(decision, comment.trim(), { fileName: file.name, mimeType: file.type, base64 }, parsedQuantity);
       setComment('');
       setFile(null);
+      setQuantity('');
     } catch (submitError) {
       setError(errorMessage(submitError));
     } finally {
@@ -210,6 +231,18 @@ function InternalScDecisionForm({
           onChange={(event) => setFile(event.target.files?.[0] ?? null)}
           disabled={pending}
           aria-label={`Фотофиксация проверки участка ${portion.label}`}
+        />
+        <input
+          className={styles.input}
+          type="number"
+          step="any"
+          min="0"
+          inputMode="decimal"
+          placeholder="Подтверждённый объём"
+          value={quantity}
+          onChange={(event) => setQuantity(event.target.value)}
+          disabled={pending}
+          aria-label={`Подтверждённый объём по участку ${portion.label}`}
         />
         <input
           className={styles.input}
@@ -343,13 +376,14 @@ function PortionRow({ portion, actions }: { portion: W01PortionViewModel; action
       {actions && portion.decidableInspection ? (
         <InternalScDecisionForm
           portion={portion}
-          onSubmit={(decision, comment, photo) =>
+          onSubmit={(decision, comment, photo, quantity) =>
             actions.onRegisterInternalScDecision(
               portion.decidableInspection!.id,
               portion.decidableInspection!.version,
               decision,
               comment,
               photo,
+              quantity,
             )
           }
         />

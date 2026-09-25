@@ -31,8 +31,11 @@ test('F8.1: execution unit / layer / quantity portion — create, tenant isolati
 
   const pm = await actorWithRole('PROJECT_MANAGER');
   const sk = await actorWithRole('CONSTRUCTION_CONTROL');
-  const workType = await one(pool, 'SELECT * FROM work_types WHERE tenant_id=$1 LIMIT 1', [tenant.id]);
   const work = await one(pool, 'SELECT * FROM works WHERE tenant_id=$1 LIMIT 1', [tenant.id]);
+  // F8.1-04 corrective, second pass (Independent Re-Review, Patch 2): an
+  // execution unit's own work type and measurement unit must match its
+  // parent work's — the work's own work type, not an unrelated first row.
+  const workType = await one(pool, 'SELECT * FROM work_types WHERE tenant_id=$1 AND id=$2', [tenant.id, work.workTypeId]);
   const contractor = await one(pool, 'SELECT * FROM contractors WHERE tenant_id=$1 AND id=$2', [tenant.id, work.contractorId]);
 
   // --- permission: EXECUTION_UNIT_MANAGE, not just any logged-in role ---
@@ -42,7 +45,7 @@ test('F8.1: execution unit / layer / quantity portion — create, tenant isolati
         objectWorkId: work.id,
         workTypeId: workType.id,
         contractorId: contractor.id,
-        unit: 'м²',
+        unit: work.unit,
         plannedQuantity: '500',
       }),
     (e: any) => e.status === 403 || /Недостаточно прав/.test(e.message),
@@ -53,7 +56,7 @@ test('F8.1: execution unit / layer / quantity portion — create, tenant isolati
     objectWorkId: work.id,
     workTypeId: workType.id,
     contractorId: contractor.id,
-    unit: 'м²',
+    unit: work.unit,
     plannedQuantity: '500',
   });
   assert.equal(unit.objectWorkId, work.id);
@@ -78,7 +81,7 @@ test('F8.1: execution unit / layer / quantity portion — create, tenant isolati
         objectWorkId: work.id,
         workTypeId: workType.id,
         contractorId: foreignContractor.id,
-        unit: 'м²',
+        unit: work.unit,
         plannedQuantity: '100',
       }),
     /не назначен на объект/,
@@ -103,7 +106,7 @@ test('F8.1: execution unit / layer / quantity portion — create, tenant isolati
     objectWorkId: work.id,
     workTypeId: workType.id,
     contractorId: contractor.id,
-    unit: 'м²',
+    unit: work.unit,
     plannedQuantity: '100',
   });
   const unit2Portion = await service.createQuantityPortion(pm, unit2.id, { label: 'Отдельная секция', plannedQuantity: '80' });
@@ -114,7 +117,7 @@ test('F8.1: execution unit / layer / quantity portion — create, tenant isolati
     objectWorkId: work.id,
     workTypeId: workType.id,
     contractorId: contractor.id,
-    unit: 'м²',
+    unit: work.unit,
     plannedQuantity: '100',
   });
   await service.createQuantityPortion(pm, unit3.id, { label: 'База', plannedQuantity: '60' });
