@@ -30,6 +30,20 @@ async function seedSession(page: Page, token: string): Promise<void> {
 const PTO = { id: 'u-pto', tenantId: 't-1', name: 'Ольга Морозова', role: 'PTO' };
 const RP = { id: 'u-pm', tenantId: 't-1', name: 'Пётр Петров', role: 'PROJECT_MANAGER' };
 const SDO = { id: 'u-sdo', tenantId: 't-1', name: 'Сергей Сидоров', role: 'SDO' };
+const ADMIN = { id: 'u-admin', tenantId: 't-1', name: 'Админов Админ Админович', role: 'ADMIN' };
+
+// F8.2.1-04 (Corrective Patch) — GET /api/users' own fixture, standing in
+// for the real `SELECT id,name,role,bitrix_user_id FROM users WHERE
+// tenant_id=$1 AND is_active=true`. Two PTO users so a picker test can prove
+// a *specific* selection reaches the backend, plus a non-PTO user so the
+// frontend's own PTO-only filter is exercised against real "someone else"
+// noise, not just an empty complement.
+const PTO_USER_2 = { id: 'u-pto-2', name: 'Виктор Волков', role: 'PTO', bitrixUserId: null };
+const ALL_USERS = [
+  { id: PTO.id, name: PTO.name, role: 'PTO', bitrixUserId: null },
+  PTO_USER_2,
+  { id: RP.id, name: RP.name, role: 'PROJECT_MANAGER', bitrixUserId: null },
+];
 
 const OBJECT_A = 'object-a';
 const WORK_NEW = 'work-new';
@@ -307,16 +321,25 @@ function handleApi(
 ): { status: number; body?: unknown } | undefined {
   if (method === 'GET' && path === '/api/me') return { status: 200, body: state.actor };
   if (method === 'GET' && path === '/api/snapshot') return { status: 200, body: buildSnapshot(state) };
+  if (method === 'GET' && path === '/api/users') return { status: 200, body: ALL_USERS };
 
   if (method === 'POST' && path === '/api/documentation-packages') {
     const body = request.postDataJSON() as { objectWorkId: string; responsibleUserId: string };
+    // F8.2.1-04 — the real backend rejects anything but an active PTO user;
+    // this mock enforces the same rule so a test that (by mistake, or by a
+    // regression) sends the wrong id fails loudly here rather than silently
+    // succeeding against a lenient fake.
+    const responsibleUser = ALL_USERS.find((u) => u.id === body.responsibleUserId);
+    if (!responsibleUser || responsibleUser.role !== 'PTO') {
+      return { status: 400, body: { message: 'Назначьте активного сотрудника ПТО' } };
+    }
     const pkg: FakePackage = {
       id: nextId(state, 'package'),
       objectId: OBJECT_A,
       objectWorkId: body.objectWorkId,
       status: 'DRAFT',
       responsibleUserId: body.responsibleUserId,
-      responsible: state.actor.name,
+      responsible: responsibleUser.name,
       createdBy: state.actor.id,
       version: 1,
     };
@@ -521,6 +544,96 @@ test('W01 (Corrective F8.2.1-03): a work with an existing package still offers "
 
   expect(state.packages.length).toBe(2);
   expect(state.packages[0]!.id).not.toBe(state.packages[1]!.id);
+});
+
+test('P01 (Corrective F8.2.1-04): ADMIN opening the create-package flow sees a PTO-user picker and cannot submit before choosing one — never admin.id', async ({
+  page,
+}) => {
+  const state = makeState(ADMIN);
+  await seedSession(page, 'f8-2-1-browser-token-admin-picker');
+  await mockApi(page, state);
+
+  await page.goto('/app.html/pto');
+  const table = page.locator('table', { hasText: 'Очередь ПТО' });
+  const row = table.locator('tr', { hasText: 'Устройство кровли' });
+
+  await expect(row.getByLabel('Ответственный сотрудник ПТО')).toBeVisible();
+  await expect(row.getByRole('button', { name: 'Создать пакет' })).toBeDisabled();
+
+  expect(state.packages.length).toBe(0);
+});
+
+test('P01 (Corrective F8.2.1-04): ADMIN creates a first package by selecting a PTO responsible user — the package is created for that PTO user, not ADMIN', async ({
+  page,
+}) => {
+  const state = makeState(ADMIN);
+  await seedSession(page, 'f8-2-1-browser-token-admin-first');
+  await mockApi(page, state);
+
+  await page.goto('/app.html/pto');
+  const table = page.locator('table', { hasText: 'Очередь ПТО' });
+  const row = table.locator('tr', { hasText: 'Устройство кровли' });
+
+  await row.getByLabel('Ответственный сотрудник ПТО').selectOption({ label: PTO_USER_2.name });
+  await row.getByRole('button', { name: 'Создать пакет' }).click();
+
+  await expect(page.getByRole('heading', { level: 1, name: 'Устройство кровли' })).toBeVisible();
+  await expect(page.getByText('Черновик', { exact: true })).toBeVisible();
+  await expect(page.getByText(PTO_USER_2.name)).toBeVisible();
+
+  expect(state.packages.length).toBe(1);
+  expect(state.packages[0]!.responsibleUserId).toBe(PTO_USER_2.id);
+  expect(state.packages[0]!.responsibleUserId).not.toBe(ADMIN.id);
+});
+
+test('P01 (Corrective F8.2.1-04): ADMIN creates a second package for a work that already has one, again by selecting a PTO responsible user', async ({
+  page,
+}) => {
+  const state = makeState(ADMIN, [draftPackage()]);
+  await seedSession(page, 'f8-2-1-browser-token-admin-second');
+  await mockApi(page, state);
+
+  await page.goto('/app.html/pto');
+  const table = page.locator('table', { hasText: 'Очередь ПТО' });
+  const row = table.locator('tr', { hasText: 'Штукатурка стен' });
+
+  await expect(row.getByRole('button', { name: 'Открыть' })).toBeVisible();
+  await row.getByLabel('Ответственный сотрудник ПТО').selectOption({ label: PTO_USER_2.name });
+  await row.getByRole('button', { name: 'Создать ещё один пакет' }).click();
+
+  await expect(page.getByRole('heading', { level: 1, name: 'Штукатурка стен' })).toBeVisible();
+  await expect(page.getByText('Черновик', { exact: true })).toBeVisible();
+
+  expect(state.packages.length).toBe(2);
+  expect(state.packages[0]!.id).not.toBe(state.packages[1]!.id);
+  const second = state.packages.find((p) => p.id !== 'package-draft')!;
+  expect(second.responsibleUserId).toBe(PTO_USER_2.id);
+  expect(second.responsibleUserId).not.toBe(ADMIN.id);
+});
+
+test('W01 (Corrective F8.2.1-04): ADMIN also sees the PTO-user picker there, the same shared flow P01 uses (Decision 1), and never submits admin.id', async ({
+  page,
+}) => {
+  const state = makeState(ADMIN);
+  await seedSession(page, 'f8-2-1-browser-token-admin-w01');
+  await mockApi(page, state);
+
+  await page.goto(`/app.html/object/${OBJECT_A}/work/${WORK_NEW}`);
+  const section = page.locator('section', { hasText: 'Исполнительная документация' });
+
+  await expect(section.getByLabel('Ответственный сотрудник ПТО')).toBeVisible();
+  await expect(section.getByRole('button', { name: 'Создать пакет' })).toBeDisabled();
+  expect(state.packages.length).toBe(0);
+
+  await section.getByLabel('Ответственный сотрудник ПТО').selectOption({ label: PTO_USER_2.name });
+  await section.getByRole('button', { name: 'Создать пакет' }).click();
+
+  await expect(page.getByRole('heading', { level: 1, name: 'Устройство кровли' })).toBeVisible();
+  await expect(page.getByText('Черновик', { exact: true })).toBeVisible();
+
+  expect(state.packages.length).toBe(1);
+  expect(state.packages[0]!.responsibleUserId).toBe(PTO_USER_2.id);
+  expect(state.packages[0]!.responsibleUserId).not.toBe(ADMIN.id);
 });
 
 test('Role visibility (Corrective F8.2.1-02): RP has no "ПТО" nav item and no workspace access, but its W01 documentation visibility is completely unchanged', async ({

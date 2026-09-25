@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { StatusBadge, typeClass } from '../../design-system';
 import type { W01DocumentationPackageViewModel } from '../../view-models/w01';
+import type { CreatePackageResponsible } from '../../data/documentationApi';
 import styles from './DocumentationSection.module.css';
 
 /**
@@ -21,8 +22,10 @@ import styles from './DocumentationSection.module.css';
  */
 
 export interface DocumentationSectionActionHandlers {
-  onCreatePackage: () => Promise<void>;
+  onCreatePackage: (responsibleUserId: string) => Promise<void>;
   onOpenPackage: (packageId: string) => void;
+  /** F8.2.1-04 (Corrective Patch) — how the create action resolves its responsible PTO user: PTO defaults to itself, ADMIN must pick one. */
+  responsible: CreatePackageResponsible;
 }
 
 export interface DocumentationSectionProps {
@@ -46,30 +49,77 @@ function errorMessage(error: unknown): string {
 
 function CreatePackageButton({
   onCreate,
+  responsible,
   label = 'Создать пакет',
 }: {
-  onCreate: () => Promise<void>;
+  onCreate: (responsibleUserId: string) => Promise<void>;
+  responsible: CreatePackageResponsible;
   /** Corrective F8.2.1-03 — "Создать ещё один пакет" when the work already has one. */
   label?: string;
 }) {
+  const [selected, setSelected] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function handleClick() {
+  async function handleCreate(responsibleUserId: string) {
     setPending(true);
     setError(null);
     try {
-      await onCreate();
+      await onCreate(responsibleUserId);
     } catch (submitError) {
       setError(errorMessage(submitError));
-    } finally {
       setPending(false);
     }
   }
 
+  // F8.2.1-04 — ADMIN is not itself a PTO user (the backend requires an
+  // active PTO responsible), so it picks one here rather than the button
+  // defaulting to `session.user.id` the way it safely can for PTO.
+  if (responsible.mode === 'pick') {
+    if (responsible.ptoUsers.length === 0) {
+      return (
+        <div className={styles.emptyAction}>
+          <span className={styles.errorText}>Нет активных сотрудников ПТО</span>
+        </div>
+      );
+    }
+    return (
+      <div className={styles.emptyAction}>
+        <select
+          className={styles.pickerSelect}
+          value={selected}
+          onChange={(event) => setSelected(event.target.value)}
+          disabled={pending}
+          aria-label="Ответственный сотрудник ПТО"
+        >
+          <option value="">Выберите сотрудника ПТО…</option>
+          {responsible.ptoUsers.map((user) => (
+            <option key={user.id} value={user.id}>
+              {user.name}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          className={styles.actionButton}
+          onClick={() => handleCreate(selected)}
+          disabled={pending || !selected}
+        >
+          {pending ? 'Создание…' : label}
+        </button>
+        {error ? <span className={styles.errorText}>{error}</span> : null}
+      </div>
+    );
+  }
+
   return (
     <div className={styles.emptyAction}>
-      <button type="button" className={styles.actionButton} onClick={handleClick} disabled={pending}>
+      <button
+        type="button"
+        className={styles.actionButton}
+        onClick={() => handleCreate(responsible.userId)}
+        disabled={pending}
+      >
         {pending ? 'Создание…' : label}
       </button>
       {error ? <span className={styles.errorText}>{error}</span> : null}
@@ -125,14 +175,20 @@ export function DocumentationSection({ documentationPackages, actions, visible =
               <PackageCard key={pkg.id} pkg={pkg} onOpenPackage={actions?.onOpenPackage} />
             ))}
           </div>
-          {actions ? <CreatePackageButton onCreate={actions.onCreatePackage} label="Создать ещё один пакет" /> : null}
+          {actions ? (
+            <CreatePackageButton
+              onCreate={actions.onCreatePackage}
+              responsible={actions.responsible}
+              label="Создать ещё один пакет"
+            />
+          ) : null}
         </>
       ) : actions ? (
         <>
           <span className={[styles.empty, typeClass('body')].join(' ')}>
             Пакет исполнительной документации ещё не создан
           </span>
-          <CreatePackageButton onCreate={actions.onCreatePackage} />
+          <CreatePackageButton onCreate={actions.onCreatePackage} responsible={actions.responsible} />
         </>
       ) : (
         <span className={[styles.empty, typeClass('body')].join(' ')}>

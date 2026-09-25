@@ -6,6 +6,7 @@ import type {
   DocumentationPackageStatus,
   DocumentationVersion,
   StorageProvider,
+  UserSummary,
   Uuid,
 } from '../types/api';
 import { parseResponse } from '../http';
@@ -22,6 +23,20 @@ import { readSessionToken } from '../auth/sessionToken';
  * W01's own "create/open package" actions call these same functions — never
  * a second, screen-local copy of the request shape.
  */
+
+/**
+ * F8.2.1-04 (Corrective Patch) — how a "Создать пакет" action resolves the
+ * package's `responsibleUserId`, which the backend requires to name an
+ * active PTO user (`ensure(responsible.role === 'PTO' && responsible.isActive, ...)`,
+ * `service.ts`, unchanged by this patch). A PTO session is itself an active
+ * PTO user and defaults to itself; ADMIN is not a PTO user at all and has
+ * nothing to default to, so it must choose one from `ptoUsers`. Shared by
+ * P01 and W01 (Decision 1) rather than each screen re-deriving which mode
+ * applies to the current actor.
+ */
+export type CreatePackageResponsible =
+  | { mode: 'self'; userId: Uuid }
+  | { mode: 'pick'; ptoUsers: UserSummary[] };
 async function post<T>(path: string, body: unknown): Promise<T> {
   const token = readSessionToken();
   const response = await fetch(`/api/${path}`, {

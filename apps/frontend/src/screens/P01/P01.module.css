@@ -69,6 +69,23 @@
   cursor: pointer;
 }
 
+.pickerSelect {
+  width: 100%;
+  min-width: 180px;
+  box-sizing: border-box;
+  padding: var(--cc-p-space-8) var(--cc-p-space-12);
+  border: var(--cc-border-width) solid var(--cc-border-interactive);
+  border-radius: var(--cc-p-radius-6);
+  background: var(--cc-background-surface);
+  color: var(--cc-text-primary);
+  font: inherit;
+}
+
+.pickerSelect:focus-visible {
+  outline: var(--cc-focus-ring-width) solid var(--cc-focus-ring);
+  outline-offset: var(--cc-focus-ring-offset);
+}
+
 .actionButton:hover:not(:disabled) {
   background: var(--cc-action-primary-hover);
 }

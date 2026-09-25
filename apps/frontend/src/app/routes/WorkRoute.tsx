@@ -8,6 +8,7 @@ import * as executionUnitsApi from '../../data/executionUnitsApi';
 import * as documentationApi from '../../data/documentationApi';
 import { useCoreRuntime } from '../CoreRuntimeContext';
 import { canAccessDocumentation, canManageDocumentation } from '../../auth/internalRoles';
+import { useActivePtoUsers } from '../useActivePtoUsers';
 import { AppSidebar } from '../AppSidebar';
 import { ROUTE_PATHS, objectPath, packagePath } from '../routePaths';
 import { RouteError, RouteLoading, RouteNotFound } from '../RouteStatus';
@@ -24,6 +25,9 @@ export function WorkRoute() {
   const refetch = useRefetchSnapshot();
   const { session } = useCoreRuntime();
   const navigate = useNavigate();
+  // F8.2.1-04 — fetched only for ADMIN (see the hook's own comment); called
+  // unconditionally, before any early return, per the Rules of Hooks.
+  const ptoUsers = useActivePtoUsers(session?.user.role);
 
   if (state.status === 'Loading') return <RouteLoading />;
   if (state.status === 'Error') return <RouteError message={state.message} />;
@@ -86,8 +90,11 @@ export function WorkRoute() {
   const documentationActions: DocumentationSectionActionHandlers | undefined =
     session && canManageDocumentation(session.user.role)
       ? {
-          onCreatePackage: async () => {
-            const pkg = await documentationApi.createDocumentationPackage(work.id, session.user.id);
+          // F8.2.1-04 — PTO defaults to itself; ADMIN picks an active PTO
+          // user instead (see CreatePackageButton, W01/DocumentationSection.tsx).
+          responsible: session.user.role === 'PTO' ? { mode: 'self', userId: session.user.id } : { mode: 'pick', ptoUsers },
+          onCreatePackage: async (responsibleUserId) => {
+            const pkg = await documentationApi.createDocumentationPackage(work.id, responsibleUserId);
             refetch();
             navigate(packagePath(pkg.id));
           },
