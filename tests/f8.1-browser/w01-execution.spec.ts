@@ -91,6 +91,15 @@ interface FakeInspection {
 }
 
 function buildSnapshot(state: { portions: FakePortion[]; inspections: FakeInspection[] }) {
+  // F8.1 Final corrective — coverage is the sum of each portion's own latest
+  // confirmed quantity, never its planned quantity nor a plain accepted/not
+  // boolean: mirrors PortionCompletionService.unitCoverage() (packages/domain).
+  // Computed once so the work-level `accepted` flag and the unit-level
+  // `internalScStatus` can never disagree within this fixture, the same
+  // requirement resolveInternalScAccepted()/unitCoverage() satisfy for real
+  // in the backend.
+  const internalScConfirmedSum = state.portions.reduce((sum, p) => sum + Number(p.internalScConfirmedQuantity ?? 0), 0);
+  const internalScStatus = internalScConfirmedSum <= 0 ? 'NONE' : internalScConfirmedSum >= 300 ? 'COMPLETE' : 'PARTIAL';
   return {
     objects: [
       {
@@ -149,7 +158,7 @@ function buildSnapshot(state: { portions: FakePortion[]; inspections: FakeInspec
         variance: null,
         delayDays: 0,
         scheduleStatus: 'GREEN',
-        accepted: state.portions.length > 0 && state.portions.every((p) => p.internalScAccepted),
+        accepted: internalScStatus === 'COMPLETE',
         docsReady: false,
         blockers: [],
         stale: false,
@@ -175,10 +184,7 @@ function buildSnapshot(state: { portions: FakePortion[]; inspections: FakeInspec
         unit: 'м²',
         plannedQuantity: '300',
         actualQuantity: state.portions.reduce((sum, p) => sum + Number(p.rpFactQuantity ?? 0), 0).toFixed(4),
-        internalScStatus: (() => {
-          const acceptedSum = state.portions.filter((p) => p.internalScAccepted).reduce((sum, p) => sum + Number(p.plannedQuantity), 0);
-          return acceptedSum <= 0 ? 'NONE' : acceptedSum >= 300 ? 'COMPLETE' : 'PARTIAL';
-        })(),
+        internalScStatus,
         customerScStatus: 'NONE',
       },
     ],
@@ -322,6 +328,100 @@ test('F8.1 golden path: add a portion, enter RP fact, request and register an In
   expect(state.portions[0]!.internalScConfirmedQuantity).toBe('298');
   expect(state.inspections).toHaveLength(1);
   expect(state.inspections[0]!.status).toBe('ACCEPTED');
+});
+
+// F8.1 Final corrective — `Number('')` is `0` in JavaScript, so a blank
+// "Подтверждённый объём" field used to silently submit a confirmed
+// quantity of zero instead of being refused. Real DOM, real component: the
+// field is left untouched (never filled), proving the actual
+// InternalScDecisionForm code blocks submission before any request is
+// sent — parseConfirmedQuantityInput's own character-level cases (empty,
+// whitespace, non-numeric, negative, explicit zero) are unit-tested
+// directly in tests/f8.1-w01-viewmodel.test.ts, no browser required there.
+test('F8.1: an empty confirmed-quantity input is refused before submission — no accept request is ever sent', async ({
+  page,
+}) => {
+  const state: { portions: FakePortion[]; inspections: FakeInspection[] } = {
+    portions: [
+      {
+        id: 'portion-1',
+        executionUnitId: UNIT_ID,
+        label: 'Секция A',
+        plannedQuantity: '300',
+        rpFactQuantity: '300',
+        internalScAccepted: false,
+        internalScConfirmedQuantity: null,
+        customerScAccepted: false,
+        customerScConfirmedQuantity: null,
+        version: 3,
+      },
+    ],
+    inspections: [
+      {
+        id: 'inspection-1',
+        objectId: OBJECT_ID,
+        objectWorkId: WORK_ID,
+        portionId: 'portion-1',
+        inspectionType: 'INTERNAL_SC',
+        status: 'WAITING',
+        version: 1,
+        requestedBy: PM.id,
+        requestedAt: new Date().toISOString(),
+        inspectorId: null,
+        inspectionDate: null,
+        decision: null,
+        comment: null,
+        acceptedAt: null,
+      },
+    ],
+  };
+  let acceptCalls = 0;
+
+  await seedSession(page, 'f8-1-browser-token-empty-qty');
+  await mockApi(page, {
+    'GET /api/me': () => ({ status: 200, body: PM }),
+    'GET /api/snapshot': () => ({ status: 200, body: buildSnapshot(state) }),
+    'POST /api/attachments': () => ({
+      status: 201,
+      body: { id: 'attachment-1', fileName: 'photo.png', mimeType: 'image/png' },
+    }),
+    'POST /api/inspections/inspection-1/photos': () => ({ status: 201, body: { id: 'photo-1' } }),
+    // Mirrors the real backend's own rejection of a missing quantity — this
+    // responder must never actually be reached from this test, since the
+    // fix is that the request is never sent at all.
+    'POST /api/inspections/inspection-1/accept': (request) => {
+      acceptCalls += 1;
+      const body = request.postDataJSON() as { quantity?: number };
+      if (body.quantity === undefined || body.quantity === null) {
+        return { status: 400, body: { statusCode: 400, message: 'Укажите подтверждённый объём' } };
+      }
+      const inspection = state.inspections.find((i) => i.id === 'inspection-1')!;
+      inspection.status = 'ACCEPTED';
+      const portion = state.portions.find((p) => p.id === inspection.portionId)!;
+      portion.internalScAccepted = true;
+      portion.internalScConfirmedQuantity = String(body.quantity);
+      portion.version += 1;
+      return { status: 201, body: inspection };
+    },
+  });
+
+  await page.goto(`/app.html/object/${OBJECT_ID}/work/${WORK_ID}`);
+  await expect(page.getByRole('heading', { level: 1, name: 'Штукатурка стен' })).toBeVisible();
+
+  const portionRow = page.getByText('Секция A', { exact: true }).locator('..').locator('..');
+  await expect(portionRow.getByText('На проверке')).toBeVisible();
+
+  await portionRow
+    .getByLabel('Фотофиксация проверки участка Секция A')
+    .setInputFiles({ name: 'photo.png', mimeType: 'image/png', buffer: Buffer.from(PNG_BASE64, 'base64') });
+  await portionRow.getByLabel('Комментарий к решению по участку Секция A').fill('Объём не указан');
+  // The "Подтверждённый объём" field is deliberately left blank.
+  await portionRow.getByRole('button', { name: 'Принять' }).click();
+
+  await expect(portionRow.getByText('Укажите подтверждённый объём')).toBeVisible();
+  await expect(portionRow.getByText('Принято СК')).toHaveCount(0);
+  expect(acceptCalls, 'the request must never be sent for a blank quantity, not merely be rejected once sent').toBe(0);
+  expect(state.portions[0]!.internalScAccepted).toBe(false);
 });
 
 // The mock/demo runtime (`App.tsx`'s `MOCK_RUNTIME`, `session: null`) never

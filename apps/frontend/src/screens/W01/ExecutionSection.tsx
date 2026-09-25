@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { StatusBadge, typeClass } from '../../design-system';
 import type { W01ExecutionUnitViewModel, W01PortionViewModel } from '../../view-models/w01';
-import { confirmationVariant, confirmationLabel } from '../../view-models/w01';
+import { confirmationVariant, confirmationLabel, parseConfirmedQuantityInput } from '../../view-models/w01';
 import styles from './ExecutionSection.module.css';
 
 /**
@@ -196,14 +196,22 @@ function InternalScDecisionForm({
     }
     // F8.1-01 corrective, second pass — required for accept, the
     // inspector's own independently confirmed figure, never a copy of RP
-    // fact; irrelevant for reject, which confirms nothing.
+    // fact; irrelevant for reject, which confirms nothing. F8.1 Final
+    // corrective: parsed through parseConfirmedQuantityInput, not a raw
+    // Number(quantity) — an empty or whitespace-only field must not
+    // silently become a confirmed 0.
     let parsedQuantity: number | undefined;
     if (decision === 'accept') {
-      parsedQuantity = Number(quantity);
-      if (!Number.isFinite(parsedQuantity) || parsedQuantity < 0) {
-        setError('Укажите подтверждённый объём');
+      const parsed = parseConfirmedQuantityInput(quantity);
+      // Written as `=== false`, not `!parsed.ok` — the repo's root
+      // tsconfig.json runs with `strict: false` (see its own comment), under
+      // which this discriminated union only narrows via an equality check,
+      // not truthiness negation.
+      if (parsed.ok === false) {
+        setError(parsed.error);
         return;
       }
+      parsedQuantity = parsed.value;
     }
     setPending(true);
     setError(null);

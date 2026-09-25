@@ -155,18 +155,29 @@ export class InternalScPolicy {
 // fully accepted, is real progress but not completion — the remaining 400 m²
 // was never portioned at all, and treating an incomplete portion set as
 // satisfied is the same shape of bug as an empty `.every()`, one level up.
+//
+// F8.1 Final corrective (Independent Re-Review, pass 3): coverage used to sum
+// an accepted portion's own *planned* quantity, not what SC actually
+// confirmed. Once Internal SC and Customer SC record their own independently
+// confirmed figure (F8.1-01 v2, never a copy of RP_FACT or of the plan), a
+// portion accepted at 100 of its own 500 planned must count as 100 toward
+// its unit, not 500 — the exact "500 planned / 500 RP fact / Internal SC
+// confirms only 100" example the Review gave. `accepted` (a boolean) is gone
+// from this shape entirely: a portion with no applicable confirmation
+// contributes `confirmedQuantity: null`, read as zero, same treatment a
+// portion that was never created already got.
 export type ScCoverageStatus = 'NONE' | 'PARTIAL' | 'COMPLETE';
 export class PortionCompletionService {
-    // NONE: nothing accepted (including no portions at all — an empty sum is
-    // zero, not "vacuously covered"). PARTIAL: some accepted quantity exists
-    // but does not yet reach the unit's own planned quantity — D4 already
-    // forbids portions summing past it, so "reaches" and "equals" coincide.
-    // COMPLETE: the accepted portions' own planned quantities cover it.
-    unitCoverage(unitPlannedQuantity: any, portions: { plannedQuantity: any; accepted: boolean }[]): ScCoverageStatus {
-        const acceptedQuantity = portions.filter(p => p.accepted).reduce((s, p) => s.add(p.plannedQuantity), new Decimal(0));
-        if (acceptedQuantity.lte(0))
+    // NONE: nothing confirmed (including no portions at all — an empty sum is
+    // zero, not "vacuously covered"). PARTIAL: some confirmed quantity exists
+    // but does not yet reach the unit's own planned quantity. COMPLETE: the
+    // portions' own latest applicable confirmations sum to at least the
+    // unit's planned quantity.
+    unitCoverage(unitPlannedQuantity: any, portions: { confirmedQuantity: any }[]): ScCoverageStatus {
+        const confirmedQuantity = portions.reduce((s, p) => s.add(p.confirmedQuantity ?? 0), new Decimal(0));
+        if (confirmedQuantity.lte(0))
             return 'NONE';
-        return acceptedQuantity.gte(unitPlannedQuantity) ? 'COMPLETE' : 'PARTIAL';
+        return confirmedQuantity.gte(unitPlannedQuantity) ? 'COMPLETE' : 'PARTIAL';
     }
     private aggregate(statuses: ScCoverageStatus[]): ScCoverageStatus {
         if (statuses.length === 0)
@@ -176,23 +187,25 @@ export class PortionCompletionService {
         return statuses.every(s => s === 'NONE') ? 'NONE' : 'PARTIAL';
     }
     // F8.1 decision 8: acceptance aggregates from portions — never any-portion-
-    // accepted, and never any-created-portion-accepted either (the bug above).
-    // Internal SC completion and Customer SC acceptance are two separate
-    // methods over two separate booleans, kept structurally apart rather than
-    // merged into one generic "accepted" (F8.1 final clarification 2) — a
-    // caller cannot conflate them without deliberately reading the wrong
-    // field, because there is no shared field to misread. A work with zero
-    // units is never vacuously complete either — the same guard one level up.
-    internalScStatus(units: { plannedQuantity: any; portions: { plannedQuantity: any; internalScAccepted: boolean }[] }[]): ScCoverageStatus {
-        return this.aggregate(units.map(u => this.unitCoverage(u.plannedQuantity, u.portions.map(p => ({ plannedQuantity: p.plannedQuantity, accepted: p.internalScAccepted })))));
+    // accepted, never any-created-portion-accepted (the bug above), and never
+    // a confirmed portion's own planned quantity either (the Final corrective
+    // bug above that). Internal SC completion and Customer SC acceptance are
+    // two separate methods over two separate confirmation sources, kept
+    // structurally apart rather than merged into one generic "accepted" (F8.1
+    // final clarification 2) — a caller cannot conflate them without
+    // deliberately reading the wrong field, because there is no shared field
+    // to misread. A work with zero units is never vacuously complete either —
+    // the same guard one level up.
+    internalScStatus(units: { plannedQuantity: any; portions: { internalScConfirmedQuantity: any }[] }[]): ScCoverageStatus {
+        return this.aggregate(units.map(u => this.unitCoverage(u.plannedQuantity, u.portions.map(p => ({ confirmedQuantity: p.internalScConfirmedQuantity })))));
     }
-    customerScStatus(units: { plannedQuantity: any; portions: { plannedQuantity: any; customerScAccepted: boolean }[] }[]): ScCoverageStatus {
-        return this.aggregate(units.map(u => this.unitCoverage(u.plannedQuantity, u.portions.map(p => ({ plannedQuantity: p.plannedQuantity, accepted: p.customerScAccepted })))));
+    customerScStatus(units: { plannedQuantity: any; portions: { customerScConfirmedQuantity: any }[] }[]): ScCoverageStatus {
+        return this.aggregate(units.map(u => this.unitCoverage(u.plannedQuantity, u.portions.map(p => ({ confirmedQuantity: p.customerScConfirmedQuantity })))));
     }
-    internalScComplete(units: { plannedQuantity: any; portions: { plannedQuantity: any; internalScAccepted: boolean }[] }[]): boolean {
+    internalScComplete(units: { plannedQuantity: any; portions: { internalScConfirmedQuantity: any }[] }[]): boolean {
         return this.internalScStatus(units) === 'COMPLETE';
     }
-    customerScAccepted(units: { plannedQuantity: any; portions: { plannedQuantity: any; customerScAccepted: boolean }[] }[]): boolean {
+    customerScAccepted(units: { plannedQuantity: any; portions: { customerScConfirmedQuantity: any }[] }[]): boolean {
         return this.customerScStatus(units) === 'COMPLETE';
     }
 }
@@ -205,7 +218,7 @@ export class PortionCompletionService {
 // ProductionService.transition() (the gate a backend mutation is actually
 // held to), so the two can no longer diverge — they call the same function,
 // not two independent re-derivations of the same rule.
-export function resolveInternalScAccepted(wholeWorkAccepted: boolean, units: { plannedQuantity: any; portions: { plannedQuantity: any; internalScAccepted: boolean }[] }[]): boolean {
+export function resolveInternalScAccepted(wholeWorkAccepted: boolean, units: { plannedQuantity: any; portions: { internalScConfirmedQuantity: any }[] }[]): boolean {
     return units.length === 0 ? wholeWorkAccepted : new PortionCompletionService().internalScComplete(units);
 }
 // F8.1-04 corrective: the one place that decides a work's actual quantity —

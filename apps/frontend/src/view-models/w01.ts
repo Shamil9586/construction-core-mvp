@@ -175,6 +175,27 @@ const DECIDABLE_INTERNAL_SC_STATUSES = new Set<InspectionStatus>([
   'REINSPECTION',
 ]);
 
+export type ConfirmedQuantityParseResult = { ok: true; value: number } | { ok: false; error: string };
+
+/**
+ * F8.1 Final corrective — `Number('')` and `Number('   ')` both evaluate to
+ * `0` in JavaScript, so a blank or whitespace-only "Подтверждённый объём"
+ * field on the Internal SC decision form (`ExecutionSection.tsx`) used to
+ * silently submit a confirmed quantity of zero instead of being refused.
+ * Trimming first and rejecting an empty result catches both; a non-numeric
+ * or negative input is rejected the same way it already was. An explicitly
+ * typed `0` is a real, deliberate value once the input is non-empty, and is
+ * not itself forbidden here — the backend's own `qty` schema already allows
+ * a nonnegative zero.
+ */
+export function parseConfirmedQuantityInput(raw: string): ConfirmedQuantityParseResult {
+  const trimmed = raw.trim();
+  if (trimmed === '') return { ok: false, error: 'Укажите подтверждённый объём' };
+  const value = Number(trimmed);
+  if (!Number.isFinite(value) || value < 0) return { ok: false, error: 'Укажите подтверждённый объём' };
+  return { ok: true, value };
+}
+
 export interface W01PortionViewModel {
   id: string;
   /** For `POST portions/:id/fact` and `.../inspection-request`'s optimistic-concurrency `version`. */

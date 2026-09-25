@@ -59,92 +59,96 @@ test('InternalScPolicy: required only for the exact organization name, nothing e
 
 /* --------------------------------------------------------------------- *
  * D8 — acceptance aggregates from portions, never any-portion-accepted,  *
- * AND (F8.1-02 corrective) never any-created-portion-accepted either:    *
- * an accepted portion only counts toward its unit's total if the sum of  *
- * accepted portions' own planned quantity actually covers the unit's     *
- * planned quantity. Portions that were never created count as zero,      *
- * never as satisfied.                                                    *
+ * never any-created-portion-accepted (F8.1-02 corrective), and (F8.1     *
+ * Final corrective, Independent Re-Review pass 3) never a confirmed      *
+ * portion's own *planned* quantity either: an accepted portion's         *
+ * planned quantity is what it was asked to deliver, not what SC actually *
+ * confirmed. The Review's own example — 500 planned, 500 RP fact, but    *
+ * Internal SC confirms only 100 — must read PARTIAL, because only 100 is *
+ * the figure SC actually stands behind. Each portion now contributes its *
+ * own latest applicable confirmation quantity (never its planned         *
+ * quantity, never a plain accepted/not boolean); a portion with no such  *
+ * confirmation contributes zero, same as one that was never created.     *
  * --------------------------------------------------------------------- */
 
-test('PortionCompletionService.unitCoverage: 100 of 500 planned, fully accepted, is PARTIAL — not COMPLETE', () => {
-  // The exact F8.1-02 bug: a single 100 m² portion, itself fully accepted,
-  // used to read the whole 500 m² unit as complete because .every() over
-  // the one portion that happens to exist is trivially true. The unit's own
-  // remaining 400 m² was never portioned at all.
+test('PortionCompletionService.unitCoverage: a confirmed quantity below the unit plan is PARTIAL, even though the portion itself was accepted in full — the Review\'s own 500/500/100 example', () => {
+  // The exact F8.1 Final bug: SC confirmed only 100 of this portion, but the
+  // old code counted the portion's own 500 planned quantity the moment it
+  // was accepted at all, regardless of what was actually confirmed.
   const service = new PortionCompletionService();
   assert.equal(
-    service.unitCoverage('500', [{ plannedQuantity: '100', accepted: true }]),
+    service.unitCoverage('500', [{ confirmedQuantity: '100' }]),
     'PARTIAL',
   );
 });
 
-test('PortionCompletionService.unitCoverage: 500 of 500 planned, fully accepted, is COMPLETE', () => {
+test('PortionCompletionService.unitCoverage: confirmed quantities summing to the unit plan is COMPLETE', () => {
   const service = new PortionCompletionService();
   assert.equal(
-    service.unitCoverage('500', [{ plannedQuantity: '500', accepted: true }]),
+    service.unitCoverage('500', [{ confirmedQuantity: '500' }]),
     'COMPLETE',
   );
   assert.equal(
     service.unitCoverage('500', [
-      { plannedQuantity: '300', accepted: true },
-      { plannedQuantity: '200', accepted: true },
+      { confirmedQuantity: '300' },
+      { confirmedQuantity: '200' },
     ]),
     'COMPLETE',
   );
 });
 
-test('PortionCompletionService.unitCoverage: zero accepted quantity — including zero portions at all — is NONE', () => {
+test('PortionCompletionService.unitCoverage: zero confirmed quantity — including zero portions at all, or a portion with none — is NONE', () => {
   const service = new PortionCompletionService();
   assert.equal(service.unitCoverage('500', []), 'NONE');
-  assert.equal(service.unitCoverage('500', [{ plannedQuantity: '500', accepted: false }]), 'NONE');
+  assert.equal(service.unitCoverage('500', [{ confirmedQuantity: null }]), 'NONE');
 });
 
-test('PortionCompletionService.unitCoverage: an accepted portion alongside an unaccepted one is PARTIAL, not COMPLETE', () => {
+test('PortionCompletionService.unitCoverage: a confirmed portion alongside an unconfirmed one is PARTIAL, not COMPLETE', () => {
   const service = new PortionCompletionService();
   assert.equal(
     service.unitCoverage('500', [
-      { plannedQuantity: '300', accepted: true },
-      { plannedQuantity: '200', accepted: false },
+      { confirmedQuantity: '300' },
+      { confirmedQuantity: null },
     ]),
     'PARTIAL',
   );
 });
 
-test('PortionCompletionService.internalScComplete: true only when every unit is fully covered by accepted portions', () => {
+test('PortionCompletionService.internalScComplete: true only when confirmed quantities fully cover every unit', () => {
   const service = new PortionCompletionService();
   assert.equal(
     service.internalScComplete([
-      { plannedQuantity: '500', portions: [{ plannedQuantity: '500', internalScAccepted: true }] },
+      { plannedQuantity: '500', portions: [{ internalScConfirmedQuantity: '500' }] },
     ]),
     true,
   );
   assert.equal(
     service.internalScComplete([
-      { plannedQuantity: '500', portions: [{ plannedQuantity: '100', internalScAccepted: true }] },
+      { plannedQuantity: '500', portions: [{ internalScConfirmedQuantity: '100' }] },
     ]),
     false,
-    'partial coverage (100 of 500) must not read as complete',
+    'partial confirmed coverage (100 of 500) must not read as complete',
   );
   assert.equal(
     service.internalScComplete([
       {
         plannedQuantity: '500',
         portions: [
-          { plannedQuantity: '300', internalScAccepted: true },
-          { plannedQuantity: '200', internalScAccepted: false },
+          { internalScConfirmedQuantity: '300' },
+          { internalScConfirmedQuantity: null },
         ],
       },
     ]),
     false,
-    'one unaccepted portion in an otherwise-accepted unit must not read as complete',
+    'one unconfirmed portion in an otherwise-confirmed unit must not read as complete',
   );
   assert.equal(
     service.internalScComplete([
-      { plannedQuantity: '500', portions: [{ plannedQuantity: '500', internalScAccepted: true }] },
-      { plannedQuantity: '300', portions: [{ plannedQuantity: '300', internalScAccepted: false }] },
+      { plannedQuantity: '500', portions: [{ internalScConfirmedQuantity: '500' }] },
+      { plannedQuantity: '300', portions: [{ internalScConfirmedQuantity: null }] },
     ]),
     false,
-    'one fully-covered unit next to one unaccepted unit must not read as complete',
+    'one fully-covered unit next to one unconfirmed unit must not read as complete',
   );
 });
 
@@ -155,7 +159,7 @@ test('PortionCompletionService.internalScComplete: a zero-portion unit blocks co
   assert.equal(service.internalScComplete([{ plannedQuantity: '500', portions: [] }]), false);
   assert.equal(
     service.internalScComplete([
-      { plannedQuantity: '500', portions: [{ plannedQuantity: '500', internalScAccepted: true }] },
+      { plannedQuantity: '500', portions: [{ internalScConfirmedQuantity: '500' }] },
       { plannedQuantity: '300', portions: [] },
     ]),
     false,
@@ -171,31 +175,31 @@ test('PortionCompletionService.internalScComplete: zero units is not vacuously c
 test('PortionCompletionService: Internal SC completion and Customer SC acceptance are independent — never derived from each other', () => {
   const service = new PortionCompletionService();
   const units = [
-    { plannedQuantity: '500', portions: [{ plannedQuantity: '500', internalScAccepted: true, customerScAccepted: false }] },
+    { plannedQuantity: '500', portions: [{ internalScConfirmedQuantity: '500', customerScConfirmedQuantity: null }] },
   ];
   assert.equal(service.internalScComplete(units), true);
   assert.equal(service.customerScAccepted(units), false);
   const reversed = [
-    { plannedQuantity: '500', portions: [{ plannedQuantity: '500', internalScAccepted: false, customerScAccepted: true }] },
+    { plannedQuantity: '500', portions: [{ internalScConfirmedQuantity: null, customerScConfirmedQuantity: '500' }] },
   ];
   assert.equal(service.internalScComplete(reversed), false);
   assert.equal(service.customerScAccepted(reversed), true);
 });
 
-test('PortionCompletionService.customerScAccepted: same coverage rule and the same zero-portion guard', () => {
+test('PortionCompletionService.customerScAccepted: same confirmed-quantity coverage rule and the same zero-portion guard', () => {
   const service = new PortionCompletionService();
   assert.equal(
     service.customerScAccepted([
-      { plannedQuantity: '500', portions: [{ plannedQuantity: '500', customerScAccepted: true }] },
+      { plannedQuantity: '500', portions: [{ customerScConfirmedQuantity: '500' }] },
     ]),
     true,
   );
   assert.equal(
     service.customerScAccepted([
-      { plannedQuantity: '500', portions: [{ plannedQuantity: '100', customerScAccepted: true }] },
+      { plannedQuantity: '500', portions: [{ customerScConfirmedQuantity: '100' }] },
     ]),
     false,
-    'partial coverage must not read as complete',
+    'partial confirmed coverage must not read as complete',
   );
   assert.equal(service.customerScAccepted([{ plannedQuantity: '500', portions: [] }]), false);
   assert.equal(service.customerScAccepted([]), false);
@@ -214,10 +218,10 @@ test('resolveInternalScAccepted: no execution units falls back to the whole-work
   assert.equal(resolveInternalScAccepted(false, []), false);
 });
 
-test('resolveInternalScAccepted: with execution units, the whole-work flag is ignored — only coverage counts', () => {
-  const partiallyCovered = [{ plannedQuantity: '500', portions: [{ plannedQuantity: '100', internalScAccepted: true }] }];
+test('resolveInternalScAccepted: with execution units, the whole-work flag is ignored — only confirmed-quantity coverage counts', () => {
+  const partiallyCovered = [{ plannedQuantity: '500', portions: [{ internalScConfirmedQuantity: '100' }] }];
   assert.equal(resolveInternalScAccepted(true, partiallyCovered), false, 'a stale/irrelevant whole-work flag must not override real portion coverage');
-  const fullyCovered = [{ plannedQuantity: '500', portions: [{ plannedQuantity: '500', internalScAccepted: true }] }];
+  const fullyCovered = [{ plannedQuantity: '500', portions: [{ internalScConfirmedQuantity: '500' }] }];
   assert.equal(resolveInternalScAccepted(false, fullyCovered), true);
 });
 

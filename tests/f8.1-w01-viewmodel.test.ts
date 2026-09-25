@@ -4,6 +4,7 @@ import {
   buildW01ViewModel,
   confirmationLabel,
   confirmationVariant,
+  parseConfirmedQuantityInput,
 } from '../apps/frontend/src/view-models/w01';
 import type {
   Inspection,
@@ -309,4 +310,47 @@ test('F8.1 W01 view-model: confirmationVariant/confirmationLabel cover every Wor
   assert.equal(confirmationVariant({ kind: 'Unknown' }), 'Neutral');
   assert.equal(confirmationVariant({ kind: 'NotSubmitted' }), 'Neutral');
   assert.equal(confirmationVariant({ kind: 'ConfirmedQuantity', value: '498', meta: 'м²' }), 'OnTrack');
+});
+
+/**
+ * F8.1 Final corrective — `Number('')` and `Number('   ')` both evaluate to
+ * `0` in JavaScript, so `ExecutionSection.tsx`'s Internal SC decision form
+ * used to submit a confirmed quantity of zero for a field the user left
+ * blank, instead of refusing to submit at all. `parseConfirmedQuantityInput`
+ * is the extracted, unit-testable fix — see also
+ * tests/f8.1-browser/w01-execution.spec.ts for the real-DOM proof that a
+ * blank field never reaches the backend.
+ */
+test('parseConfirmedQuantityInput: an empty string is a validation error, not a silent zero', () => {
+  const result = parseConfirmedQuantityInput('');
+  assert.equal(result.ok, false);
+});
+
+test('parseConfirmedQuantityInput: a whitespace-only string is a validation error, not a silent zero', () => {
+  assert.equal(parseConfirmedQuantityInput('   ').ok, false);
+  assert.equal(parseConfirmedQuantityInput('\t\n').ok, false);
+});
+
+test('parseConfirmedQuantityInput: a non-numeric string is a validation error', () => {
+  assert.equal(parseConfirmedQuantityInput('abc').ok, false);
+  assert.equal(parseConfirmedQuantityInput('12abc').ok, false);
+});
+
+test('parseConfirmedQuantityInput: a negative number is a validation error', () => {
+  assert.equal(parseConfirmedQuantityInput('-5').ok, false);
+});
+
+test('parseConfirmedQuantityInput: an explicitly typed zero is a real value, not rejected — only an absent one is', () => {
+  const result = parseConfirmedQuantityInput('0');
+  assert.equal(result.ok, true);
+  assert.equal(result.ok && result.value, 0);
+});
+
+test('parseConfirmedQuantityInput: a plain positive number, with or without surrounding whitespace, parses to its value', () => {
+  const a = parseConfirmedQuantityInput('298');
+  assert.equal(a.ok, true);
+  assert.equal(a.ok && a.value, 298);
+  const b = parseConfirmedQuantityInput('  150.5  ');
+  assert.equal(b.ok, true);
+  assert.equal(b.ok && b.value, 150.5);
 });

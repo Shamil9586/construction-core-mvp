@@ -51,16 +51,18 @@ export class ReadService {
         const today = new Date();
         const age = (d: any) => d ? Math.max(0, Math.floor((+today - +new Date(d)) / 86400000)) : 0;
         // F8.1 decision 8: acceptance aggregates from portions, never
-        // any-portion-accepted, and (F8.1-02/03 corrective, Independent Review
-        // not accepted first pass) never any-created-portion-accepted either —
-        // computed once per work here, via the same resolveInternalScAccepted()
-        // ProductionService.transition() now also calls (packages/domain), so
-        // the read model's blockers and a real mutation's own gate cannot
-        // disagree about the same work. A work with no execution units keeps
-        // today's exact .some() computation, portion_id IS NULL — decision 6:
-        // Internal SC completion and Customer SC acceptance are kept apart as
-        // two separately-named results, never merged into one generic
-        // "accepted".
+        // any-portion-accepted, (F8.1-02/03 corrective) never
+        // any-created-portion-accepted either, and (F8.1 Final corrective) never
+        // a confirmed portion's own planned quantity — each portion contributes
+        // its latest applicable confirmation quantity, never merely whether it
+        // was accepted at all. Computed once per work here, via the same
+        // resolveInternalScAccepted() ProductionService.transition() now also
+        // calls (packages/domain), so the read model's blockers and a real
+        // mutation's own gate cannot disagree about the same work. A work with
+        // no execution units keeps today's exact .some() computation,
+        // portion_id IS NULL — decision 6: Internal SC completion and Customer
+        // SC acceptance are kept apart as two separately-named results, never
+        // merged into one generic "accepted".
         const latestConfirmation = (portionId: string, source: string) => { const own = portionConfirmations.filter(c => c.portionId === portionId && c.source === source); return own.length ? own[own.length - 1] : undefined; };
         const portionAccepted = (portionId: string, inspectionType: string) => inspections.some(i => i.portionId === portionId && i.inspectionType === inspectionType && i.status === 'ACCEPTED');
         const scCompletion = new PortionCompletionService();
@@ -76,7 +78,7 @@ export class ReadService {
         // literal PARTIAL/COMPLETE/NONE distinction the Independent Review
         // required be visible, not merely correctly computed internally.
         const portionsWithStatus = portions.map(p => ({ ...p, rpFactQuantity: latestConfirmation(p.id, 'RP_FACT')?.quantity ?? null, internalScAccepted: portionAccepted(p.id, 'INTERNAL_SC'), internalScConfirmedQuantity: latestConfirmation(p.id, 'INTERNAL_SC')?.quantity ?? null, customerScAccepted: portionAccepted(p.id, 'CUSTOMER_SC'), customerScConfirmedQuantity: latestConfirmation(p.id, 'CUSTOMER_SC')?.quantity ?? null }));
-        const executionUnitsWithTotals = executionUnits.map(u => { const ownPortions = portionsWithStatus.filter(p => p.executionUnitId === u.id); return { ...u, actualQuantity: ownPortions.reduce((s, p) => s.add(p.rpFactQuantity ?? 0), new Decimal(0)).toFixed(4), internalScStatus: scCompletion.unitCoverage(u.plannedQuantity, ownPortions.map(p => ({ plannedQuantity: p.plannedQuantity, accepted: p.internalScAccepted }))), customerScStatus: scCompletion.unitCoverage(u.plannedQuantity, ownPortions.map(p => ({ plannedQuantity: p.plannedQuantity, accepted: p.customerScAccepted }))) }; });
+        const executionUnitsWithTotals = executionUnits.map(u => { const ownPortions = portionsWithStatus.filter(p => p.executionUnitId === u.id); return { ...u, actualQuantity: ownPortions.reduce((s, p) => s.add(p.rpFactQuantity ?? 0), new Decimal(0)).toFixed(4), internalScStatus: scCompletion.unitCoverage(u.plannedQuantity, ownPortions.map(p => ({ confirmedQuantity: p.internalScConfirmedQuantity }))), customerScStatus: scCompletion.unitCoverage(u.plannedQuantity, ownPortions.map(p => ({ confirmedQuantity: p.customerScConfirmedQuantity }))) }; });
         // F8.1-04 corrective (Independent Review, not accepted first pass): a
         // work with any execution unit treats them as its sole production fact
         // source — resolveActualQuantity() (packages/domain), the same function
@@ -100,7 +102,7 @@ export class ReadService {
             const wholeWorkAccepted = inspections.some(i => i.objectWorkId === w.id && i.portionId === null && i.inspectionType === 'INTERNAL_SC' && i.status === 'ACCEPTED');
             if (!units.length)
                 return [w.id, { internalScComplete: wholeWorkAccepted, customerScAccepted: null }];
-            const shape = units.map(u => ({ plannedQuantity: u.plannedQuantity, portions: portionsWithStatus.filter(p => p.executionUnitId === u.id).map(p => ({ plannedQuantity: p.plannedQuantity, internalScAccepted: p.internalScAccepted, customerScAccepted: p.customerScAccepted })) }));
+            const shape = units.map(u => ({ plannedQuantity: u.plannedQuantity, portions: portionsWithStatus.filter(p => p.executionUnitId === u.id).map(p => ({ internalScConfirmedQuantity: p.internalScConfirmedQuantity, customerScConfirmedQuantity: p.customerScConfirmedQuantity })) }));
             return [w.id, { internalScComplete: resolveInternalScAccepted(wholeWorkAccepted, shape), customerScAccepted: scCompletion.customerScAccepted(shape) }];
         }));
         const enriched = works.map(w => { const accepted = workScStatus.get(w.id)!.internalScComplete; const customerScAccepted = workScStatus.get(w.id)!.customerScAccepted; const productionFact = productionFactByWork.get(w.id)!; const actualQuantity = productionFact.actualQuantity; const lastReportedAt = productionFact.lastReportedAt; const docsReady = packages.some(p => p.objectWorkId === w.id && ['READY', 'TRANSFERRED_TO_SDO'].includes(p.status)); const cases = sdo.filter(s => s.objectWorkId === w.id); const closed = closings.filter(f => cases.some(s => s.id === f.sdoCaseId)).reduce((x, f) => x.add(f.amount), new Decimal(0)).toFixed(2); const financial = new PotentialClosingService().calculate([{ cost: w.estimatedCost, actual: actualQuantity, planned: w.plannedQuantity, closed, accepted, requiresInspection: w.requiresInspection, docsReady, transferred: cases.length > 0, calculated: cases.some(s => ['CALCULATED', 'READY_TO_CLOSE', 'CLOSED'].includes(s.status)) }]); const status = new ScheduleStatusService().calculate(w.plannedStartDate, w.plannedFinishDate, (!lastReportedAt && Number(actualQuantity) === 0) ? null : new ProgressCalculationService().calculate(actualQuantity, w.plannedQuantity), today, risk); const blockers = dependencies.filter(d => d.successorWorkId === w.id).flatMap(d => { const before = works.find(x => x.id === d.predecessorWorkId); const beforeActual = before ? productionFactByWork.get(before.id)!.actualQuantity : null; const reasons = []; if (before && Number(beforeActual) < Number(before.plannedQuantity))
