@@ -162,6 +162,13 @@
   --cc-status-neutral-fill: var(--cc-p-slate-200);
   --cc-status-neutral-text: var(--cc-p-ink-600);
 
+  /* overlay — the dimming layer behind a modal surface. F11.1's off-canvas
+     Sidebar drawer is the first consumer; any future dialog/panel reuses this
+     rather than a second inline value. Derived from the ink primitive via
+     color-mix() instead of a new hex, so it stays tied to the same colour the
+     rest of the scale already uses for the darkest text. */
+  --cc-overlay-scrim: color-mix(in srgb, var(--cc-p-ink-900) 55%, transparent);
+
   /* radius */
   --cc-radius-card: var(--cc-p-radius-10);
   --cc-radius-button: var(--cc-p-radius-7);

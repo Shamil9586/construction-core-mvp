@@ -76,20 +76,20 @@ test.describe('AppShell landmarks', () => {
     expect(await style(main, 'max-width')).toBe('none');
   });
 
-  test("narrow viewport: legacy's 760px breakpoint does not reach the shell", async ({
+  test("narrow viewport: legacy's 760px breakpoint does not reach the header or main", async ({
     page,
   }) => {
-    // Legacy at <=760px: aside{position:relative;width:100%;padding:16px},
-    // nav{display:flex;overflow:auto;margin-top:10px}, header{padding:12px;
-    // height:auto}, main{padding:18px}. None of it is scoped to a media query on
-    // our side, so our declarations hold regardless of viewport.
+    // Legacy at <=760px: header{padding:12px;height:auto}, main{padding:18px}.
+    // Neither is scoped to a media query on our side, so our declarations hold
+    // regardless of viewport. `aside` itself is deliberately narrow-viewport
+    // dependent as of F11.1 (off-canvas below 640px, F11-D01) — see the
+    // 'AppShell — off-canvas drawer' tests below for that behaviour; asserting
+    // a fixed 208px here would re-lock in the defect F11.0 found.
     await page.setViewportSize({ width: 480, height: 900 });
     const section = shellSection(page);
 
-    expect(await style(section.locator('aside'), 'width')).toBe('208px');
     expect(await style(section.locator('header'), 'height')).toBe('64px');
     expect(await style(section.locator('main'), 'padding-left')).toBe('32px');
-    expect(await style(section.locator('aside nav'), 'display')).toBe('block');
 
     await page.setViewportSize({ width: 1440, height: 1000 });
   });
@@ -174,6 +174,193 @@ test.describe('AppShell — skip link', () => {
 
     await page.keyboard.press('Enter');
     await expect(section.locator('main')).toBeFocused();
+  });
+});
+
+test.describe('AppShell — off-canvas drawer (F11.1)', () => {
+  // F11-D01, Option A: desktop/tablet keep the existing full 208px Sidebar
+  // unchanged; below a narrow breakpoint it becomes an off-canvas drawer
+  // instead, opened by a menu trigger, reusing the exact same `sidebar` node
+  // AppShell already renders into `<aside>` — never a second implementation.
+
+  function trigger(page: Page): Locator {
+    return shellSection(page).getByRole('button', { name: 'Открыть меню навигации' });
+  }
+
+  function drawer(page: Page): Locator {
+    return shellSection(page).getByRole('dialog', { name: 'Меню навигации' });
+  }
+
+  test.describe('desktop/tablet — unchanged', () => {
+    for (const width of [1440, 1024, 768]) {
+      test(`${width}px: full sidebar, no drawer trigger`, async ({ page }) => {
+        await page.setViewportSize({ width, height: 1000 });
+        const section = shellSection(page);
+
+        expect(await style(section.locator('aside'), 'display')).toBe('flex');
+        expect(await style(section.locator('aside'), 'width')).toBe('208px');
+        await expect(trigger(page)).toBeHidden();
+        await expect(drawer(page)).toBeHidden();
+
+        await page.setViewportSize({ width: 1440, height: 1000 });
+      });
+    }
+  });
+
+  test.describe('narrow viewport (390 / 375) — off-canvas', () => {
+    for (const width of [390, 375]) {
+      test(`${width}px, closed: sidebar reserves no layout width`, async ({ page }) => {
+        await page.setViewportSize({ width, height: 800 });
+        const section = shellSection(page);
+
+        // display:none is what actually guarantees zero reserved layout
+        // width — this is the assertion the pre-F11.1 test inverted.
+        expect(await style(section.locator('aside'), 'display')).toBe('none');
+        await expect(trigger(page)).toBeVisible();
+        await expect(drawer(page)).toBeHidden();
+
+        await page.setViewportSize({ width: 1440, height: 1000 });
+      });
+    }
+
+    test('390px, open: the same Sidebar content becomes the drawer', async ({ page }) => {
+      await page.setViewportSize({ width: 390, height: 800 });
+
+      await trigger(page).click();
+
+      await expect(drawer(page)).toBeVisible();
+      for (const label of ['Панель', 'Объекты', 'Производство', 'Финансы']) {
+        await expect(drawer(page).getByRole('button', { name: label })).toBeVisible();
+      }
+      await expect(trigger(page)).toHaveAttribute('aria-expanded', 'true');
+
+      await page.setViewportSize({ width: 1440, height: 1000 });
+    });
+  });
+
+  test.describe('interaction', () => {
+    test.beforeEach(async ({ page }) => {
+      await page.setViewportSize({ width: 390, height: 800 });
+    });
+
+    test.afterEach(async ({ page }) => {
+      await page.setViewportSize({ width: 1440, height: 1000 });
+    });
+
+    test('the trigger opens the drawer and moves focus into it', async ({ page }) => {
+      await trigger(page).click();
+
+      await expect(drawer(page)).toBeVisible();
+      await expect(drawer(page).getByRole('button', { name: 'Закрыть меню' })).toBeFocused();
+    });
+
+    test("the drawer's own close button closes it and returns focus to the trigger", async ({
+      page,
+    }) => {
+      await trigger(page).click();
+      await drawer(page).getByRole('button', { name: 'Закрыть меню' }).click();
+
+      await expect(drawer(page)).toBeHidden();
+      await expect(trigger(page)).toBeFocused();
+      await expect(trigger(page)).toHaveAttribute('aria-expanded', 'false');
+    });
+
+    test('Escape closes the drawer and returns focus to the trigger', async ({ page }) => {
+      await trigger(page).click();
+      await expect(drawer(page)).toBeVisible();
+
+      await page.keyboard.press('Escape');
+
+      await expect(drawer(page)).toBeHidden();
+      await expect(trigger(page)).toBeFocused();
+      await expect(trigger(page)).toHaveAttribute('aria-expanded', 'false');
+    });
+
+    test('a click on the backdrop closes the drawer', async ({ page }) => {
+      await trigger(page).click();
+      await expect(drawer(page)).toBeVisible();
+
+      // The drawer's own content box is 208px wide, flush left; a point well
+      // to its right — but still inside the 390px viewport — can only be the
+      // ::backdrop, which is `position: fixed` to the viewport regardless of
+      // page scroll.
+      await page.mouse.click(300, 400);
+
+      await expect(drawer(page)).toBeHidden();
+    });
+
+    test('activating a Sidebar item inside the drawer closes it without swallowing the activation', async ({
+      page,
+    }) => {
+      await trigger(page).click();
+      await drawer(page).getByRole('button', { name: 'Производство' }).click();
+
+      await expect(drawer(page)).toBeHidden();
+      // Same shared activeKey state the desktop sidebar reads — proof this is
+      // the one real Sidebar activation, not a second nav implementation that
+      // merely happens to close on click.
+      await expect(shellSection(page).locator('[data-active-nav]')).toHaveText('production');
+
+      await page.setViewportSize({ width: 1440, height: 1000 });
+      await expect(sidebarNav(page).getByRole('button', { name: 'Производство' })).toHaveAttribute(
+        'aria-current',
+        'page',
+      );
+    });
+  });
+
+  test.describe('accessibility', () => {
+    test('trigger is a real button with an accessible name and exposed expanded state, operable from the keyboard', async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: 390, height: 800 });
+      const button = trigger(page);
+
+      expect(await button.evaluate((node) => node.tagName)).toBe('BUTTON');
+      await expect(button).toHaveAttribute('aria-haspopup', 'dialog');
+      await expect(button).toHaveAttribute('aria-expanded', 'false');
+
+      await button.focus();
+      await expect(button).toBeFocused();
+      await page.keyboard.press('Enter');
+
+      await expect(button).toHaveAttribute('aria-expanded', 'true');
+      await expect(drawer(page)).toBeVisible();
+
+      await page.keyboard.press('Escape');
+      await page.setViewportSize({ width: 1440, height: 1000 });
+    });
+
+    test('Tab stays inside the open drawer — no reachable keyboard trap into content behind it', async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: 390, height: 800 });
+      await trigger(page).click();
+      await expect(drawer(page).getByRole('button', { name: 'Закрыть меню' })).toBeFocused();
+
+      // A native <dialog> shown via showModal() is the platform's own focus
+      // trap: cycling Tab must never reach an operable control outside it
+      // while it is open. Chromium's own implementation of that trap rests
+      // focus on <body> for exactly one Tab press between the last focusable
+      // element inside the dialog and wrapping back to the first — <body> is
+      // inert here (nothing outside the dialog is reachable), has no visible
+      // focus ring and offers nothing to activate, so this is not a trap
+      // failure; an actual failure would land on a real control instead
+      // (e.g. a Sidebar button in the desktop `aside`, or something in `main`).
+      for (let i = 0; i < 12; i += 1) {
+        await page.keyboard.press('Tab');
+        const focusIsSafe = await page.evaluate(() => {
+          const openDialog = document.querySelector('dialog[open]');
+          const active = document.activeElement;
+          if (!openDialog || !active) return false;
+          return openDialog.contains(active) || active === document.body;
+        });
+        expect(focusIsSafe).toBe(true);
+      }
+
+      await page.keyboard.press('Escape');
+      await page.setViewportSize({ width: 1440, height: 1000 });
+    });
   });
 });
 

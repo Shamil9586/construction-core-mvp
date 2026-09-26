@@ -134,3 +134,179 @@
   outline: var(--cc-focus-ring-width) solid var(--cc-focus-ring);
   outline-offset: calc(var(--cc-focus-ring-offset) * -1);
 }
+
+/*
+ * F11.1 — off-canvas Sidebar drawer, narrow viewport only.
+ *
+ * `<dialog>` carries a UA stylesheet (centred box, 2px border, 1em padding,
+ * `dialog:not([open]){display:none}`) that has to be replaced wholesale for
+ * a flush-left, full-height drawer rather than a centred modal card. Only
+ * `.drawer[open]` sets `display`, so the UA's own `:not([open])` rule keeps
+ * hiding it the rest of the time without this file asserting that too.
+ */
+.drawer {
+  box-sizing: border-box;
+  margin: 0;
+  border: none;
+  padding: 0;
+  position: fixed;
+  inset: 0 auto 0 0;
+  height: 100%;
+  max-height: none;
+  width: var(--cc-sidebar-width);
+  max-width: 85vw;
+  background: var(--cc-background-navigation);
+  color: var(--cc-text-on-navigation-muted);
+  flex-direction: column;
+}
+
+.drawer[open] {
+  display: flex;
+}
+
+.drawer::backdrop {
+  background: var(--cc-overlay-scrim);
+}
+
+.drawerHeader {
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: flex-end;
+  padding: var(--cc-p-space-8);
+}
+
+/* Same inset-ring treatment as Sidebar's own nav items (D-04): this button
+   sits on the same navy surface, so it takes the inverse ring too. */
+.drawerClose {
+  box-sizing: border-box;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--cc-button-height);
+  height: var(--cc-button-height);
+  border: none;
+  border-radius: var(--cc-button-radius);
+  background: none;
+  color: var(--cc-text-on-navigation);
+  font: inherit;
+  cursor: pointer;
+  appearance: none;
+}
+
+.drawerClose:hover {
+  background: var(--cc-action-navigation-hover);
+}
+
+.drawerClose:focus-visible {
+  outline: var(--cc-focus-ring-width) solid var(--cc-focus-ring-inverse);
+  outline-offset: calc(var(--cc-focus-ring-offset) * -1);
+}
+
+.drawerCloseGlyph {
+  font-size: var(--cc-p-size-20);
+  line-height: 1;
+}
+
+/* The drawer's own copy of `sidebar` scrolls independently, same as `.aside`. */
+.drawerBody {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Hidden at every audited desktop/tablet width (1440/1280/1024/768); shown
+   only under the breakpoint below. A slim utility strip, not a second topbar
+   — the caller's own optional `topbar` slot is untouched and still renders
+   beneath it when supplied. */
+.mobileBar {
+  display: none;
+  align-items: center;
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  height: var(--cc-topbar-height);
+  padding: 0 var(--cc-p-space-16);
+  background: var(--cc-background-surface);
+  border-bottom: var(--cc-border-width) solid var(--cc-border-default);
+}
+
+/* D-03: an interactive control's border is border.interactive (3.49:1), not
+   the decorative border.default. */
+.menuTrigger {
+  box-sizing: border-box;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--cc-button-height);
+  height: var(--cc-button-height);
+  border: var(--cc-border-width) solid var(--cc-border-interactive);
+  border-radius: var(--cc-button-radius);
+  background: var(--cc-background-surface);
+  color: var(--cc-text-primary);
+  cursor: pointer;
+  appearance: none;
+}
+
+.menuTrigger:hover {
+  background: var(--cc-action-surface-hover);
+}
+
+.menuTrigger:focus-visible {
+  outline: var(--cc-focus-ring-width) solid var(--cc-focus-ring);
+  outline-offset: var(--cc-focus-ring-offset);
+}
+
+/* Three bars, drawn in CSS rather than pulling in an icon dependency —
+   decorative (aria-hidden on the element itself); the button's own
+   aria-label is the accessible name, never this shape. */
+.menuTriggerGlyph {
+  position: relative;
+  display: block;
+  width: 18px;
+  height: 2px;
+  border-radius: 1px;
+  background: currentColor;
+}
+
+.menuTriggerGlyph::before,
+.menuTriggerGlyph::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  width: 18px;
+  height: 2px;
+  border-radius: 1px;
+  background: currentColor;
+}
+
+.menuTriggerGlyph::before {
+  top: -6px;
+}
+
+.menuTriggerGlyph::after {
+  top: 6px;
+}
+
+/*
+ * Narrow/off-canvas breakpoint — one literal value, not a token. A CSS custom
+ * property cannot be used inside a media query condition, and a single
+ * breakpoint does not warrant a token or abstraction layer of its own.
+ *
+ * Bounds it must satisfy (F11.0 audit, F11-D01): 768px keeps the full
+ * sidebar; 390px/375px are off-canvas. 640px sits inside that gap with
+ * comfortable margin on both sides. Nothing on the JS side needs the same
+ * number — AppShell.tsx never checks viewport width, only `display` here.
+ */
+@media (max-width: 639px) {
+  .aside {
+    display: none;
+  }
+
+  .mobileBar {
+    display: flex;
+  }
+}

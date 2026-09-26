@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { SCOPE_CLASS } from '../../tokens';
 import styles from './AppShell.module.css';
 
@@ -30,10 +30,24 @@ import styles from './AppShell.module.css';
  * that context is `html, body, #root { height: 100% }`; inside a bounded
  * container, such as this gallery, it fills exactly that box. Either way `aside`
  * and `main` scroll independently rather than the document scrolling as a whole.
+ *
+ * F11.1 — below the narrow-viewport breakpoint (AppShell.module.css), `aside`
+ * no longer reserves `--cc-sidebar-width`: it is hidden, and the exact same
+ * `sidebar` node is rendered a second time inside a native `<dialog>`, opened
+ * on demand as an off-canvas drawer by a menu trigger. Desktop/tablet — `aside`
+ * always visible at `--cc-sidebar-width` — is unchanged (F11-D01, Option A).
+ * Only one of the two is ever reachable at a time, so nothing here duplicates
+ * `Sidebar`/`AppSidebar` or the role filtering already inside whatever
+ * `sidebar` is — both are the caller's unmodified node, mounted twice.
+ *
+ * `<dialog>` + `showModal()` is deliberate, not a hand-rolled overlay: the
+ * browser provides top-layer stacking, a `::backdrop`, focus containment and
+ * Escape-to-close natively, which is the "smallest standards-based
+ * implementation" this slice asks for rather than a bespoke focus trap.
  */
 
 export interface AppShellProps {
-  /** Rendered inside `<aside>` — typically `Sidebar`. */
+  /** Rendered inside `<aside>` — typically `Sidebar`. Also rendered inside the narrow-viewport drawer; see the F11.1 note above. */
   sidebar: ReactNode;
   /** Rendered inside `<header>`. Omitted entirely when there is no top bar. */
   topbar?: ReactNode;
@@ -43,6 +57,12 @@ export interface AppShellProps {
   mainId?: string;
   /** Visible only once focused — lets keyboard use bypass the navigation. */
   skipLabel?: string;
+  /** Accessible name of the narrow-viewport button that opens the Sidebar drawer. */
+  menuLabel?: string;
+  /** Accessible name of the Sidebar drawer itself. */
+  drawerLabel?: string;
+  /** Accessible name of the drawer's own close button. */
+  closeDrawerLabel?: string;
   className?: string;
 }
 
@@ -52,9 +72,47 @@ export function AppShell({
   children,
   mainId = 'cc-main-content',
   skipLabel = 'Перейти к содержимому',
+  menuLabel = 'Открыть меню навигации',
+  drawerLabel = 'Меню навигации',
+  closeDrawerLabel = 'Закрыть меню',
   className,
 }: AppShellProps) {
   const classes = [SCOPE_CLASS, styles.shell, className].filter(Boolean).join(' ');
+  const drawerId = useId();
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+
+  // `drawerOpen` only mirrors the dialog's own open/closed state, for the
+  // trigger's aria-expanded — showModal()/close() are what actually move it
+  // in and out of the top layer.
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (drawerOpen && !dialog.open) dialog.showModal();
+    else if (!drawerOpen && dialog.open) dialog.close();
+  }, [drawerOpen]);
+
+  // Every way the drawer can close — its own button, a backdrop click, a
+  // Sidebar item, or Escape (handled natively, no keydown listener needed) —
+  // ends in the browser dispatching `close` on the dialog. Reacting to that
+  // one event, rather than each caller of `closeDrawer` separately, is what
+  // keeps the "return focus to the element that opened it" contract true
+  // regardless of which path closed it.
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return undefined;
+    const handleClose = () => {
+      setDrawerOpen(false);
+      triggerRef.current?.focus();
+    };
+    dialog.addEventListener('close', handleClose);
+    return () => dialog.removeEventListener('close', handleClose);
+  }, []);
+
+  function closeDrawer(): void {
+    setDrawerOpen(false);
+  }
 
   return (
     <div className={classes}>
@@ -64,7 +122,66 @@ export function AppShell({
 
       <aside className={styles.aside}>{sidebar}</aside>
 
+      <dialog
+        ref={dialogRef}
+        id={drawerId}
+        className={styles.drawer}
+        aria-label={drawerLabel}
+        aria-modal="true"
+        onClick={(event) => {
+          // A click on the ::backdrop reports the dialog element itself as
+          // the target (the backdrop has no element of its own); a click on
+          // any real content inside always targets that descendant instead,
+          // so this only ever fires for a genuine outside click.
+          if (event.target === dialogRef.current) closeDrawer();
+        }}
+      >
+        <div className={styles.drawerHeader}>
+          <button
+            type="button"
+            autoFocus
+            className={styles.drawerClose}
+            onClick={closeDrawer}
+            aria-label={closeDrawerLabel}
+          >
+            <span aria-hidden="true" className={styles.drawerCloseGlyph}>
+              ×
+            </span>
+          </button>
+        </div>
+        {/*
+          Closing on any click inside the drawer's own content — a Sidebar
+          item, the sign-out button in its footer — is what satisfies
+          "navigating through a sidebar item closes the drawer" without this
+          component parsing what a route or a nav item is: it never inspects
+          `sidebar`, only the fact that something inside it was activated.
+        */}
+        <div className={styles.drawerBody} onClick={closeDrawer}>
+          {sidebar}
+        </div>
+      </dialog>
+
       <div className={styles.workspace}>
+        {/*
+          Hidden above the breakpoint by AppShell.module.css alone — no prop,
+          no viewport check here. Always mounted so its accessible name and
+          keyboard reachability do not depend on a resize event ever firing.
+        */}
+        <div className={styles.mobileBar}>
+          <button
+            ref={triggerRef}
+            type="button"
+            className={styles.menuTrigger}
+            aria-haspopup="dialog"
+            aria-expanded={drawerOpen}
+            aria-controls={drawerId}
+            aria-label={menuLabel}
+            onClick={() => setDrawerOpen(true)}
+          >
+            <span aria-hidden="true" className={styles.menuTriggerGlyph} />
+          </button>
+        </div>
+
         {topbar ? (
           <header className={styles.header}>
             {/*
