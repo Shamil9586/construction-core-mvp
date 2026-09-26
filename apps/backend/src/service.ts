@@ -367,7 +367,18 @@ export class ProductionService {
         // package_locked alone did nothing to stop it before this guard.
         // Re-handoff (handoffDocumentationPackageToSdo()) re-locks the same
         // case and restores this.
-        ensure(sdoCase.packageLocked, 'Дело приостановлено: пакет возвращён в ПТО'); ensure(isSdoClosingStatusTransitionAllowed(sdoCase.status, d.status), `Недопустимый переход статуса: ${sdoCase.status} → ${d.status}`); ensure(sdoCase.status !== 'CLOSED' || !!d.reason?.trim(), 'Укажите причину возврата закрытого дела на корректировку'); if (d.status === 'CLOSED') {
+        ensure(sdoCase.packageLocked, 'Дело приостановлено: пакет возвращён в ПТО'); ensure(isSdoClosingStatusTransitionAllowed(sdoCase.status, d.status), `Недопустимый переход статуса: ${sdoCase.status} → ${d.status}`);
+        // F8.3-15 corrective: a non-empty trimmed reason is mandatory for
+        // BOTH ON_CORRECTION edges that leave a state SDO had already
+        // progressed past — VERIFICATION_PASSED and CLOSED — but never for
+        // ON_RECONCILIATION -> ON_CORRECTION, which is simply "start
+        // correcting", not "undo a completed step". `sdoCase.status` here is
+        // the actual FOR-UPDATE-locked current status (scoped(...,true)
+        // above), read after the Package-first/Case-second lock order, so
+        // this can never race a concurrent transition. Checked before any
+        // write — the Case update, the status-history insert and the audit
+        // insert below all still lie ahead of this ensure().
+        ensure(d.status !== 'ON_CORRECTION' || !['VERIFICATION_PASSED', 'CLOSED'].includes(sdoCase.status) || !!d.reason?.trim(), 'Укажите причину возврата на корректировку'); if (d.status === 'CLOSED') {
         // F8.3-17.3 corrective: revalidate the SAME readiness this Case's own
         // handoff already required, under the Package lock this method now
         // holds — a document/version change (or a re-acceptance gone stale)

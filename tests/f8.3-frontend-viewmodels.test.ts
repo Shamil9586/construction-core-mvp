@@ -346,6 +346,17 @@ test('F8.3: buildSdoCaseDetailViewModel — allowedActions mirror the domain all
   assert.equal(vm.allowedActions[0].label, 'Закрыть дело');
 });
 
+test('F8.3-15: buildSdoCaseDetailViewModel — reasonRequiredForCorrection is true for VERIFICATION_PASSED and CLOSED, false for ON_RECONCILIATION and ON_CORRECTION itself', async () => {
+  for (const status of ['VERIFICATION_PASSED', 'CLOSED'] as const) {
+    const vm = buildSdoCaseDetailViewModel(baseSdoCase({ status }), baseObject(), baseWork(), [], [], [], [], [], [], []);
+    assert.equal(vm.reasonRequiredForCorrection, true, status);
+  }
+  for (const status of ['ON_RECONCILIATION', 'ON_CORRECTION'] as const) {
+    const vm = buildSdoCaseDetailViewModel(baseSdoCase({ status }), baseObject(), baseWork(), [], [], [], [], [], [], []);
+    assert.equal(vm.reasonRequiredForCorrection, false, status);
+  }
+});
+
 test('F8.3: buildSdoCaseDetailViewModel — histories are scoped to this case and sorted newest first', async () => {
   const statusHistory: SdoClosingStatusHistoryEntry[] = [
     { id: 'h1', tenantId: 't', createdAt: 'x', updatedAt: 'x', version: 1, sdoClosingCaseId: 'case-1', fromStatus: 'ON_RECONCILIATION', toStatus: 'VERIFICATION_PASSED', reason: null, changedBy: 'sdo-1', changedAt: '2026-01-01T00:00:00Z' },

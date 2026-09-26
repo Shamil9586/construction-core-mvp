@@ -50,12 +50,15 @@ function StatusActionControl({
   status,
   label,
   requiresReason,
+  reasonMissingMessage,
   onSubmit,
 }: {
   status: SdoClosingStatus;
   label: string;
-  /** True only for the CLOSED -> ON_CORRECTION edge — the backend's own mandatory-reason rule, mirrored here only for a clearer error before the round trip. */
+  /** F8.3-15 — true for the VERIFICATION_PASSED -> ON_CORRECTION and CLOSED -> ON_CORRECTION edges only, never for ON_RECONCILIATION -> ON_CORRECTION ("start correcting" is not "undo a completed step"). Mirrors the backend's own mandatory-reason rule, only for a clearer error before the round trip. */
   requiresReason: boolean;
+  /** F8.3-15 — worded for the actual source status: "закрытого дела" is only accurate when the Case really is CLOSED, so VERIFICATION_PASSED gets its own, source-neutral wording. */
+  reasonMissingMessage: string;
   onSubmit: (status: SdoClosingStatus, reason: string | undefined) => Promise<void>;
 }) {
   const [reason, setReason] = useState('');
@@ -64,7 +67,7 @@ function StatusActionControl({
 
   async function handleClick() {
     if (requiresReason && !reason.trim()) {
-      setError('Укажите причину возврата закрытого дела на корректировку');
+      setError(reasonMissingMessage);
       return;
     }
     setPending(true);
@@ -409,7 +412,12 @@ export function SdoCaseDetail({
                   key={action.status}
                   status={action.status}
                   label={action.label}
-                  requiresReason={viewModel.rawStatus === 'CLOSED' && action.status === 'ON_CORRECTION'}
+                  requiresReason={viewModel.reasonRequiredForCorrection && action.status === 'ON_CORRECTION'}
+                  reasonMissingMessage={
+                    viewModel.rawStatus === 'CLOSED'
+                      ? 'Укажите причину возврата закрытого дела на корректировку'
+                      : 'Укажите причину возврата на корректировку'
+                  }
                   onSubmit={actions.onChangeStatus}
                 />
               ))}

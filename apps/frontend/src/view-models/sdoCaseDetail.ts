@@ -156,6 +156,15 @@ export interface SdoCaseDetailViewModel {
   packageLocked: boolean;
   status: StatusPresentation;
   rawStatus: SdoClosingStatus;
+  /**
+   * F8.3-15 — mirrors the backend's own mandatory-reason rule: true exactly
+   * when the current status is VERIFICATION_PASSED or CLOSED, i.e. when an
+   * ON_CORRECTION transition from here would "undo a completed step"
+   * (verification, or closing) rather than merely starting a correction from
+   * ON_RECONCILIATION. Combined with `action.status === 'ON_CORRECTION'` by
+   * the screen — every other allowed action stays reason-optional.
+   */
+  reasonRequiredForCorrection: boolean;
   allowedActions: { status: SdoClosingStatus; label: string }[];
   responsibleUserId: string | null;
   responsible: string;
@@ -229,6 +238,7 @@ export function buildSdoCaseDetailViewModel(
     packageLocked: sdoCase.packageLocked,
     status: sdoClosingStatusPresentation(sdoCase.status),
     rawStatus: sdoCase.status,
+    reasonRequiredForCorrection: sdoCase.status === 'VERIFICATION_PASSED' || sdoCase.status === 'CLOSED',
     allowedActions: allowedNextSdoClosingStatuses(sdoCase.status).map((status) => ({
       status,
       label: sdoClosingStatusActionLabel(status),

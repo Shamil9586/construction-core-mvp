@@ -1,0 +1,70 @@
+-- F8.3-20 — repairs a misclassification migration 010 introduced.
+--
+-- Migration 010 added `operation` to sdo_closing_portion_allocation_history
+-- with a single blanket backfill for every pre-existing row:
+--   ADD COLUMN operation text NOT NULL DEFAULT 'CREATE' ...
+-- but the table's actual legacy semantics (F8.3-R05, infra/009) were always
+-- two-valued by shape:
+--   previous_amount IS NULL     => the Portion's first allocation (CREATE)
+--   previous_amount IS NOT NULL => a correction of an existing one (CORRECT)
+-- so any genuine legacy correction (e.g. previous_amount=100,
+-- new_amount=175) reads as CREATE today, which is wrong audit semantics.
+--
+-- This migration repairs that misclassification wherever it exists, on
+-- EITHER upgrade path:
+--   (a) a database moving straight from before 010: 010 runs immediately
+--       ahead of this file in the very same migrate() batch (scripts/migrate.ts
+--       applies every pending file, oldest version first, inside one
+--       transaction) and mislabels the row a moment before this file
+--       corrects it;
+--   (b) a database where 010 was already applied earlier, independently of
+--       this file, and the row has sat mislabeled since then.
+-- Both are the same repair from this file's point of view: it never assumes
+-- which path a given database took, only that operation='CREATE' with
+-- previous_amount IS NOT NULL is never a legitimate combination (the
+-- application's own CREATE path — setSdoClosingPortionAllocation(),
+-- apps/backend/src/service.ts — sets previous_amount to the existing row's
+-- amount only when existing is truthy, at which point operation is CORRECT
+-- or RESTORE, never CREATE; a true CREATE always has previous_amount NULL).
+--
+-- Migration 010 itself is deliberately left untouched: this file already
+-- fixes every affected row regardless of when 010 ran, so editing 010 too
+-- would add risk (rewriting an already-numbered, possibly already-applied
+-- migration) for no additional correctness — the same "never edit an
+-- existing migration file" discipline 001-010 already follow here.
+--
+-- Narrow scope, by construction of the WHERE clause below:
+--   * a genuine legacy CREATE (previous_amount IS NULL)   -> untouched, stays CREATE;
+--   * a genuine legacy CORRECT, mislabeled CREATE          -> corrected to CORRECT;
+--   * an already-correct CORRECT row (operation='CORRECT') -> untouched (does not match operation='CREATE');
+--   * CANCEL / RESTORE rows                                -> untouched (neither is ever 'CREATE');
+--     these two operations, and the cancelled_at/cancelled_by columns they
+--     depend on, were only introduced by 010 itself, so no row old enough to
+--     be misclassified could ever be one of them in the first place — the
+--     WHERE clause still excludes them explicitly rather than relying on
+--     that history alone.
+-- No column other than `operation` is touched on any row: id, tenant_id,
+-- sdo_closing_case_id, quantity_portion_id, previous_amount, new_amount,
+-- changed_by, changed_at, created_at, version all keep their exact existing
+-- values. `updated_at` is deliberately left alone too — this is a
+-- migration-time classification repair, not a change to when the row's own
+-- business content last changed. Row count is unchanged: this is an UPDATE,
+-- never an INSERT or DELETE.
+--
+-- The table's append-only protection
+-- (sdo_closing_portion_allocation_history_immutable, infra/009, built on
+-- 001_initial.sql's shared immutable_history() trigger function — also used
+-- by audit_logs/work_progress/financial_closings/portion_quantity_confirmations/
+-- documentation_document_versions) would otherwise reject any UPDATE on this
+-- table outright. It is disabled for exactly the one statement below, on
+-- exactly this one table — never the shared function itself, never any
+-- other table's trigger — and re-enabled immediately after, all inside the
+-- same migration transaction migrate() already wraps every pending file in.
+-- There is no application/API endpoint that performs this UPDATE, or any
+-- other UPDATE/DELETE on this table; it happens here, once, in a migration,
+-- and nowhere else.
+ALTER TABLE sdo_closing_portion_allocation_history DISABLE TRIGGER sdo_closing_portion_allocation_history_immutable;
+UPDATE sdo_closing_portion_allocation_history
+    SET operation = 'CORRECT'
+    WHERE operation = 'CREATE' AND previous_amount IS NOT NULL;
+ALTER TABLE sdo_closing_portion_allocation_history ENABLE TRIGGER sdo_closing_portion_allocation_history_immutable;

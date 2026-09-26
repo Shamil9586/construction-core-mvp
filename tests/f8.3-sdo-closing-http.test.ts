@@ -980,6 +980,83 @@ test('F8.3 HTTP (16): CLOSED -> ON_CORRECTION requires a non-empty reason, recor
   }
 });
 
+/* --------------------------------------------------------------------- *
+ * F8.3-15: VERIFICATION_PASSED -> ON_CORRECTION also requires a reason   *
+ * --------------------------------------------------------------------- */
+
+test('F8.3-15: VERIFICATION_PASSED -> ON_CORRECTION requires a non-empty trimmed reason, recorded in status history with the real actor and timestamp', async () => {
+  const { app, req, login } = await harness();
+  try {
+    const { sdoCase } = await setUpHandedOffCase(req, login, 'F83-15-' + Date.now(), 'F8.3-15 причина');
+    const sdoUser = await login('SDO');
+    let c = await req(`sdo-closing-cases/${sdoCase.id}/status`, { version: sdoCase.version, status: 'VERIFICATION_PASSED' });
+    assert.equal(c.status, 'VERIFICATION_PASSED');
+
+    // 1. No reason at all.
+    await req(`sdo-closing-cases/${c.id}/status`, { version: c.version, status: 'ON_CORRECTION' }, 400);
+    // 2. Empty-string reason.
+    await req(`sdo-closing-cases/${c.id}/status`, { version: c.version, status: 'ON_CORRECTION', reason: '' }, 400);
+    // 3. Whitespace-only reason.
+    await req(`sdo-closing-cases/${c.id}/status`, { version: c.version, status: 'ON_CORRECTION', reason: '   ' }, 400);
+    // 4. A valid, non-empty reason succeeds.
+    c = await req(`sdo-closing-cases/${c.id}/status`, { version: c.version, status: 'ON_CORRECTION', reason: 'Выверка проведена ошибочно' });
+    assert.equal(c.status, 'ON_CORRECTION');
+
+    // 5 + 6: status history contains the exact reason, the real actor and a timestamp.
+    const history = (await req('snapshot')).sdoClosingStatusHistory.filter((h: any) => h.sdoClosingCaseId === sdoCase.id);
+    const last = history[history.length - 1];
+    assert.equal(last.fromStatus, 'VERIFICATION_PASSED');
+    assert.equal(last.toStatus, 'ON_CORRECTION');
+    assert.equal(last.reason, 'Выверка проведена ошибочно');
+    assert.equal(last.changedBy, sdoUser.id, 'the real acting SDO user, not synthesized');
+    assert.ok(last.changedAt);
+  } finally {
+    await app.close();
+  }
+});
+
+test('F8.3-15: ON_RECONCILIATION -> ON_CORRECTION still does NOT require a reason — the mandatory rule is scoped to VERIFICATION_PASSED/CLOSED sources only', async () => {
+  const { app, req, login } = await harness();
+  try {
+    const { sdoCase } = await setUpHandedOffCase(req, login, 'F83-15-recon-' + Date.now(), 'F8.3-15 без причины');
+    await login('SDO');
+    // sdoCase starts at ON_RECONCILIATION (setUpHandedOffCase never advances it).
+    const c = await req(`sdo-closing-cases/${sdoCase.id}/status`, { version: sdoCase.version, status: 'ON_CORRECTION' });
+    assert.equal(c.status, 'ON_CORRECTION');
+  } finally {
+    await app.close();
+  }
+});
+
+test('F8.3-15: a rejected VERIFICATION_PASSED -> ON_CORRECTION (missing reason) mutates nothing — no Case status change, no status-history row, no audit side effect', async () => {
+  const { app, req, login } = await harness();
+  try {
+    const { sdoCase } = await setUpHandedOffCase(req, login, 'F83-15-noop-' + Date.now(), 'F8.3-15 без побочных эффектов');
+    await login('SDO');
+    const verified = await req(`sdo-closing-cases/${sdoCase.id}/status`, { version: sdoCase.version, status: 'VERIFICATION_PASSED' });
+
+    const beforeHistoryCount = ((await req('snapshot')).sdoClosingStatusHistory ?? []).filter((h: any) => h.sdoClosingCaseId === sdoCase.id).length;
+    await login('ADMIN');
+    const beforeAuditCount = (await req('audit')).filter((x: any) => x.entityType === 'SdoClosingCase' && x.entityId === sdoCase.id).length;
+
+    await login('SDO');
+    await req(`sdo-closing-cases/${verified.id}/status`, { version: verified.version, status: 'ON_CORRECTION' }, 400);
+
+    const casesAfter = (await req('sdo-closing-cases')).find((x: any) => x.id === sdoCase.id);
+    assert.equal(casesAfter.status, 'VERIFICATION_PASSED', 'status unchanged by the rejected request');
+    assert.equal(casesAfter.version, verified.version, 'version unchanged — no partial write');
+
+    const afterHistoryCount = ((await req('snapshot')).sdoClosingStatusHistory ?? []).filter((h: any) => h.sdoClosingCaseId === sdoCase.id).length;
+    assert.equal(afterHistoryCount, beforeHistoryCount, 'no new status-history row from the rejected request');
+
+    await login('ADMIN');
+    const afterAuditCount = (await req('audit')).filter((x: any) => x.entityType === 'SdoClosingCase' && x.entityId === sdoCase.id).length;
+    assert.equal(afterAuditCount, beforeAuditCount, 'no new audit row from the rejected request');
+  } finally {
+    await app.close();
+  }
+});
+
 test('F8.3-R04: a CLOSED Case cannot be returned to PTO directly — must go through ON_CORRECTION (with reason) first, audit histories preserved', async () => {
   const { app, req, login } = await harness();
   try {

@@ -326,6 +326,12 @@ function handleApi(state: State, actor: Actor, method: string, path: string, req
     if (sdoCase.status === 'CLOSED' && !body.reason?.trim()) {
       return { status: 400, body: { message: 'Укажите причину возврата закрытого дела на корректировку' } };
     }
+    // F8.3-15: the same mandatory-reason rule also applies leaving
+    // VERIFICATION_PASSED, never ON_RECONCILIATION — mirrors
+    // changeSdoClosingStatus()'s own real-backend rule.
+    if (body.status === 'ON_CORRECTION' && sdoCase.status === 'VERIFICATION_PASSED' && !body.reason?.trim()) {
+      return { status: 400, body: { message: 'Укажите причину возврата на корректировку' } };
+    }
     state.statusHistory.push({ id: nextId(state, 'status'), sdoClosingCaseId: sdoCase.id, fromStatus: sdoCase.status, toStatus: body.status, reason: body.reason ?? null, changedAt: new Date().toISOString() });
     sdoCase.status = body.status;
     sdoCase.closedAt = body.status === 'CLOSED' ? new Date().toISOString() : null;
@@ -521,6 +527,35 @@ test('SDO Case detail: CLOSED cannot return to ON_CORRECTION without a reason', 
   // exact: true — the status-history line "Закрытие → На корректировке ·
   // Ошибка в сумме" also contains this text as a substring.
   await expect(page.getByText('На корректировке', { exact: true })).toBeVisible();
+});
+
+test('F8.3-15: SDO Case detail — VERIFICATION_PASSED also cannot return to ON_CORRECTION without a reason, but ON_RECONCILIATION can, unchanged', async ({ page }) => {
+  const state = makeState();
+  const verifiedCase: FakeSdoCase = {
+    id: 'case-verified', objectId: OBJECT_A, objectName: 'Школа на 550 мест', objectWorkId: WORK_READY, workName: 'Штукатурка стен (готово)',
+    documentationPackageId: PACKAGE_READY, documentationPackageStatus: 'ACCEPTED_BY_CUSTOMER', coveredQuantityPortionIds: [PORTION_READY],
+    status: 'VERIFICATION_PASSED', packageLocked: true, responsibleUserId: SDO.id, responsible: SDO.name, totalAmount: null, closedAt: null, attention: 'NONE', version: 1,
+  };
+  state.sdoCases.push(verifiedCase);
+  await seedSession(page, 'f8-3-browser-token-reason-verified');
+  await mockApi(page, state, SDO);
+
+  await page.goto('/app.html/sdo/case/' + verifiedCase.id);
+  // The mandatory-reason input is rendered up front (requiresReason is
+  // already true here, unlike the plain "Закрыть дело" action beside it).
+  await page.getByRole('button', { name: 'Вернуть на корректировку' }).click();
+  await expect(page.getByText('Укажите причину возврата на корректировку')).toBeVisible();
+  await expect(page.getByText('Выверка пройдена', { exact: true })).toBeVisible();
+
+  await page.getByLabel('Причина: Вернуть на корректировку').fill('Обнаружена ошибка после выверки');
+  await page.getByRole('button', { name: 'Вернуть на корректировку' }).click();
+  await expect(page.getByText('На корректировке', { exact: true })).toBeVisible();
+
+  // From here (ON_CORRECTION), the only allowed next status is
+  // ON_RECONCILIATION — a plain "start correcting" resumption, no reason.
+  await expect(page.getByLabel('Причина: Вернуть на выверку')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Вернуть на выверку' }).click();
+  await expect(page.getByText('На выверке', { exact: true })).toBeVisible();
 });
 
 /* --------------------------------------------------------------------- *
