@@ -17,6 +17,21 @@ import styles from './DataTable.module.css';
  * "widths are set once per table" true in practice: every row inherits the same
  * track, so a long name wraps in its own column instead of shoving the numbers
  * sideways.
+ *
+ * F11.2 — that guarantee only held while the table's own width had room for
+ * every column's declared track. Below that, `table-layout: fixed` clamped the
+ * one flexible ('fill') column toward zero rather than shrinking the fixed
+ * ones, which is what produced both failure shapes F11.0 found: an
+ * unwrapped single-word header (`Работа`, `Объект`) painting past its own
+ * cell into the next one once its column had no room left, and — for a row
+ * whose cell *does* wrap (`ObjectRow`, via `TableRow.module.css`) — a column
+ * squeezed to nothing forcing every word onto its own line. `.viewport`
+ * below is the fix: a scroll container that belongs to the table alone, with
+ * `<table>` given a `min-width` computed from its own column contract
+ * (fixed tracks unchanged, `MIN_FILL_COLUMN_WIDTH` as the fill column's
+ * floor) so no column, fixed or flexible, is ever asked to render narrower
+ * than its own budget — the table scrolls instead, and nothing about
+ * `<main>` or the page has to.
  */
 
 export interface DataTableColumn {
@@ -27,6 +42,18 @@ export interface DataTableColumn {
   width: 'fill' | number;
   align?: 'start' | 'end';
 }
+
+/**
+ * The floor the one 'fill' column never renders narrower than, regardless of
+ * how many fixed-width columns the table also declares. Chosen well above
+ * the destructive character-by-character collapse threshold (F11.0 measured
+ * that at roughly one glyph's width, under 40px) while staying close to what
+ * the tightest existing column contract (P01's `workColumns`, 1000px of
+ * fixed tracks) already rendered without scrolling at 1440px — this floor is
+ * a genuine minimum for a wrapping text column, not a number chosen to force
+ * new scrolling where none existed before.
+ */
+const MIN_FILL_COLUMN_WIDTH = 120;
 
 export type DataTableState = 'Default' | 'Loading' | 'Empty' | 'Error';
 
@@ -64,97 +91,113 @@ export function DataTable({
 }: DataTableProps) {
   const classes = [styles.root, className].filter(Boolean).join(' ');
 
+  const fixedColumnWidth = columns.reduce(
+    (total, column) => total + (column.width === 'fill' ? 0 : column.width),
+    0,
+  );
+  const tableMinWidth = fixedColumnWidth + MIN_FILL_COLUMN_WIDTH;
+
   return (
     <div className={classes}>
-      <table className={styles.table}>
-        <caption className={styles.caption}>
-          <span className={[styles.title, typeClass('heading-card')].join(' ')}>
-            {title}
-          </span>
-          {context ? (
-            <span className={[styles.context, typeClass('label')].join(' ')}>
-              {context}
+      <div
+        className={styles.viewport}
+        role="region"
+        aria-label={title}
+        tabIndex={0}
+      >
+        <table
+          className={styles.table}
+          style={{ minWidth: `${tableMinWidth}px` }}
+        >
+          <caption className={styles.caption}>
+            <span className={[styles.title, typeClass('heading-card')].join(' ')}>
+              {title}
             </span>
-          ) : null}
-        </caption>
+            {context ? (
+              <span className={[styles.context, typeClass('label')].join(' ')}>
+                {context}
+              </span>
+            ) : null}
+          </caption>
 
-        <colgroup>
-          {columns.map((column) => (
-            <col
-              key={column.key}
-              style={
-                column.width === 'fill'
-                  ? undefined
-                  : { width: `${column.width}px` }
-              }
-            />
-          ))}
-        </colgroup>
-
-        <thead>
-          <tr>
+          <colgroup>
             {columns.map((column) => (
-              <th
+              <col
                 key={column.key}
-                scope="col"
-                className={[
-                  styles.headerCell,
-                  column.align === 'end' ? styles.headerAlignEnd : '',
-                  typeClass('eyebrow'),
-                ]
-                  .filter(Boolean)
-                  .join(' ')}
-              >
-                {column.header}
-              </th>
+                style={
+                  column.width === 'fill'
+                    ? undefined
+                    : { width: `${column.width}px` }
+                }
+              />
             ))}
-          </tr>
-        </thead>
+          </colgroup>
 
-        <tbody>
-          {state === 'Loading'
-            ? Array.from({ length: skeletonRows }, (_, index) => (
-                <tr key={`skeleton-${index}`}>
-                  {columns.map((column) => (
-                    <td key={column.key} className={styles.skeletonCell}>
-                      {column.header ? (
-                        <div className={styles.skeletonBar} aria-hidden="true" />
-                      ) : null}
-                    </td>
-                  ))}
-                </tr>
-              ))
-            : null}
-
-          {state === 'Empty' ? (
+          <thead>
             <tr>
-              <td
-                colSpan={columns.length}
-                className={[styles.stateCell, typeClass('body')].join(' ')}
-              >
-                {emptyLabel}
-              </td>
+              {columns.map((column) => (
+                <th
+                  key={column.key}
+                  scope="col"
+                  className={[
+                    styles.headerCell,
+                    column.align === 'end' ? styles.headerAlignEnd : '',
+                    typeClass('eyebrow'),
+                  ]
+                    .filter(Boolean)
+                    .join(' ')}
+                >
+                  {column.header}
+                </th>
+              ))}
             </tr>
-          ) : null}
+          </thead>
 
-          {state === 'Error' ? (
-            <tr>
-              <td colSpan={columns.length} className={styles.stateCell}>
-                <div className={styles.stateStack}>
-                  <span className={typeClass('body')}>{errorLabel}</span>
-                  {onRetry ? (
-                    <Button variant="Secondary" onClick={onRetry}>
-                      {retryLabel}
-                    </Button>
-                  ) : null}
-                </div>
-              </td>
-            </tr>
-          ) : null}
+          <tbody>
+            {state === 'Loading'
+              ? Array.from({ length: skeletonRows }, (_, index) => (
+                  <tr key={`skeleton-${index}`}>
+                    {columns.map((column) => (
+                      <td key={column.key} className={styles.skeletonCell}>
+                        {column.header ? (
+                          <div className={styles.skeletonBar} aria-hidden="true" />
+                        ) : null}
+                      </td>
+                    ))}
+                  </tr>
+                ))
+              : null}
 
-          {state === 'Default' ? children : null}
-        </tbody>
-      </table>
+            {state === 'Empty' ? (
+              <tr>
+                <td
+                  colSpan={columns.length}
+                  className={[styles.stateCell, typeClass('body')].join(' ')}
+                >
+                  {emptyLabel}
+                </td>
+              </tr>
+            ) : null}
+
+            {state === 'Error' ? (
+              <tr>
+                <td colSpan={columns.length} className={styles.stateCell}>
+                  <div className={styles.stateStack}>
+                    <span className={typeClass('body')}>{errorLabel}</span>
+                    {onRetry ? (
+                      <Button variant="Secondary" onClick={onRetry}>
+                        {retryLabel}
+                      </Button>
+                    ) : null}
+                  </div>
+                </td>
+              </tr>
+            ) : null}
+
+            {state === 'Default' ? children : null}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

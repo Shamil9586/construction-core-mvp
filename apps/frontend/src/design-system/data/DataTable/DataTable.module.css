@@ -15,6 +15,23 @@
 }
 
 /*
+ * F11.2 — the scroll container belongs to the table, not the page. `<table>`
+ * carries its own `min-width` (see DataTable.tsx), so below that width this
+ * is what scrolls instead of `<main>` or the table's columns collapsing.
+ * `tabIndex={0}` + `role="region"` make it reachable and announced even when
+ * a row has no focusable descendant of its own (a read-only row, an empty or
+ * loading table).
+ */
+.viewport {
+  overflow-x: auto;
+}
+
+.viewport:focus-visible {
+  outline: var(--cc-focus-ring-width) solid var(--cc-focus-ring);
+  outline-offset: calc(var(--cc-focus-ring-offset) * -1);
+}
+
+/*
  * `table-layout: fixed` is what makes the column model work. Widths are declared
  * once per table in the colgroup and every row inherits them, so a long object
  * name wraps inside its own column instead of shifting the numbers beside it.

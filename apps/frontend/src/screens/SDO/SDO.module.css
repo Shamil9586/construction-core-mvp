@@ -14,6 +14,7 @@
   box-sizing: border-box;
   padding: var(--cc-p-space-12) var(--cc-p-space-16);
   vertical-align: middle;
+  overflow-wrap: break-word;
 }
 
 .alignEnd {

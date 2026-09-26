@@ -68,6 +68,44 @@ test.describe('table semantics', () => {
   });
 });
 
+test.describe('scoped horizontal scroll (F11.2)', () => {
+  test('the table sits inside a focusable, labelled scroll region', async ({ page }) => {
+    const region = page.getByRole('region', { name: 'Портфель объектов' });
+    await expect(region).toBeVisible();
+    await expect(region.getByRole('table')).toHaveCount(1);
+    expect(await region.getAttribute('tabindex')).toBe('0');
+  });
+
+  test('the table never renders narrower than its own column budget', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 320, height: 800 });
+    // objectColumns: fill + 120 (СМР) + 165 (График) + 24 (chevron); the fill
+    // column's own floor is 120, so nothing below 429px is a valid render.
+    const table = page.getByRole('table', { name: /Портфель объектов/ });
+    const width = await table.evaluate((node) => node.getBoundingClientRect().width);
+    expect(width).toBeGreaterThanOrEqual(429);
+  });
+
+  test('a viewport narrower than the column budget scrolls the region, not the header text', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 320, height: 800 });
+    const region = page.getByRole('region', { name: 'Портфель объектов' });
+
+    const regionOverflow = await region.evaluate(
+      (node) => node.scrollWidth - node.clientWidth,
+    );
+    expect(regionOverflow).toBeGreaterThan(0);
+
+    const header = region.getByRole('columnheader', { name: 'Объект / РП' });
+    const headerOverflow = await header.evaluate(
+      (node) => node.scrollWidth - node.clientWidth,
+    );
+    expect(headerOverflow).toBeLessThanOrEqual(1);
+  });
+});
+
 test.describe('ObjectRow', () => {
   test('renders name, code and responsible person', async ({ page }) => {
     const section = page.locator('[data-section="object-table"]');
