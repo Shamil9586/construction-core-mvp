@@ -1,0 +1,57 @@
+/*
+ * Data / LinkedStage
+ *
+ * A stack of records with a hairline between them. The divider is decorative —
+ * border.default is fine here, since nothing in this component is operated.
+ */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+}
+
+.row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--cc-p-space-16);
+  padding: var(--cc-p-space-12) 0;
+  border-top: var(--cc-border-width) solid var(--cc-border-default);
+  min-width: 0;
+}
+
+.row:first-child {
+  border-top: 0;
+  padding-top: 0;
+}
+
+.label {
+  color: var(--cc-text-secondary);
+  margin: 0;
+  min-width: 0;
+}
+
+.state {
+  color: var(--cc-text-primary);
+  margin: 0;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
+/* The closing sum, when there is one, is the last record and is read as a figure
+   rather than as a state. */
+.summaryRow {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-4);
+  align-items: flex-start;
+  padding: var(--cc-p-space-16) 0 0;
+  border-top: var(--cc-border-width) solid var(--cc-border-default);
+}
+
+.summaryValue {
+  color: var(--cc-text-primary);
+  margin: 0;
+  overflow-wrap: anywhere;
+}

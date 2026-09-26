@@ -1,0 +1,62 @@
+/*
+ * F7 — contents of Sidebar's existing footer slot. Sidebar's own `.footer`
+ * rule still owns placement (bottom of the rail) and padding; nothing here
+ * restyles Sidebar itself.
+ *
+ * The sign-out control follows the rail's own interactive pattern (Sidebar's
+ * `.item`): no border, muted text that brightens on hover, and the inverse
+ * focus ring (D-04 — the ordinary ring is 2.0:1 on navy), inset so the rail's
+ * overflow can never clip it. Every value is a token.
+ */
+
+.footer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-12);
+}
+
+.session {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--cc-p-space-4);
+}
+
+.user {
+  color: var(--cc-text-on-navigation);
+  overflow-wrap: anywhere;
+}
+
+.signOut {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  height: var(--cc-sidebar-item-height-section);
+  padding: 0 var(--cc-p-space-8);
+  margin: var(--cc-p-space-4) 0 0 calc(var(--cc-p-space-8) * -1);
+  border: none;
+  border-radius: var(--cc-radius-button);
+  background: none;
+  color: var(--cc-text-on-navigation-muted);
+  cursor: pointer;
+  appearance: none;
+}
+
+.signOut:hover:not(:disabled) {
+  background: var(--cc-action-navigation-hover);
+  color: var(--cc-text-on-navigation);
+}
+
+.signOut:focus-visible {
+  outline: var(--cc-focus-ring-width) solid var(--cc-focus-ring-inverse);
+  outline-offset: calc(var(--cc-focus-ring-offset) * -1);
+}
+
+.signOut:disabled {
+  cursor: default;
+}
+
+.error {
+  margin: 0;
+  color: var(--cc-text-on-navigation);
+}

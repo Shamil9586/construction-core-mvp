@@ -1,0 +1,99 @@
+.section {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--cc-card-gap);
+  margin-top: var(--cc-p-space-32);
+}
+
+.section:first-child {
+  margin-top: var(--cc-p-space-20);
+}
+
+.details {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--cc-p-space-20);
+  margin: 0;
+  width: 100%;
+}
+
+.detailItem {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-4);
+  min-width: 0;
+}
+
+.detailLabel {
+  color: var(--cc-text-secondary);
+}
+
+.detailValue {
+  color: var(--cc-text-primary);
+}
+
+.readinessCard,
+.scheduleCard,
+.blockersCard {
+  background: var(--cc-background-surface);
+  border: var(--cc-border-width) solid var(--cc-border-default);
+  border-radius: var(--cc-card-radius);
+  padding: var(--cc-card-padding);
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-12);
+}
+
+.readinessCard {
+  flex: 0 0 var(--cc-layout-span-4);
+  max-width: 100%;
+}
+
+.scheduleCard {
+  flex: 1 1 var(--cc-layout-span-4);
+  min-width: 280px;
+}
+
+.readinessLabel {
+  color: var(--cc-text-secondary);
+}
+
+.readinessBar {
+  margin-top: var(--cc-p-space-8);
+}
+
+.scheduleRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--cc-p-space-20);
+}
+
+.blockersCard {
+  flex: 1 1 var(--cc-layout-span-12);
+  width: 100%;
+}
+
+.blockedWorkList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-12);
+}
+
+.blockedWorkItem {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-4);
+}
+
+.blockerReasonList {
+  margin: 0;
+  padding-left: var(--cc-p-space-20);
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-4);
+}

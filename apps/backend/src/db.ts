@@ -25,7 +25,15 @@ finally {
 export const camel = (row: any): any => row && Object.fromEntries(Object.entries(row).map(([k, v]) => [k.replace(/_([a-z])/g, (_, x) => x.toUpperCase()), v]));
 export async function rows(c: any, sql: string, args: any[] = []) { return (await c.query(sql, args)).rows.map(camel); }
 export async function one(c: any, sql: string, args: any[] = []) { return (await rows(c, sql, args))[0]; }
-const tables = new Set(['users', 'contractors', 'objects', 'object_contractors', 'work_categories', 'work_types', 'work_templates', 'works', 'work_dependencies', 'work_progress', 'inspections', 'issues', 'attachments', 'inspection_photos', 'materials', 'material_batches', 'material_documents', 'work_materials', 'executive_documents', 'executive_packages', 'package_documents', 'pto_transfers', 'sdo_cases', 'financial_closings', 'monthly_plans', 'audit_logs', 'domain_events', 'notifications', 'dictionary_items', 'risk_settings', 'bitrix_installations', 'sessions', 'import_reports']);
+const tables = new Set(['users', 'contractors', 'objects', 'object_contractors', 'work_categories', 'work_types', 'work_templates', 'works', 'work_dependencies', 'work_progress', 'inspections', 'issues', 'attachments', 'inspection_photos', 'materials', 'material_batches', 'material_documents', 'work_materials', 'executive_documents', 'executive_packages', 'package_documents', 'pto_transfers', 'sdo_cases', 'financial_closings', 'monthly_plans', 'audit_logs', 'domain_events', 'notifications', 'dictionary_items', 'risk_settings', 'bitrix_installations', 'sessions', 'import_reports',
+    // F8.1 Production Execution + Construction Control Foundation.
+    'finish_types', 'work_execution_units', 'execution_unit_layers', 'quantity_portions', 'portion_quantity_confirmations',
+    // F8.2 PTO / Executive Documentation Foundation.
+    'documentation_packages', 'documentation_package_portions', 'documentation_documents', 'documentation_document_versions', 'documentation_package_status_history',
+    // F8.3 SDO / Closing.
+    'documentation_customer_acceptances', 'sdo_closing_cases', 'sdo_closing_status_history', 'sdo_closing_handoff_history', 'sdo_closing_amount_history', 'sdo_closing_portion_allocations',
+    // F8.3 Corrective Patch (R02, R05).
+    'documentation_customer_acceptance_versions', 'sdo_closing_portion_allocation_history']);
 export async function insert(c: any, table: string, tenantId: string, data: any) { if (!tables.has(table))
     throw Error('Invalid table'); const d = { tenant_id: tenantId, ...Object.fromEntries(Object.entries(data).map(([k, v]) => [k.replace(/[A-Z]/g, x => '_' + x.toLowerCase()), v])) }; const keys = Object.keys(d); if (keys.some(k => !/^[a-z_]+$/.test(k)))
     throw Error('Invalid column'); return one(c, `INSERT INTO ${table} (${keys.join(',')}) VALUES (${keys.map((_, i) => '$' + (i + 1)).join(',')}) RETURNING *`, Object.values(d)); }

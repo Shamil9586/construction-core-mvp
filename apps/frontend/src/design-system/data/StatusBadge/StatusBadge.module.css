@@ -1,0 +1,47 @@
+/*
+ * Data / StatusBadge
+ *
+ * Every property the legacy global sheet could supply is declared here. `span` is
+ * not styled globally today, but relying on that would make the component depend
+ * on a file it must not know about.
+ */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  box-sizing: border-box;
+  height: var(--cc-badge-height);
+  padding: 0 var(--cc-badge-padding-x);
+  border: 0;
+  border-radius: var(--cc-badge-radius);
+  white-space: nowrap;
+}
+
+/* The five appearances. `delayed` and `attention` resolve to the same amber on
+   purpose: a second step would imply a severity scale the product does not have,
+   and the label carries the difference (D-07). */
+
+.onTrack {
+  background: var(--cc-status-on-track-fill);
+  color: var(--cc-status-on-track-text);
+}
+
+.delayed {
+  background: var(--cc-status-delayed-fill);
+  color: var(--cc-status-delayed-text);
+}
+
+.attention {
+  background: var(--cc-status-attention-fill);
+  color: var(--cc-status-attention-text);
+}
+
+.blocked {
+  background: var(--cc-status-blocked-fill);
+  color: var(--cc-status-blocked-text);
+}
+
+.neutral {
+  background: var(--cc-status-neutral-fill);
+  color: var(--cc-status-neutral-text);
+}

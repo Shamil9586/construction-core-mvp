@@ -1,0 +1,77 @@
+/*
+ * F7 — session and configuration states. Composed from the existing layout
+ * and component tokens only; no new token, no new component in the design
+ * system.
+ *
+ * The panel takes a whole grid span (span-4, D-01) and separates by border
+ * and surface, not elevation (shadow is reserved for ContextOverlay, D-10).
+ * Form controls take `border.interactive`, never `border.default` (D-03,
+ * WCAG 1.4.11), and the ordinary focus ring — they sit on a light surface.
+ */
+
+.panel {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--cc-p-space-16);
+  width: 100%;
+  max-width: var(--cc-layout-span-4);
+  margin-top: var(--cc-p-space-24);
+  padding: var(--cc-card-padding);
+  background: var(--cc-background-surface);
+  border: var(--cc-border-width) solid var(--cc-border-default);
+  border-radius: var(--cc-card-radius);
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--cc-p-space-16);
+  width: 100%;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-4);
+}
+
+.heading,
+.fieldLabel {
+  margin: 0;
+  color: var(--cc-text-primary);
+}
+
+.control {
+  box-sizing: border-box;
+  width: 100%;
+  height: var(--cc-button-height);
+  padding: 0 var(--cc-p-space-12);
+  border: var(--cc-border-width) solid var(--cc-border-interactive);
+  border-radius: var(--cc-radius-button);
+  background: var(--cc-background-surface);
+  color: var(--cc-text-primary);
+}
+
+.control:focus-visible {
+  outline: var(--cc-focus-ring-width) solid var(--cc-focus-ring);
+  outline-offset: var(--cc-focus-ring-offset);
+}
+
+.note {
+  margin: 0;
+  color: var(--cc-text-secondary);
+}
+
+.alert {
+  margin: 0;
+  color: var(--cc-text-primary);
+}
+
+.technical {
+  margin: 0;
+  color: var(--cc-text-secondary);
+  overflow-wrap: anywhere;
+}

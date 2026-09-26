@@ -1,0 +1,256 @@
+/*
+ * Construction Core — design tokens
+ * Source of truth: 01_Visual_Design_System_v1.md
+ *
+ * Inter is self-hosted through @fontsource-variable (no external font CDN: the
+ * application is embedded in Bitrix24, where a third-party CDN is unreliable).
+ * The `wght` axis file carries weights 100-900 in one variable font and includes
+ * the cyrillic and cyrillic-ext subsets.
+ */
+@import '@fontsource-variable/inter/wght.css';
+
+/*
+ * Three layers, per decision D-02.
+ *
+ *   primitive  raw values                  -> never referenced by a component
+ *   semantic   purpose                     -> referenced by components
+ *   component  per-component measurements  -> referenced by components
+ *
+ * A component reading a --cc-p-* variable is a review failure: `amber` does not
+ * tell you whether it may be applied to an unconfirmed volume, `status-attention`
+ * does. The indirection is also what allows a dark theme later by redefining only
+ * the semantic layer (D-13).
+ */
+
+:root {
+  /* ------------------------------------------------------------------ *
+   * LAYER 1 — PRIMITIVE                                                *
+   * ------------------------------------------------------------------ */
+
+  /* colour */
+  --cc-p-white: #FFFFFF;
+
+  --cc-p-navy-900: #142C3C;
+  --cc-p-navy-700: #28485D;
+  --cc-p-navy-600: #3C5464;
+  --cc-p-navy-200: #B8C8D3;
+
+  --cc-p-ink-900: #172B3A;
+  --cc-p-ink-600: #526575;
+
+  --cc-p-slate-100: #F4F6F8;
+  --cc-p-slate-200: #EEF2F5;
+  --cc-p-slate-300: #DFE6EC;
+  --cc-p-slate-500: #778C9C;
+
+  --cc-p-blue-700: #173C57;
+  --cc-p-blue-600: #1D4B6E;
+  --cc-p-blue-500: #245B85;
+  --cc-p-blue-200: #7FB4E0;
+  --cc-p-blue-050: #EAF2F8;
+
+  --cc-p-green-700: #216649;
+  --cc-p-green-050: #E8F4ED;
+
+  --cc-p-amber-700: #925000;
+  --cc-p-amber-050: #FFF3DA;
+
+  --cc-p-red-700: #AB3434;
+  --cc-p-red-050: #FCEDED;
+
+  /* type */
+  --cc-p-font-sans: "Inter Variable", Inter, Arial, sans-serif;
+
+  --cc-p-size-42: 42px;
+  --cc-p-size-32: 32px;
+  --cc-p-size-28: 28px;
+  --cc-p-size-22: 22px;
+  --cc-p-size-20: 20px;
+  --cc-p-size-17: 17px;
+  --cc-p-size-16: 16px;
+  --cc-p-size-14: 14px;
+  --cc-p-size-13: 13px;
+  --cc-p-size-12: 12px;
+  --cc-p-size-11: 11px;
+  --cc-p-size-10: 10px;
+
+  --cc-p-line-50: 50px;
+  --cc-p-line-40: 40px;
+  --cc-p-line-36: 36px;
+  --cc-p-line-28: 28px;
+  --cc-p-line-24: 24px;
+  --cc-p-line-20: 20px;
+  --cc-p-line-18: 18px;
+  --cc-p-line-16: 16px;
+  --cc-p-line-14: 14px;
+
+  --cc-p-weight-regular: 400;
+  --cc-p-weight-medium: 500;
+  --cc-p-weight-semibold: 600;
+
+  --cc-p-tracking-eyebrow: 0.04em;
+
+  /* dimension — 4px scale */
+  --cc-p-space-4: 4px;
+  --cc-p-space-8: 8px;
+  --cc-p-space-12: 12px;
+  --cc-p-space-16: 16px;
+  --cc-p-space-20: 20px;
+  --cc-p-space-24: 24px;
+  --cc-p-space-32: 32px;
+  --cc-p-space-40: 40px;
+
+  --cc-p-radius-3: 3px;
+  --cc-p-radius-6: 6px;
+  --cc-p-radius-7: 7px;
+  --cc-p-radius-10: 10px;
+  --cc-p-radius-14: 14px;
+
+  /* ------------------------------------------------------------------ *
+   * LAYER 2 — SEMANTIC                                                 *
+   * ------------------------------------------------------------------ */
+
+  /* surfaces */
+  --cc-background-page: var(--cc-p-slate-100);
+  --cc-background-surface: var(--cc-p-white);
+  --cc-background-navigation: var(--cc-p-navy-900);
+  --cc-background-selected: var(--cc-p-blue-050);
+  --cc-background-neutral: var(--cc-p-slate-200);
+
+  /* text */
+  --cc-text-primary: var(--cc-p-ink-900);
+  --cc-text-secondary: var(--cc-p-ink-600);
+  --cc-text-on-navigation: var(--cc-p-white);
+  --cc-text-on-navigation-muted: var(--cc-p-navy-200);
+  --cc-text-on-action: var(--cc-p-white);
+  --cc-text-link: var(--cc-p-blue-500);
+
+  /* borders — `default` is decorative (1.26:1) and is only ever a card edge or a
+     divider, where the change of surface already separates. Anything the user
+     operates takes `interactive` (3.49:1), the WCAG 1.4.11 floor. D-03. */
+  --cc-border-default: var(--cc-p-slate-300);
+  --cc-border-interactive: var(--cc-p-slate-500);
+  --cc-border-navigation: var(--cc-p-navy-600);
+  --cc-border-width: 1px;
+
+  /* action */
+  --cc-action-primary: var(--cc-p-blue-500);
+  --cc-action-primary-hover: var(--cc-p-blue-600);
+  --cc-action-primary-pressed: var(--cc-p-blue-700);
+  --cc-action-surface-hover: var(--cc-p-slate-100);
+  --cc-action-navigation-hover: var(--cc-p-navy-700);
+  --cc-action-navigation-selected: var(--cc-p-navy-700);
+
+  /* focus — the inverse ring exists because the normal ring is 2.0:1 on navy and
+     keyboard navigation starts in the sidebar. D-04. */
+  --cc-focus-ring: var(--cc-p-blue-500);
+  --cc-focus-ring-inverse: var(--cc-p-blue-200);
+  --cc-focus-ring-width: 2px;
+  --cc-focus-ring-offset: 3px;
+
+  /* status — the four states of Design Rules §16 plus neutral. `delayed` and
+     `attention` deliberately share one amber: a second step would imply a risk
+     scale the product model does not have. The label carries the difference. D-07. */
+  --cc-status-on-track-fill: var(--cc-p-green-050);
+  --cc-status-on-track-text: var(--cc-p-green-700);
+  --cc-status-delayed-fill: var(--cc-p-amber-050);
+  --cc-status-delayed-text: var(--cc-p-amber-700);
+  --cc-status-attention-fill: var(--cc-p-amber-050);
+  --cc-status-attention-text: var(--cc-p-amber-700);
+  --cc-status-blocked-fill: var(--cc-p-red-050);
+  --cc-status-blocked-text: var(--cc-p-red-700);
+  --cc-status-neutral-fill: var(--cc-p-slate-200);
+  --cc-status-neutral-text: var(--cc-p-ink-600);
+
+  /* radius */
+  --cc-radius-card: var(--cc-p-radius-10);
+  --cc-radius-button: var(--cc-p-radius-7);
+  --cc-radius-badge: var(--cc-p-radius-6);
+  --cc-radius-row: var(--cc-p-radius-6);
+  --cc-radius-progress: var(--cc-p-radius-3);
+  --cc-radius-overlay: var(--cc-p-radius-14);
+
+  /* layout — 12 columns, 77px column, 20px gutter, offset 248. Spans are whole
+     grid widths; the prototype's 268/364/370/376/380/744/748 were normalised
+     to these. D-01. */
+  --cc-layout-sidebar-width: 208px;
+  --cc-layout-topbar-height: 64px;
+  --cc-layout-content-width: 1144px;
+  --cc-layout-column: 77px;
+  --cc-layout-gutter: 20px;
+  --cc-layout-span-3: 271px;
+  --cc-layout-span-4: 368px;
+  --cc-layout-span-8: 756px;
+  --cc-layout-span-12: 1144px;
+
+  /* ------------------------------------------------------------------ *
+   * LAYER 3 — COMPONENT                                                *
+   * ------------------------------------------------------------------ */
+
+  --cc-sidebar-width: var(--cc-layout-sidebar-width);
+  --cc-sidebar-item-height: 42px;
+  --cc-sidebar-item-height-section: 38px;
+  --cc-sidebar-item-padding-x: var(--cc-p-space-16);
+  --cc-sidebar-padding: var(--cc-p-space-24);
+
+  --cc-topbar-height: var(--cc-layout-topbar-height);
+
+  --cc-card-padding: var(--cc-p-space-24);
+  --cc-card-radius: var(--cc-radius-card);
+  --cc-card-gap: var(--cc-p-space-20);
+
+  --cc-kpi-card-padding: var(--cc-p-space-20);
+  --cc-kpi-card-width: var(--cc-layout-span-3);
+  --cc-kpi-card-height: 115px;
+
+  --cc-badge-height: 27px;
+  --cc-badge-padding-x: var(--cc-p-space-12);
+  --cc-badge-radius: var(--cc-radius-badge);
+
+  --cc-button-height: 38px;
+  --cc-button-padding-x: var(--cc-p-space-16);
+  --cc-button-radius: var(--cc-radius-button);
+  --cc-button-icon-gap: var(--cc-p-space-8);
+
+  /* The fill is always the neutral blue. Colouring it by status would make 62%
+     read as a judgement of quality or acceptance; the bar reports volume of work
+     done, the badge beside it reports schedule state. D-08. */
+  --cc-progress-height: 6px;
+  --cc-progress-radius: var(--cc-radius-progress);
+  --cc-progress-inline-width: 80px;
+  --cc-progress-track: var(--cc-background-neutral);
+  --cc-progress-fill: var(--cc-action-primary);
+
+  --cc-table-row-height: 53px;
+  --cc-table-row-height-tall: 69px;
+  --cc-table-row-padding-x: var(--cc-p-space-12);
+  --cc-table-row-radius: var(--cc-radius-row);
+  --cc-table-row-hover: var(--cc-action-surface-hover);
+  --cc-table-row-attention: var(--cc-status-attention-fill);
+  --cc-table-chevron-width: 24px;
+  --cc-table-chevron-color: var(--cc-text-link);
+}
+
+/*
+ * Design-system scope.
+ *
+ * The legacy stylesheet (apps/frontend/src/style.css) is global and carries bare
+ * element selectors — body, h1, h2, p, small, strong, a, aside, header, main.
+ * Module class names win on specificity for properties we declare, but inherited
+ * and undeclared properties would still leak in. This class re-establishes the
+ * baseline on any design-system subtree, so a component renders the same whether
+ * or not the legacy sheet is loaded.
+ *
+ * Tabular figures are set here and restated on each text style. The product is
+ * read by comparing numbers down a column — 500 against 498, 75% against 62% —
+ * and proportional digits break that alignment. D-06.
+ */
+.ccScope {
+  font-family: var(--cc-p-font-sans);
+  font-size: var(--cc-p-size-14);
+  line-height: var(--cc-p-line-20);
+  font-weight: var(--cc-p-weight-regular);
+  color: var(--cc-text-primary);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1;
+}

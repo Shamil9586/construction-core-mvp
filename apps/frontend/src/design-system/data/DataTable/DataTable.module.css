@@ -1,0 +1,106 @@
+/*
+ * Data / Table
+ *
+ * One surface holding a stack of rows. Cells are not wrapped in cards of their
+ * own; the card is the table.
+ */
+
+.root {
+  background: var(--cc-background-surface);
+  border: var(--cc-border-width) solid var(--cc-border-default);
+  border-radius: var(--cc-card-radius);
+  padding: var(--cc-card-padding);
+  box-sizing: border-box;
+  width: 100%;
+}
+
+/*
+ * `table-layout: fixed` is what makes the column model work. Widths are declared
+ * once per table in the colgroup and every row inherits them, so a long object
+ * name wraps inside its own column instead of shifting the numbers beside it.
+ */
+.table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.caption {
+  text-align: left;
+  padding: 0 0 var(--cc-p-space-16);
+}
+
+.title {
+  display: block;
+  color: var(--cc-text-primary);
+  margin: 0;
+}
+
+/*
+ * Category, type and coverage. Saying "3 из 12 работ объекта" is not decoration:
+ * when a table shows part of a set, a reader who is not told so will take it for
+ * the whole set.
+ */
+.context {
+  display: block;
+  color: var(--cc-text-secondary);
+  margin: var(--cc-p-space-4) 0 0;
+}
+
+.headerCell {
+  color: var(--cc-text-secondary);
+  text-align: left;
+  padding: 0 var(--cc-table-row-padding-x) var(--cc-p-space-8);
+  border-bottom: var(--cc-border-width) solid var(--cc-border-default);
+  font-weight: inherit;
+}
+
+.headerAlignEnd {
+  text-align: right;
+}
+
+.stateCell {
+  padding: var(--cc-p-space-24) var(--cc-table-row-padding-x);
+  text-align: left;
+  color: var(--cc-text-secondary);
+}
+
+.stateStack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--cc-p-space-16);
+}
+
+/*
+ * Loading shows the shape of a row and no values at all. Rendering zeros while
+ * waiting would state a measurement the table does not have yet, and by the time
+ * the real number arrives the reader has already read the zero.
+ */
+.skeletonCell {
+  padding: 0 var(--cc-table-row-padding-x);
+  vertical-align: middle;
+}
+
+.skeletonBar {
+  height: 12px;
+  border-radius: var(--cc-p-radius-3);
+  background: var(--cc-background-neutral);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .skeletonBar {
+    animation: cc-table-skeleton 1.4s ease-in-out infinite;
+  }
+}
+
+@keyframes cc-table-skeleton {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}

@@ -1,0 +1,107 @@
+/*
+ * Navigation / Sidebar
+ *
+ * Items are <button>s, not <a>s, so legacy's `nav a{...}` rule (display, gap,
+ * colour, padding, margin, border-radius, font-size) never matches this markup
+ * at all — a different element, not merely a higher-specificity override. The
+ * `<nav>` itself still gets an explicit `display`/`overflow`/`margin-top` below,
+ * because legacy styles a *bare* `nav` at its narrowest breakpoint
+ * (`nav{display:flex;overflow:auto;margin-top:10px}`), and that would apply if
+ * nothing here claimed those three properties.
+ */
+
+.sidebar {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: var(--cc-sidebar-padding) 0;
+  gap: var(--cc-p-space-8);
+}
+
+.brand {
+  padding: 0 var(--cc-sidebar-item-padding-x);
+  color: var(--cc-text-on-navigation);
+}
+
+.caption {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  height: var(--cc-sidebar-item-height-section);
+  padding: 0 var(--cc-sidebar-item-padding-x);
+  margin-top: var(--cc-p-space-16);
+  color: var(--cc-text-on-navigation-muted);
+}
+
+.nav {
+  display: block;
+  overflow: visible;
+  margin-top: 0;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0 var(--cc-p-space-16);
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-4);
+}
+
+.item {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: var(--cc-sidebar-item-gap);
+  width: 100%;
+  height: var(--cc-sidebar-item-height);
+  padding: 0 var(--cc-sidebar-item-padding-x);
+  margin: 0;
+  border: none;
+  border-radius: var(--cc-radius-button);
+  background: none;
+  color: var(--cc-text-on-navigation-muted);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  appearance: none;
+}
+
+.item:hover {
+  background: var(--cc-action-navigation-hover);
+  color: var(--cc-text-on-navigation);
+}
+
+.itemActive {
+  background: var(--cc-action-navigation-selected);
+  color: var(--cc-text-on-navigation);
+}
+
+/* D-04: the inverse ring, not the ordinary one — 6.53:1 against navy versus
+   2.0:1, and this is where keyboard navigation starts on every screen. Inset so
+   it never gets clipped by the rail's own `overflow-y: auto`. */
+.item:focus-visible {
+  outline: var(--cc-focus-ring-width) solid var(--cc-focus-ring-inverse);
+  outline-offset: calc(var(--cc-focus-ring-offset) * -1);
+}
+
+.icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+
+.label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.footer {
+  margin-top: auto;
+  padding: var(--cc-p-space-16) var(--cc-sidebar-item-padding-x) 0;
+  color: var(--cc-text-on-navigation-muted);
+}

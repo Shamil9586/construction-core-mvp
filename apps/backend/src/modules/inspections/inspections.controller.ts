@@ -47,7 +47,7 @@ export class InspectionsController {
     @Param('id')
     id: string,
     @Body()
-    b: any) { return this.service.inspectionAction(await authenticate(r), V.uuid.parse(id), V.version.parse(b.version), 'accept', V.text.parse(b.comment)); }
+    b: any) { const d = V.inspectionAcceptDto.parse(b); return this.service.inspectionAction(await authenticate(r), V.uuid.parse(id), d.version, 'accept', d.comment, d.quantity); }
     @Post('inspections/:id/reject')
     async reject(
     @Req()
