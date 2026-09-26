@@ -34,9 +34,15 @@ __pycache__/
 *.pyc
 .DS_Store
 Thumbs.db
+# Per-developer Claude Code settings (e.g. opt-in Impeccable design hook).
+.claude/settings.local.json
 # Real workbook-derived information is not demo data.
 docs/excel-source-report.json
 project_sources/
 dev-data/
 reference/
+# The bare "reference/" rule above matches at any depth; carve back out the
+# Impeccable skill's own reference/ subfolder, which is public skill content.
+!.claude/skills/impeccable/reference/
+!.claude/skills/impeccable/reference/**
 TASK-PROMPT.md
