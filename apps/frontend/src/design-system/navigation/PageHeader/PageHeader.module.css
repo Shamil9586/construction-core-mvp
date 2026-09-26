@@ -1,0 +1,35 @@
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--cc-p-space-20);
+  margin-bottom: var(--cc-p-space-20);
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-4);
+  min-width: 0;
+}
+
+.eyebrow {
+  color: var(--cc-text-secondary);
+}
+
+.title {
+  color: var(--cc-text-primary);
+}
+
+.description {
+  color: var(--cc-text-secondary);
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--cc-p-space-12);
+  flex: none;
+}

@@ -1,0 +1,101 @@
+.filterRow {
+  display: flex;
+  align-items: center;
+  gap: var(--cc-p-space-12);
+  margin-bottom: var(--cc-p-space-20);
+}
+
+.filterLabel {
+  color: var(--cc-text-secondary);
+}
+
+.filterSelect {
+  min-width: 240px;
+  box-sizing: border-box;
+  padding: var(--cc-p-space-8) var(--cc-p-space-12);
+  border: var(--cc-border-width) solid var(--cc-border-interactive);
+  border-radius: var(--cc-p-radius-6);
+  background: var(--cc-background-surface);
+  color: var(--cc-text-primary);
+  font: inherit;
+}
+
+.filterSelect:focus-visible {
+  outline: var(--cc-focus-ring-width) solid var(--cc-focus-ring);
+  outline-offset: var(--cc-focus-ring-offset);
+}
+
+.row {
+  border-top: var(--cc-border-width) solid var(--cc-border-default);
+}
+
+.cell {
+  box-sizing: border-box;
+  padding: var(--cc-p-space-12) var(--cc-p-space-16);
+  vertical-align: middle;
+}
+
+.alignEnd {
+  text-align: end;
+}
+
+.secondary {
+  color: var(--cc-text-secondary);
+}
+
+.rowAction {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--cc-p-space-4);
+}
+
+.rowActionStack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--cc-p-space-8);
+}
+
+.actionButton {
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  padding: var(--cc-p-space-8) var(--cc-button-padding-x);
+  border: var(--cc-border-width) solid transparent;
+  border-radius: var(--cc-button-radius);
+  background: var(--cc-action-primary);
+  color: var(--cc-text-on-action);
+  font: inherit;
+  cursor: pointer;
+}
+
+.pickerSelect {
+  width: 100%;
+  min-width: 180px;
+  box-sizing: border-box;
+  padding: var(--cc-p-space-8) var(--cc-p-space-12);
+  border: var(--cc-border-width) solid var(--cc-border-interactive);
+  border-radius: var(--cc-p-radius-6);
+  background: var(--cc-background-surface);
+  color: var(--cc-text-primary);
+  font: inherit;
+}
+
+.pickerSelect:focus-visible {
+  outline: var(--cc-focus-ring-width) solid var(--cc-focus-ring);
+  outline-offset: var(--cc-focus-ring-offset);
+}
+
+.actionButton:hover:not(:disabled) {
+  background: var(--cc-action-primary-hover);
+}
+
+.actionButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.errorText {
+  color: var(--cc-status-blocked-text);
+  text-align: end;
+}

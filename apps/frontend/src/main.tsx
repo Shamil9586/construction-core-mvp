@@ -14,12 +14,12 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { AppstoreOutlined, ApartmentOutlined, TeamOutlined, BuildOutlined, CalendarOutlined, SafetyCertificateOutlined, FileDoneOutlined, CalculatorOutlined, WalletOutlined, DatabaseOutlined, SettingOutlined, ArrowRightOutlined } from '@ant-design/icons';
 import './style.css';
+import { parseResponse } from './http';
 import ContractorPanel, { WorkChain } from './ContractorPanel';
 import { Gantt, GanttTask } from './Gantt';
 const queryClient = new QueryClient();
 let token = sessionStorage.getItem('session') ?? '';
-async function api(path: string, body?: any) { const r = await fetch('/api/' + path, { method: body === undefined ? 'GET' : 'POST', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) }, body: body === undefined ? undefined : JSON.stringify(body) }); const data = await r.json(); if (!r.ok)
-    throw Error(data.message ?? 'Ошибка сервера'); return data; }
+async function api(path: string, body?: any) { const r = await fetch('/api/' + path, { method: body === undefined ? 'GET' : 'POST', headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) }, body: body === undefined ? undefined : JSON.stringify(body) }); return parseResponse(r); }
 /**
  * Открыть бинарное вложение (фото приёмки) в новой вкладке. GET /attachments/:id
  * требует Authorization-заголовок (см. attachments.controller.ts), поэтому
@@ -176,6 +176,9 @@ function App() {
         // отфильтрованные на клиенте по этому объекту — новых прав не требуется.
         const materialsQ = useQuery({ queryKey: ['materials'], queryFn: () => api('materials'), enabled: !!actor });
         const auditQ = useQuery({ queryKey: ['audit'], queryFn: () => api('audit'), enabled: !!actor });
+        // Active object↔contractor relations (id+version, needed to remove one) — a
+        // dedicated object-scoped endpoint, same shape as GET /objects/:id/works.
+        const contractorsQ = useQuery({ queryKey: ['object-contractors', id], queryFn: () => api(`objects/${id}/contractors`), enabled: !!actor });
         const objectMaterialBatches = (materialsQ.data?.batches ?? []).filter((b: any) => b.objectId === id);
         const relatedHistoryIds = new Set<string>([
             id!,
@@ -187,7 +190,15 @@ function App() {
             ...(d.sdo ?? []).filter((s: any) => s.objectId === id).map((s: any) => s.id),
             ...(d.closings ?? []).filter((f: any) => f.objectId === id).map((f: any) => f.id),
         ]);
-        const objectHistory = (auditQ.data ?? []).filter((a: any) => relatedHistoryIds.has(a.entityId));
+        // ObjectContractor audit rows can't be matched by relatedHistoryIds: their
+        // entityId is the object_contractors relation's own id, and a removed
+        // relation is no longer present in contractorsQ.data (active-only) — building
+        // this off currently-active relation ids would make removed-relation history
+        // disappear again. audit_logs already stores the relation's objectId inside
+        // oldValue/newValue (F4 corrective) — match on that instead, one source of
+        // truth (audit_logs), no new endpoint. old_value/new_value are jsonb columns;
+        // the API already returns them parsed (pg auto-parses jsonb), not as strings.
+        const objectHistory = (auditQ.data ?? []).filter((a: any) => relatedHistoryIds.has(a.entityId) || (a.entityType === 'ObjectContractor' && [a.oldValue, a.newValue].some((v: any) => v?.objectId === id)));
         return <><Link to="/objects">← Все объекты</Link><div className="page-heading"><div><h1>{o.name}</h1><p>{o.externalCode} · {o.address}</p><p>РП: {o.responsible} · {o.contractors.join(', ')}</p></div><Health value={o.healthStatus}/></div><div className="kpi-grid">{[['Факт / план', pct(o.actualProgress) + ' / ' + pct(o.plannedProgress)], ['Стоимость', money(o.contractValue)], ['Закрыто', money(o.closed)], ['Потенциал', money(o.potential)]].map(([label, value]) => <Card key={label}><small>{label}</small><h2>{value}</h2></Card>)}</div><WorkChain data={d} works={works}/><Tabs activeKey={objectTab} onChange={setObjectTab} items={[
             { key: 'overview', label: 'Обзор', children: <Card><Descriptions column={2} size="small" bordered>
                 <Descriptions.Item label="Статус"><Status value={o.status}/></Descriptions.Item>
@@ -199,8 +210,18 @@ function App() {
                 <Descriptions.Item label="Плановое завершение">{date(o.plannedFinishDate)}</Descriptions.Item>
                 <Descriptions.Item label="Сумма договора">{money(o.contractValue)}</Descriptions.Item>
                 <Descriptions.Item label="Физ. готовность" span={2}><Progress percent={Math.round(o.actualProgress ?? 0)} style={{ maxWidth: 320 }}/></Descriptions.Item>
-                <Descriptions.Item label="Субподрядчики" span={2}>{o.contractors.length ? o.contractors.map((c: string) => <Tag key={c}>{c}</Tag>) : <small>не определены</small>}</Descriptions.Item>
-              </Descriptions></Card> },
+                <Descriptions.Item label="Субподрядчики" span={2}><Space direction="vertical" style={{ width: '100%' }}>
+                  <Space wrap>{(contractorsQ.data ?? []).length ? contractorsQ.data.map((rel: any) => <Tag key={rel.id} closable={can('PROJECT_MANAGER', 'TECHNICAL_DIRECTOR')} onClose={() => mutate(`objects/${id}/contractors/${rel.contractorId}/remove`, { relationId: rel.id, version: rel.version }).catch(() => { })}>{rel.contractorName}</Tag>) : <small>не назначены</small>}</Space>
+                  {can('PROJECT_MANAGER', 'TECHNICAL_DIRECTOR') && <Button size="small" onClick={() => actionForm('Добавить подрядчика', `objects/${id}/contractors`, [{ name: 'contractorId', label: 'Субподрядчик', options: opts(d.contractors.filter((c: any) => !(contractorsQ.data ?? []).some((rel: any) => rel.contractorId === c.id))) }])}>Добавить подрядчика</Button>}
+                </Space></Descriptions.Item>
+              </Descriptions>{can('PROJECT_MANAGER', 'TECHNICAL_DIRECTOR') && <Button style={{ marginTop: 12 }} onClick={() => actionForm('Редактировать объект', `objects/${id}/edit`, [
+                { name: 'name', label: 'Название', value: o.name },
+                { name: 'address', label: 'Адрес', value: o.address },
+                { name: 'customerName', label: 'Заказчик', value: o.customerName ?? '', optional: true },
+                { name: 'startDate', label: 'Дата начала', type: 'date', value: o.startDate },
+                { name: 'plannedFinishDate', label: 'Плановое завершение', type: 'date', value: o.plannedFinishDate },
+                ...(can('TECHNICAL_DIRECTOR') ? [{ name: 'projectManagerId', label: 'Руководитель проекта', options: opts(users.data?.filter((u: any) => u.role === 'PROJECT_MANAGER')), value: o.projectManagerId }] : []),
+              ], { version: o.version })}>Редактировать объект</Button>}</Card> },
             { key: 'production', label: 'Производство', children: <>{can('PROJECT_MANAGER', 'TECHNICAL_DIRECTOR') && <Button onClick={() => newWork(id)}>Добавить работу</Button>}{worksTable(works)}</> },
             { key: 'schedule', label: 'График', children: gantt(works) },
             { key: 'sk', label: 'Строительный контроль', children: inspectionsView(objectInspections) },

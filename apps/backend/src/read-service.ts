@@ -2,15 +2,24 @@ import { Injectable } from '@nestjs/common';
 import Decimal from 'decimal.js';
 import { pool, rows, one } from './db';
 import { Actor, requirePermission, objectAccess } from './security';
-import { Permission as P, ProgressCalculationService, ScheduleStatusService, PotentialClosingService, ObjectHealthService, defaultRisk } from '../../../packages/domain';
+import { Permission as P, ProgressCalculationService, ScheduleStatusService, PotentialClosingService, ObjectHealthService, PortionCompletionService, defaultRisk, resolveInternalScAccepted, resolveActualQuantity, canAccessDocumentation, resolveDocumentationAttention, resolvePackageSdoReadiness, isCustomerAcceptanceSnapshotCurrent } from '../../../packages/domain';
 @Injectable()
 export class ReadService {
-    async snapshot(a: Actor) {
+    async snapshot(a: Actor, filters: { contractorId?: string } = {}) {
         requirePermission(a, P.OBJECT_VIEW);
         const t = a.tenantId;
-        const objectFilter = a.role === 'PROJECT_MANAGER' ? ' AND o.project_manager_id=$2' : a.role === 'CONTRACTOR_VIEWER' ? ' AND EXISTS(SELECT 1 FROM object_contractors oc WHERE oc.tenant_id=o.tenant_id AND oc.object_id=o.id AND oc.contractor_id=$2)' : '';
-        const objects = await rows(pool, 'SELECT o.*,u.name AS responsible FROM objects o JOIN users u ON u.tenant_id=o.tenant_id AND u.id=o.project_manager_id WHERE o.tenant_id=$1' + objectFilter + ' ORDER BY o.name', objectFilter ? [t, a.role === 'PROJECT_MANAGER' ? a.id : a.contractorId ?? null] : [t]);
+        const params: any[] = [t]; let objectFilter = '';
+        if (a.role === 'PROJECT_MANAGER') { params.push(a.id); objectFilter += ` AND o.project_manager_id=$${params.length}`; }
+        if (a.role === 'CONTRACTOR_VIEWER') { params.push(a.contractorId ?? null); objectFilter += ` AND EXISTS(SELECT 1 FROM object_contractors_active oc WHERE oc.tenant_id=o.tenant_id AND oc.object_id=o.id AND oc.contractor_id=$${params.length})`; }
+        if (filters.contractorId) { params.push(filters.contractorId); objectFilter += ` AND EXISTS(SELECT 1 FROM object_contractors_active oc2 WHERE oc2.tenant_id=o.tenant_id AND oc2.object_id=o.id AND oc2.contractor_id=$${params.length})`; }
+        const objects = await rows(pool, 'SELECT o.*,u.name AS responsible FROM objects o JOIN users u ON u.tenant_id=o.tenant_id AND u.id=o.project_manager_id WHERE o.tenant_id=$1' + objectFilter + ' ORDER BY o.name', params);
         const ids = objects.map(o => o.id);
+        // Active object_contractors (object_contractors_active — единый read source,
+        // infra/005) — current assignment, used for objectList.contractorIds/
+        // contractors below. Distinct from works.contractor_id (historical/actual
+        // attribution) and from CONTRACTOR_VIEWER's own-work filter above, which is
+        // unaffected by this and stays keyed off works directly.
+        const activeAssignments = await rows(pool, 'SELECT oc.object_id,oc.contractor_id,c.name AS contractor_name FROM object_contractors_active oc JOIN contractors c ON c.id=oc.contractor_id AND c.tenant_id=oc.tenant_id WHERE oc.tenant_id=$1 AND oc.object_id=ANY($2::uuid[])', [t, ids]);
         const works = await rows(pool, `SELECT w.*,t.requires_inspection,t.requires_materials,t.category_id,c.name AS contractor,u.name AS responsible,(SELECT max(reported_at) FROM work_progress p WHERE p.tenant_id=w.tenant_id AND p.object_work_id=w.id) AS last_reported_at FROM works w JOIN work_types t ON t.id=w.work_type_id AND t.tenant_id=w.tenant_id JOIN contractors c ON c.id=w.contractor_id AND c.tenant_id=w.tenant_id JOIN users u ON u.id=w.responsible_user_id AND u.tenant_id=w.tenant_id WHERE w.tenant_id=$1 AND w.object_id=ANY($2::uuid[]) ${a.role === 'CONTRACTOR_VIEWER' ? 'AND w.contractor_id=$3' : ''} ORDER BY w.planned_start_date,w.name`, a.role === 'CONTRACTOR_VIEWER' ? [t, ids, a.contractorId ?? null] : [t, ids]);
         const inspections = await rows(pool, 'SELECT * FROM inspections WHERE tenant_id=$1 AND object_id=ANY($2::uuid[]) ORDER BY created_at DESC', [t, ids]);
         const issues = await rows(pool, 'SELECT x.*,i.object_id,i.object_work_id,u.name AS responsible FROM issues x JOIN inspections i ON i.id=x.inspection_id AND i.tenant_id=x.tenant_id JOIN users u ON u.id=x.responsible_user_id AND u.tenant_id=x.tenant_id WHERE x.tenant_id=$1 AND i.object_id=ANY($2::uuid[])', [t, ids]);
@@ -26,15 +35,213 @@ export class ReadService {
         const photos = await rows(pool, 'SELECT * FROM inspection_photos WHERE tenant_id=$1 AND inspection_id=ANY($2::uuid[])', [t, inspections.map(i => i.id)]);
         const contractors = await rows(pool, 'SELECT * FROM contractors WHERE tenant_id=$1' + (a.role === 'CONTRACTOR_VIEWER' ? ' AND id=$2' : ''), a.role === 'CONTRACTOR_VIEWER' ? [t, a.contractorId ?? null] : [t]);
         const dependencies = await rows(pool, 'SELECT d.* FROM work_dependencies d JOIN works w ON w.id=d.successor_work_id AND w.tenant_id=d.tenant_id WHERE d.tenant_id=$1 AND w.object_id=ANY($2::uuid[])', [t, ids]);
+        // F8.1 Production Execution + Construction Control Foundation. Scoped by
+        // work id, not directly by object id — work_execution_units joins to
+        // works, quantity_portions/portion_quantity_confirmations chain from
+        // there. Omitted from the CONTRACTOR_VIEWER branch below, the same
+        // treatment inspections/issues already get for that role.
+        const workIds = works.map(w => w.id);
+        const executionUnits = await rows(pool, 'SELECT * FROM work_execution_units WHERE tenant_id=$1 AND object_work_id=ANY($2::uuid[])', [t, workIds]);
+        const unitIds = executionUnits.map(u => u.id);
+        const executionUnitLayers = await rows(pool, 'SELECT * FROM execution_unit_layers WHERE tenant_id=$1 AND execution_unit_id=ANY($2::uuid[]) ORDER BY sort_order', [t, unitIds]);
+        const portions = await rows(pool, 'SELECT * FROM quantity_portions WHERE tenant_id=$1 AND execution_unit_id=ANY($2::uuid[])', [t, unitIds]);
+        const portionConfirmations = await rows(pool, 'SELECT * FROM portion_quantity_confirmations WHERE tenant_id=$1 AND portion_id=ANY($2::uuid[]) ORDER BY recorded_at', [t, portions.map(p => p.id)]);
+        // F8.2 PTO / Executive Documentation Foundation. Scoped by work id, the
+        // same as execution units above — a Documentation Package hangs off a
+        // work, never directly off an object. Fetched unconditionally;
+        // canAccessDocumentation() (packages/domain) decides below whether the
+        // final payload actually carries it — SDO has no F8.2 access at all
+        // ("SDO: No F8.2 access"), and CONTRACTOR_VIEWER already gets none of
+        // F8.1 either, via its own early return further down.
+        // `responsible` is a JOINed display name, the same treatment works.responsible/objects.responsible already get — P01/W01 render a name, not a raw responsibleUserId.
+        const documentationPackages = await rows(pool, 'SELECT dp.*,u.name AS responsible FROM documentation_packages dp JOIN users u ON u.id=dp.responsible_user_id AND u.tenant_id=dp.tenant_id WHERE dp.tenant_id=$1 AND dp.object_work_id=ANY($2::uuid[])', [t, workIds]);
+        const documentationPackageIds = documentationPackages.map(p => p.id);
+        const documentationPackagePortions = await rows(pool, 'SELECT * FROM documentation_package_portions WHERE tenant_id=$1 AND documentation_package_id=ANY($2::uuid[])', [t, documentationPackageIds]);
+        const documentationDocuments = await rows(pool, 'SELECT * FROM documentation_documents WHERE tenant_id=$1 AND documentation_package_id=ANY($2::uuid[])', [t, documentationPackageIds]);
+        const documentationDocumentIds = documentationDocuments.map(d => d.id);
+        const documentationVersions = await rows(pool, 'SELECT * FROM documentation_document_versions WHERE tenant_id=$1 AND documentation_document_id=ANY($2::uuid[]) ORDER BY version_number', [t, documentationDocumentIds]);
+        const documentationStatusHistory = await rows(pool, 'SELECT * FROM documentation_package_status_history WHERE tenant_id=$1 AND documentation_package_id=ANY($2::uuid[]) ORDER BY changed_at', [t, documentationPackageIds]);
+        // F8.2.1 Decision 4 — PTO Attention Queue: one item per work whose
+        // documentation still needs PTO's attention (resolveDocumentationAttention()
+        // — packages/domain — is the sole classifier, so this can't drift from
+        // any other caller of the same rule). A work with an attention level of
+        // NONE is left out entirely — "cleared" means absent, not present with
+        // a neutral level, matching how blockers/attentionRequired already omit
+        // problem-free rows rather than listing them with an empty reason.
+        const documentationAttentionQueue = works.map(w => {
+            const ownPackages = documentationPackages.filter(p => p.objectWorkId === w.id);
+            const attention = resolveDocumentationAttention(ownPackages.map(p => p.status));
+            if (attention.level === 'NONE')
+                return null;
+            const o = objects.find(x => x.id === w.objectId);
+            const worstPackage = ownPackages.find(p => resolveDocumentationAttention([p.status]).level === attention.level);
+            // `packageId` lets P01/W01 link straight to the package this row is
+            // actually about, without re-deriving "which package is worst"
+            // client-side — null when the work has no package to open at all
+            // (the RED "Create" case, not an "Open" one).
+            return { objectId: w.objectId, objectName: o ? o.name : null, objectWorkId: w.id, workName: w.name, level: attention.level, reason: attention.reason, responsible: worstPackage ? worstPackage.responsible : null, packageId: worstPackage ? worstPackage.id : null };
+        }).filter(item => item !== null);
         const saved = await one(pool, 'SELECT * FROM risk_settings WHERE tenant_id=$1', [t]);
         const risk = { ...defaultRisk, ...saved };
         const today = new Date();
         const age = (d: any) => d ? Math.max(0, Math.floor((+today - +new Date(d)) / 86400000)) : 0;
-        const enriched = works.map(w => { const accepted = inspections.some(i => i.objectWorkId === w.id && i.status === 'ACCEPTED'); const docsReady = packages.some(p => p.objectWorkId === w.id && ['READY', 'TRANSFERRED_TO_SDO'].includes(p.status)); const cases = sdo.filter(s => s.objectWorkId === w.id); const closed = closings.filter(f => cases.some(s => s.id === f.sdoCaseId)).reduce((x, f) => x.add(f.amount), new Decimal(0)).toFixed(2); const financial = new PotentialClosingService().calculate([{ cost: w.estimatedCost, actual: w.actualQuantity, planned: w.plannedQuantity, closed, accepted, requiresInspection: w.requiresInspection, docsReady, transferred: cases.length > 0, calculated: cases.some(s => ['CALCULATED', 'READY_TO_CLOSE', 'CLOSED'].includes(s.status)) }]); const status = new ScheduleStatusService().calculate(w.plannedStartDate, w.plannedFinishDate, (!w.lastReportedAt && Number(w.actualQuantity) === 0) ? null : new ProgressCalculationService().calculate(w.actualQuantity, w.plannedQuantity), today, risk); const blockers = dependencies.filter(d => d.successorWorkId === w.id).flatMap(d => { const before = works.find(x => x.id === d.predecessorWorkId); const reasons = []; if (before && Number(before.actualQuantity) < Number(before.plannedQuantity))
-            reasons.push(`${before.name}: не завершена`); if (d.requiresAcceptance && !inspections.some(i => i.objectWorkId === d.predecessorWorkId && i.status === 'ACCEPTED'))
+        // ---------------------------------------------------------------
+        // F8.3 SDO / Closing. Hangs off documentation_packages/quantity_portions
+        // — never executive_packages/sdo_cases/financial_closings above
+        // (infra/008_sdo_closing.sql explains why). Fetched unconditionally
+        // for every role, the same treatment every other F8.x table here
+        // already gets; visibility is decided once below, at the final
+        // return, alongside documentationVisible.
+        // ---------------------------------------------------------------
+        const documentationCustomerAcceptances = await rows(pool, 'SELECT * FROM documentation_customer_acceptances WHERE tenant_id=$1 AND documentation_package_id=ANY($2::uuid[]) ORDER BY created_at', [t, documentationPackageIds]);
+        // F8.3-R02 corrective: the immutable per-document-version snapshot each
+        // acceptance recorded (documentation_customer_acceptance_versions,
+        // infra/009_sdo_closing_corrective.sql) — used below, together with
+        // documentationDocuments/documentationVersions already fetched above,
+        // to decide whether the *latest* acceptance for a package is still
+        // current (isCustomerAcceptanceSnapshotCurrent, packages/domain), the
+        // same check handoffDocumentationPackageToSdo() itself applies.
+        const documentationCustomerAcceptanceVersions = await rows(pool, 'SELECT * FROM documentation_customer_acceptance_versions WHERE tenant_id=$1 AND customer_acceptance_id=ANY($2::uuid[])', [t, documentationCustomerAcceptances.map(acc => acc.id)]);
+        const sdoClosingCasesRaw = await rows(pool, 'SELECT s.*,u.name AS responsible FROM sdo_closing_cases s LEFT JOIN users u ON u.id=s.responsible_user_id AND u.tenant_id=s.tenant_id WHERE s.tenant_id=$1 AND s.documentation_package_id=ANY($2::uuid[])', [t, documentationPackageIds]);
+        const sdoClosingCaseIds = sdoClosingCasesRaw.map(s => s.id);
+        const sdoClosingStatusHistory = await rows(pool, 'SELECT * FROM sdo_closing_status_history WHERE tenant_id=$1 AND sdo_closing_case_id=ANY($2::uuid[]) ORDER BY changed_at', [t, sdoClosingCaseIds]);
+        const sdoClosingHandoffHistory = await rows(pool, 'SELECT * FROM sdo_closing_handoff_history WHERE tenant_id=$1 AND sdo_closing_case_id=ANY($2::uuid[]) ORDER BY occurred_at', [t, sdoClosingCaseIds]);
+        const sdoClosingAmountHistory = await rows(pool, 'SELECT * FROM sdo_closing_amount_history WHERE tenant_id=$1 AND sdo_closing_case_id=ANY($2::uuid[]) ORDER BY changed_at', [t, sdoClosingCaseIds]);
+        const sdoClosingPortionAllocations = await rows(pool, 'SELECT * FROM sdo_closing_portion_allocations WHERE tenant_id=$1 AND sdo_closing_case_id=ANY($2::uuid[])', [t, sdoClosingCaseIds]);
+        // F8.3-R05 corrective: append-only correction trail for Portion
+        // allocations (infra/009_sdo_closing_corrective.sql) — the same
+        // unconditional, tenant-wide-then-filtered treatment every other F8.3
+        // history table above already gets.
+        const sdoClosingPortionAllocationHistory = await rows(pool, 'SELECT * FROM sdo_closing_portion_allocation_history WHERE tenant_id=$1 AND sdo_closing_case_id=ANY($2::uuid[]) ORDER BY changed_at', [t, sdoClosingCaseIds]);
+        // F8.3 readiness (decision 7) — the one place that classifies each
+        // Documentation Package's SDO readiness, computed for every package
+        // regardless of viewer so Package Detail's own indication and the
+        // SDO workspace's upcoming queue can never diverge (the same
+        // discipline resolveDocumentationAttention() already enforces for
+        // the PTO Attention Queue). Reuses portionConfirmations already
+        // fetched above (F8.1) — no extra query for Customer SC confirmations.
+        // `handoffPending` is true exactly when PTO could hand the package
+        // off right now but has not (yet) locked it with SDO — the signal
+        // the "Upcoming packages" section filters on.
+        const sdoPackageReadiness = documentationPackages.map(p => {
+            const coveredPortionIds = documentationPackagePortions.filter(link => link.documentationPackageId === p.id).map(link => link.quantityPortionId);
+            const customerScConfirmedPortionIds = portionConfirmations.filter(c => c.source === 'CUSTOMER_SC' && coveredPortionIds.includes(c.portionId)).map(c => c.portionId);
+            // F8.3 decisions 9-10, extended by F8.3-R02: the audited
+            // documentation_customer_acceptances record is the authoritative
+            // fact, never the package status flip alone (resolvePackageSdoReadiness's
+            // own comment, packages/domain) — required on top of (never
+            // instead of) the status still reading ACCEPTED_BY_CUSTOMER, which
+            // is what correctly invalidates a *stale* record from before a
+            // "Вернуть в ПТО" correction cycle. On top of that, the *latest*
+            // acceptance's own documentation_document_versions snapshot must
+            // still be current (isCustomerAcceptanceSnapshotCurrent, packages/domain)
+            // — the identical check handoffDocumentationPackageToSdo() itself
+            // applies, so Package Detail/the SDO workspace's own readiness
+            // display can never say "ready" when a handoff attempt would
+            // actually be refused for a stale acceptance.
+            const packageAcceptances = documentationCustomerAcceptances.filter(acc => acc.documentationPackageId === p.id);
+            const latestAcceptance = packageAcceptances.length ? packageAcceptances[packageAcceptances.length - 1] : null;
+            const acceptedVersionIds = latestAcceptance ? documentationCustomerAcceptanceVersions.filter(v => v.customerAcceptanceId === latestAcceptance.id).map(v => v.documentationDocumentVersionId) : [];
+            // F8.3-R02b corrective: `packageDocuments.length` is the Package's
+            // *total* current document count — including one with no version
+            // at all, which `currentVersionIds` below would otherwise silently
+            // omit — so isCustomerAcceptanceSnapshotCurrent() can tell "every
+            // document has a version" from "some document has none".
+            const packageDocuments = documentationDocuments.filter(d => d.documentationPackageId === p.id);
+            const currentVersionIds: string[] = [];
+            for (const doc of packageDocuments) {
+                const docVersions = documentationVersions.filter(v => v.documentationDocumentId === doc.id);
+                if (docVersions.length)
+                    currentVersionIds.push(docVersions[docVersions.length - 1].id);
+            }
+            const hasCustomerAcceptance = p.status === 'ACCEPTED_BY_CUSTOMER' && !!latestAcceptance && isCustomerAcceptanceSnapshotCurrent({ acceptedVersionIds, currentDocumentCount: packageDocuments.length, currentVersionIds });
+            const readiness = resolvePackageSdoReadiness({ hasCustomerAcceptance, coveredPortionIds, customerScConfirmedPortionIds });
+            const sdoCase = sdoClosingCasesRaw.find(s => s.documentationPackageId === p.id);
+            const o = objects.find(x => x.id === p.objectId);
+            const w = works.find(x => x.id === p.objectWorkId);
+            return { documentationPackageId: p.id, objectId: p.objectId, objectName: o ? o.name : null, objectWorkId: p.objectWorkId, workName: w ? w.name : null, documentationPackageStatus: p.status, responsible: p.responsible, ready: readiness.ready, missingReasons: readiness.missingReasons, sdoClosingCaseId: sdoCase ? sdoCase.id : null, packageLocked: sdoCase ? sdoCase.packageLocked : false, handoffPending: readiness.ready && !(sdoCase && sdoCase.packageLocked) };
+        });
+        // SDO Case rows enriched with display names, the same joined-name
+        // treatment works/objects/documentationPackages already get.
+        // `attention` reuses risk.sdoDays (the same threshold the legacy
+        // SDO backlog attention item already reads) but stays entirely
+        // inside the SDO workspace's own data — never merged into O01's
+        // attentionRequired/dashboard ("Do not turn O01 into a finance
+        // screen" applies to this new amount exactly as it does to the
+        // legacy one).
+        const sdoClosingCases = sdoClosingCasesRaw.map(s => {
+            const o = objects.find(x => x.id === s.objectId);
+            const w = works.find(x => x.id === s.objectWorkId);
+            const pkg = documentationPackages.find(p => p.id === s.documentationPackageId);
+            // SDO has no F8.2 access at all, so it never receives
+            // documentationPackagePortions (gated by documentationVisible
+            // below) — this is the one SDO-visible bridge to "which portions
+            // does my own case's package cover", carried on the (already
+            // broadly visible) case row itself rather than by widening F8.2's
+            // own link table.
+            const coveredQuantityPortionIds = documentationPackagePortions.filter(link => link.documentationPackageId === s.documentationPackageId).map(link => link.quantityPortionId);
+            return { ...s, objectName: o ? o.name : null, workName: w ? w.name : null, documentationPackageStatus: pkg ? pkg.status : null, coveredQuantityPortionIds, attention: s.status !== 'CLOSED' && age(s.createdAt) > Number(risk.sdoDays) ? 'RED' : 'NONE' };
+        });
+        // F8.1 decision 8: acceptance aggregates from portions, never
+        // any-portion-accepted, (F8.1-02/03 corrective) never
+        // any-created-portion-accepted either, and (F8.1 Final corrective) never
+        // a confirmed portion's own planned quantity — each portion contributes
+        // its latest applicable confirmation quantity, never merely whether it
+        // was accepted at all. Computed once per work here, via the same
+        // resolveInternalScAccepted() ProductionService.transition() now also
+        // calls (packages/domain), so the read model's blockers and a real
+        // mutation's own gate cannot disagree about the same work. A work with
+        // no execution units keeps today's exact .some() computation,
+        // portion_id IS NULL — decision 6: Internal SC completion and Customer
+        // SC acceptance are kept apart as two separately-named results, never
+        // merged into one generic "accepted".
+        const latestConfirmation = (portionId: string, source: string) => { const own = portionConfirmations.filter(c => c.portionId === portionId && c.source === source); return own.length ? own[own.length - 1] : undefined; };
+        const portionAccepted = (portionId: string, inspectionType: string) => inspections.some(i => i.portionId === portionId && i.inspectionType === inspectionType && i.status === 'ACCEPTED');
+        const scCompletion = new PortionCompletionService();
+        // Each portion's own current figures (latest per source — RP fact never
+        // overwritten by either SC figure, the three stay separately readable)
+        // plus whether it has a real ACCEPTED inspection of each type (an
+        // acceptance boolean must come from inspections.status, not merely from
+        // a confirmation row existing). Each unit's actualQuantity is derived,
+        // never stored (F8.1 decision 2) — the sum of its portions' own latest
+        // RP fact, so a unit with quantity not yet portioned under-reports
+        // rather than silently borrowing the work's own actualQuantity.
+        // internalScStatus/customerScStatus (F8.1-02 corrective) are the
+        // literal PARTIAL/COMPLETE/NONE distinction the Independent Review
+        // required be visible, not merely correctly computed internally.
+        const portionsWithStatus = portions.map(p => ({ ...p, rpFactQuantity: latestConfirmation(p.id, 'RP_FACT')?.quantity ?? null, internalScAccepted: portionAccepted(p.id, 'INTERNAL_SC'), internalScConfirmedQuantity: latestConfirmation(p.id, 'INTERNAL_SC')?.quantity ?? null, customerScAccepted: portionAccepted(p.id, 'CUSTOMER_SC'), customerScConfirmedQuantity: latestConfirmation(p.id, 'CUSTOMER_SC')?.quantity ?? null }));
+        const executionUnitsWithTotals = executionUnits.map(u => { const ownPortions = portionsWithStatus.filter(p => p.executionUnitId === u.id); return { ...u, actualQuantity: ownPortions.reduce((s, p) => s.add(p.rpFactQuantity ?? 0), new Decimal(0)).toFixed(4), internalScStatus: scCompletion.unitCoverage(u.plannedQuantity, ownPortions.map(p => ({ confirmedQuantity: p.internalScConfirmedQuantity }))), customerScStatus: scCompletion.unitCoverage(u.plannedQuantity, ownPortions.map(p => ({ confirmedQuantity: p.customerScConfirmedQuantity }))) }; });
+        // F8.1-04 corrective (Independent Review, not accepted first pass): a
+        // work with any execution unit treats them as its sole production fact
+        // source — resolveActualQuantity() (packages/domain), the same function
+        // ProductionService.transition() now calls, ignores works.actual_quantity
+        // entirely once a unit exists (progress() itself now refuses to write it
+        // for such a work, so it would only ever be a stale zero here).
+        // lastReportedAt gets the equivalent treatment so buildW01ViewModel's
+        // `factReported` stays a true statement instead of freezing at "never
+        // reported" the moment a work adopts the unit/portion model. A work with
+        // no execution units is unaffected — both read exactly its own row.
+        const productionFactByWork = new Map<string, { actualQuantity: string; lastReportedAt: string | null }>(works.map(w => {
+            const units = executionUnitsWithTotals.filter(u => u.objectWorkId === w.id);
+            if (!units.length)
+                return [w.id, { actualQuantity: w.actualQuantity, lastReportedAt: w.lastReportedAt }];
+            const ownPortionIds = new Set(portionsWithStatus.filter(p => units.some(u => u.id === p.executionUnitId)).map(p => p.id));
+            const factTimestamps = portionConfirmations.filter(c => c.source === 'RP_FACT' && ownPortionIds.has(c.portionId)).map(c => c.recordedAt).sort();
+            return [w.id, { actualQuantity: resolveActualQuantity(w.actualQuantity, w.unit, units.map(u => ({ unit: u.unit, actualQuantity: u.actualQuantity }))), lastReportedAt: factTimestamps.length ? factTimestamps[factTimestamps.length - 1] : null }];
+        }));
+        const workScStatus = new Map<string, { internalScComplete: boolean; customerScAccepted: boolean | null }>(works.map(w => {
+            const units = executionUnitsWithTotals.filter(u => u.objectWorkId === w.id);
+            const wholeWorkAccepted = inspections.some(i => i.objectWorkId === w.id && i.portionId === null && i.inspectionType === 'INTERNAL_SC' && i.status === 'ACCEPTED');
+            if (!units.length)
+                return [w.id, { internalScComplete: wholeWorkAccepted, customerScAccepted: null }];
+            const shape = units.map(u => ({ plannedQuantity: u.plannedQuantity, portions: portionsWithStatus.filter(p => p.executionUnitId === u.id).map(p => ({ internalScConfirmedQuantity: p.internalScConfirmedQuantity, customerScConfirmedQuantity: p.customerScConfirmedQuantity })) }));
+            return [w.id, { internalScComplete: resolveInternalScAccepted(wholeWorkAccepted, shape), customerScAccepted: scCompletion.customerScAccepted(shape) }];
+        }));
+        const enriched = works.map(w => { const accepted = workScStatus.get(w.id)!.internalScComplete; const customerScAccepted = workScStatus.get(w.id)!.customerScAccepted; const productionFact = productionFactByWork.get(w.id)!; const actualQuantity = productionFact.actualQuantity; const lastReportedAt = productionFact.lastReportedAt; const docsReady = packages.some(p => p.objectWorkId === w.id && ['READY', 'TRANSFERRED_TO_SDO'].includes(p.status)); const cases = sdo.filter(s => s.objectWorkId === w.id); const closed = closings.filter(f => cases.some(s => s.id === f.sdoCaseId)).reduce((x, f) => x.add(f.amount), new Decimal(0)).toFixed(2); const financial = new PotentialClosingService().calculate([{ cost: w.estimatedCost, actual: actualQuantity, planned: w.plannedQuantity, closed, accepted, requiresInspection: w.requiresInspection, docsReady, transferred: cases.length > 0, calculated: cases.some(s => ['CALCULATED', 'READY_TO_CLOSE', 'CLOSED'].includes(s.status)) }]); const status = new ScheduleStatusService().calculate(w.plannedStartDate, w.plannedFinishDate, (!lastReportedAt && Number(actualQuantity) === 0) ? null : new ProgressCalculationService().calculate(actualQuantity, w.plannedQuantity), today, risk); const blockers = dependencies.filter(d => d.successorWorkId === w.id).flatMap(d => { const before = works.find(x => x.id === d.predecessorWorkId); const beforeActual = before ? productionFactByWork.get(before.id)!.actualQuantity : null; const reasons = []; if (before && Number(beforeActual) < Number(before.plannedQuantity))
+            reasons.push(`${before.name}: не завершена`); if (d.requiresAcceptance && !workScStatus.get(d.predecessorWorkId)?.internalScComplete)
             reasons.push('Нет допуска строительного контроля'); if (issues.some(i => i.objectWorkId === d.predecessorWorkId && i.severity === 'CRITICAL' && i.status !== 'CLOSED'))
             reasons.push('Критическое замечание'); if (d.requiresDocument && !documents.some(x => x.objectWorkId === d.predecessorWorkId && x.status === 'APPROVED'))
-            reasons.push('Не подтверждён обязательный документ'); return reasons; }); return { ...w, ...status, accepted, docsReady, closed, financial, blockers, stale: !w.lastReportedAt || age(w.lastReportedAt) > Number(risk.staleDays) }; });
+            reasons.push('Не подтверждён обязательный документ'); return reasons; }); return { ...w, ...status, actualQuantity, lastReportedAt, accepted, customerScAccepted, docsReady, closed, financial, blockers, stale: !lastReportedAt || age(lastReportedAt) > Number(risk.staleDays) }; });
         const attentionRequired: any[] = [];
         for (const w of enriched) {
             const o = objects.find(x => x.id === w.objectId);
@@ -61,7 +268,7 @@ export class ReadService {
             if (w)
                 attentionRequired.push({ entityType: 'SdoCase', entityId: s.id, objectId: s.objectId, objectName: objects.find(o => o.id === s.objectId)?.name, contractor: w.contractor, title: 'Задержка в СДО', reason: 'Не завершено осмечивание/закрытие', severity: 'YELLOW', daysOverdue: age(s.ptoTransferredAt) - Number(risk.sdoDays), moneyImpact: w.financial.potential, responsible: 'СДО', recommendedAction: 'Получить расчёт и зафиксировать закрытие' });
         }
-        const objectList = objects.map(o => { const ws = enriched.filter(w => w.objectId === o.id); const cost = ws.reduce((s, w) => s + Number(w.estimatedCost), 0); const weighted = (field: string) => cost ? ws.reduce((s, w) => s + Number(w.estimatedCost) * (w[field] ?? 0), 0) / cost : ws.length ? ws.reduce((s, w) => s + (w[field] ?? 0), 0) / ws.length : null; const sum = (field: string) => ws.reduce((s, w) => s.add(w.financial[field]), new Decimal(0)).toFixed(2); return { ...o, contractors: [...new Set(ws.map(w => w.contractor))], actualProgress: weighted('actualProgress'), plannedProgress: weighted('plannedProgress'), closed: sum('closed'), potential: sum('potential'), healthStatus: new ObjectHealthService().calculate({ statuses: ws.map(w => w.scheduleStatus), criticalIssues: issues.filter(i => i.objectId === o.id && i.severity === 'CRITICAL' && i.status !== 'CLOSED').length, overdueIssues: issues.filter(i => i.objectId === o.id && i.status !== 'CLOSED' && age(i.dueDate) > 0).length, stale: ws.some(w => w.stale && w.actualProgress < 100), blocked: ws.some(w => w.blockers.length && w.delayDays > 0), ptoLate: attentionRequired.some(x => x.objectId === o.id && x.entityType === 'Package'), sdoLate: attentionRequired.some(x => x.objectId === o.id && x.entityType === 'SdoCase') }) }; });
+        const objectList = objects.map(o => { const ws = enriched.filter(w => w.objectId === o.id); const cost = ws.reduce((s, w) => s + Number(w.estimatedCost), 0); const weighted = (field: string) => cost ? ws.reduce((s, w) => s + Number(w.estimatedCost) * (w[field] ?? 0), 0) / cost : ws.length ? ws.reduce((s, w) => s + (w[field] ?? 0), 0) / ws.length : null; const sum = (field: string) => ws.reduce((s, w) => s.add(w.financial[field]), new Decimal(0)).toFixed(2); const active = activeAssignments.filter(x => x.objectId === o.id); return { ...o, contractorIds: active.map(x => x.contractorId), contractors: active.map(x => x.contractorName), actualProgress: weighted('actualProgress'), plannedProgress: weighted('plannedProgress'), closed: sum('closed'), potential: sum('potential'), healthStatus: new ObjectHealthService().calculate({ statuses: ws.map(w => w.scheduleStatus), criticalIssues: issues.filter(i => i.objectId === o.id && i.severity === 'CRITICAL' && i.status !== 'CLOSED').length, overdueIssues: issues.filter(i => i.objectId === o.id && i.status !== 'CLOSED' && age(i.dueDate) > 0).length, stale: ws.some(w => w.stale && w.actualProgress < 100), blocked: ws.some(w => w.blockers.length && w.delayDays > 0), ptoLate: attentionRequired.some(x => x.objectId === o.id && x.entityType === 'Package'), sdoLate: attentionRequired.some(x => x.objectId === o.id && x.entityType === 'SdoCase') }) }; });
         const total = (field: string) => objectList.reduce((s, o) => s.add(o[field]), new Decimal(0)).toFixed(2);
         const monthly = await rows(pool, 'SELECT * FROM monthly_plans WHERE tenant_id=$1 AND object_id=ANY($2::uuid[])', [t, ids]);
         const period = today.toISOString().slice(0, 7);
@@ -72,6 +279,16 @@ export class ReadService {
             const allowed = new Set(enriched.map(w => w.id));
             return { objects: objectList.map(({ contractValue, closed, potential, ...o }) => o), works: enriched.map(({ estimatedCost, closed, financial, ...w }) => w), contractors, dependencies: dependencies.filter(d => allowed.has(d.successorWorkId) && allowed.has(d.predecessorWorkId)) };
         }
-        return { objects: objectList, works: enriched, inspections, issues, packages, documents, sdo, closings, contractors, dependencies, dashboard, monthlyPlans: monthly, risk, photos };
+        const documentationVisible = canAccessDocumentation(a.role);
+        // F8.3: SDO Case state is read-only outside /sdo for every internal
+        // role reaching this point, including SDO itself (which still has
+        // no F8.2 access — documentationVisible stays false for it) and PTO
+        // (Package Detail's own lock/handoff display). CONTRACTOR_VIEWER
+        // never reaches here at all (its own early return above), so unlike
+        // documentationVisible there is no per-role condition left to apply
+        // — every remaining role sees it unconditionally. Full operational
+        // actions stay SDO/ADMIN-only (SDO_CASE_MANAGE, service.ts)
+        // regardless of this read visibility.
+        return { objects: objectList, works: enriched, inspections, issues, packages, documents, sdo, closings, contractors, dependencies, dashboard, monthlyPlans: monthly, risk, photos, executionUnits: executionUnitsWithTotals, executionUnitLayers, portions: portionsWithStatus, portionConfirmations, documentationPackages: documentationVisible ? documentationPackages : undefined, documentationPackagePortions: documentationVisible ? documentationPackagePortions : undefined, documentationDocuments: documentationVisible ? documentationDocuments : undefined, documentationVersions: documentationVisible ? documentationVersions : undefined, documentationStatusHistory: documentationVisible ? documentationStatusHistory : undefined, documentationAttentionQueue: documentationVisible ? documentationAttentionQueue : undefined, documentationCustomerAcceptances: documentationVisible ? documentationCustomerAcceptances : undefined, documentationCustomerAcceptanceVersions: documentationVisible ? documentationCustomerAcceptanceVersions : undefined, sdoClosingCases, sdoClosingStatusHistory, sdoClosingHandoffHistory, sdoClosingAmountHistory, sdoClosingPortionAllocations, sdoClosingPortionAllocationHistory, sdoPackageReadiness };
     }
 }

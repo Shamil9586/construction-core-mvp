@@ -1,0 +1,19 @@
+/*
+ * Host-page reset for the F5 application entry (app.html).
+ *
+ * AppShell fills whatever height its mounting context gives it rather than
+ * sizing itself to the viewport (see AppShell.tsx's own doc comment: "Mounted
+ * at the application root, that context is `html, body, #root { height: 100% }`").
+ * This supplies exactly that context for `#app-root` — nothing else. No global
+ * element resets (box-sizing, typography) are added here: those are the design
+ * system's job (`.ccScope`, applied by AppShell itself), not this entry point's.
+ */
+html,
+body,
+#app-root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+}

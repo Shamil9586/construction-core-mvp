@@ -1,0 +1,124 @@
+/*
+ * Shared row styling for Data / Table.
+ *
+ * ObjectRow and WorkSummaryRow are the same row with different columns, so the
+ * height, fills, focus treatment and cell padding live in one place. Two copies
+ * would drift, and a row that highlights differently from its neighbour in the
+ * same table is exactly the kind of drift nobody notices until a screenshot.
+ */
+
+.row {
+  height: var(--cc-table-row-height);
+}
+
+.rowTall {
+  height: var(--cc-table-row-height-tall);
+}
+
+.cell {
+  padding: 0 var(--cc-table-row-padding-x);
+  vertical-align: middle;
+  text-align: left;
+  /* A long name wraps inside its own column instead of pushing the numbers into
+     the next one. The table is `table-layout: fixed`, so the column widths hold.
+     `break-word` rather than `anywhere`: both stop the text escaping its column,
+     but `anywhere` also lets the browser break mid-word when a line break at a
+     space would have done, which turns "Подготовка основания" into something
+     nobody wants to read. */
+  overflow-wrap: break-word;
+}
+
+.alignEnd {
+  text-align: right;
+}
+
+/* Fills. Default is transparent — the surface belongs to the card behind the
+   table, and wrapping each cell in its own card is exactly what the spec rules
+   out. Attention marks the one row that needs it; the whole screen is never
+   coloured because of a single problem. */
+
+.attention > .cell {
+  background: var(--cc-table-row-attention);
+}
+
+.interactive:hover > .cell {
+  background: var(--cc-table-row-hover);
+  cursor: pointer;
+}
+
+.interactive.attention:hover > .cell {
+  background: var(--cc-table-row-attention);
+  filter: brightness(0.97);
+}
+
+.row > .cell:first-child {
+  border-top-left-radius: var(--cc-table-row-radius);
+  border-bottom-left-radius: var(--cc-table-row-radius);
+}
+
+.row > .cell:last-child {
+  border-top-right-radius: var(--cc-table-row-radius);
+  border-bottom-right-radius: var(--cc-table-row-radius);
+}
+
+/*
+ * The activator is the row's single tab stop and the source of its accessible
+ * name. A real <button> carries the role and the Enter/Space handling; the row's
+ * own click is a convenience on top of it, not the primary control. Styled to
+ * look like the text it wraps, because visually it is the name of the object.
+ */
+.activator {
+  display: inline;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.activator:focus-visible {
+  outline: var(--cc-focus-ring-width) solid var(--cc-focus-ring);
+  outline-offset: var(--cc-focus-ring-offset);
+  border-radius: var(--cc-p-radius-3);
+}
+
+/* Highlighting the whole row on keyboard focus is an enhancement: the button
+   already carries its own ring, so a browser without :has() still shows focus. */
+.row:has(.activator:focus-visible) > .cell {
+  background: var(--cc-action-surface-hover);
+}
+
+.primary {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.name {
+  color: var(--cc-text-primary);
+  margin: 0;
+}
+
+.meta {
+  color: var(--cc-text-secondary);
+  margin: 0;
+}
+
+.smr {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--cc-p-space-4);
+  color: var(--cc-text-primary);
+}
+
+/* Present only on an interactive row — it is the affordance, so showing it on a
+   row that does not open would be a promise the table does not keep. */
+.chevron {
+  color: var(--cc-table-chevron-color);
+  text-align: right;
+}

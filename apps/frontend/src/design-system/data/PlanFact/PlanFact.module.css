@@ -1,0 +1,52 @@
+/*
+ * Data / PlanFact
+ *
+ * A row of independent figures. Each keeps its own caption, its own value and its
+ * own unit — nothing is combined and nothing is subtracted.
+ */
+
+.root {
+  display: grid;
+  gap: var(--cc-p-space-20);
+  margin: 0;
+}
+
+.columns2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.columns3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.columns4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-4);
+  min-width: 0;
+}
+
+.label {
+  color: var(--cc-text-secondary);
+  margin: 0;
+}
+
+.value {
+  color: var(--cc-text-primary);
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The unit sits apart from the figure and at a smaller size: "500" is the
+   measurement, "м² · физически выполнено" is what it measures. Several quantities
+   of the same unit stand next to each other on a work card, and the unit alone
+   would not tell them apart. */
+.meta {
+  color: var(--cc-text-secondary);
+  margin: 0;
+  overflow-wrap: anywhere;
+}

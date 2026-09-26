@@ -1,0 +1,128 @@
+/*
+ * Controls / Button
+ *
+ * A real <button>, so Enter and Space work without any key handling of our own,
+ * and the disabled state is understood by assistive technology rather than
+ * imitated with a class.
+ */
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--cc-button-icon-gap);
+  box-sizing: border-box;
+  height: var(--cc-button-height);
+  padding: 0 var(--cc-button-padding-x);
+  border: var(--cc-border-width) solid transparent;
+  border-radius: var(--cc-button-radius);
+  background: none;
+  font: inherit;
+  cursor: pointer;
+  text-align: center;
+  white-space: nowrap;
+  appearance: none;
+}
+
+.hug {
+  width: auto;
+}
+
+.fill {
+  width: 100%;
+}
+
+.button:focus-visible {
+  outline: var(--cc-focus-ring-width) solid var(--cc-focus-ring);
+  outline-offset: var(--cc-focus-ring-offset);
+}
+
+/* Primary */
+
+.primary {
+  background: var(--cc-action-primary);
+  color: var(--cc-text-on-action);
+  border-color: transparent;
+}
+
+.primary:hover:not(:disabled) {
+  background: var(--cc-action-primary-hover);
+}
+
+.primary:active:not(:disabled) {
+  background: var(--cc-action-primary-pressed);
+}
+
+.primary:disabled {
+  background: var(--cc-background-neutral);
+  color: var(--cc-text-secondary);
+}
+
+/* Secondary — the outline uses border.interactive, not border.default. A control
+   outline has to reach 3:1 against its background (WCAG 1.4.11); border.default
+   is 1.26:1 and is only ever a card edge or a divider (D-03). */
+
+.secondary {
+  background: var(--cc-background-surface);
+  color: var(--cc-text-primary);
+  border-color: var(--cc-border-interactive);
+}
+
+.secondary:hover:not(:disabled) {
+  background: var(--cc-action-surface-hover);
+}
+
+.secondary:active:not(:disabled) {
+  background: var(--cc-background-neutral);
+}
+
+.secondary:disabled {
+  background: var(--cc-background-surface);
+  border-color: var(--cc-border-default);
+  color: var(--cc-text-secondary);
+}
+
+.button:disabled {
+  cursor: default;
+}
+
+.button:disabled .label,
+.button:disabled .icon {
+  opacity: 0.6;
+}
+
+.label {
+  display: inline-block;
+}
+
+.icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+
+/* The spinner takes the arrow's slot, so a button that has an arrow keeps its
+   width while loading. The text stays: replacing a label with a spinner loses
+   what the button was about at the moment the user most wants to know. */
+.spinner {
+  width: 13px;
+  height: 13px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  opacity: 0.8;
+  animation: cc-button-spin 0.7s linear infinite;
+}
+
+@keyframes cc-button-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation-duration: 2.4s;
+  }
+}

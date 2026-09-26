@@ -56,7 +56,12 @@ export default function ContractorPanel({ data }: any) {
     (!late || data.works.some((w: any) => w.objectId === o.id && (w.delayDays > 0 || w.variance < -5)))
   );
   const groups = data.contractors.filter((c: any) => contractor === 'ALL' || c.id === contractor).map((c: any) => {
-    const rows = objects.filter((o: any) => data.works.some((w: any) => w.objectId === o.id && w.contractorId === c.id) || o.contractors?.includes(c.name));
+    // Membership in a contractor's group is the CURRENT assignment (active object_contractors,
+    // via o.contractorIds — see read-service.ts). Once an object is in the group, `works`
+    // below is used only to show that contractor's historical/actual production metrics —
+    // it must never decide membership itself (a removed contractor's old works must not keep
+    // the object in their group, and works are not a fallback for a missing active relation).
+    const rows = objects.filter((o: any) => o.contractorIds?.includes(c.id));
     const health = rows.map((o: any) => o.healthStatus).sort((a: string, b: string) => severity[a] - severity[b])[0] ?? 'GRAY';
     return { ...c, rows, health };
   }).filter((c: any) => c.rows.length).sort((a: any, b: any) => severity[a.health] - severity[b.health]);

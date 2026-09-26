@@ -1,0 +1,119 @@
+.section {
+  margin-top: var(--cc-p-space-32);
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-12);
+}
+
+.sectionLabel {
+  color: var(--cc-text-secondary);
+}
+
+.packageList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-16);
+}
+
+.packageCard {
+  background: var(--cc-background-surface);
+  border: var(--cc-border-width) solid var(--cc-border-default);
+  border-radius: var(--cc-card-radius);
+  padding: var(--cc-card-padding);
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-12);
+}
+
+.packageHeader {
+  display: flex;
+  align-items: center;
+}
+
+.packageDetails {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--cc-p-space-24);
+}
+
+.detailRow {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-4);
+}
+
+.detailLabel {
+  color: var(--cc-text-secondary);
+}
+
+.empty {
+  color: var(--cc-text-secondary);
+}
+
+.emptyAction {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--cc-p-space-8);
+}
+
+.actionButton {
+  flex: 0 0 auto;
+  align-self: flex-start;
+  box-sizing: border-box;
+  padding: var(--cc-p-space-8) var(--cc-button-padding-x);
+  border: var(--cc-border-width) solid transparent;
+  border-radius: var(--cc-button-radius);
+  background: var(--cc-action-primary);
+  color: var(--cc-text-on-action);
+  font: inherit;
+  cursor: pointer;
+}
+
+.actionButton:hover:not(:disabled) {
+  background: var(--cc-action-primary-hover);
+}
+
+.actionButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.actionButtonSecondary {
+  align-self: flex-start;
+  box-sizing: border-box;
+  padding: var(--cc-p-space-8) var(--cc-button-padding-x);
+  border: var(--cc-border-width) solid var(--cc-border-interactive);
+  border-radius: var(--cc-button-radius);
+  background: var(--cc-background-surface);
+  color: var(--cc-text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.actionButtonSecondary:hover:not(:disabled) {
+  background: var(--cc-action-surface-hover);
+}
+
+.pickerSelect {
+  width: 100%;
+  min-width: 220px;
+  box-sizing: border-box;
+  padding: var(--cc-p-space-8) var(--cc-p-space-12);
+  border: var(--cc-border-width) solid var(--cc-border-interactive);
+  border-radius: var(--cc-p-radius-6);
+  background: var(--cc-background-surface);
+  color: var(--cc-text-primary);
+  font: inherit;
+}
+
+.pickerSelect:focus-visible {
+  outline: var(--cc-focus-ring-width) solid var(--cc-focus-ring);
+  outline-offset: var(--cc-focus-ring-offset);
+}
+
+.errorText {
+  color: var(--cc-status-blocked-text);
+}
