@@ -28,12 +28,16 @@ import styles from './P01.module.css';
  * one-shared-implementation requirement.
  */
 
+// Fixed tracks total 904px so "Работа" keeps 214px in the 1118px a 1440px
+// desktop gives the table (scroll-free), and never drops below DataTable's
+// 192px readable floor elsewhere. "Статус ИД" stays 200: its widest badge,
+// "Возвращено заказчиком", does not wrap.
 const workColumns: DataTableColumn[] = [
   { key: 'work', header: 'Работа', width: 'fill' },
   { key: 'object', header: 'Объект', width: 200 },
   { key: 'status', header: 'Статус ИД', width: 200 },
-  { key: 'attention', header: 'Требует внимания', width: 260 },
-  { key: 'responsible', header: 'Ответственный ПТО', width: 180 },
+  { key: 'attention', header: 'Требует внимания', width: 192 },
+  { key: 'responsible', header: 'Ответственный ПТО', width: 152 },
   { key: 'actions', header: '', width: 160, align: 'end' },
 ];
 

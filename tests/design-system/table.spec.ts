@@ -81,10 +81,10 @@ test.describe('scoped horizontal scroll (F11.2)', () => {
   }) => {
     await page.setViewportSize({ width: 320, height: 800 });
     // objectColumns: fill + 120 (СМР) + 165 (График) + 24 (chevron); the fill
-    // column's own floor is 120, so nothing below 429px is a valid render.
+    // column's own readable floor is 192, so nothing below 501px is valid.
     const table = page.getByRole('table', { name: /Портфель объектов/ });
     const width = await table.evaluate((node) => node.getBoundingClientRect().width);
-    expect(width).toBeGreaterThanOrEqual(429);
+    expect(width).toBeGreaterThanOrEqual(501);
   });
 
   test('a viewport narrower than the column budget scrolls the region, not the header text', async ({

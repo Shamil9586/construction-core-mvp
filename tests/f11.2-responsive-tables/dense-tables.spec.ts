@@ -358,6 +358,78 @@ async function assertNoContentOverflow(table: Locator, role: 'columnheader' | 'c
   }
 }
 
+/**
+ * F11.2-01 — the shape of the defect every check above misses: a column that
+ * is wide enough not to collapse, and whose content never overflows its box,
+ * but is still narrower than one ordinary word, so `overflow-wrap:
+ * break-word` splits that word across two lines ("Армирован / ие"). A DOM
+ * Range over exactly the word reports one client rect per line fragment it
+ * renders on; a word that stayed whole has all of them on a single line.
+ *
+ * Returns one entry per occurrence of each word found in the given column's
+ * body cells, so a caller can also prove every word was actually found.
+ */
+async function wordLineCounts(
+  table: Locator,
+  columnIndex: number,
+  words: string[],
+): Promise<Array<{ word: string; lines: number }>> {
+  return table.evaluate(
+    (tableEl, args) => {
+      const found: Array<{ word: string; lines: number }> = [];
+      const cells = Array.from(tableEl.querySelectorAll('tbody tr'))
+        .map((row) => row.children[args.columnIndex])
+        .filter((cell): cell is Element => Boolean(cell));
+      for (const word of args.words) {
+        for (const cell of cells) {
+          const walker = document.createTreeWalker(cell, NodeFilter.SHOW_TEXT);
+          for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+            const text = node.textContent ?? '';
+            for (let at = text.indexOf(word); at !== -1; at = text.indexOf(word, at + word.length)) {
+              const range = document.createRange();
+              range.setStart(node, at);
+              range.setEnd(node, at + word.length);
+              const lineTops = new Set(
+                Array.from(range.getClientRects())
+                  .filter((rect) => rect.width > 0)
+                  .map((rect) => Math.round(rect.top)),
+              );
+              found.push({ word, lines: lineTops.size });
+            }
+          }
+        }
+      }
+      return found;
+    },
+    { columnIndex, words },
+  );
+}
+
+async function assertWordsStayWhole(table: Locator, columnIndex: number, words: string[]): Promise<void> {
+  const found = await wordLineCounts(table, columnIndex, words);
+  // Non-vacuous: every word must actually be present in that column.
+  expect(new Set(found.map((entry) => entry.word))).toEqual(new Set(words));
+  const broken = found.filter((entry) => entry.lines !== 1);
+  expect(broken, `ordinary words split across lines: ${JSON.stringify(broken)}`).toEqual([]);
+}
+
+/** Letter-only words of 6+ letters — the ordinary vocabulary a name is made of. */
+function ordinaryWords(text: string): string[] {
+  return Array.from(
+    new Set(
+      text
+        .split(/\s+/)
+        .map((token) => token.replace(/[^\p{L}]/gu, ''))
+        .filter((word) => word.length >= 6),
+    ),
+  );
+}
+
+const TARGET_WORDS = ['Армирование', 'фундаментной', 'железобетонного'];
+const WORK_WORDS = Array.from(new Set([...TARGET_WORDS, ...ordinaryWords(LONG_WORK_NAME)]));
+const LONG_WORK_ONLY_WORDS = ordinaryWords(LONG_WORK_NAME);
+const OBJECT_WORDS = ordinaryWords(LONG_OBJECT_NAME);
+
 async function mainOverflow(page: Page): Promise<{ scrollWidth: number; clientWidth: number }> {
   return page.evaluate(() => {
     const main = document.querySelector('main');
@@ -524,6 +596,45 @@ test.describe('C01 — portfolio table keeps a readable object-name column', () 
 
       const main = await mainOverflow(page);
       expect(main.scrollWidth - main.clientWidth).toBeLessThan(4);
+    });
+  }
+});
+
+test.describe('F11.2-01 — ordinary construction words are never split inside a word', () => {
+  const ALL_WIDTHS = [1440, 1280, 1024, 768, 390, 375];
+
+  for (const width of ALL_WIDTHS) {
+    test(`P01 @ ${width}px: work and object names wrap only between words`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await openScreen(page, PTO, '/app.html/pto');
+      const table = page.getByRole('table', { name: 'Очередь ПТО' });
+      await assertWordsStayWhole(table, 0, WORK_WORDS);
+      await assertWordsStayWhole(table, 1, OBJECT_WORDS);
+    });
+
+    test(`SDO @ ${width}px: both tables wrap work and object names only between words`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await openScreen(page, SDO_USER, '/app.html/sdo');
+      const upcoming = page.getByRole('table', { name: 'Предстоящие пакеты' });
+      const active = page.getByRole('table', { name: 'Дела СДО' });
+      await assertWordsStayWhole(upcoming, 0, LONG_WORK_ONLY_WORDS);
+      await assertWordsStayWhole(upcoming, 1, OBJECT_WORDS);
+      await assertWordsStayWhole(active, 0, WORK_WORDS);
+      await assertWordsStayWhole(active, 1, OBJECT_WORDS);
+    });
+
+    test(`O01 @ ${width}px: work names wrap only between words`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await openScreen(page, PTO, '/app.html/object/obj-1');
+      await assertWordsStayWhole(page.getByRole('table', { name: 'Работы объекта' }), 0, WORK_WORDS);
+    });
+
+    test(`C01 @ ${width}px: the object name wraps only between words`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 900 });
+      await openScreen(page, PTO, '/app.html/company');
+      await assertWordsStayWhole(page.getByRole('table', { name: 'Объекты компании' }), 0, OBJECT_WORDS);
     });
   }
 });

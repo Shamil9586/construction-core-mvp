@@ -44,16 +44,20 @@ export interface DataTableColumn {
 }
 
 /**
- * The floor the one 'fill' column never renders narrower than, regardless of
- * how many fixed-width columns the table also declares. Chosen well above
- * the destructive character-by-character collapse threshold (F11.0 measured
- * that at roughly one glyph's width, under 40px) while staying close to what
- * the tightest existing column contract (P01's `workColumns`, 1000px of
- * fixed tracks) already rendered without scrolling at 1440px — this floor is
- * a genuine minimum for a wrapping text column, not a number chosen to force
- * new scrolling where none existed before.
+ * The floor the one 'fill' column never renders narrower than. It is sized so
+ * an ordinary construction word stays whole and the column wraps only between
+ * words, never inside one (F11.2-01).
+ *
+ * Derived from the widest consumer's real rendering: P01/SDO render the
+ * primary name at 14px semibold inside 16px + 16px of cell padding, so 192px
+ * leaves 160px of text — enough for every ordinary term measured up to 19
+ * letters (электрооборудования 157px, водонепроницаемого 153px,
+ * металлоконструкций 150px; the fixture's железобетонного is 124px). C01/O01
+ * set names at 14px regular in 12px + 12px padding, which leaves 168px.
+ * `overflow-wrap: break-word` on the cells stays only as the last resort for
+ * a token longer than that.
  */
-const MIN_FILL_COLUMN_WIDTH = 120;
+const MIN_FILL_COLUMN_WIDTH = 192;
 
 export type DataTableState = 'Default' | 'Loading' | 'Empty' | 'Error';
 
