@@ -697,12 +697,22 @@ export interface SdoClosingAmountHistoryEntry extends Versioned {
   changedAt: Timestamp;
 }
 
-/** F8.3 — an optional allocation of the total closing amount to one covered Quantity Portion. Create-only (no update/delete route); duplicate allocations for the same portion, or a portion outside the linked package's own coverage, are both rejected server-side. */
+/** F8.3, corrected by F8.3-R05 — an optional allocation of the total closing amount to one covered Quantity Portion. At most one *current* row per Portion (still enforced server-side), but that row can now be corrected in place — see `SdoClosingPortionAllocationHistoryEntry` for the append-only trail; `version` (from `Versioned`) is what a correction must supply back. A Portion outside the linked package's own coverage is still rejected server-side. */
 export interface SdoClosingPortionAllocation extends Versioned {
   sdoClosingCaseId: Uuid;
   quantityPortionId: Uuid;
   amount: Numeric;
   createdBy: Uuid;
+}
+
+/** F8.3-R05 — one entry of a Portion allocation's append-only correction history. `previousAmount` is `null` exactly the first time that Portion's allocation is ever set. */
+export interface SdoClosingPortionAllocationHistoryEntry extends Versioned {
+  sdoClosingCaseId: Uuid;
+  quantityPortionId: Uuid;
+  previousAmount: Numeric | null;
+  newAmount: Numeric;
+  changedBy: Uuid;
+  changedAt: Timestamp;
 }
 
 export interface RiskSettings extends Versioned {
@@ -848,6 +858,7 @@ export interface Snapshot {
   sdoClosingHandoffHistory?: SdoClosingHandoffHistoryEntry[];
   sdoClosingAmountHistory?: SdoClosingAmountHistoryEntry[];
   sdoClosingPortionAllocations?: SdoClosingPortionAllocation[];
+  sdoClosingPortionAllocationHistory?: SdoClosingPortionAllocationHistoryEntry[];
   /** F8.3 — visible to every role that reaches this Snapshot at all (including SDO, which has no other F8.2 access): SDO's own "Upcoming packages" queue and Package Detail's readiness indication both read this one array. */
   sdoPackageReadiness?: SdoPackageReadiness[];
 }

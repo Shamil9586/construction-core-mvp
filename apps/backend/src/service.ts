@@ -2,7 +2,7 @@ import { Injectable, BadRequestException, ForbiddenException, NotFoundException,
 import Decimal from 'decimal.js';
 import { pool, one, rows, insert, transaction } from './db';
 import { Actor, requirePermission, checkVersion, scoped, objectAccess, audit, ensure } from './security';
-import { Permission as P, ProgressCalculationService, ScheduleStatusService, WorkTransitionPolicy, PtoPackageValidationService, PotentialClosingService, ObjectHealthService, defaultRisk, AosrDraftEngine, QuantityPortionPolicy, resolveInternalScAccepted, resolveActualQuantity, isDocumentationStatusTransitionAllowed, resolvePackageSdoReadiness, isSdoClosingStatusTransitionAllowed, SdoClosingAllocationService } from '../../../packages/domain';
+import { Permission as P, ProgressCalculationService, ScheduleStatusService, WorkTransitionPolicy, PtoPackageValidationService, PotentialClosingService, ObjectHealthService, defaultRisk, AosrDraftEngine, QuantityPortionPolicy, resolveInternalScAccepted, resolveActualQuantity, isDocumentationStatusTransitionAllowed, resolvePackageSdoReadiness, isSdoClosingStatusTransitionAllowed, isCustomerAcceptanceSnapshotCurrent, SdoClosingAllocationService } from '../../../packages/domain';
 @Injectable()
 export class ProductionService {
     async createObject(a: Actor, d: any) { requirePermission(a, P.OBJECT_CREATE); return transaction(async (c) => { ensure(d.plannedFinishDate >= d.startDate, 'Дата окончания раньше начала'); const pm = await scoped(c, 'users', d.projectManagerId, a); ensure(pm.role === 'PROJECT_MANAGER' && pm.isActive, 'Назначьте активного РП'); if (a.role === 'PROJECT_MANAGER')
@@ -221,7 +221,29 @@ export class ProductionService {
     // status transition. documentation_customer_acceptances.documentation_package_version
     // ties the registration to "the relevant presented documentation
     // version" — the package's own version at the moment of registration.
-    async registerDocumentationCustomerAcceptance(a: Actor, packageId: string, d: any) { requirePermission(a, P.DOCUMENTATION_MANAGE); return transaction(async (c) => { const pkg = await scoped(c, 'documentation_packages', packageId, a, true); const w = await scoped(c, 'works', pkg.objectWorkId, a); await objectAccess(c, a, w.objectId, true); checkVersion(pkg, d.version); ensure(pkg.status === 'PRESENTED', 'Согласие заказчика можно зарегистрировать только для предъявленного пакета'); const acceptance = await insert(c, 'documentation_customer_acceptances', a.tenantId, { documentationPackageId: packageId, documentationPackageVersion: pkg.version, acceptedDate: d.acceptedDate, reference: d.reference ?? null, comment: d.comment ?? null, registeredBy: a.id }); const n = await one(c, "UPDATE documentation_packages SET status='ACCEPTED_BY_CUSTOMER',version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2 RETURNING *", [a.tenantId, packageId]); await insert(c, 'documentation_package_status_history', a.tenantId, { documentationPackageId: packageId, fromStatus: 'PRESENTED', toStatus: 'ACCEPTED_BY_CUSTOMER', changedBy: a.id, comment: d.comment ?? null }); await audit(c, a, 'DocumentationCustomerAcceptance', acceptance.id, 'CREATE', null, acceptance); return n; }); }
+    // F8.3-R01 corrective: DOCUMENTATION_MANAGE alone is too wide a gate here
+    // — ADMIN holds it too (superuser grant, packages/domain), but the
+    // accepted contract reserves registering the external customer-acceptance
+    // fact to PTO specifically ("ONLY PTO may register customer documentation
+    // acceptance"). ADMIN keeps every other DOCUMENTATION_MANAGE capability
+    // (package/document/version/status management, F8.2.1's own accepted
+    // scope) — this is an additional role check on top of the permission
+    // bit, not a narrowing of the grant itself.
+    // F8.3-R02 corrective: alongside the acceptance row itself, snapshot the
+    // actual documentation_document_versions currently presented — one row
+    // per Documentation Document the Package holds, its own current highest
+    // version_number (DISTINCT ON, the same "latest per group" idiom
+    // read-service.ts's own INTERNAL_SC/RP_FACT confirmation lookups already
+    // use) — into documentation_customer_acceptance_versions
+    // (infra/009_sdo_closing_corrective.sql). This is what lets a later
+    // readiness/handoff check tell whether the acceptance is still current
+    // (isCustomerAcceptanceSnapshotCurrent, packages/domain) instead of
+    // trusting documentation_package_version, which is not a document
+    // version at all. Both inserts share this transaction with the
+    // acceptance row itself, so the snapshot can never exist partially.
+    async registerDocumentationCustomerAcceptance(a: Actor, packageId: string, d: any) { requirePermission(a, P.DOCUMENTATION_MANAGE); if (a.role !== 'PTO')
+        throw new ForbiddenException('Согласие заказчика по документации регистрирует только ПТО'); return transaction(async (c) => { const pkg = await scoped(c, 'documentation_packages', packageId, a, true); const w = await scoped(c, 'works', pkg.objectWorkId, a); await objectAccess(c, a, w.objectId, true); checkVersion(pkg, d.version); ensure(pkg.status === 'PRESENTED', 'Согласие заказчика можно зарегистрировать только для предъявленного пакета'); const documentIds = (await rows(c, 'SELECT id FROM documentation_documents WHERE tenant_id=$1 AND documentation_package_id=$2', [a.tenantId, packageId])).map((x: any) => x.id); const latestVersions = documentIds.length ? await rows(c, 'SELECT DISTINCT ON (documentation_document_id) documentation_document_id,id FROM documentation_document_versions WHERE tenant_id=$1 AND documentation_document_id=ANY($2::uuid[]) ORDER BY documentation_document_id,version_number DESC', [a.tenantId, documentIds]) : []; const acceptance = await insert(c, 'documentation_customer_acceptances', a.tenantId, { documentationPackageId: packageId, documentationPackageVersion: pkg.version, acceptedDate: d.acceptedDate, reference: d.reference ?? null, comment: d.comment ?? null, registeredBy: a.id }); for (const v of latestVersions)
+        await insert(c, 'documentation_customer_acceptance_versions', a.tenantId, { customerAcceptanceId: acceptance.id, documentationDocumentVersionId: v.id }); const n = await one(c, "UPDATE documentation_packages SET status='ACCEPTED_BY_CUSTOMER',version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2 RETURNING *", [a.tenantId, packageId]); await insert(c, 'documentation_package_status_history', a.tenantId, { documentationPackageId: packageId, fromStatus: 'PRESENTED', toStatus: 'ACCEPTED_BY_CUSTOMER', changedBy: a.id, comment: d.comment ?? null }); await audit(c, a, 'DocumentationCustomerAcceptance', acceptance.id, 'CREATE', null, acceptance); return n; }); }
     // F8.3 decisions 3-4,6-13: the one and only path that creates or
     // resumes an SDO Case. First handoff (no case exists yet for this
     // package) creates it — ON_RECONCILIATION, locked, its own first
@@ -234,15 +256,24 @@ export class ProductionService {
     // time, first handoff or re-handoff alike — the same function
     // ReadService.snapshot() computes for what Package Detail/the SDO
     // workspace display, so the two cannot diverge.
-    async handoffDocumentationPackageToSdo(a: Actor, packageId: string, d: any) { requirePermission(a, P.DOCUMENTATION_MANAGE); return transaction(async (c) => { const pkg = await scoped(c, 'documentation_packages', packageId, a, true); const w = await scoped(c, 'works', pkg.objectWorkId, a); await objectAccess(c, a, w.objectId, true); checkVersion(pkg, d.version); const covered = await rows(c, 'SELECT quantity_portion_id FROM documentation_package_portions WHERE tenant_id=$1 AND documentation_package_id=$2', [a.tenantId, packageId]); const coveredPortionIds = covered.map((p: any) => p.quantityPortionId); const confirmed = coveredPortionIds.length ? await rows(c, "SELECT DISTINCT portion_id FROM portion_quantity_confirmations WHERE tenant_id=$1 AND portion_id=ANY($2::uuid[]) AND source='CUSTOMER_SC'", [a.tenantId, coveredPortionIds]) : [];
-    // F8.3 decisions 9-10: the audited documentation_customer_acceptances
-    // record is the authoritative fact, never the package status flip alone
-    // (see resolvePackageSdoReadiness's own comment, packages/domain) — this
-    // independently confirms a real acceptance row exists for this package,
-    // on top of (never instead of) requiring the status to still read
-    // ACCEPTED_BY_CUSTOMER (which is what correctly invalidates a *stale*
-    // record from before a "Вернуть в ПТО" correction cycle).
-    const hasCustomerAcceptance = pkg.status === 'ACCEPTED_BY_CUSTOMER' && !!await one(c, 'SELECT id FROM documentation_customer_acceptances WHERE tenant_id=$1 AND documentation_package_id=$2', [a.tenantId, packageId]); const readiness = resolvePackageSdoReadiness({ hasCustomerAcceptance, coveredPortionIds, customerScConfirmedPortionIds: confirmed.map((x: any) => x.portionId) }); ensure(readiness.ready, readiness.missingReasons.join('; ')); const existing = await one(c, 'SELECT * FROM sdo_closing_cases WHERE tenant_id=$1 AND documentation_package_id=$2 FOR UPDATE', [a.tenantId, packageId]); ensure(!existing || !existing.packageLocked, 'Пакет уже передан в СДО'); const sdoCase = existing ? await one(c, 'UPDATE sdo_closing_cases SET package_locked=true,version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2 RETURNING *', [a.tenantId, existing.id]) : await insert(c, 'sdo_closing_cases', a.tenantId, { objectId: pkg.objectId, objectWorkId: pkg.objectWorkId, documentationPackageId: packageId, createdBy: a.id }); await insert(c, 'sdo_closing_handoff_history', a.tenantId, { sdoClosingCaseId: sdoCase.id, event: 'HANDED_OFF', actorId: a.id, comment: d.comment ?? null }); await audit(c, a, 'SdoClosingCase', sdoCase.id, existing ? 'RE_HANDOFF' : 'HANDOFF', existing ?? null, sdoCase); return sdoCase; }); }
+    // F8.3-R01 corrective: same reasoning as registerDocumentationCustomerAcceptance
+    // above — "Передать в СДО" is explicitly PTO's own action ("PTO explicitly
+    // performs handoff"), not anything ADMIN's superuser DOCUMENTATION_MANAGE
+    // grant should also open. ADMIN's other package-management capabilities
+    // are untouched.
+    async handoffDocumentationPackageToSdo(a: Actor, packageId: string, d: any) { requirePermission(a, P.DOCUMENTATION_MANAGE); if (a.role !== 'PTO')
+        throw new ForbiddenException('Передать в СДО может только ПТО'); return transaction(async (c) => { const pkg = await scoped(c, 'documentation_packages', packageId, a, true); const w = await scoped(c, 'works', pkg.objectWorkId, a); await objectAccess(c, a, w.objectId, true); checkVersion(pkg, d.version); const covered = await rows(c, 'SELECT quantity_portion_id FROM documentation_package_portions WHERE tenant_id=$1 AND documentation_package_id=$2', [a.tenantId, packageId]); const coveredPortionIds = covered.map((p: any) => p.quantityPortionId); const confirmed = coveredPortionIds.length ? await rows(c, "SELECT DISTINCT portion_id FROM portion_quantity_confirmations WHERE tenant_id=$1 AND portion_id=ANY($2::uuid[]) AND source='CUSTOMER_SC'", [a.tenantId, coveredPortionIds]) : [];
+    // F8.3 decisions 9-10, extended by F8.3-R02: the audited
+    // documentation_customer_acceptances record is the authoritative fact,
+    // never the package status flip alone (see resolvePackageSdoReadiness's
+    // own comment, packages/domain) — on top of (never instead of) requiring
+    // the status to still read ACCEPTED_BY_CUSTOMER (which is what correctly
+    // invalidates a *stale* record from before a "Вернуть в ПТО" correction
+    // cycle), the *latest* acceptance's own documentation_document_versions
+    // snapshot must still be current — isCustomerAcceptanceSnapshotCurrent()
+    // (packages/domain) — so a document version added or changed after that
+    // acceptance can no longer silently keep counting as accepted.
+    const latestAcceptance = await one(c, 'SELECT * FROM documentation_customer_acceptances WHERE tenant_id=$1 AND documentation_package_id=$2 ORDER BY created_at DESC LIMIT 1', [a.tenantId, packageId]); const acceptedVersionIds = latestAcceptance ? (await rows(c, 'SELECT documentation_document_version_id FROM documentation_customer_acceptance_versions WHERE tenant_id=$1 AND customer_acceptance_id=$2', [a.tenantId, latestAcceptance.id])).map((x: any) => x.documentationDocumentVersionId) : []; const currentDocumentIds = (await rows(c, 'SELECT id FROM documentation_documents WHERE tenant_id=$1 AND documentation_package_id=$2', [a.tenantId, packageId])).map((x: any) => x.id); const currentVersionIds = currentDocumentIds.length ? (await rows(c, 'SELECT DISTINCT ON (documentation_document_id) documentation_document_id,id FROM documentation_document_versions WHERE tenant_id=$1 AND documentation_document_id=ANY($2::uuid[]) ORDER BY documentation_document_id,version_number DESC', [a.tenantId, currentDocumentIds])).map((x: any) => x.id) : []; const hasCustomerAcceptance = pkg.status === 'ACCEPTED_BY_CUSTOMER' && !!latestAcceptance && isCustomerAcceptanceSnapshotCurrent(acceptedVersionIds, currentVersionIds); const readiness = resolvePackageSdoReadiness({ hasCustomerAcceptance, coveredPortionIds, customerScConfirmedPortionIds: confirmed.map((x: any) => x.portionId) }); ensure(readiness.ready, readiness.missingReasons.join('; ')); const existing = await one(c, 'SELECT * FROM sdo_closing_cases WHERE tenant_id=$1 AND documentation_package_id=$2 FOR UPDATE', [a.tenantId, packageId]); ensure(!existing || !existing.packageLocked, 'Пакет уже передан в СДО'); const sdoCase = existing ? await one(c, 'UPDATE sdo_closing_cases SET package_locked=true,version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2 RETURNING *', [a.tenantId, existing.id]) : await insert(c, 'sdo_closing_cases', a.tenantId, { objectId: pkg.objectId, objectWorkId: pkg.objectWorkId, documentationPackageId: packageId, createdBy: a.id }); await insert(c, 'sdo_closing_handoff_history', a.tenantId, { sdoClosingCaseId: sdoCase.id, event: 'HANDED_OFF', actorId: a.id, comment: d.comment ?? null }); await audit(c, a, 'SdoClosingCase', sdoCase.id, existing ? 'RE_HANDOFF' : 'HANDOFF', existing ?? null, sdoCase); return sdoCase; }); }
     // F8.3 decision 13: "Вернуть в ПТО" — SDO/ADMIN only (SDO_CASE_MANAGE),
     // never PTO. Unlocks Package composition and moves the package back to
     // CORRECTING (a dedicated transition, bypassing
@@ -253,7 +284,13 @@ export class ProductionService {
     // (sdo_closing_status_history) is a separate axis from package
     // lock/handoff (sdo_closing_handoff_history) and "resumes" exactly
     // where it was on re-handoff, never reset.
-    async returnSdoCaseToPto(a: Actor, id: string, d: any) { requirePermission(a, P.SDO_CASE_MANAGE); return transaction(async (c) => { const sdoCase = await scoped(c, 'sdo_closing_cases', id, a, true); const w = await scoped(c, 'works', sdoCase.objectWorkId, a); await objectAccess(c, a, w.objectId); checkVersion(sdoCase, d.version); ensure(sdoCase.packageLocked, 'Пакет уже возвращён в ПТО'); const pkg = await scoped(c, 'documentation_packages', sdoCase.documentationPackageId, a, true); ensure(pkg.status === 'ACCEPTED_BY_CUSTOMER', 'Пакет должен находиться в статусе «Принято заказчиком»'); const n = await one(c, 'UPDATE sdo_closing_cases SET package_locked=false,version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2 RETURNING *', [a.tenantId, id]); await one(c, "UPDATE documentation_packages SET status='CORRECTING',version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2 RETURNING *", [a.tenantId, pkg.id]); await insert(c, 'documentation_package_status_history', a.tenantId, { documentationPackageId: pkg.id, fromStatus: 'ACCEPTED_BY_CUSTOMER', toStatus: 'CORRECTING', changedBy: a.id, comment: d.comment ?? null }); await insert(c, 'sdo_closing_handoff_history', a.tenantId, { sdoClosingCaseId: id, event: 'RETURNED_TO_PTO', actorId: a.id, comment: d.comment ?? null }); await audit(c, a, 'SdoClosingCase', id, 'RETURN_TO_PTO', sdoCase, n); return n; }); }
+    async returnSdoCaseToPto(a: Actor, id: string, d: any) { requirePermission(a, P.SDO_CASE_MANAGE); return transaction(async (c) => { const sdoCase = await scoped(c, 'sdo_closing_cases', id, a, true); const w = await scoped(c, 'works', sdoCase.objectWorkId, a); await objectAccess(c, a, w.objectId); checkVersion(sdoCase, d.version);
+        // F8.3-R04 corrective: a CLOSED case must first go through the
+        // dedicated CLOSED -> ON_CORRECTION step (changeSdoClosingStatus,
+        // mandatory non-empty reason) before it can be returned to PTO — this
+        // guard is what actually enforces that "no direct edit" route, since
+        // package_locked alone said nothing about the case's own status.
+        ensure(sdoCase.status !== 'CLOSED', 'Закрытое дело нельзя вернуть в ПТО напрямую — сначала переведите его на корректировку с указанием причины'); ensure(sdoCase.packageLocked, 'Пакет уже возвращён в ПТО'); const pkg = await scoped(c, 'documentation_packages', sdoCase.documentationPackageId, a, true); ensure(pkg.status === 'ACCEPTED_BY_CUSTOMER', 'Пакет должен находиться в статусе «Принято заказчиком»'); const n = await one(c, 'UPDATE sdo_closing_cases SET package_locked=false,version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2 RETURNING *', [a.tenantId, id]); await one(c, "UPDATE documentation_packages SET status='CORRECTING',version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2 RETURNING *", [a.tenantId, pkg.id]); await insert(c, 'documentation_package_status_history', a.tenantId, { documentationPackageId: pkg.id, fromStatus: 'ACCEPTED_BY_CUSTOMER', toStatus: 'CORRECTING', changedBy: a.id, comment: d.comment ?? null }); await insert(c, 'sdo_closing_handoff_history', a.tenantId, { sdoClosingCaseId: id, event: 'RETURNED_TO_PTO', actorId: a.id, comment: d.comment ?? null }); await audit(c, a, 'SdoClosingCase', id, 'RETURN_TO_PTO', sdoCase, n); return n; }); }
     // F8.3 RESPONSIBILITY: assigned by SDO or ADMIN only (SDO_CASE_MANAGE —
     // PTO holds no such permission: "PTO does NOT assign work inside the
     // SDO department"); the target must be an active SDO user, the same
@@ -267,7 +304,13 @@ export class ProductionService {
     // reason; every other transition's reason stays optional. Entering
     // CLOSED requires a total amount and, if any Portion allocations exist,
     // their exact sum (SdoClosingAllocationService, packages/domain).
-    async changeSdoClosingStatus(a: Actor, id: string, d: any) { requirePermission(a, P.SDO_CASE_MANAGE); return transaction(async (c) => { const sdoCase = await scoped(c, 'sdo_closing_cases', id, a, true); const w = await scoped(c, 'works', sdoCase.objectWorkId, a); await objectAccess(c, a, w.objectId); checkVersion(sdoCase, d.version); ensure(isSdoClosingStatusTransitionAllowed(sdoCase.status, d.status), `Недопустимый переход статуса: ${sdoCase.status} → ${d.status}`); ensure(sdoCase.status !== 'CLOSED' || !!d.reason?.trim(), 'Укажите причину возврата закрытого дела на корректировку'); if (d.status === 'CLOSED') {
+    async changeSdoClosingStatus(a: Actor, id: string, d: any) { requirePermission(a, P.SDO_CASE_MANAGE); return transaction(async (c) => { const sdoCase = await scoped(c, 'sdo_closing_cases', id, a, true); const w = await scoped(c, 'works', sdoCase.objectWorkId, a); await objectAccess(c, a, w.objectId); checkVersion(sdoCase, d.version);
+        // F8.3-R03 corrective: while custody is with PTO (package_locked=false,
+        // set by returnSdoCaseToPto()), no SDO operational work may progress —
+        // package_locked alone did nothing to stop it before this guard.
+        // Re-handoff (handoffDocumentationPackageToSdo()) re-locks the same
+        // case and restores this.
+        ensure(sdoCase.packageLocked, 'Дело приостановлено: пакет возвращён в ПТО'); ensure(isSdoClosingStatusTransitionAllowed(sdoCase.status, d.status), `Недопустимый переход статуса: ${sdoCase.status} → ${d.status}`); ensure(sdoCase.status !== 'CLOSED' || !!d.reason?.trim(), 'Укажите причину возврата закрытого дела на корректировку'); if (d.status === 'CLOSED') {
         const allocations = await rows(c, 'SELECT amount FROM sdo_closing_portion_allocations WHERE tenant_id=$1 AND sdo_closing_case_id=$2', [a.tenantId, id]);
         const closeCheck = new SdoClosingAllocationService().canClose(sdoCase.totalAmount, allocations);
         ensure(closeCheck.allowed, closeCheck.reason ?? 'Закрытие невозможно');
@@ -279,14 +322,24 @@ export class ProductionService {
     // A CLOSED case refuses this outright: it must first go back to
     // ON_CORRECTION via changeSdoClosingStatus() — "must not allow silent
     // amount editing".
-    async setSdoClosingAmount(a: Actor, id: string, d: any) { requirePermission(a, P.SDO_CASE_MANAGE); return transaction(async (c) => { const sdoCase = await scoped(c, 'sdo_closing_cases', id, a, true); const w = await scoped(c, 'works', sdoCase.objectWorkId, a); await objectAccess(c, a, w.objectId); checkVersion(sdoCase, d.version); ensure(sdoCase.status !== 'CLOSED', 'Дело закрыто. Верните на корректировку, чтобы изменить сумму'); await insert(c, 'sdo_closing_amount_history', a.tenantId, { sdoClosingCaseId: id, previousAmount: sdoCase.totalAmount ?? null, newAmount: d.amount, changedBy: a.id }); const n = await one(c, 'UPDATE sdo_closing_cases SET total_amount=$3,version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2 RETURNING *', [a.tenantId, id, d.amount]); await audit(c, a, 'SdoClosingCase', id, 'SET_AMOUNT', sdoCase, n); return n; }); }
-    // F8.3 optional Portion allocation: create-only (no update/delete
-    // route), the same lifecycle linkDocumentationPackagePortion() already
-    // has. Rejects a duplicate allocation for the same Quantity Portion
-    // (sdo_closing_portion_allocations_unique is the database's own
-    // backstop) and a Portion outside the linked Documentation Package's
-    // own coverage — the same "does this cross-entity reference actually
+    async setSdoClosingAmount(a: Actor, id: string, d: any) { requirePermission(a, P.SDO_CASE_MANAGE); return transaction(async (c) => { const sdoCase = await scoped(c, 'sdo_closing_cases', id, a, true); const w = await scoped(c, 'works', sdoCase.objectWorkId, a); await objectAccess(c, a, w.objectId); checkVersion(sdoCase, d.version);
+        // F8.3-R03 corrective: see changeSdoClosingStatus's own comment.
+        ensure(sdoCase.packageLocked, 'Дело приостановлено: пакет возвращён в ПТО'); ensure(sdoCase.status !== 'CLOSED', 'Дело закрыто. Верните на корректировку, чтобы изменить сумму'); await insert(c, 'sdo_closing_amount_history', a.tenantId, { sdoClosingCaseId: id, previousAmount: sdoCase.totalAmount ?? null, newAmount: d.amount, changedBy: a.id }); const n = await one(c, 'UPDATE sdo_closing_cases SET total_amount=$3,version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2 RETURNING *', [a.tenantId, id, d.amount]); await audit(c, a, 'SdoClosingCase', id, 'SET_AMOUNT', sdoCase, n); return n; }); }
+    // F8.3-R05 corrective: Portion allocation now has a correction path — set/
+    // update the existing allocation for that Portion (never a second row for
+    // the same Portion: sdo_closing_portion_allocations_unique remains the
+    // database's own backstop, now serving the "at most one current
+    // allocation per Portion" rule rather than "create-only"), with the prior
+    // value preserved append-only in sdo_closing_portion_allocation_history
+    // (previous_amount NULL exactly the first time, the same convention
+    // sdo_closing_amount_history already uses for the case's own total). A
+    // Portion outside the linked Documentation Package's own coverage is
+    // still rejected — the same "does this cross-entity reference actually
     // belong together" discipline linkDocumentationPackagePortion() itself
-    // applies to its own cross-table rule.
-    async addSdoClosingPortionAllocation(a: Actor, id: string, d: any) { requirePermission(a, P.SDO_CASE_MANAGE); return transaction(async (c) => { const sdoCase = await scoped(c, 'sdo_closing_cases', id, a, true); const w = await scoped(c, 'works', sdoCase.objectWorkId, a); await objectAccess(c, a, w.objectId); ensure(sdoCase.status !== 'CLOSED', 'Дело закрыто. Верните на корректировку, чтобы изменить распределение'); ensure(!!await one(c, 'SELECT id FROM documentation_package_portions WHERE tenant_id=$1 AND documentation_package_id=$2 AND quantity_portion_id=$3', [a.tenantId, sdoCase.documentationPackageId, d.quantityPortionId]), 'Участок не входит в состав пакета'); ensure(!await one(c, 'SELECT id FROM sdo_closing_portion_allocations WHERE tenant_id=$1 AND sdo_closing_case_id=$2 AND quantity_portion_id=$3', [a.tenantId, id, d.quantityPortionId]), 'Для этого участка уже указано распределение суммы'); const allocation = await insert(c, 'sdo_closing_portion_allocations', a.tenantId, { sdoClosingCaseId: id, quantityPortionId: d.quantityPortionId, amount: d.amount, createdBy: a.id }); await audit(c, a, 'SdoClosingPortionAllocation', allocation.id, 'CREATE', null, allocation); return allocation; }); }
+    // applies to its own cross-table rule. F8.3-R03: no allocation work while
+    // custody is with PTO (package_locked=false). F8.3-R04/pre-existing: a
+    // CLOSED case must return to ON_CORRECTION first, exactly as
+    // setSdoClosingAmount() already requires for the total amount.
+    async setSdoClosingPortionAllocation(a: Actor, id: string, d: any) { requirePermission(a, P.SDO_CASE_MANAGE); return transaction(async (c) => { const sdoCase = await scoped(c, 'sdo_closing_cases', id, a, true); const w = await scoped(c, 'works', sdoCase.objectWorkId, a); await objectAccess(c, a, w.objectId); ensure(sdoCase.packageLocked, 'Дело приостановлено: пакет возвращён в ПТО'); ensure(sdoCase.status !== 'CLOSED', 'Дело закрыто. Верните на корректировку, чтобы изменить распределение'); ensure(!!await one(c, 'SELECT id FROM documentation_package_portions WHERE tenant_id=$1 AND documentation_package_id=$2 AND quantity_portion_id=$3', [a.tenantId, sdoCase.documentationPackageId, d.quantityPortionId]), 'Участок не входит в состав пакета'); const existing = await one(c, 'SELECT * FROM sdo_closing_portion_allocations WHERE tenant_id=$1 AND sdo_closing_case_id=$2 AND quantity_portion_id=$3 FOR UPDATE', [a.tenantId, id, d.quantityPortionId]); if (existing)
+        checkVersion(existing, d.version); await insert(c, 'sdo_closing_portion_allocation_history', a.tenantId, { sdoClosingCaseId: id, quantityPortionId: d.quantityPortionId, previousAmount: existing ? existing.amount : null, newAmount: d.amount, changedBy: a.id }); const allocation = existing ? await one(c, 'UPDATE sdo_closing_portion_allocations SET amount=$3,version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2 RETURNING *', [a.tenantId, existing.id, d.amount]) : await insert(c, 'sdo_closing_portion_allocations', a.tenantId, { sdoClosingCaseId: id, quantityPortionId: d.quantityPortionId, amount: d.amount, createdBy: a.id }); await audit(c, a, 'SdoClosingPortionAllocation', allocation.id, existing ? 'CORRECT' : 'CREATE', existing ?? null, allocation); return allocation; }); }
 }

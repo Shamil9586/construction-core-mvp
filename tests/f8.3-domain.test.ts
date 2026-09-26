@@ -139,3 +139,33 @@ test('F8.3: SdoClosingAllocationService.canClose — an over-allocation sum also
   const result = new SdoClosingAllocationService().canClose('1000000.00', [{ amount: '600000.00' }, { amount: '600000.00' }]);
   assert.equal(result.allowed, false);
 });
+
+/* --------------------------------------------------------------------- *
+ * F8.3-R02 corrective: acceptance snapshot currency                     *
+ * --------------------------------------------------------------------- */
+
+test('F8.3-R02: isCustomerAcceptanceSnapshotCurrent — current when the accepted set exactly matches the current set (order-independent)', async () => {
+  const { isCustomerAcceptanceSnapshotCurrent } = await import('../packages/domain');
+  assert.equal(isCustomerAcceptanceSnapshotCurrent(['v1', 'v2'], ['v2', 'v1']), true);
+});
+
+test('F8.3-R02: isCustomerAcceptanceSnapshotCurrent — both empty (a package with no versioned documents) is vacuously current', async () => {
+  const { isCustomerAcceptanceSnapshotCurrent } = await import('../packages/domain');
+  assert.equal(isCustomerAcceptanceSnapshotCurrent([], []), true);
+});
+
+test('F8.3-R02: isCustomerAcceptanceSnapshotCurrent — not current once a document gets a new version (the current id is no longer the accepted one)', async () => {
+  const { isCustomerAcceptanceSnapshotCurrent } = await import('../packages/domain');
+  // Same document, accepted at v1's id, but v2 now exists and is current.
+  assert.equal(isCustomerAcceptanceSnapshotCurrent(['v1-id'], ['v2-id']), false);
+});
+
+test('F8.3-R02: isCustomerAcceptanceSnapshotCurrent — not current when a new document was added to the package after acceptance', async () => {
+  const { isCustomerAcceptanceSnapshotCurrent } = await import('../packages/domain');
+  assert.equal(isCustomerAcceptanceSnapshotCurrent(['v1'], ['v1', 'v2-new-doc']), false);
+});
+
+test('F8.3-R02: isCustomerAcceptanceSnapshotCurrent — not current when the accepted snapshot covers more than the package currently has', async () => {
+  const { isCustomerAcceptanceSnapshotCurrent } = await import('../packages/domain');
+  assert.equal(isCustomerAcceptanceSnapshotCurrent(['v1', 'v2'], ['v1']), false);
+});

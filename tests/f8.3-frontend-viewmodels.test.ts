@@ -18,6 +18,7 @@ import type {
   SdoClosingCase,
   SdoClosingHandoffHistoryEntry,
   SdoClosingPortionAllocation,
+  SdoClosingPortionAllocationHistoryEntry,
   SdoClosingStatusHistoryEntry,
   SdoPackageReadiness,
   Work,
@@ -273,11 +274,13 @@ test('F8.3: buildSdoCaseDetailViewModel — covered portions come from the case\
     [],
     [],
     [],
+    [],
   );
   assert.equal(vm.portions.length, 1);
   assert.equal(vm.portions[0].id, 'portion-1');
   assert.match(vm.portions[0].plannedQuantity, /200/);
   assert.equal(vm.portions[0].allocatedAmount, null);
+  assert.equal(vm.portions[0].allocationVersion, null);
 });
 
 test('F8.3: buildSdoCaseDetailViewModel — an allocated portion shows its own amount, and allocatedSum reflects every allocation on this case only', async () => {
@@ -286,14 +289,15 @@ test('F8.3: buildSdoCaseDetailViewModel — an allocated portion shows its own a
     { id: 'alloc-1', tenantId: 't', createdAt: 'x', updatedAt: 'x', version: 1, sdoClosingCaseId: 'case-1', quantityPortionId: 'portion-1', amount: '750.00', createdBy: 'sdo-1' },
     { id: 'alloc-2', tenantId: 't', createdAt: 'x', updatedAt: 'x', version: 1, sdoClosingCaseId: 'other-case', quantityPortionId: 'portion-1', amount: '999999.00', createdBy: 'sdo-1' },
   ];
-  const vm = buildSdoCaseDetailViewModel(sdoCase, baseObject(), baseWork(), [baseUnit()], [basePortion()], allocations, [], [], []);
+  const vm = buildSdoCaseDetailViewModel(sdoCase, baseObject(), baseWork(), [baseUnit()], [basePortion()], allocations, [], [], [], []);
   assert.match(vm.portions[0].allocatedAmount ?? '', /750/);
+  assert.equal(vm.portions[0].allocationVersion, 1, 'F8.3-R05: the existing allocation\'s own version, needed to correct it');
   assert.match(vm.allocatedSum, /750/);
   assert.doesNotMatch(vm.allocatedSum, /999999/);
 });
 
 test('F8.3: buildSdoCaseDetailViewModel — allowedActions mirror the domain allow-list exactly, with labels', async () => {
-  const vm = buildSdoCaseDetailViewModel(baseSdoCase({ status: 'VERIFICATION_PASSED' }), baseObject(), baseWork(), [], [], [], [], [], []);
+  const vm = buildSdoCaseDetailViewModel(baseSdoCase({ status: 'VERIFICATION_PASSED' }), baseObject(), baseWork(), [], [], [], [], [], [], []);
   assert.deepEqual(
     vm.allowedActions.map((a) => a.status),
     ['CLOSED', 'ON_CORRECTION'],
@@ -313,12 +317,23 @@ test('F8.3: buildSdoCaseDetailViewModel — histories are scoped to this case an
   const amountHistory: SdoClosingAmountHistoryEntry[] = [
     { id: 'a1', tenantId: 't', createdAt: 'x', updatedAt: 'x', version: 1, sdoClosingCaseId: 'case-1', previousAmount: null, newAmount: '1840000.00', changedBy: 'sdo-1', changedAt: '2026-01-01T00:00:00Z' },
   ];
-  const vm = buildSdoCaseDetailViewModel(baseSdoCase(), baseObject(), baseWork(), [], [], [], statusHistory, handoffHistory, amountHistory);
+  // F8.3-R05: allocation history is scoped and sorted exactly like the other
+  // three histories — its own entries name the Portion, since (unlike amount
+  // history) there is no single case-wide figure to read the entry against.
+  const allocationHistory: SdoClosingPortionAllocationHistoryEntry[] = [
+    { id: 'al1', tenantId: 't', createdAt: 'x', updatedAt: 'x', version: 1, sdoClosingCaseId: 'case-1', quantityPortionId: 'portion-1', previousAmount: null, newAmount: '400.00', changedBy: 'sdo-1', changedAt: '2026-01-01T00:00:00Z' },
+    { id: 'al2', tenantId: 't', createdAt: 'x', updatedAt: 'x', version: 1, sdoClosingCaseId: 'case-1', quantityPortionId: 'portion-1', previousAmount: '400.00', newAmount: '750.00', changedAt: '2026-01-02T00:00:00Z', changedBy: 'sdo-1' },
+    { id: 'al3', tenantId: 't', createdAt: 'x', updatedAt: 'x', version: 1, sdoClosingCaseId: 'other-case', quantityPortionId: 'portion-1', previousAmount: null, newAmount: '999.00', changedBy: 'sdo-1', changedAt: '2026-01-03T00:00:00Z' },
+  ];
+  const vm = buildSdoCaseDetailViewModel(baseSdoCase({ coveredQuantityPortionIds: ['portion-1'] }), baseObject(), baseWork(), [baseUnit()], [basePortion()], [], statusHistory, handoffHistory, amountHistory, allocationHistory);
   assert.equal(vm.statusHistory.length, 2, 'only this case\'s own rows');
   assert.equal(vm.statusHistory[0].id, 'h2', 'newest first');
   assert.equal(vm.handoffHistory.length, 1);
   assert.equal(vm.handoffHistory[0].eventLabel, 'Передано в СДО');
   assert.equal(vm.amountHistory[0].previousAmount, '—');
+  assert.equal(vm.allocationHistory.length, 2, 'only this case\'s own rows');
+  assert.equal(vm.allocationHistory[0].id, 'al2', 'newest first');
+  assert.match(vm.allocationHistory[0].portionLabel, /Секция/);
 });
 
 /* --------------------------------------------------------------------- *

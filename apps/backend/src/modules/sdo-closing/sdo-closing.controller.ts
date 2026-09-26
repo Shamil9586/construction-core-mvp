@@ -58,8 +58,8 @@ export class SdoClosingController {
     }
 
     @Post('sdo-closing-cases/:id/allocations')
-    async addAllocation(@Req() r: any, @Param('id') id: string, @Body() b: any) {
+    async setAllocation(@Req() r: any, @Param('id') id: string, @Body() b: any) {
         const d = V.sdoClosingAllocationDto.parse(b);
-        return this.service.addSdoClosingPortionAllocation(await authenticate(r), V.uuid.parse(id), d);
+        return this.service.setSdoClosingPortionAllocation(await authenticate(r), V.uuid.parse(id), d);
     }
 }

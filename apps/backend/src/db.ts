@@ -31,7 +31,9 @@ const tables = new Set(['users', 'contractors', 'objects', 'object_contractors',
     // F8.2 PTO / Executive Documentation Foundation.
     'documentation_packages', 'documentation_package_portions', 'documentation_documents', 'documentation_document_versions', 'documentation_package_status_history',
     // F8.3 SDO / Closing.
-    'documentation_customer_acceptances', 'sdo_closing_cases', 'sdo_closing_status_history', 'sdo_closing_handoff_history', 'sdo_closing_amount_history', 'sdo_closing_portion_allocations']);
+    'documentation_customer_acceptances', 'sdo_closing_cases', 'sdo_closing_status_history', 'sdo_closing_handoff_history', 'sdo_closing_amount_history', 'sdo_closing_portion_allocations',
+    // F8.3 Corrective Patch (R02, R05).
+    'documentation_customer_acceptance_versions', 'sdo_closing_portion_allocation_history']);
 export async function insert(c: any, table: string, tenantId: string, data: any) { if (!tables.has(table))
     throw Error('Invalid table'); const d = { tenant_id: tenantId, ...Object.fromEntries(Object.entries(data).map(([k, v]) => [k.replace(/[A-Z]/g, x => '_' + x.toLowerCase()), v])) }; const keys = Object.keys(d); if (keys.some(k => !/^[a-z_]+$/.test(k)))
     throw Error('Invalid column'); return one(c, `INSERT INTO ${table} (${keys.join(',')}) VALUES (${keys.map((_, i) => '$' + (i + 1)).join(',')}) RETURNING *`, Object.values(d)); }

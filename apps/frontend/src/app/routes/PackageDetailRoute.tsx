@@ -92,14 +92,25 @@ export function PackageDetailRoute() {
             await documentationApi.createDocumentationVersion(documentId, storageProvider, storageReference, comment);
             refetch();
           },
-          onRegisterCustomerAcceptance: async (acceptedDate, reference, comment) => {
-            await documentationApi.registerDocumentationCustomerAcceptance(pkg.id, pkg.version, acceptedDate, reference, comment);
-            refetch();
-          },
-          onHandoffToSdo: async (comment) => {
-            await documentationApi.handoffDocumentationPackageToSdo(pkg.id, pkg.version, comment);
-            refetch();
-          },
+          // F8.3-R01 corrective: registering customer acceptance and handing
+          // off to SDO are PTO-only actions — the backend now refuses ADMIN
+          // outright even though ADMIN otherwise passes canManageDocumentation
+          // (its blanket DOCUMENTATION_MANAGE grant). Omitted for any other
+          // role reaching this branch (ADMIN), so PackageDetail renders these
+          // two controls read-only instead of offering a control the backend
+          // would 403.
+          ...(session.user.role === 'PTO'
+            ? {
+                onRegisterCustomerAcceptance: async (acceptedDate: string, reference: string | undefined, comment: string | undefined) => {
+                  await documentationApi.registerDocumentationCustomerAcceptance(pkg.id, pkg.version, acceptedDate, reference, comment);
+                  refetch();
+                },
+                onHandoffToSdo: async (comment: string | undefined) => {
+                  await documentationApi.handoffDocumentationPackageToSdo(pkg.id, pkg.version, comment);
+                  refetch();
+                },
+              }
+            : {}),
         }
       : undefined;
 

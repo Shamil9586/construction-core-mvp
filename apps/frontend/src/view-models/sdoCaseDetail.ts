@@ -13,6 +13,7 @@ import type {
   SdoClosingCase,
   SdoClosingHandoffHistoryEntry,
   SdoClosingPortionAllocation,
+  SdoClosingPortionAllocationHistoryEntry,
   SdoClosingStatus,
   SdoClosingStatusHistoryEntry,
   Work,
@@ -71,6 +72,8 @@ export interface SdoCaseDetailPortionViewModel {
   plannedQuantity: string;
   /** `null` exactly when this covered portion has no allocation of its own yet — "optional". */
   allocatedAmount: string | null;
+  /** F8.3-R05 — the existing allocation's own `version`, required to correct it; `null` alongside `allocatedAmount === null` (nothing to correct yet). */
+  allocationVersion: number | null;
 }
 
 export interface SdoCaseDetailStatusHistoryItem {
@@ -90,6 +93,15 @@ export interface SdoCaseDetailHandoffHistoryItem {
 
 export interface SdoCaseDetailAmountHistoryItem {
   id: string;
+  previousAmount: string;
+  newAmount: string;
+  changedAt: string;
+}
+
+/** F8.3-R05 — one corrected-in-place Portion allocation, named by its Portion label (there is no case-wide total here, unlike amount history). */
+export interface SdoCaseDetailAllocationHistoryItem {
+  id: string;
+  portionLabel: string;
   previousAmount: string;
   newAmount: string;
   changedAt: string;
@@ -117,6 +129,7 @@ export interface SdoCaseDetailViewModel {
   statusHistory: SdoCaseDetailStatusHistoryItem[];
   handoffHistory: SdoCaseDetailHandoffHistoryItem[];
   amountHistory: SdoCaseDetailAmountHistoryItem[];
+  allocationHistory: SdoCaseDetailAllocationHistoryItem[];
 }
 
 function handoffEventLabel(event: SdoClosingHandoffHistoryEntry['event']): string {
@@ -133,6 +146,7 @@ export function buildSdoCaseDetailViewModel(
   statusHistory: SdoClosingStatusHistoryEntry[],
   handoffHistory: SdoClosingHandoffHistoryEntry[],
   amountHistory: SdoClosingAmountHistoryEntry[],
+  allocationHistory: SdoClosingPortionAllocationHistoryEntry[],
 ): SdoCaseDetailViewModel {
   const unitById = new Map(executionUnits.map((unit) => [unit.id, unit]));
   // SDO has no other F8.2 access at all — `sdoCase.coveredQuantityPortionIds`
@@ -151,6 +165,10 @@ export function buildSdoCaseDetailViewModel(
     .filter((entry) => entry.sdoClosingCaseId === sdoCase.id)
     .sort((a, b) => (a.occurredAt < b.occurredAt ? 1 : -1));
   const ownAmountHistory = amountHistory
+    .filter((entry) => entry.sdoClosingCaseId === sdoCase.id)
+    .sort((a, b) => (a.changedAt < b.changedAt ? 1 : -1));
+  const portionLabelById = new Map(portions.map((portion) => [portion.id, portion.label]));
+  const ownAllocationHistory = allocationHistory
     .filter((entry) => entry.sdoClosingCaseId === sdoCase.id)
     .sort((a, b) => (a.changedAt < b.changedAt ? 1 : -1));
 
@@ -183,6 +201,7 @@ export function buildSdoCaseDetailViewModel(
           label: portion.label,
           plannedQuantity: formatQuantityWithUnit(portion.plannedQuantity, unit?.unit ?? ''),
           allocatedAmount: allocation ? formatMoney(allocation.amount) : null,
+          allocationVersion: allocation ? allocation.version : null,
         };
       }),
     allocatedSum: formatMoney(allocatedSum.isZero() && ownAllocations.length === 0 ? null : allocatedSum.toFixed(2)),
@@ -201,6 +220,13 @@ export function buildSdoCaseDetailViewModel(
     })),
     amountHistory: ownAmountHistory.map((entry) => ({
       id: entry.id,
+      previousAmount: formatMoney(entry.previousAmount),
+      newAmount: formatMoney(entry.newAmount),
+      changedAt: formatDate(entry.changedAt),
+    })),
+    allocationHistory: ownAllocationHistory.map((entry) => ({
+      id: entry.id,
+      portionLabel: portionLabelById.get(entry.quantityPortionId) ?? 'Участок не найден',
       previousAmount: formatMoney(entry.previousAmount),
       newAmount: formatMoney(entry.newAmount),
       changedAt: formatDate(entry.changedAt),

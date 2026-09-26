@@ -221,6 +221,36 @@ export function resolvePackageSdoReadiness(input: {
     }
     return { ready: reasons.length === 0, missingReasons: reasons };
 }
+// F8.3-R02 corrective: documentation_customer_acceptances.documentation_package_version
+// is the Package's own optimistic-lock row version, never a Documentation
+// Document Version — a Package can hold several independently versioned
+// documents (documentation_documents/documentation_document_versions,
+// 007_documentation_foundation.sql), and createDocumentationVersion() never
+// bumps the package's own version. The bare existence of an acceptance row
+// (what hasCustomerAcceptance used to mean) cannot prove which actual
+// document content the customer accepted, and cannot detect a document
+// version added or changed *after* that acceptance — the old record would
+// keep "covering" content the customer never saw.
+//
+// documentation_customer_acceptance_versions (infra/009_sdo_closing_corrective.sql)
+// is the fix: an immutable snapshot, one row per Documentation Document
+// Version that was current at the moment of registration, linked to that
+// acceptance. This function is the one place that decides whether the
+// *latest* acceptance's snapshot is still current: every Documentation
+// Document the Package presently has must have a version, and that exact
+// version id must appear in the snapshot — nothing missing, nothing extra
+// (an extra id would mean the snapshot covers a document/version that no
+// longer represents the package's current content either). Called
+// identically by handoffDocumentationPackageToSdo()'s own gate and
+// ReadService.snapshot()'s readiness computation (service.ts/read-service.ts),
+// so the two cannot diverge — the same discipline resolvePackageSdoReadiness
+// itself already applies.
+export function isCustomerAcceptanceSnapshotCurrent(acceptedDocumentVersionIds: string[], currentDocumentVersionIds: string[]): boolean {
+    if (acceptedDocumentVersionIds.length !== currentDocumentVersionIds.length)
+        return false;
+    const accepted = new Set(acceptedDocumentVersionIds);
+    return currentDocumentVersionIds.every(id => accepted.has(id));
+}
 // F8.3 closing amount rule: "If no allocations exist, CLOSED is allowed
 // using the total amount. If at least one Portion allocation exists, their
 // sum must equal the total closing amount." A pure function over values the

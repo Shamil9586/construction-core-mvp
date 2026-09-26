@@ -59,11 +59,19 @@ export function setSdoClosingAmount(sdoCaseId: Uuid, version: number, amount: st
   return post(`sdo-closing-cases/${sdoCaseId}/amount`, { version, amount });
 }
 
-/** F8.3 optional Portion allocation — create-only. A duplicate allocation for the same Quantity Portion, or a Portion outside the linked package's own coverage, are both rejected server-side. */
-export function addSdoClosingPortionAllocation(
+/**
+ * F8.3-R05 corrective — optional Portion allocation, now with a correction
+ * path: omit `version` to create the first allocation for a Portion, or pass
+ * the existing allocation's current `version` to correct it in place (the
+ * backend refuses a second write without it — an optimistic-concurrency
+ * conflict, never a silent duplicate). A Portion outside the linked
+ * package's own coverage is still rejected server-side.
+ */
+export function setSdoClosingPortionAllocation(
   sdoCaseId: Uuid,
   quantityPortionId: Uuid,
   amount: string,
+  version?: number,
 ): Promise<SdoClosingPortionAllocation> {
-  return post(`sdo-closing-cases/${sdoCaseId}/allocations`, { quantityPortionId, amount });
+  return post(`sdo-closing-cases/${sdoCaseId}/allocations`, { quantityPortionId, amount, version });
 }

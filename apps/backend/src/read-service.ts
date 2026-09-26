@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import Decimal from 'decimal.js';
 import { pool, rows, one } from './db';
 import { Actor, requirePermission, objectAccess } from './security';
-import { Permission as P, ProgressCalculationService, ScheduleStatusService, PotentialClosingService, ObjectHealthService, PortionCompletionService, defaultRisk, resolveInternalScAccepted, resolveActualQuantity, canAccessDocumentation, resolveDocumentationAttention, resolvePackageSdoReadiness } from '../../../packages/domain';
+import { Permission as P, ProgressCalculationService, ScheduleStatusService, PotentialClosingService, ObjectHealthService, PortionCompletionService, defaultRisk, resolveInternalScAccepted, resolveActualQuantity, canAccessDocumentation, resolveDocumentationAttention, resolvePackageSdoReadiness, isCustomerAcceptanceSnapshotCurrent } from '../../../packages/domain';
 @Injectable()
 export class ReadService {
     async snapshot(a: Actor, filters: { contractorId?: string } = {}) {
@@ -93,13 +93,26 @@ export class ReadService {
         // already gets; visibility is decided once below, at the final
         // return, alongside documentationVisible.
         // ---------------------------------------------------------------
-        const documentationCustomerAcceptances = await rows(pool, 'SELECT * FROM documentation_customer_acceptances WHERE tenant_id=$1 AND documentation_package_id=ANY($2::uuid[])', [t, documentationPackageIds]);
+        const documentationCustomerAcceptances = await rows(pool, 'SELECT * FROM documentation_customer_acceptances WHERE tenant_id=$1 AND documentation_package_id=ANY($2::uuid[]) ORDER BY created_at', [t, documentationPackageIds]);
+        // F8.3-R02 corrective: the immutable per-document-version snapshot each
+        // acceptance recorded (documentation_customer_acceptance_versions,
+        // infra/009_sdo_closing_corrective.sql) — used below, together with
+        // documentationDocuments/documentationVersions already fetched above,
+        // to decide whether the *latest* acceptance for a package is still
+        // current (isCustomerAcceptanceSnapshotCurrent, packages/domain), the
+        // same check handoffDocumentationPackageToSdo() itself applies.
+        const documentationCustomerAcceptanceVersions = await rows(pool, 'SELECT * FROM documentation_customer_acceptance_versions WHERE tenant_id=$1 AND customer_acceptance_id=ANY($2::uuid[])', [t, documentationCustomerAcceptances.map(acc => acc.id)]);
         const sdoClosingCasesRaw = await rows(pool, 'SELECT s.*,u.name AS responsible FROM sdo_closing_cases s LEFT JOIN users u ON u.id=s.responsible_user_id AND u.tenant_id=s.tenant_id WHERE s.tenant_id=$1 AND s.documentation_package_id=ANY($2::uuid[])', [t, documentationPackageIds]);
         const sdoClosingCaseIds = sdoClosingCasesRaw.map(s => s.id);
         const sdoClosingStatusHistory = await rows(pool, 'SELECT * FROM sdo_closing_status_history WHERE tenant_id=$1 AND sdo_closing_case_id=ANY($2::uuid[]) ORDER BY changed_at', [t, sdoClosingCaseIds]);
         const sdoClosingHandoffHistory = await rows(pool, 'SELECT * FROM sdo_closing_handoff_history WHERE tenant_id=$1 AND sdo_closing_case_id=ANY($2::uuid[]) ORDER BY occurred_at', [t, sdoClosingCaseIds]);
         const sdoClosingAmountHistory = await rows(pool, 'SELECT * FROM sdo_closing_amount_history WHERE tenant_id=$1 AND sdo_closing_case_id=ANY($2::uuid[]) ORDER BY changed_at', [t, sdoClosingCaseIds]);
         const sdoClosingPortionAllocations = await rows(pool, 'SELECT * FROM sdo_closing_portion_allocations WHERE tenant_id=$1 AND sdo_closing_case_id=ANY($2::uuid[])', [t, sdoClosingCaseIds]);
+        // F8.3-R05 corrective: append-only correction trail for Portion
+        // allocations (infra/009_sdo_closing_corrective.sql) — the same
+        // unconditional, tenant-wide-then-filtered treatment every other F8.3
+        // history table above already gets.
+        const sdoClosingPortionAllocationHistory = await rows(pool, 'SELECT * FROM sdo_closing_portion_allocation_history WHERE tenant_id=$1 AND sdo_closing_case_id=ANY($2::uuid[]) ORDER BY changed_at', [t, sdoClosingCaseIds]);
         // F8.3 readiness (decision 7) — the one place that classifies each
         // Documentation Package's SDO readiness, computed for every package
         // regardless of viewer so Package Detail's own indication and the
@@ -113,13 +126,29 @@ export class ReadService {
         const sdoPackageReadiness = documentationPackages.map(p => {
             const coveredPortionIds = documentationPackagePortions.filter(link => link.documentationPackageId === p.id).map(link => link.quantityPortionId);
             const customerScConfirmedPortionIds = portionConfirmations.filter(c => c.source === 'CUSTOMER_SC' && coveredPortionIds.includes(c.portionId)).map(c => c.portionId);
-            // F8.3 decisions 9-10: the audited documentation_customer_acceptances
-            // record is the authoritative fact, never the package status flip
-            // alone (resolvePackageSdoReadiness's own comment, packages/domain)
-            // — required on top of (never instead of) the status still reading
-            // ACCEPTED_BY_CUSTOMER, which is what correctly invalidates a
-            // *stale* record from before a "Вернуть в ПТО" correction cycle.
-            const hasCustomerAcceptance = p.status === 'ACCEPTED_BY_CUSTOMER' && documentationCustomerAcceptances.some(acc => acc.documentationPackageId === p.id);
+            // F8.3 decisions 9-10, extended by F8.3-R02: the audited
+            // documentation_customer_acceptances record is the authoritative
+            // fact, never the package status flip alone (resolvePackageSdoReadiness's
+            // own comment, packages/domain) — required on top of (never
+            // instead of) the status still reading ACCEPTED_BY_CUSTOMER, which
+            // is what correctly invalidates a *stale* record from before a
+            // "Вернуть в ПТО" correction cycle. On top of that, the *latest*
+            // acceptance's own documentation_document_versions snapshot must
+            // still be current (isCustomerAcceptanceSnapshotCurrent, packages/domain)
+            // — the identical check handoffDocumentationPackageToSdo() itself
+            // applies, so Package Detail/the SDO workspace's own readiness
+            // display can never say "ready" when a handoff attempt would
+            // actually be refused for a stale acceptance.
+            const packageAcceptances = documentationCustomerAcceptances.filter(acc => acc.documentationPackageId === p.id);
+            const latestAcceptance = packageAcceptances.length ? packageAcceptances[packageAcceptances.length - 1] : null;
+            const acceptedVersionIds = latestAcceptance ? documentationCustomerAcceptanceVersions.filter(v => v.customerAcceptanceId === latestAcceptance.id).map(v => v.documentationDocumentVersionId) : [];
+            const currentVersionIds: string[] = [];
+            for (const doc of documentationDocuments.filter(d => d.documentationPackageId === p.id)) {
+                const docVersions = documentationVersions.filter(v => v.documentationDocumentId === doc.id);
+                if (docVersions.length)
+                    currentVersionIds.push(docVersions[docVersions.length - 1].id);
+            }
+            const hasCustomerAcceptance = p.status === 'ACCEPTED_BY_CUSTOMER' && !!latestAcceptance && isCustomerAcceptanceSnapshotCurrent(acceptedVersionIds, currentVersionIds);
             const readiness = resolvePackageSdoReadiness({ hasCustomerAcceptance, coveredPortionIds, customerScConfirmedPortionIds });
             const sdoCase = sdoClosingCasesRaw.find(s => s.documentationPackageId === p.id);
             const o = objects.find(x => x.id === p.objectId);
@@ -254,6 +283,6 @@ export class ReadService {
         // — every remaining role sees it unconditionally. Full operational
         // actions stay SDO/ADMIN-only (SDO_CASE_MANAGE, service.ts)
         // regardless of this read visibility.
-        return { objects: objectList, works: enriched, inspections, issues, packages, documents, sdo, closings, contractors, dependencies, dashboard, monthlyPlans: monthly, risk, photos, executionUnits: executionUnitsWithTotals, executionUnitLayers, portions: portionsWithStatus, portionConfirmations, documentationPackages: documentationVisible ? documentationPackages : undefined, documentationPackagePortions: documentationVisible ? documentationPackagePortions : undefined, documentationDocuments: documentationVisible ? documentationDocuments : undefined, documentationVersions: documentationVisible ? documentationVersions : undefined, documentationStatusHistory: documentationVisible ? documentationStatusHistory : undefined, documentationAttentionQueue: documentationVisible ? documentationAttentionQueue : undefined, documentationCustomerAcceptances: documentationVisible ? documentationCustomerAcceptances : undefined, sdoClosingCases, sdoClosingStatusHistory, sdoClosingHandoffHistory, sdoClosingAmountHistory, sdoClosingPortionAllocations, sdoPackageReadiness };
+        return { objects: objectList, works: enriched, inspections, issues, packages, documents, sdo, closings, contractors, dependencies, dashboard, monthlyPlans: monthly, risk, photos, executionUnits: executionUnitsWithTotals, executionUnitLayers, portions: portionsWithStatus, portionConfirmations, documentationPackages: documentationVisible ? documentationPackages : undefined, documentationPackagePortions: documentationVisible ? documentationPackagePortions : undefined, documentationDocuments: documentationVisible ? documentationDocuments : undefined, documentationVersions: documentationVisible ? documentationVersions : undefined, documentationStatusHistory: documentationVisible ? documentationStatusHistory : undefined, documentationAttentionQueue: documentationVisible ? documentationAttentionQueue : undefined, documentationCustomerAcceptances: documentationVisible ? documentationCustomerAcceptances : undefined, documentationCustomerAcceptanceVersions: documentationVisible ? documentationCustomerAcceptanceVersions : undefined, sdoClosingCases, sdoClosingStatusHistory, sdoClosingHandoffHistory, sdoClosingAmountHistory, sdoClosingPortionAllocations, sdoClosingPortionAllocationHistory, sdoPackageReadiness };
     }
 }

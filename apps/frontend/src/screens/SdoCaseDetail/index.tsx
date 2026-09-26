@@ -22,7 +22,8 @@ import styles from './SdoCaseDetail.module.css';
 export interface SdoCaseDetailActionHandlers {
   onChangeStatus: (status: SdoClosingStatus, reason: string | undefined) => Promise<void>;
   onSetAmount: (amount: string) => Promise<void>;
-  onAddAllocation: (quantityPortionId: string, amount: string) => Promise<void>;
+  /** F8.3-R05 — `version` is required to correct an existing allocation, and must be omitted (undefined) to create the first one for a Portion. */
+  onSetAllocation: (quantityPortionId: string, amount: string, version: number | undefined) => Promise<void>;
   onAssignResponsible: (responsibleUserId: string) => Promise<void>;
   onReturnToPto: (comment: string | undefined) => Promise<void>;
   sdoUsers: UserSummary[];
@@ -140,20 +141,37 @@ function AmountForm({ onSubmit }: { onSubmit: (amount: string) => Promise<void> 
   );
 }
 
+/**
+ * F8.3-R05 corrective — every covered Portion is selectable, not only an
+ * unallocated one: picking a Portion that already has an allocation submits
+ * with its `version` (a correction); picking one with none submits with no
+ * version (the first allocation). The amount field is never prefilled from
+ * `allocatedAmount` — that is a display string (`formatMoney`, e.g. "750,00
+ * ₽"), not a value the backend's `money` schema (a plain decimal string)
+ * would accept back unedited — so the actor always types the (new) amount.
+ * The backend remains the sole authority on both the exact-sum-for-CLOSED
+ * rule and the optimistic-concurrency check.
+ */
 function AllocationForm({
   portions,
   onSubmit,
 }: {
   portions: SdoCaseDetailViewModel['portions'];
-  onSubmit: (quantityPortionId: string, amount: string) => Promise<void>;
+  onSubmit: (quantityPortionId: string, amount: string, version: number | undefined) => Promise<void>;
 }) {
-  const unallocated = portions.filter((portion) => portion.allocatedAmount === null);
   const [selected, setSelected] = useState('');
   const [amount, setAmount] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  if (unallocated.length === 0) return null;
+  if (portions.length === 0) return null;
+  const selectedPortion = portions.find((portion) => portion.id === selected) ?? null;
+
+  function handleSelect(portionId: string) {
+    setSelected(portionId);
+    setError(null);
+    setAmount('');
+  }
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -164,7 +182,7 @@ function AllocationForm({
     setPending(true);
     setError(null);
     try {
-      await onSubmit(selected, amount.trim());
+      await onSubmit(selected, amount.trim(), selectedPortion?.allocationVersion ?? undefined);
       setSelected('');
       setAmount('');
     } catch (submitError) {
@@ -179,14 +197,15 @@ function AllocationForm({
       <select
         className={styles.input}
         value={selected}
-        onChange={(event) => setSelected(event.target.value)}
+        onChange={(event) => handleSelect(event.target.value)}
         disabled={pending}
         aria-label="Участок для распределения суммы"
       >
         <option value="">Выберите участок…</option>
-        {unallocated.map((portion) => (
+        {portions.map((portion) => (
           <option key={portion.id} value={portion.id}>
             {portion.label}
+            {portion.allocatedAmount !== null ? ` (текущее: ${portion.allocatedAmount})` : ''}
           </option>
         ))}
       </select>
@@ -201,7 +220,7 @@ function AllocationForm({
         aria-label="Сумма распределения по участку"
       />
       <button type="submit" className={styles.actionButton} disabled={pending}>
-        {pending ? 'Сохранение…' : 'Добавить распределение'}
+        {pending ? 'Сохранение…' : selectedPortion && selectedPortion.allocatedAmount !== null ? 'Исправить распределение' : 'Добавить распределение'}
       </button>
       {error ? <span className={styles.errorText}>{error}</span> : null}
     </form>
@@ -339,31 +358,38 @@ export function SdoCaseDetail({
       {actions ? (
         <section className={styles.section}>
           <span className={[styles.sectionLabel, typeClass('label')].join(' ')}>Действия по статусу</span>
-          <div className={styles.actionRow}>
-            {viewModel.allowedActions.map((action) => (
-              <StatusActionControl
-                key={action.status}
-                status={action.status}
-                label={action.label}
-                requiresReason={viewModel.rawStatus === 'CLOSED' && action.status === 'ON_CORRECTION'}
-                onSubmit={actions.onChangeStatus}
-              />
-            ))}
-          </div>
-          {viewModel.packageLocked ? <ReturnToPtoControl onSubmit={actions.onReturnToPto} /> : null}
+          {/* F8.3-R03: no status mutation while custody is with PTO (package_locked=false) — the backend now refuses it outright. */}
+          {viewModel.packageLocked ? (
+            <div className={styles.actionRow}>
+              {viewModel.allowedActions.map((action) => (
+                <StatusActionControl
+                  key={action.status}
+                  status={action.status}
+                  label={action.label}
+                  requiresReason={viewModel.rawStatus === 'CLOSED' && action.status === 'ON_CORRECTION'}
+                  onSubmit={actions.onChangeStatus}
+                />
+              ))}
+            </div>
+          ) : (
+            <span className={[styles.empty, typeClass('body')].join(' ')}>Дело приостановлено до повторной передачи в СДО</span>
+          )}
+          {/* F8.3-R04: a CLOSED case must go CLOSED -> ON_CORRECTION (with reason) first — direct return-to-PTO from CLOSED is refused server-side. */}
+          {viewModel.packageLocked && viewModel.rawStatus !== 'CLOSED' ? <ReturnToPtoControl onSubmit={actions.onReturnToPto} /> : null}
         </section>
       ) : null}
 
       <section className={styles.section}>
         <span className={[styles.sectionLabel, typeClass('label')].join(' ')}>Ответственный СДО</span>
         <span className={typeClass('body-strong')}>{viewModel.responsible}</span>
+        {/* F8.3-R03: responsible assignment stays administrative — available regardless of package_locked. */}
         {actions ? <ResponsibleForm sdoUsers={actions.sdoUsers} onSubmit={actions.onAssignResponsible} /> : null}
       </section>
 
       <section className={styles.section}>
         <span className={[styles.sectionLabel, typeClass('label')].join(' ')}>Сумма закрытия</span>
         <span className={typeClass('body-strong')}>{viewModel.totalAmount}</span>
-        {actions ? <AmountForm onSubmit={actions.onSetAmount} /> : null}
+        {actions && viewModel.packageLocked ? <AmountForm onSubmit={actions.onSetAmount} /> : null}
       </section>
 
       <section className={styles.section}>
@@ -383,7 +409,7 @@ export function SdoCaseDetail({
           <span className={[styles.empty, typeClass('body')].join(' ')}>Пакет не покрывает ни одного участка</span>
         )}
         <span className={[typeClass('body'), styles.secondary].join(' ')}>Распределено: {viewModel.allocatedSum}</span>
-        {actions ? <AllocationForm portions={viewModel.portions} onSubmit={actions.onAddAllocation} /> : null}
+        {actions && viewModel.packageLocked ? <AllocationForm portions={viewModel.portions} onSubmit={actions.onSetAllocation} /> : null}
       </section>
 
       <section className={styles.section}>
@@ -432,6 +458,22 @@ export function SdoCaseDetail({
           </ul>
         ) : (
           <span className={[styles.empty, typeClass('body')].join(' ')}>Сумма ещё не указывалась</span>
+        )}
+      </section>
+
+      <section className={styles.section}>
+        <span className={[styles.sectionLabel, typeClass('label')].join(' ')}>История распределения по участкам</span>
+        {viewModel.allocationHistory.length > 0 ? (
+          <ul className={styles.plainList}>
+            {viewModel.allocationHistory.map((entry) => (
+              <li key={entry.id} className={typeClass('body')}>
+                <span className={styles.secondary}>{entry.changedAt}</span> · {entry.portionLabel} ·{' '}
+                {entry.previousAmount} → {entry.newAmount}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <span className={[styles.empty, typeClass('body')].join(' ')}>Распределение ещё не указывалось</span>
         )}
       </section>
     </AppShell>

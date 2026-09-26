@@ -50,6 +50,7 @@ export function SdoCaseDetailRoute() {
     state.snapshot.sdoClosingStatusHistory ?? [],
     state.snapshot.sdoClosingHandoffHistory ?? [],
     state.snapshot.sdoClosingAmountHistory ?? [],
+    state.snapshot.sdoClosingPortionAllocationHistory ?? [],
   );
 
   const actions: SdoCaseDetailActionHandlers | undefined =
@@ -63,8 +64,8 @@ export function SdoCaseDetailRoute() {
             await sdoClosingApi.setSdoClosingAmount(sdoCase.id, sdoCase.version, amount);
             refetch();
           },
-          onAddAllocation: async (quantityPortionId, amount) => {
-            await sdoClosingApi.addSdoClosingPortionAllocation(sdoCase.id, quantityPortionId, amount);
+          onSetAllocation: async (quantityPortionId, amount, version) => {
+            await sdoClosingApi.setSdoClosingPortionAllocation(sdoCase.id, quantityPortionId, amount, version);
             refetch();
           },
           onAssignResponsible: async (responsibleUserId) => {

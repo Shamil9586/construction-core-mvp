@@ -60,4 +60,7 @@ export const sdoReturnToPtoDto = z.object({ version, comment: text.optional() })
 export const sdoResponsibleDto = z.object({ version, responsibleUserId: uuid }).strict();
 export const sdoClosingStatusDto = z.object({ version, status: z.enum(['ON_RECONCILIATION', 'VERIFICATION_PASSED', 'ON_CORRECTION', 'CLOSED']), reason: text.optional() }).strict();
 export const sdoClosingAmountDto = z.object({ version, amount: money }).strict();
-export const sdoClosingAllocationDto = z.object({ quantityPortionId: uuid, amount: money.refine(v => Number(v) > 0) }).strict();
+// F8.3-R05 corrective: version is optional — required (and checked) only when
+// correcting an existing allocation; the first allocation for a Portion has
+// no prior row to conflict with. See setSdoClosingPortionAllocation(), service.ts.
+export const sdoClosingAllocationDto = z.object({ quantityPortionId: uuid, amount: money.refine(v => Number(v) > 0), version: version.optional() }).strict();

@@ -37,10 +37,20 @@ export interface PackageDetailActionHandlers {
     storageReference: string | undefined,
     comment: string | undefined,
   ) => Promise<void>;
-  /** F8.3 decisions 9-10 — the dedicated, audited registration; never routed through `onAdvanceStatus`. */
-  onRegisterCustomerAcceptance: (acceptedDate: string, reference: string | undefined, comment: string | undefined) => Promise<void>;
-  /** F8.3 "Передать в СДО" — enabled only once `viewModel.sdo.canHandoffToSdo` is true; the backend re-checks readiness regardless. */
-  onHandoffToSdo: (comment: string | undefined) => Promise<void>;
+  /**
+   * F8.3 decisions 9-10 — the dedicated, audited registration; never routed
+   * through `onAdvanceStatus`. F8.3-R01 corrective: optional, not required —
+   * PTO only (the backend now refuses ADMIN outright despite ADMIN otherwise
+   * holding `canManageDocumentation`'s DOCUMENTATION_MANAGE); the route
+   * container omits this field entirely for a non-PTO actor.
+   */
+  onRegisterCustomerAcceptance?: (acceptedDate: string, reference: string | undefined, comment: string | undefined) => Promise<void>;
+  /**
+   * F8.3 "Передать в СДО" — enabled only once `viewModel.sdo.canHandoffToSdo`
+   * is true; the backend re-checks readiness regardless. F8.3-R01 corrective:
+   * optional, PTO only — see `onRegisterCustomerAcceptance` above.
+   */
+  onHandoffToSdo?: (comment: string | undefined) => Promise<void>;
 }
 
 export interface PackageDetailProps {
@@ -470,10 +480,10 @@ export function PackageDetail({
             {viewModel.sdo.customerAcceptance.reference ? ` · ${viewModel.sdo.customerAcceptance.reference}` : ''}
           </span>
         ) : null}
-        {actions && viewModel.sdo.canRegisterCustomerAcceptance ? (
+        {actions?.onRegisterCustomerAcceptance && viewModel.sdo.canRegisterCustomerAcceptance ? (
           <CustomerAcceptanceForm onSubmit={actions.onRegisterCustomerAcceptance} />
         ) : null}
-        {actions && viewModel.sdo.canHandoffToSdo ? <HandoffToSdoControl onSubmit={actions.onHandoffToSdo} /> : null}
+        {actions?.onHandoffToSdo && viewModel.sdo.canHandoffToSdo ? <HandoffToSdoControl onSubmit={actions.onHandoffToSdo} /> : null}
       </section>
 
       <section className={styles.section}>
