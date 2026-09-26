@@ -583,6 +583,128 @@ export interface DocumentationAttentionItem {
   packageId: Uuid | null;
 }
 
+/**
+ * F8.3 SDO / Closing — the SDO Case's own status ("На выверке"/"Выверка
+ * пройдена"/"На корректировке"/"Закрытие"). A completely separate
+ * vocabulary from `DocumentationPackageStatus` and from the legacy
+ * `SdoStatus` (`ExecutivePackage`'s own pipeline, above) — no shared
+ * meaning, no shared table.
+ */
+export type SdoClosingStatus = 'ON_RECONCILIATION' | 'VERIFICATION_PASSED' | 'ON_CORRECTION' | 'CLOSED';
+
+/**
+ * F8.3 — a customer documentation acceptance registration (`POST
+ * documentation-packages/:id/customer-acceptance`), the dedicated, audited
+ * fact PTO alone records — never an ordinary `DocumentationStatusHistoryEntry`
+ * a free status transition would produce. `documentationPackageVersion` is
+ * the package's own `version` at the moment of registration ("the relevant
+ * presented documentation version"); `acceptedDate` is the external fact
+ * (when the customer actually signed), distinct from `createdAt` (when PTO
+ * entered it into Core).
+ */
+export interface DocumentationCustomerAcceptance extends Versioned {
+  documentationPackageId: Uuid;
+  documentationPackageVersion: number;
+  acceptedDate: CivilDate;
+  reference: string | null;
+  comment: string | null;
+  registeredBy: Uuid;
+}
+
+/**
+ * F8.3 decision 7 — one Documentation Package's SDO readiness,
+ * `resolvePackageSdoReadiness()`'s output (packages/domain) enriched with
+ * enough identifying context (`objectName`/`workName`/`responsible`) that
+ * SDO — which has no other F8.2 access at all — can use this array
+ * directly for its own "Upcoming packages" queue, while Package Detail
+ * uses the same row for its own readiness indication. `handoffPending` is
+ * true exactly when PTO could hand the package off right now but has not
+ * (yet) locked it with SDO.
+ */
+export interface SdoPackageReadiness {
+  documentationPackageId: Uuid;
+  objectId: Uuid;
+  objectName: string | null;
+  objectWorkId: Uuid;
+  workName: string | null;
+  documentationPackageStatus: DocumentationPackageStatus;
+  responsible: string;
+  ready: boolean;
+  missingReasons: string[];
+  sdoClosingCaseId: Uuid | null;
+  packageLocked: boolean;
+  handoffPending: boolean;
+}
+
+/**
+ * F8.3 — the SDO Case itself. Hangs off a Documentation Package
+ * (`documentationPackageId`, unique per package — one Package maps to at
+ * most one Case), never the legacy `SdoCase`/`ExecutivePackage` pipeline
+ * above, which shares no table or meaning with this. `packageLocked` is
+ * the Package Portion composition lock: true from handoff until SDO
+ * returns it to PTO for correction, true again on re-handoff.
+ * `totalAmount` is nullable — a case may sit in `ON_RECONCILIATION` before
+ * SDO has entered a figure — and is never payment, invoice or accounting.
+ * `attention` mirrors the same `risk.sdoDays` threshold the legacy backlog
+ * signal already uses, computed for the SDO workspace alone — never merged
+ * into `DashboardProjection`.
+ */
+export interface SdoClosingCase extends Versioned {
+  objectId: Uuid;
+  objectName: string | null;
+  objectWorkId: Uuid;
+  workName: string | null;
+  documentationPackageId: Uuid;
+  documentationPackageStatus: DocumentationPackageStatus | null;
+  /** The linked Documentation Package's own covered Quantity Portions, carried here because SDO has no other F8.2 access to `documentationPackagePortions` at all — this is the one SDO-visible bridge to "which portions does my own case cover". */
+  coveredQuantityPortionIds: Uuid[];
+  status: SdoClosingStatus;
+  packageLocked: boolean;
+  responsibleUserId: Uuid | null;
+  /** Joined display name for `responsibleUserId` — `null` exactly when nobody is assigned yet. */
+  responsible: string | null;
+  totalAmount: Numeric | null;
+  createdBy: Uuid;
+  closedAt: Timestamp | null;
+  attention: 'RED' | 'NONE';
+}
+
+/** F8.3 — one row of an SDO Case's append-only reconciliation status history. `reason` carries the mandatory CLOSED -> ON_CORRECTION justification; every other transition leaves it `null`. */
+export interface SdoClosingStatusHistoryEntry extends Versioned {
+  sdoClosingCaseId: Uuid;
+  fromStatus: SdoClosingStatus;
+  toStatus: SdoClosingStatus;
+  reason: string | null;
+  changedBy: Uuid;
+  changedAt: Timestamp;
+}
+
+/** F8.3 — the PTO<->SDO handoff/return timeline: a separate axis from both the case's own status and the package's own documentation status. */
+export interface SdoClosingHandoffHistoryEntry extends Versioned {
+  sdoClosingCaseId: Uuid;
+  event: 'HANDED_OFF' | 'RETURNED_TO_PTO';
+  actorId: Uuid;
+  occurredAt: Timestamp;
+  comment: string | null;
+}
+
+/** F8.3 — one entry of the total closing amount's append-only history. `previousAmount` is `null` exactly the first time an amount is ever set — "record the prior and new value", never a silent overwrite. */
+export interface SdoClosingAmountHistoryEntry extends Versioned {
+  sdoClosingCaseId: Uuid;
+  previousAmount: Numeric | null;
+  newAmount: Numeric;
+  changedBy: Uuid;
+  changedAt: Timestamp;
+}
+
+/** F8.3 — an optional allocation of the total closing amount to one covered Quantity Portion. Create-only (no update/delete route); duplicate allocations for the same portion, or a portion outside the linked package's own coverage, are both rejected server-side. */
+export interface SdoClosingPortionAllocation extends Versioned {
+  sdoClosingCaseId: Uuid;
+  quantityPortionId: Uuid;
+  amount: Numeric;
+  createdBy: Uuid;
+}
+
 export interface RiskSettings extends Versioned {
   yellowVariance: Numeric;
   redVariance: Numeric;
@@ -712,6 +834,22 @@ export interface Snapshot {
   documentationStatusHistory?: DocumentationStatusHistoryEntry[];
   /** F8.2.1 — same visibility as the other documentation fields (omitted for SDO/CONTRACTOR_VIEWER). Only works still needing attention appear; a cleared work is simply absent. */
   documentationAttentionQueue?: DocumentationAttentionItem[];
+  /** F8.3 — same visibility as the other documentation fields above (PTO-side fact; omitted for SDO/CONTRACTOR_VIEWER). */
+  documentationCustomerAcceptances?: DocumentationCustomerAcceptance[];
+  /**
+   * F8.3 — SDO Case state is read-only outside /sdo for every role except
+   * CONTRACTOR_VIEWER (including SDO itself, which still has no F8.2
+   * access, and PTO, for Package Detail's own lock/handoff display). Full
+   * operational actions stay SDO/ADMIN-only regardless of this read
+   * visibility (SDO_CASE_MANAGE, backend).
+   */
+  sdoClosingCases?: SdoClosingCase[];
+  sdoClosingStatusHistory?: SdoClosingStatusHistoryEntry[];
+  sdoClosingHandoffHistory?: SdoClosingHandoffHistoryEntry[];
+  sdoClosingAmountHistory?: SdoClosingAmountHistoryEntry[];
+  sdoClosingPortionAllocations?: SdoClosingPortionAllocation[];
+  /** F8.3 — visible to every role that reaches this Snapshot at all (including SDO, which has no other F8.2 access): SDO's own "Upcoming packages" queue and Package Detail's readiness indication both read this one array. */
+  sdoPackageReadiness?: SdoPackageReadiness[];
 }
 
 /** `GET /objects/:id` — note it carries no ИД, СДО or closing data. */

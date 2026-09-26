@@ -5,6 +5,8 @@ import { ObjectRoute } from './routes/ObjectRoute';
 import { WorkRoute } from './routes/WorkRoute';
 import { PtoRoute } from './routes/PtoRoute';
 import { PackageDetailRoute } from './routes/PackageDetailRoute';
+import { SdoRoute } from './routes/SdoRoute';
+import { SdoCaseDetailRoute } from './routes/SdoCaseDetailRoute';
 import { RouteNotFound } from './RouteStatus';
 
 /**
@@ -22,6 +24,8 @@ export function AppRoutes() {
       <Route path={ROUTE_PATHS.work} element={<WorkRoute />} />
       <Route path={ROUTE_PATHS.pto} element={<PtoRoute />} />
       <Route path={ROUTE_PATHS.package} element={<PackageDetailRoute />} />
+      <Route path={ROUTE_PATHS.sdo} element={<SdoRoute />} />
+      <Route path={ROUTE_PATHS.sdoCase} element={<SdoCaseDetailRoute />} />
       <Route path="*" element={<RouteNotFound label="Страница не найдена" />} />
     </Routes>
   );

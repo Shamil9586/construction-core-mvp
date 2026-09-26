@@ -92,6 +92,29 @@ function hasDocumentationAttentionLevelField(record: Record<string, unknown>, fi
   return isString(record[field]) && DOCUMENTATION_ATTENTION_LEVELS.has(record[field] as string);
 }
 
+/** F8.3 — `SdoClosingStatus`, closed and DB-enforced, same treatment as `DocumentationPackageStatus`. */
+const SDO_CLOSING_STATUSES = new Set(['ON_RECONCILIATION', 'VERIFICATION_PASSED', 'ON_CORRECTION', 'CLOSED']);
+function hasSdoClosingStatusField(record: Record<string, unknown>, field: string): boolean {
+  return isString(record[field]) && SDO_CLOSING_STATUSES.has(record[field] as string);
+}
+
+/** F8.3 — the same closed set as `DocumentationPackageStatus`, but nullable: `SdoClosingCase.documentationPackageStatus`/history `from`/`toStatus` fields read null only where the join itself can be absent — never for the enum's own membership. */
+function hasDocumentationPackageStatusOrNullField(record: Record<string, unknown>, field: string): boolean {
+  return record[field] === null || hasDocumentationPackageStatusField(record, field);
+}
+
+/** F8.3 — the PTO<->SDO handoff/return event, closed and DB-enforced. */
+const SDO_HANDOFF_EVENTS = new Set(['HANDED_OFF', 'RETURNED_TO_PTO']);
+function hasSdoHandoffEventField(record: Record<string, unknown>, field: string): boolean {
+  return isString(record[field]) && SDO_HANDOFF_EVENTS.has(record[field] as string);
+}
+
+/** F8.3 — `SdoClosingCase.attention`, computed server-side, never a database enum but rendered/switched on the same way. */
+const SDO_ATTENTION_LEVELS = new Set(['RED', 'NONE']);
+function hasSdoAttentionLevelField(record: Record<string, unknown>, field: string): boolean {
+  return isString(record[field]) && SDO_ATTENTION_LEVELS.has(record[field] as string);
+}
+
 const MALFORMED_SNAPSHOT_MESSAGE = 'Неверный ответ сервера: искажённый снимок данных.';
 
 function fail(): never {
@@ -320,6 +343,95 @@ export function validateSnapshot(value: unknown): Snapshot {
       if (!hasStringField(item, 'reason')) fail();
       if (!hasStringOrNullField(item, 'responsible')) fail();
       if (!hasStringOrNullField(item, 'packageId')) fail();
+    }
+  }
+
+  // F8.3 SDO / Closing — same treatment as the F8.2 documentation block
+  // above: genuinely optional per role, but a *present* value's own
+  // identity/status/type fields are checked, since those are what the SDO
+  // workspace, Package Detail and W01's read-only section all render
+  // directly as JSX or switch on.
+  if (value.documentationCustomerAcceptances !== undefined) {
+    if (!isObjectArray(value.documentationCustomerAcceptances)) fail();
+    for (const acceptance of value.documentationCustomerAcceptances) {
+      if (!hasStringField(acceptance, 'documentationPackageId')) fail();
+      if (!hasStringField(acceptance, 'acceptedDate')) fail();
+      if (!hasStringOrNullField(acceptance, 'reference')) fail();
+    }
+  }
+
+  if (value.sdoPackageReadiness !== undefined) {
+    if (!isObjectArray(value.sdoPackageReadiness)) fail();
+    for (const item of value.sdoPackageReadiness) {
+      if (!hasStringField(item, 'documentationPackageId')) fail();
+      if (!hasStringField(item, 'objectId')) fail();
+      if (!hasStringOrNullField(item, 'objectName')) fail();
+      if (!hasStringField(item, 'objectWorkId')) fail();
+      if (!hasStringOrNullField(item, 'workName')) fail();
+      if (!hasDocumentationPackageStatusField(item, 'documentationPackageStatus')) fail();
+      if (!hasStringField(item, 'responsible')) fail();
+      if (!hasBooleanField(item, 'ready')) fail();
+      if (!isStringArray(item.missingReasons)) fail();
+      if (!hasStringOrNullField(item, 'sdoClosingCaseId')) fail();
+      if (!hasBooleanField(item, 'packageLocked')) fail();
+      if (!hasBooleanField(item, 'handoffPending')) fail();
+    }
+  }
+
+  if (value.sdoClosingCases !== undefined) {
+    if (!isObjectArray(value.sdoClosingCases)) fail();
+    for (const c of value.sdoClosingCases) {
+      if (!hasStringField(c, 'id')) fail();
+      if (!hasStringField(c, 'objectId')) fail();
+      if (!hasStringOrNullField(c, 'objectName')) fail();
+      if (!hasStringField(c, 'objectWorkId')) fail();
+      if (!hasStringOrNullField(c, 'workName')) fail();
+      if (!hasStringField(c, 'documentationPackageId')) fail();
+      if (!hasDocumentationPackageStatusOrNullField(c, 'documentationPackageStatus')) fail();
+      if (!isStringArray(c.coveredQuantityPortionIds)) fail();
+      if (!hasSdoClosingStatusField(c, 'status')) fail();
+      if (!hasBooleanField(c, 'packageLocked')) fail();
+      if (!hasStringOrNullField(c, 'responsibleUserId')) fail();
+      if (!hasStringOrNullField(c, 'responsible')) fail();
+      if (!hasNumericOrNullField(c, 'totalAmount')) fail();
+      if (!hasStringOrNullField(c, 'closedAt')) fail();
+      if (!hasSdoAttentionLevelField(c, 'attention')) fail();
+    }
+  }
+
+  if (value.sdoClosingStatusHistory !== undefined) {
+    if (!isObjectArray(value.sdoClosingStatusHistory)) fail();
+    for (const entry of value.sdoClosingStatusHistory) {
+      if (!hasStringField(entry, 'sdoClosingCaseId')) fail();
+      if (!hasSdoClosingStatusField(entry, 'fromStatus')) fail();
+      if (!hasSdoClosingStatusField(entry, 'toStatus')) fail();
+      if (!hasStringOrNullField(entry, 'reason')) fail();
+    }
+  }
+
+  if (value.sdoClosingHandoffHistory !== undefined) {
+    if (!isObjectArray(value.sdoClosingHandoffHistory)) fail();
+    for (const entry of value.sdoClosingHandoffHistory) {
+      if (!hasStringField(entry, 'sdoClosingCaseId')) fail();
+      if (!hasSdoHandoffEventField(entry, 'event')) fail();
+    }
+  }
+
+  if (value.sdoClosingAmountHistory !== undefined) {
+    if (!isObjectArray(value.sdoClosingAmountHistory)) fail();
+    for (const entry of value.sdoClosingAmountHistory) {
+      if (!hasStringField(entry, 'sdoClosingCaseId')) fail();
+      if (!hasNumericOrNullField(entry, 'previousAmount')) fail();
+      if (!hasNumericField(entry, 'newAmount')) fail();
+    }
+  }
+
+  if (value.sdoClosingPortionAllocations !== undefined) {
+    if (!isObjectArray(value.sdoClosingPortionAllocations)) fail();
+    for (const allocation of value.sdoClosingPortionAllocations) {
+      if (!hasStringField(allocation, 'sdoClosingCaseId')) fail();
+      if (!hasStringField(allocation, 'quantityPortionId')) fail();
+      if (!hasNumericField(allocation, 'amount')) fail();
     }
   }
 

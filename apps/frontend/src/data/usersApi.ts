@@ -24,3 +24,14 @@ export async function listActivePtoUsers(): Promise<UserSummary[]> {
   const users = await get<UserSummary[]>('users');
   return users.filter((user) => user.role === 'PTO');
 }
+
+/**
+ * F8.3 — the SDO Case responsible-assignment picker's own data source
+ * (`ensure(responsible.role === 'SDO' && responsible.isActive, ...)`,
+ * `service.ts`), the exact same treatment `listActivePtoUsers` above
+ * already gives PTO's own responsible picker.
+ */
+export async function listActiveSdoUsers(): Promise<UserSummary[]> {
+  const users = await get<UserSummary[]>('users');
+  return users.filter((user) => user.role === 'SDO');
+}

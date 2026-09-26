@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import Decimal from 'decimal.js';
 import { pool, rows, one } from './db';
 import { Actor, requirePermission, objectAccess } from './security';
-import { Permission as P, ProgressCalculationService, ScheduleStatusService, PotentialClosingService, ObjectHealthService, PortionCompletionService, defaultRisk, resolveInternalScAccepted, resolveActualQuantity, canAccessDocumentation, resolveDocumentationAttention } from '../../../packages/domain';
+import { Permission as P, ProgressCalculationService, ScheduleStatusService, PotentialClosingService, ObjectHealthService, PortionCompletionService, defaultRisk, resolveInternalScAccepted, resolveActualQuantity, canAccessDocumentation, resolveDocumentationAttention, resolvePackageSdoReadiness } from '../../../packages/domain';
 @Injectable()
 export class ReadService {
     async snapshot(a: Actor, filters: { contractorId?: string } = {}) {
@@ -85,6 +85,68 @@ export class ReadService {
         const risk = { ...defaultRisk, ...saved };
         const today = new Date();
         const age = (d: any) => d ? Math.max(0, Math.floor((+today - +new Date(d)) / 86400000)) : 0;
+        // ---------------------------------------------------------------
+        // F8.3 SDO / Closing. Hangs off documentation_packages/quantity_portions
+        // — never executive_packages/sdo_cases/financial_closings above
+        // (infra/008_sdo_closing.sql explains why). Fetched unconditionally
+        // for every role, the same treatment every other F8.x table here
+        // already gets; visibility is decided once below, at the final
+        // return, alongside documentationVisible.
+        // ---------------------------------------------------------------
+        const documentationCustomerAcceptances = await rows(pool, 'SELECT * FROM documentation_customer_acceptances WHERE tenant_id=$1 AND documentation_package_id=ANY($2::uuid[])', [t, documentationPackageIds]);
+        const sdoClosingCasesRaw = await rows(pool, 'SELECT s.*,u.name AS responsible FROM sdo_closing_cases s LEFT JOIN users u ON u.id=s.responsible_user_id AND u.tenant_id=s.tenant_id WHERE s.tenant_id=$1 AND s.documentation_package_id=ANY($2::uuid[])', [t, documentationPackageIds]);
+        const sdoClosingCaseIds = sdoClosingCasesRaw.map(s => s.id);
+        const sdoClosingStatusHistory = await rows(pool, 'SELECT * FROM sdo_closing_status_history WHERE tenant_id=$1 AND sdo_closing_case_id=ANY($2::uuid[]) ORDER BY changed_at', [t, sdoClosingCaseIds]);
+        const sdoClosingHandoffHistory = await rows(pool, 'SELECT * FROM sdo_closing_handoff_history WHERE tenant_id=$1 AND sdo_closing_case_id=ANY($2::uuid[]) ORDER BY occurred_at', [t, sdoClosingCaseIds]);
+        const sdoClosingAmountHistory = await rows(pool, 'SELECT * FROM sdo_closing_amount_history WHERE tenant_id=$1 AND sdo_closing_case_id=ANY($2::uuid[]) ORDER BY changed_at', [t, sdoClosingCaseIds]);
+        const sdoClosingPortionAllocations = await rows(pool, 'SELECT * FROM sdo_closing_portion_allocations WHERE tenant_id=$1 AND sdo_closing_case_id=ANY($2::uuid[])', [t, sdoClosingCaseIds]);
+        // F8.3 readiness (decision 7) — the one place that classifies each
+        // Documentation Package's SDO readiness, computed for every package
+        // regardless of viewer so Package Detail's own indication and the
+        // SDO workspace's upcoming queue can never diverge (the same
+        // discipline resolveDocumentationAttention() already enforces for
+        // the PTO Attention Queue). Reuses portionConfirmations already
+        // fetched above (F8.1) — no extra query for Customer SC confirmations.
+        // `handoffPending` is true exactly when PTO could hand the package
+        // off right now but has not (yet) locked it with SDO — the signal
+        // the "Upcoming packages" section filters on.
+        const sdoPackageReadiness = documentationPackages.map(p => {
+            const coveredPortionIds = documentationPackagePortions.filter(link => link.documentationPackageId === p.id).map(link => link.quantityPortionId);
+            const customerScConfirmedPortionIds = portionConfirmations.filter(c => c.source === 'CUSTOMER_SC' && coveredPortionIds.includes(c.portionId)).map(c => c.portionId);
+            // F8.3 decisions 9-10: the audited documentation_customer_acceptances
+            // record is the authoritative fact, never the package status flip
+            // alone (resolvePackageSdoReadiness's own comment, packages/domain)
+            // — required on top of (never instead of) the status still reading
+            // ACCEPTED_BY_CUSTOMER, which is what correctly invalidates a
+            // *stale* record from before a "Вернуть в ПТО" correction cycle.
+            const hasCustomerAcceptance = p.status === 'ACCEPTED_BY_CUSTOMER' && documentationCustomerAcceptances.some(acc => acc.documentationPackageId === p.id);
+            const readiness = resolvePackageSdoReadiness({ hasCustomerAcceptance, coveredPortionIds, customerScConfirmedPortionIds });
+            const sdoCase = sdoClosingCasesRaw.find(s => s.documentationPackageId === p.id);
+            const o = objects.find(x => x.id === p.objectId);
+            const w = works.find(x => x.id === p.objectWorkId);
+            return { documentationPackageId: p.id, objectId: p.objectId, objectName: o ? o.name : null, objectWorkId: p.objectWorkId, workName: w ? w.name : null, documentationPackageStatus: p.status, responsible: p.responsible, ready: readiness.ready, missingReasons: readiness.missingReasons, sdoClosingCaseId: sdoCase ? sdoCase.id : null, packageLocked: sdoCase ? sdoCase.packageLocked : false, handoffPending: readiness.ready && !(sdoCase && sdoCase.packageLocked) };
+        });
+        // SDO Case rows enriched with display names, the same joined-name
+        // treatment works/objects/documentationPackages already get.
+        // `attention` reuses risk.sdoDays (the same threshold the legacy
+        // SDO backlog attention item already reads) but stays entirely
+        // inside the SDO workspace's own data — never merged into O01's
+        // attentionRequired/dashboard ("Do not turn O01 into a finance
+        // screen" applies to this new amount exactly as it does to the
+        // legacy one).
+        const sdoClosingCases = sdoClosingCasesRaw.map(s => {
+            const o = objects.find(x => x.id === s.objectId);
+            const w = works.find(x => x.id === s.objectWorkId);
+            const pkg = documentationPackages.find(p => p.id === s.documentationPackageId);
+            // SDO has no F8.2 access at all, so it never receives
+            // documentationPackagePortions (gated by documentationVisible
+            // below) — this is the one SDO-visible bridge to "which portions
+            // does my own case's package cover", carried on the (already
+            // broadly visible) case row itself rather than by widening F8.2's
+            // own link table.
+            const coveredQuantityPortionIds = documentationPackagePortions.filter(link => link.documentationPackageId === s.documentationPackageId).map(link => link.quantityPortionId);
+            return { ...s, objectName: o ? o.name : null, workName: w ? w.name : null, documentationPackageStatus: pkg ? pkg.status : null, coveredQuantityPortionIds, attention: s.status !== 'CLOSED' && age(s.createdAt) > Number(risk.sdoDays) ? 'RED' : 'NONE' };
+        });
         // F8.1 decision 8: acceptance aggregates from portions, never
         // any-portion-accepted, (F8.1-02/03 corrective) never
         // any-created-portion-accepted either, and (F8.1 Final corrective) never
@@ -183,6 +245,15 @@ export class ReadService {
             return { objects: objectList.map(({ contractValue, closed, potential, ...o }) => o), works: enriched.map(({ estimatedCost, closed, financial, ...w }) => w), contractors, dependencies: dependencies.filter(d => allowed.has(d.successorWorkId) && allowed.has(d.predecessorWorkId)) };
         }
         const documentationVisible = canAccessDocumentation(a.role);
-        return { objects: objectList, works: enriched, inspections, issues, packages, documents, sdo, closings, contractors, dependencies, dashboard, monthlyPlans: monthly, risk, photos, executionUnits: executionUnitsWithTotals, executionUnitLayers, portions: portionsWithStatus, portionConfirmations, documentationPackages: documentationVisible ? documentationPackages : undefined, documentationPackagePortions: documentationVisible ? documentationPackagePortions : undefined, documentationDocuments: documentationVisible ? documentationDocuments : undefined, documentationVersions: documentationVisible ? documentationVersions : undefined, documentationStatusHistory: documentationVisible ? documentationStatusHistory : undefined, documentationAttentionQueue: documentationVisible ? documentationAttentionQueue : undefined };
+        // F8.3: SDO Case state is read-only outside /sdo for every internal
+        // role reaching this point, including SDO itself (which still has
+        // no F8.2 access — documentationVisible stays false for it) and PTO
+        // (Package Detail's own lock/handoff display). CONTRACTOR_VIEWER
+        // never reaches here at all (its own early return above), so unlike
+        // documentationVisible there is no per-role condition left to apply
+        // — every remaining role sees it unconditionally. Full operational
+        // actions stay SDO/ADMIN-only (SDO_CASE_MANAGE, service.ts)
+        // regardless of this read visibility.
+        return { objects: objectList, works: enriched, inspections, issues, packages, documents, sdo, closings, contractors, dependencies, dashboard, monthlyPlans: monthly, risk, photos, executionUnits: executionUnitsWithTotals, executionUnitLayers, portions: portionsWithStatus, portionConfirmations, documentationPackages: documentationVisible ? documentationPackages : undefined, documentationPackagePortions: documentationVisible ? documentationPackagePortions : undefined, documentationDocuments: documentationVisible ? documentationDocuments : undefined, documentationVersions: documentationVisible ? documentationVersions : undefined, documentationStatusHistory: documentationVisible ? documentationStatusHistory : undefined, documentationAttentionQueue: documentationVisible ? documentationAttentionQueue : undefined, documentationCustomerAcceptances: documentationVisible ? documentationCustomerAcceptances : undefined, sdoClosingCases, sdoClosingStatusHistory, sdoClosingHandoffHistory, sdoClosingAmountHistory, sdoClosingPortionAllocations, sdoPackageReadiness };
     }
 }

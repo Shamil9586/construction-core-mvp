@@ -72,4 +72,24 @@ export class DocumentationController {
         const d = V.documentationPackageStatusDto.parse(b);
         return this.service.changeDocumentationPackageStatus(await authenticate(r), V.uuid.parse(id), d);
     }
+
+    /**
+     * F8.3 SDO / Closing. Both routes stay nested under documentation-packages
+     * (the same "action on an existing resource nests under that resource's
+     * own id" precedent /status above already follows) — customer-acceptance
+     * registration and the handoff to SDO are both PTO-side actions on a
+     * Documentation Package, never on the legacy executive-packages pipeline
+     * (pto.controller.ts's own /transfer-sdo, untouched by this file).
+     */
+    @Post('documentation-packages/:id/customer-acceptance')
+    async registerCustomerAcceptance(@Req() r: any, @Param('id') id: string, @Body() b: any) {
+        const d = V.sdoCustomerAcceptanceDto.parse(b);
+        return this.service.registerDocumentationCustomerAcceptance(await authenticate(r), V.uuid.parse(id), d);
+    }
+
+    @Post('documentation-packages/:id/handoff-to-sdo')
+    async handoffToSdo(@Req() r: any, @Param('id') id: string, @Body() b: any) {
+        const d = V.sdoHandoffDto.parse(b);
+        return this.service.handoffDocumentationPackageToSdo(await authenticate(r), V.uuid.parse(id), d);
+    }
 }

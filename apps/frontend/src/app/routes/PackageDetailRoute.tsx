@@ -69,6 +69,8 @@ export function PackageDetailRoute() {
     state.snapshot.documentationDocuments ?? [],
     state.snapshot.documentationVersions ?? [],
     state.snapshot.documentationStatusHistory ?? [],
+    state.snapshot.sdoPackageReadiness ?? [],
+    state.snapshot.documentationCustomerAcceptances ?? [],
   );
 
   const actions: PackageDetailActionHandlers | undefined =
@@ -88,6 +90,14 @@ export function PackageDetailRoute() {
           },
           onCreateVersion: async (documentId, storageProvider, storageReference, comment) => {
             await documentationApi.createDocumentationVersion(documentId, storageProvider, storageReference, comment);
+            refetch();
+          },
+          onRegisterCustomerAcceptance: async (acceptedDate, reference, comment) => {
+            await documentationApi.registerDocumentationCustomerAcceptance(pkg.id, pkg.version, acceptedDate, reference, comment);
+            refetch();
+          },
+          onHandoffToSdo: async (comment) => {
+            await documentationApi.handoffDocumentationPackageToSdo(pkg.id, pkg.version, comment);
             refetch();
           },
         }

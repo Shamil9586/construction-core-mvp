@@ -64,11 +64,17 @@ import type {
   InspectionStatus,
   ObjectSummary,
   QuantityPortion,
+  SdoClosingCase,
   Work,
   WorkExecutionUnit,
 } from '../types/api';
-import { formatDate, formatMeasure, formatQuantityWithUnit, type Measure } from '../formatters';
-import { documentationPackageStatusPresentation, workStatusPresentation, type StatusPresentation } from './status';
+import { formatDate, formatMeasure, formatMoney, formatQuantityWithUnit, type Measure } from '../formatters';
+import {
+  documentationPackageStatusPresentation,
+  sdoClosingStatusPresentation,
+  workStatusPresentation,
+  type StatusPresentation,
+} from './status';
 
 export type WorkConfirmation =
   | { kind: 'NotSubmitted' }
@@ -326,6 +332,39 @@ function buildW01DocumentationPackages(
     }));
 }
 
+/**
+ * F8.3 — one SDO Case covering a Documentation Package of this work, as
+ * W01's own read-only section shows it: existence, closing status,
+ * responsible SDO and total amount when available. Read-only here by
+ * design (F8.3: "Add read-only SDO state where appropriate" — mutations
+ * happen only in the /sdo workspace) and structurally separate from
+ * `readiness`/`plan`/`fact` above — an SDO Case's own status or amount
+ * never feeds physical readiness, and physical readiness never feeds it
+ * back (Production Invariants: "SDO status must not change actual
+ * production quantity, physical readiness, schedule status").
+ */
+export interface W01SdoCaseViewModel {
+  id: string;
+  documentationPackageId: string;
+  status: StatusPresentation;
+  responsible: string;
+  totalAmount: string;
+  packageLocked: boolean;
+}
+
+function buildW01SdoCases(work: Work, sdoClosingCases: SdoClosingCase[]): W01SdoCaseViewModel[] {
+  return sdoClosingCases
+    .filter((c) => c.objectWorkId === work.id)
+    .map((c) => ({
+      id: c.id,
+      documentationPackageId: c.documentationPackageId,
+      status: sdoClosingStatusPresentation(c.status),
+      responsible: c.responsible ?? 'Не назначен',
+      totalAmount: formatMoney(c.totalAmount),
+      packageLocked: c.packageLocked,
+    }));
+}
+
 export interface W01Schedule {
   plannedStart: string;
   plannedFinish: string;
@@ -351,6 +390,8 @@ export interface W01ViewModel {
   executionUnits: W01ExecutionUnitViewModel[];
   /** F8.2 — every Documentation Package covering this work; empty when none has been created yet. */
   documentationPackages: W01DocumentationPackageViewModel[];
+  /** F8.3 — every SDO Case covering a Documentation Package of this work; empty when none has been handed off yet. Read-only (see `W01SdoCaseViewModel`'s own comment). */
+  sdoClosingCases: W01SdoCaseViewModel[];
 }
 
 export function buildW01ViewModel(
@@ -361,6 +402,7 @@ export function buildW01ViewModel(
   portions: QuantityPortion[] = [],
   documentationPackages: DocumentationPackage[] = [],
   documentationPackagePortions: DocumentationPackagePortion[] = [],
+  sdoClosingCases: SdoClosingCase[] = [],
 ): W01ViewModel {
   const factReported = work.lastReportedAt !== null;
 
@@ -406,5 +448,6 @@ export function buildW01ViewModel(
     },
     executionUnits: buildW01ExecutionUnits(work, executionUnits, portions, inspections),
     documentationPackages: buildW01DocumentationPackages(work, documentationPackages, documentationPackagePortions),
+    sdoClosingCases: buildW01SdoCases(work, sdoClosingCases),
   };
 }

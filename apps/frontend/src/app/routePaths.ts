@@ -17,6 +17,10 @@ export const ROUTE_PATHS = {
   pto: '/pto',
   /** F8.2.1 — Documentation Package detail: reachable from both P01 and W01 (Decision 1, one shared destination). */
   package: '/pto/package/:packageId',
+  /** F8.3 — the SDO workspace: a separate top-level destination, not part of the object drill-down chain (mirrors `pto` above). */
+  sdo: '/sdo',
+  /** F8.3 — SDO Case detail, reachable only from the SDO workspace's own "Активные дела СДО" table. */
+  sdoCase: '/sdo/case/:caseId',
 } as const;
 
 export function objectPath(objectId: string): string {
@@ -29,4 +33,12 @@ export function workPath(objectId: string, workId: string): string {
 
 export function packagePath(packageId: string): string {
   return `/pto/package/${encodeURIComponent(packageId)}`;
+}
+
+export function sdoPath(): string {
+  return '/sdo';
+}
+
+export function sdoCasePath(caseId: string): string {
+  return `/sdo/case/${encodeURIComponent(caseId)}`;
 }

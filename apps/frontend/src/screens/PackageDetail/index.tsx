@@ -37,6 +37,10 @@ export interface PackageDetailActionHandlers {
     storageReference: string | undefined,
     comment: string | undefined,
   ) => Promise<void>;
+  /** F8.3 decisions 9-10 — the dedicated, audited registration; never routed through `onAdvanceStatus`. */
+  onRegisterCustomerAcceptance: (acceptedDate: string, reference: string | undefined, comment: string | undefined) => Promise<void>;
+  /** F8.3 "Передать в СДО" — enabled only once `viewModel.sdo.canHandoffToSdo` is true; the backend re-checks readiness regardless. */
+  onHandoffToSdo: (comment: string | undefined) => Promise<void>;
 }
 
 export interface PackageDetailProps {
@@ -152,6 +156,107 @@ function LinkPortionForm({
       </button>
       {error ? <span className={styles.errorText}>{error}</span> : null}
     </form>
+  );
+}
+
+function todayCivilDate(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function CustomerAcceptanceForm({
+  onSubmit,
+}: {
+  onSubmit: (acceptedDate: string, reference: string | undefined, comment: string | undefined) => Promise<void>;
+}) {
+  const [acceptedDate, setAcceptedDate] = useState(todayCivilDate());
+  const [reference, setReference] = useState('');
+  const [comment, setComment] = useState('');
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault();
+    setPending(true);
+    setError(null);
+    try {
+      await onSubmit(acceptedDate, reference.trim() || undefined, comment.trim() || undefined);
+    } catch (submitError) {
+      setError(errorMessage(submitError));
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <form className={styles.inlineForm} onSubmit={handleSubmit}>
+      <input
+        className={styles.input}
+        type="date"
+        value={acceptedDate}
+        onChange={(event) => setAcceptedDate(event.target.value)}
+        disabled={pending}
+        aria-label="Дата согласия заказчика"
+      />
+      <input
+        className={styles.input}
+        type="text"
+        placeholder="Номер акта (необязательно)"
+        value={reference}
+        onChange={(event) => setReference(event.target.value)}
+        disabled={pending}
+        aria-label="Номер акта согласия"
+      />
+      <input
+        className={styles.input}
+        type="text"
+        placeholder="Комментарий (необязательно)"
+        value={comment}
+        onChange={(event) => setComment(event.target.value)}
+        disabled={pending}
+        aria-label="Комментарий к согласию заказчика"
+      />
+      <button type="submit" className={styles.actionButton} disabled={pending}>
+        {pending ? 'Сохранение…' : 'Зарегистрировать согласие заказчика'}
+      </button>
+      {error ? <span className={styles.errorText}>{error}</span> : null}
+    </form>
+  );
+}
+
+function HandoffToSdoControl({ onSubmit }: { onSubmit: (comment: string | undefined) => Promise<void> }) {
+  const [comment, setComment] = useState('');
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleClick() {
+    setPending(true);
+    setError(null);
+    try {
+      await onSubmit(comment.trim() || undefined);
+      setComment('');
+    } catch (submitError) {
+      setError(errorMessage(submitError));
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <div className={styles.inlineForm}>
+      <input
+        className={styles.input}
+        type="text"
+        placeholder="Комментарий (необязательно)"
+        value={comment}
+        onChange={(event) => setComment(event.target.value)}
+        disabled={pending}
+        aria-label="Комментарий к передаче в СДО"
+      />
+      <button type="button" className={styles.actionButton} onClick={handleClick} disabled={pending}>
+        {pending ? 'Передача…' : 'Передать в СДО'}
+      </button>
+      {error ? <span className={styles.errorText}>{error}</span> : null}
+    </div>
   );
 }
 
@@ -339,6 +444,36 @@ export function PackageDetail({
         {actions ? (
           <LinkPortionForm availablePortions={viewModel.availablePortions} onSubmit={actions.onLinkPortion} />
         ) : null}
+      </section>
+
+      <section className={styles.section}>
+        <span className={[styles.sectionLabel, typeClass('label')].join(' ')}>СДО / Закрытие</span>
+        <StatusBadge variant={viewModel.sdo.packageLocked ? 'Blocked' : viewModel.sdo.ready ? 'OnTrack' : 'Neutral'}>
+          {viewModel.sdo.packageLocked
+            ? 'Состав пакета заблокирован: передан в СДО'
+            : viewModel.sdo.ready
+              ? 'Готов к передаче в СДО'
+              : 'Не готов к передаче в СДО'}
+        </StatusBadge>
+        {!viewModel.sdo.ready && viewModel.sdo.missingReasons.length > 0 ? (
+          <ul className={styles.plainList}>
+            {viewModel.sdo.missingReasons.map((reason) => (
+              <li key={reason} className={typeClass('body')}>
+                {reason}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        {viewModel.sdo.customerAcceptance ? (
+          <span className={typeClass('body')}>
+            Согласие заказчика зарегистрировано {viewModel.sdo.customerAcceptance.acceptedDate}
+            {viewModel.sdo.customerAcceptance.reference ? ` · ${viewModel.sdo.customerAcceptance.reference}` : ''}
+          </span>
+        ) : null}
+        {actions && viewModel.sdo.canRegisterCustomerAcceptance ? (
+          <CustomerAcceptanceForm onSubmit={actions.onRegisterCustomerAcceptance} />
+        ) : null}
+        {actions && viewModel.sdo.canHandoffToSdo ? <HandoffToSdoControl onSubmit={actions.onHandoffToSdo} /> : null}
       </section>
 
       <section className={styles.section}>

@@ -10,6 +10,7 @@
  */
 
 import type {
+  DocumentationCustomerAcceptance,
   DocumentationDocument,
   DocumentationDocumentType,
   DocumentationPackage,
@@ -19,6 +20,7 @@ import type {
   DocumentationVersion,
   ObjectSummary,
   QuantityPortion,
+  SdoPackageReadiness,
   StorageProvider,
   Work,
   WorkExecutionUnit,
@@ -136,6 +138,26 @@ export interface PackageDetailHistoryItemViewModel {
   comment: string | null;
 }
 
+/**
+ * F8.3 — Package Detail's own readiness/lock/handoff slice. `readiness` is
+ * `resolvePackageSdoReadiness()`'s output (packages/domain), the identical
+ * rule the SDO workspace's own "Upcoming packages" queue reads — Package
+ * Detail never re-derives it. `canRegisterCustomerAcceptance` is true only
+ * for `PRESENTED` (the dedicated registration operation's own precondition,
+ * service.ts); `canHandoffToSdo` is true only once ready and not already
+ * locked with SDO.
+ */
+export interface PackageDetailSdoViewModel {
+  ready: boolean;
+  missingReasons: string[];
+  /** True once PTO has handed this package to SDO and it has not been returned since — "lock state after handoff". PTO has no access to the SDO workspace itself (SDO/ADMIN only), so this screen shows only the lock, never the case's own reconciliation status. */
+  packageLocked: boolean;
+  canRegisterCustomerAcceptance: boolean;
+  canHandoffToSdo: boolean;
+  /** The latest registered acceptance, once one exists — `null` before PTO has registered any. */
+  customerAcceptance: { acceptedDate: string; reference: string | null } | null;
+}
+
 export interface PackageDetailViewModel {
   id: string;
   version: number;
@@ -153,6 +175,7 @@ export interface PackageDetailViewModel {
   history: PackageDetailHistoryItemViewModel[];
   nextStatus: DocumentationPackageStatus | null;
   nextStatusLabel: string | null;
+  sdo: PackageDetailSdoViewModel;
 }
 
 export function buildPackageDetailViewModel(
@@ -165,6 +188,8 @@ export function buildPackageDetailViewModel(
   documents: DocumentationDocument[],
   versions: DocumentationVersion[],
   statusHistory: DocumentationStatusHistoryEntry[],
+  readiness: SdoPackageReadiness[] = [],
+  customerAcceptances: DocumentationCustomerAcceptance[] = [],
 ): PackageDetailViewModel {
   const ownPortionIds = new Set(
     packagePortions.filter((link) => link.documentationPackageId === pkg.id).map((link) => link.quantityPortionId),
@@ -180,6 +205,13 @@ export function buildPackageDetailViewModel(
   const workPortions = portions.filter((portion) => workUnitIds.has(portion.executionUnitId));
 
   const next = nextDocumentationStatus(pkg.status);
+
+  const readinessItem = readiness.find((item) => item.documentationPackageId === pkg.id);
+  const ownAcceptances = customerAcceptances
+    .filter((acceptance) => acceptance.documentationPackageId === pkg.id)
+    .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  const latestAcceptance = ownAcceptances[0];
+  const packageLocked = readinessItem?.packageLocked ?? false;
 
   return {
     id: pkg.id,
@@ -222,5 +254,15 @@ export function buildPackageDetailViewModel(
     })),
     nextStatus: next,
     nextStatusLabel: next ? nextDocumentationStatusLabel(next) : null,
+    sdo: {
+      ready: readinessItem?.ready ?? false,
+      missingReasons: readinessItem?.missingReasons ?? [],
+      packageLocked,
+      canRegisterCustomerAcceptance: pkg.status === 'PRESENTED',
+      canHandoffToSdo: (readinessItem?.ready ?? false) && !packageLocked,
+      customerAcceptance: latestAcceptance
+        ? { acceptedDate: formatDate(latestAcceptance.acceptedDate), reference: latestAcceptance.reference }
+        : null,
+    },
   };
 }

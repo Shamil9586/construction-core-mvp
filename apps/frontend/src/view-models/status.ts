@@ -34,7 +34,7 @@
  * never the problem.
  */
 
-import type { DocumentationPackageStatus, ScheduleStatus, Work } from '../types/api';
+import type { DocumentationPackageStatus, ScheduleStatus, SdoClosingStatus, Work } from '../types/api';
 
 export type ScheduleVariant = 'OnTrack' | 'Delayed' | 'Attention' | 'Blocked' | 'Neutral';
 
@@ -117,6 +117,34 @@ export function documentationPackageStatusPresentation(status: DocumentationPack
       return { variant: 'Attention', label: 'Устраняются замечания' };
     case 'ACCEPTED_BY_CUSTOMER':
       return { variant: 'OnTrack', label: 'Принято заказчиком' };
+    default: {
+      const exhaustive: never = status;
+      return exhaustive;
+    }
+  }
+}
+
+/**
+ * F8.3 — the SDO Case's own status, a distinct contour from
+ * `DocumentationPackageStatus`/`scheduleStatus` — this reads only the SDO
+ * closing workflow, never the underlying work's physical readiness or the
+ * package's own documentation status (BR-02/BR-03's own discipline,
+ * extended to F8.3). `ON_RECONCILIATION` is genuinely in-progress work, not
+ * yet a problem: `Neutral`. `ON_CORRECTION` reads `Attention` — real,
+ * current work to do, the same amber `RETURNED`/`CORRECTING` already use
+ * for the equivalent documentation-side meaning. `VERIFICATION_PASSED` and
+ * `CLOSED` are both genuine forward steps: `OnTrack`.
+ */
+export function sdoClosingStatusPresentation(status: SdoClosingStatus): StatusPresentation {
+  switch (status) {
+    case 'ON_RECONCILIATION':
+      return { variant: 'Neutral', label: 'На выверке' };
+    case 'VERIFICATION_PASSED':
+      return { variant: 'OnTrack', label: 'Выверка пройдена' };
+    case 'ON_CORRECTION':
+      return { variant: 'Attention', label: 'На корректировке' };
+    case 'CLOSED':
+      return { variant: 'OnTrack', label: 'Закрытие' };
     default: {
       const exhaustive: never = status;
       return exhaustive;

@@ -44,10 +44,21 @@ export enum Permission {
     // CONTRACTOR_VIEWER — "SDO: No F8.2 access") is decided once by
     // canAccessDocumentation() below, not by a permission bit PTO_VIEW-style
     // grants would give SDO anyway (SDO already holds PTO_VIEW via `view`).
-    DOCUMENTATION_MANAGE = 'DOCUMENTATION_MANAGE'
+    DOCUMENTATION_MANAGE = 'DOCUMENTATION_MANAGE',
+    // F8.3 — every SDO-side mutation on an SDO Case: status transitions,
+    // amount/allocation entry, responsible assignment, "Вернуть в ПТО".
+    // Deliberately its own permission, not SDO_EDIT/SDO_CLOSE/FINANCE_EDIT:
+    // those gate the pre-existing sdo_cases/financial_closings pipeline
+    // (packageAction() 'transfer-sdo', calculateSdo(), close() in
+    // service.ts), a payment/accounting-adjacent workflow F8.3's own
+    // Definition of Done explicitly excludes ("Closing is NOT payment and
+    // NOT accounting") — the same reasoning DOCUMENTATION_MANAGE already
+    // applied against reusing PTO_EDIT. PTO does not hold this permission
+    // ("PTO does NOT assign work inside the SDO department").
+    SDO_CASE_MANAGE = 'SDO_CASE_MANAGE'
 }
 const view = [Permission.OBJECT_VIEW, Permission.WORK_VIEW, Permission.PTO_VIEW, Permission.SDO_VIEW, Permission.FINANCE_VIEW];
-const grants: Record<Role, Permission[]> = { ADMIN: Object.values(Permission), GENERAL_DIRECTOR: view, TECHNICAL_DIRECTOR: [...view, Permission.OBJECT_CREATE, Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE, Permission.EXECUTION_UNIT_MANAGE], DEPARTMENT_HEAD: view, PROJECT_MANAGER: [...view, Permission.OBJECT_CREATE, Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE, Permission.EXECUTION_UNIT_MANAGE, Permission.WORK_UPDATE_PROGRESS, Permission.INSPECTION_REQUEST, Permission.ISSUE_RESOLVE], CONSTRUCTION_CONTROL: [...view, Permission.INSPECTION_ACCEPT, Permission.INSPECTION_REJECT, Permission.ISSUE_CREATE, Permission.ISSUE_VERIFY], PTO: [...view, Permission.PTO_EDIT, Permission.PTO_TRANSFER_SDO, Permission.DOCUMENTATION_MANAGE], SDO: [...view, Permission.SDO_EDIT, Permission.SDO_CLOSE, Permission.FINANCE_EDIT], CONTRACTOR_VIEWER: [Permission.OBJECT_VIEW, Permission.WORK_VIEW] };
+const grants: Record<Role, Permission[]> = { ADMIN: Object.values(Permission), GENERAL_DIRECTOR: view, TECHNICAL_DIRECTOR: [...view, Permission.OBJECT_CREATE, Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE, Permission.EXECUTION_UNIT_MANAGE], DEPARTMENT_HEAD: view, PROJECT_MANAGER: [...view, Permission.OBJECT_CREATE, Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE, Permission.EXECUTION_UNIT_MANAGE, Permission.WORK_UPDATE_PROGRESS, Permission.INSPECTION_REQUEST, Permission.ISSUE_RESOLVE], CONSTRUCTION_CONTROL: [...view, Permission.INSPECTION_ACCEPT, Permission.INSPECTION_REJECT, Permission.ISSUE_CREATE, Permission.ISSUE_VERIFY], PTO: [...view, Permission.PTO_EDIT, Permission.PTO_TRANSFER_SDO, Permission.DOCUMENTATION_MANAGE], SDO: [...view, Permission.SDO_EDIT, Permission.SDO_CLOSE, Permission.FINANCE_EDIT, Permission.SDO_CASE_MANAGE], CONTRACTOR_VIEWER: [Permission.OBJECT_VIEW, Permission.WORK_VIEW] };
 export const hasPermission = (role: Role, p: Permission) => grants[role]?.includes(p) ?? false;
 // F8.2 Architecture Contract: "SDO: No F8.2 access" and no contractor portal
 // — the one place that decides who may see Executive Documentation data at
@@ -121,6 +132,109 @@ export function resolveDocumentationAttention(packageStatuses: string[]): Docume
     return packageStatuses
         .map(packageStatusAttention)
         .reduce((worst, current) => (DOCUMENTATION_ATTENTION_RANK[current.level] < DOCUMENTATION_ATTENTION_RANK[worst.level] ? current : worst));
+}
+// ---------------------------------------------------------------------
+// F8.3 SDO / Closing. Hangs off documentation_packages/quantity_portions,
+// exactly as F8.2 itself hangs off works — never the pre-existing
+// executive_packages/sdo_cases/financial_closings pipeline (see
+// infra/008_sdo_closing.sql). SDO status here never feeds
+// ProgressCalculationService/ScheduleStatusService/ObjectHealthService, and
+// nothing below reads or writes portion_quantity_confirmations/
+// quantity_portions/works — F8.3 only ever reads Customer SC confirmations
+// to decide readiness, never writes production facts.
+// ---------------------------------------------------------------------
+// F8.3 decision: SDO's own operational workspace (/sdo) — status
+// transitions, amount/allocation entry, "Вернуть в ПТО" — is SDO/ADMIN
+// only. Every other internal role gets read-only SDO state elsewhere
+// (Work Card), never this predicate.
+export function canAccessSdoWorkspace(role: Role): boolean {
+    return role === 'SDO' || role === 'ADMIN';
+}
+// F8.3 SDO status workflow — the one allow-list, mirroring
+// isDocumentationStatusTransitionAllowed's own discipline: ON_RECONCILIATION
+// ("На выверке") <-> ON_CORRECTION and -> VERIFICATION_PASSED ("Выверка
+// пройдена"); VERIFICATION_PASSED -> CLOSED ("Закрытие") or back to
+// ON_CORRECTION; CLOSED -> ON_CORRECTION only (never a direct edit — a
+// closed case must re-open through correction first). No same-status
+// no-op, no other edge.
+export const SDO_CLOSING_STATUSES = ['ON_RECONCILIATION', 'VERIFICATION_PASSED', 'ON_CORRECTION', 'CLOSED'] as const;
+export type SdoClosingStatus = typeof SDO_CLOSING_STATUSES[number];
+const ALLOWED_SDO_CLOSING_STATUS_TRANSITIONS: Record<string, string[]> = {
+    ON_RECONCILIATION: ['VERIFICATION_PASSED', 'ON_CORRECTION'],
+    VERIFICATION_PASSED: ['CLOSED', 'ON_CORRECTION'],
+    ON_CORRECTION: ['ON_RECONCILIATION'],
+    CLOSED: ['ON_CORRECTION'],
+};
+export function isSdoClosingStatusTransitionAllowed(from: string, to: string): boolean {
+    return ALLOWED_SDO_CLOSING_STATUS_TRANSITIONS[from]?.includes(to) ?? false;
+}
+// F8.3 readiness (decision 7): (a) every Quantity Portion this package
+// covers has at least one Customer SC quantity confirmation recorded —
+// existence, exactly the contract's own wording ("confirmation exists"),
+// never a magnitude/coverage match against planned quantity, which the
+// contract never asks for; (b) a dedicated, audited customer documentation
+// acceptance record exists (F8.3 decisions 9-10's own registration
+// operation, never a free PTO status transition — see
+// registerDocumentationCustomerAcceptance(), service.ts).
+//
+// `hasCustomerAcceptance` is deliberately not "documentation status ==
+// ACCEPTED_BY_CUSTOMER" — the caller (service.ts/read-service.ts) computes
+// it as "current status is ACCEPTED_BY_CUSTOMER AND at least one row exists
+// in documentation_customer_acceptances for this package". The status flip
+// alone is never sufficient on its own: it is the ordinary derived/display
+// state that already happens to move in lockstep with the dedicated record
+// today (the only code path that can set it also inserts the record, in the
+// same transaction), but this function's own contract does not trust that
+// coupling — it requires the audited fact to be independently true, so a
+// hypothetical future bug that flips the status through some other path
+// (skipping the dedicated operation) reads NOT ready rather than silently
+// granting it. The status transitioning away on "Вернуть в ПТО"
+// (returnSdoCaseToPto(), service.ts, moves it to CORRECTING) is what makes a
+// *stale* acceptance record from a prior cycle correctly stop counting —
+// combining both conditions, not the record's bare existence alone, is what
+// keeps the correction cycle correct.
+//
+// A package with no covered portions at all is never ready — there is
+// nothing for an SDO Case to close against. Called identically by
+// ReadService.snapshot() (what Package Detail and the SDO workspace both
+// display) and handoffDocumentationPackageToSdo()'s own server-side gate, so
+// the two cannot diverge.
+export interface SdoPackageReadinessResult {
+    ready: boolean;
+    missingReasons: string[];
+}
+export function resolvePackageSdoReadiness(input: {
+    hasCustomerAcceptance: boolean;
+    coveredPortionIds: string[];
+    customerScConfirmedPortionIds: string[];
+}): SdoPackageReadinessResult {
+    const reasons: string[] = [];
+    if (!input.hasCustomerAcceptance)
+        reasons.push('Не зарегистрировано согласие заказчика по документации');
+    if (input.coveredPortionIds.length === 0) {
+        reasons.push('К пакету не привязан ни один участок объёма');
+    }
+    else {
+        const confirmed = new Set(input.customerScConfirmedPortionIds);
+        if (input.coveredPortionIds.some(id => !confirmed.has(id)))
+            reasons.push('Не по всем участкам объёма есть подтверждение количества заказчиком (СК заказчика)');
+    }
+    return { ready: reasons.length === 0, missingReasons: reasons };
+}
+// F8.3 closing amount rule: "If no allocations exist, CLOSED is allowed
+// using the total amount. If at least one Portion allocation exists, their
+// sum must equal the total closing amount." A pure function over values the
+// service layer already fetched, the same discipline QuantityPortionPolicy/
+// PtoPackageValidationService already apply to their own cross-row rules.
+export class SdoClosingAllocationService {
+    canClose(totalAmount: any, allocations: { amount: any }[]): { allowed: boolean; reason: string | null } {
+        if (totalAmount === null || totalAmount === undefined)
+            return { allowed: false, reason: 'Не указана итоговая сумма закрытия' };
+        if (allocations.length === 0)
+            return { allowed: true, reason: null };
+        const sum = allocations.reduce((s, a) => s.add(a.amount), new Decimal(0));
+        return sum.eq(totalAmount) ? { allowed: true, reason: null } : { allowed: false, reason: 'Сумма распределения по участкам не совпадает с итоговой суммой закрытия' };
+    }
 }
 export const defaultRisk = { yellowVariance: -5, redVariance: -15, staleDays: 7, ptoDays: 5, sdoDays: 10, escalateTechnicalDays: 3, escalateDirectorDays: 7 };
 export class ProgressCalculationService {

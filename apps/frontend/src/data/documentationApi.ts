@@ -5,6 +5,7 @@ import type {
   DocumentationPackagePortion,
   DocumentationPackageStatus,
   DocumentationVersion,
+  SdoClosingCase,
   StorageProvider,
   UserSummary,
   Uuid,
@@ -106,4 +107,38 @@ export function changeDocumentationPackageStatus(
   comment?: string,
 ): Promise<DocumentationPackage> {
   return post(`documentation-packages/${packageId}/status`, { status, version, comment });
+}
+
+/**
+ * F8.3 decisions 9-10 — PTO's dedicated, audited registration of external
+ * customer documentation acceptance, tied to the presented package's own
+ * `version` ("the relevant presented documentation version"). Never routed
+ * through `changeDocumentationPackageStatus` above — the backend itself
+ * refuses `ACCEPTED_BY_CUSTOMER` as an ordinary target there. Returns the
+ * updated package (now `ACCEPTED_BY_CUSTOMER`), the same return shape every
+ * other package mutation here already has.
+ */
+export function registerDocumentationCustomerAcceptance(
+  packageId: Uuid,
+  version: number,
+  acceptedDate: string,
+  reference: string | undefined,
+  comment: string | undefined,
+): Promise<DocumentationPackage> {
+  return post(`documentation-packages/${packageId}/customer-acceptance`, { version, acceptedDate, reference, comment });
+}
+
+/**
+ * F8.3 "Передать в СДО" — PTO's explicit handoff. Creates the package's one
+ * SDO Case on first handoff, or re-locks the same Case after "Вернуть в
+ * ПТО" (never a second Case for the same package — the backend is the sole
+ * authority; this only sends the request). Readiness (`sdoPackageReadiness`
+ * in the snapshot) decides whether the screen even offers this action.
+ */
+export function handoffDocumentationPackageToSdo(
+  packageId: Uuid,
+  version: number,
+  comment?: string,
+): Promise<SdoClosingCase> {
+  return post(`documentation-packages/${packageId}/handoff-to-sdo`, { version, comment });
 }

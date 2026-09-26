@@ -3,7 +3,7 @@ import { Sidebar, typeClass, type NavItem } from '../design-system';
 import { ROUTE_PATHS } from './routePaths';
 import { RuntimeFooter } from './RuntimeFooter';
 import { useCoreRuntime } from './CoreRuntimeContext';
-import { canManageDocumentation } from '../auth/internalRoles';
+import { canManageDocumentation, canAccessSdoWorkspace } from '../auth/internalRoles';
 
 /**
  * The routing adapter `Sidebar`'s own doc comment asks for: "a screen — or a
@@ -29,6 +29,7 @@ import { canManageDocumentation } from '../auth/internalRoles';
 const NAV_ITEMS: NavItem[] = [
   { key: 'company', label: 'Портфель' },
   { key: 'pto', label: 'ПТО' },
+  { key: 'sdo', label: 'СДО' },
 ];
 
 export function AppSidebar() {
@@ -43,7 +44,9 @@ export function AppSidebar() {
       ? 'company'
       : location.pathname === ROUTE_PATHS.pto
         ? 'pto'
-        : '';
+        : location.pathname.startsWith('/sdo')
+          ? 'sdo'
+          : '';
 
   // F8.2.1 Corrective Patch (F8.2.1-02) — the PTO Workspace is PTO's own
   // working area (and ADMIN's, per existing administration convention), not
@@ -54,7 +57,17 @@ export function AppSidebar() {
   // `documentationVisible`. No session at all (the mock/demo runtime) still
   // shows it, unchanged from F8.2, since an absent session is not evidence
   // of a real restriction.
-  const items = session && !canManageDocumentation(session.user.role) ? NAV_ITEMS.filter((item) => item.key !== 'pto') : NAV_ITEMS;
+  //
+  // F8.3 — "СДО" gets the exact same treatment for `canAccessSdoWorkspace`
+  // (SDO/ADMIN only): every other role reads SDO Case state through W01
+  // instead, never through this nav item.
+  const items = session
+    ? NAV_ITEMS.filter(
+        (item) =>
+          (item.key !== 'pto' || canManageDocumentation(session.user.role)) &&
+          (item.key !== 'sdo' || canAccessSdoWorkspace(session.user.role)),
+      )
+    : NAV_ITEMS;
 
   return (
     <Sidebar
@@ -65,6 +78,7 @@ export function AppSidebar() {
       onNavigate={(key) => {
         if (key === 'company') navigate(ROUTE_PATHS.company);
         if (key === 'pto') navigate(ROUTE_PATHS.pto);
+        if (key === 'sdo') navigate(ROUTE_PATHS.sdo);
       }}
       footer={<RuntimeFooter />}
     />

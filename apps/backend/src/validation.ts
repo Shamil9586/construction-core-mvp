@@ -49,3 +49,15 @@ export const documentationDocumentDto = z.object({ type: z.enum(['AOSR', 'ACT_CE
 // EXTERNAL_REFERENCE, mirroring the DB's own pairing CHECK.
 export const documentationVersionDto = z.object({ storageProvider: z.enum(['NONE', 'EXTERNAL_REFERENCE']), storageReference: text.optional(), comment: text.optional() }).strict().refine(d => (d.storageProvider === 'EXTERNAL_REFERENCE') === (d.storageReference !== undefined), 'Ссылка на документ обязательна только для EXTERNAL_REFERENCE');
 export const documentationPackageStatusDto = z.object({ status: z.enum(['DRAFT', 'PREPARING', 'READY_FOR_PRESENTATION', 'PRESENTED', 'RETURNED', 'CORRECTING', 'ACCEPTED_BY_CUSTOMER']), version, comment: text.optional() }).strict();
+// F8.3 SDO / Closing.
+// Dedicated, audited external-result registration (F8.3 decisions 9-10) —
+// never a bare status flip. acceptedDate is the external fact (when the
+// customer actually signed); reference is an optional customer-side
+// document/act number.
+export const sdoCustomerAcceptanceDto = z.object({ version, acceptedDate: date, reference: text.optional(), comment: text.optional() }).strict();
+export const sdoHandoffDto = z.object({ version, comment: text.optional() }).strict();
+export const sdoReturnToPtoDto = z.object({ version, comment: text.optional() }).strict();
+export const sdoResponsibleDto = z.object({ version, responsibleUserId: uuid }).strict();
+export const sdoClosingStatusDto = z.object({ version, status: z.enum(['ON_RECONCILIATION', 'VERIFICATION_PASSED', 'ON_CORRECTION', 'CLOSED']), reason: text.optional() }).strict();
+export const sdoClosingAmountDto = z.object({ version, amount: money }).strict();
+export const sdoClosingAllocationDto = z.object({ quantityPortionId: uuid, amount: money.refine(v => Number(v) > 0) }).strict();

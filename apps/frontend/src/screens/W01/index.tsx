@@ -11,6 +11,7 @@ import {
 import type { W01ViewModel, WorkConfirmation } from '../../view-models/w01';
 import { ExecutionSection, type W01ActionHandlers } from './ExecutionSection';
 import { DocumentationSection, type DocumentationSectionActionHandlers } from './DocumentationSection';
+import { SdoSection } from './SdoSection';
 import styles from './W01.module.css';
 
 /**
@@ -217,6 +218,8 @@ export function WorkCard({
         actions={documentationActions}
         visible={documentationVisible}
       />
+
+      <SdoSection sdoClosingCases={viewModel.sdoClosingCases} visible={documentationVisible} />
     </AppShell>
   );
 }

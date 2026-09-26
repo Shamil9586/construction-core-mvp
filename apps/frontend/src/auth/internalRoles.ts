@@ -94,3 +94,18 @@ export function canAccessDocumentation(role: string): boolean {
 export function canManageDocumentation(role: string): boolean {
   return role === 'PTO' || role === 'ADMIN';
 }
+
+/**
+ * F8.3 — mirrors the backend's own `canAccessSdoWorkspace()`
+ * (`packages/domain`): the `/sdo` operational workspace (upcoming packages
+ * queue, active SDO Cases, case detail actions) is SDO/ADMIN only — a
+ * mirror-image predicate from `canAccessDocumentation` above, not a reuse of
+ * it (SDO is explicitly excluded there, explicitly included here). Every
+ * other internal role still reads SDO Case state read-only elsewhere (W01,
+ * Package Detail) via the snapshot's own `sdoClosingCases`/
+ * `sdoPackageReadiness`, gated only by `canAccessDocumentation`/nothing at
+ * all — never by this predicate.
+ */
+export function canAccessSdoWorkspace(role: string): boolean {
+  return role === 'SDO' || role === 'ADMIN';
+}

@@ -46,6 +46,7 @@ export function WorkRoute() {
     state.snapshot.portions ?? [],
     state.snapshot.documentationPackages ?? [],
     state.snapshot.documentationPackagePortions ?? [],
+    state.snapshot.sdoClosingCases ?? [],
   );
 
   // F8.1 (Phase 4) — no session (the mock/demo runtime, `App.tsx`'s

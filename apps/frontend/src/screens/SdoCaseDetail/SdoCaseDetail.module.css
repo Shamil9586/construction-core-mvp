@@ -1,0 +1,117 @@
+.headerActions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--cc-p-space-8);
+}
+
+.section {
+  margin-top: var(--cc-p-space-32);
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-12);
+}
+
+.section:first-of-type {
+  margin-top: var(--cc-p-space-20);
+}
+
+.sectionLabel {
+  color: var(--cc-text-secondary);
+}
+
+.secondary {
+  color: var(--cc-text-secondary);
+}
+
+.empty {
+  color: var(--cc-text-secondary);
+}
+
+.plainList {
+  margin: 0;
+  padding-left: var(--cc-p-space-20);
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-4);
+}
+
+.actionRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--cc-p-space-8);
+}
+
+.inlineForm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--cc-p-space-8);
+  padding-top: var(--cc-p-space-8);
+}
+
+.input {
+  box-sizing: border-box;
+  padding: var(--cc-p-space-8) var(--cc-p-space-12);
+  border: var(--cc-border-width) solid var(--cc-border-interactive);
+  border-radius: var(--cc-p-radius-6);
+  background: var(--cc-background-surface);
+  color: var(--cc-text-primary);
+  font: inherit;
+}
+
+.input:focus-visible {
+  outline: var(--cc-focus-ring-width) solid var(--cc-focus-ring);
+  outline-offset: var(--cc-focus-ring-offset);
+}
+
+.input:disabled {
+  background: var(--cc-background-neutral);
+  color: var(--cc-text-secondary);
+}
+
+.actionButton {
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  padding: var(--cc-p-space-8) var(--cc-button-padding-x);
+  border: var(--cc-border-width) solid transparent;
+  border-radius: var(--cc-button-radius);
+  background: var(--cc-action-primary);
+  color: var(--cc-text-on-action);
+  font: inherit;
+  cursor: pointer;
+}
+
+.actionButton:hover:not(:disabled) {
+  background: var(--cc-action-primary-hover);
+}
+
+.actionButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.actionButtonSecondary {
+  box-sizing: border-box;
+  padding: var(--cc-p-space-8) var(--cc-button-padding-x);
+  border: var(--cc-border-width) solid var(--cc-border-interactive);
+  border-radius: var(--cc-button-radius);
+  background: var(--cc-background-surface);
+  color: var(--cc-text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.actionButtonSecondary:hover:not(:disabled) {
+  background: var(--cc-action-surface-hover);
+}
+
+.errorText {
+  color: var(--cc-status-blocked-text);
+}
+
+.portionRow {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--cc-p-space-12);
+}
