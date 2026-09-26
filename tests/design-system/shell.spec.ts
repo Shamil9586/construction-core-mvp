@@ -362,6 +362,83 @@ test.describe('AppShell — off-canvas drawer (F11.1)', () => {
       await page.setViewportSize({ width: 1440, height: 1000 });
     });
   });
+
+  test.describe('breakpoint transition (F11.1-01 corrective)', () => {
+    // An open drawer must not survive a resize back into desktop/tablet
+    // layout: at that point `aside` (the permanent Sidebar) is visible again,
+    // so a still-open modal `<dialog>` would sit uselessly on top of it,
+    // backdrop and all, blocking the very Sidebar F11-D01 says desktop must
+    // use normally.
+    test.afterEach(async ({ page }) => {
+      await page.setViewportSize({ width: 1440, height: 1000 });
+    });
+
+    test('390px open → 768px: the drawer closes, the permanent Sidebar returns, and nothing stays modal', async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: 390, height: 800 });
+      await trigger(page).click();
+      await expect(drawer(page)).toBeVisible();
+
+      await page.setViewportSize({ width: 768, height: 1000 });
+
+      const section = shellSection(page);
+      expect(await style(section.locator('aside'), 'display')).toBe('flex');
+      expect(await style(section.locator('aside'), 'width')).toBe('208px');
+      await expect(trigger(page)).toBeHidden();
+      await expect(drawer(page)).toBeHidden();
+      expect(await page.evaluate(() => document.querySelectorAll('dialog[open]').length)).toBe(0);
+
+      // Not just visually hidden: the desktop Sidebar is genuinely
+      // interactive again, not still sitting behind an inert top layer a
+      // stale modal dialog would otherwise leave in place.
+      await sidebarNav(page).getByRole('button', { name: 'Финансы' }).click();
+      await expect(section.locator('[data-active-nav]')).toHaveText('finance');
+    });
+
+    test('390px open → 1440px: the same closure holds on a second, wider desktop width', async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: 390, height: 800 });
+      await trigger(page).click();
+      await expect(drawer(page)).toBeVisible();
+
+      await page.setViewportSize({ width: 1440, height: 1000 });
+
+      const section = shellSection(page);
+      expect(await style(section.locator('aside'), 'display')).toBe('flex');
+      await expect(trigger(page)).toBeHidden();
+      await expect(drawer(page)).toBeHidden();
+      expect(await page.evaluate(() => document.querySelectorAll('dialog[open]').length)).toBe(0);
+    });
+
+    test('breakpoint-driven closure never leaves focus on the now-hidden trigger', async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: 390, height: 800 });
+      await trigger(page).click();
+      await expect(drawer(page).getByRole('button', { name: 'Закрыть меню' })).toBeFocused();
+
+      await page.setViewportSize({ width: 768, height: 1000 });
+
+      await expect(trigger(page)).toBeHidden();
+      // The explicit close paths (its own button, Escape, backdrop, a
+      // Sidebar item) correctly return focus to the trigger while it is
+      // still visible. A hidden (display:none) element can never
+      // legitimately be "the final focus target" — nothing could see a ring
+      // on it — so a breakpoint-driven closure must not attempt that.
+      // Checked directly against the DOM node rather than through
+      // getByRole(): a display:none button is correctly excluded from the
+      // accessibility tree (the toBeHidden() assertion above relies on
+      // exactly that), so a role-based locator has nothing to assert
+      // (not)Focused() against any more.
+      const triggerIsFocused = await page.evaluate(() => {
+        const triggerNode = document.querySelector('button[aria-label="Открыть меню навигации"]');
+        return document.activeElement === triggerNode;
+      });
+      expect(triggerIsFocused).toBe(false);
+    });
+  });
 });
 
 test.describe('Sidebar', () => {

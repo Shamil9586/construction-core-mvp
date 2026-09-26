@@ -94,20 +94,46 @@ export function AppShell({
   }, [drawerOpen]);
 
   // Every way the drawer can close — its own button, a backdrop click, a
-  // Sidebar item, or Escape (handled natively, no keydown listener needed) —
-  // ends in the browser dispatching `close` on the dialog. Reacting to that
-  // one event, rather than each caller of `closeDrawer` separately, is what
-  // keeps the "return focus to the element that opened it" contract true
-  // regardless of which path closed it.
+  // Sidebar item, Escape (handled natively, no keydown listener needed), or
+  // the breakpoint guard below — ends in the browser dispatching `close` on
+  // the dialog. Reacting to that one event, rather than each caller of
+  // `closeDrawer` separately, is what keeps focus handling correct regardless
+  // of which path closed it.
   useEffect(() => {
     const dialog = dialogRef.current;
     if (!dialog) return undefined;
     const handleClose = () => {
       setDrawerOpen(false);
-      triggerRef.current?.focus();
+      const trigger = triggerRef.current;
+      // The explicit mobile close paths return focus to the trigger — but
+      // only while it is still visible. `offsetParent === null` is true
+      // exactly when an element (or an ancestor) is `display: none`, which
+      // is exactly what AppShell.module.css does to it at >=640px: a hidden
+      // trigger can never legitimately be "the final focus target" (F11.1-01
+      // corrective) — nothing could see a ring on it — so a breakpoint-driven
+      // closure leaves focus wherever the browser's own dialog-close
+      // restoration puts it instead of forcing it here.
+      if (trigger && trigger.offsetParent !== null) trigger.focus();
     };
     dialog.addEventListener('close', handleClose);
     return () => dialog.removeEventListener('close', handleClose);
+  }, []);
+
+  // F11.1-01 corrective — an open drawer must not survive a resize back into
+  // desktop/tablet layout: at that width `aside` (the permanent Sidebar) is
+  // visible again, so a still-open modal `<dialog>` would sit on top of it,
+  // backdrop and all, blocking the very Sidebar F11-D01 says desktop/tablet
+  // must use normally. `(min-width: 640px)` is the exact complement of
+  // AppShell.module.css's `@media (max-width: 639px)` — the two must be kept
+  // in sync, one breakpoint, expressed once on each side because a media
+  // query condition cannot reference the other's custom property.
+  useEffect(() => {
+    const desktopQuery = window.matchMedia('(min-width: 640px)');
+    const closeIfDesktop = (query: MediaQueryList | MediaQueryListEvent) => {
+      if (query.matches) setDrawerOpen(false);
+    };
+    desktopQuery.addEventListener('change', closeIfDesktop);
+    return () => desktopQuery.removeEventListener('change', closeIfDesktop);
   }, []);
 
   function closeDrawer(): void {

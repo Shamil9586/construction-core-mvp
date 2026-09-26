@@ -298,8 +298,11 @@
  *
  * Bounds it must satisfy (F11.0 audit, F11-D01): 768px keeps the full
  * sidebar; 390px/375px are off-canvas. 640px sits inside that gap with
- * comfortable margin on both sides. Nothing on the JS side needs the same
- * number — AppShell.tsx never checks viewport width, only `display` here.
+ * comfortable margin on both sides.
+ *
+ * AppShell.tsx's own `matchMedia('(min-width: 640px)')` guard (F11.1-01
+ * corrective — closes a drawer left open across a resize into this range) is
+ * the exact complement of this query and must stay in sync with it by hand.
  */
 @media (max-width: 639px) {
   .aside {
