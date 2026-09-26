@@ -697,20 +697,39 @@ export interface SdoClosingAmountHistoryEntry extends Versioned {
   changedAt: Timestamp;
 }
 
-/** F8.3, corrected by F8.3-R05 — an optional allocation of the total closing amount to one covered Quantity Portion. At most one *current* row per Portion (still enforced server-side), but that row can now be corrected in place — see `SdoClosingPortionAllocationHistoryEntry` for the append-only trail; `version` (from `Versioned`) is what a correction must supply back. A Portion outside the linked package's own coverage is still rejected server-side. */
+/**
+ * F8.3, corrected by F8.3-R05, then F8.3-19 — an optional allocation of the
+ * total closing amount to one covered Quantity Portion. At most one
+ * *current* row per Portion (still enforced server-side); that row can be
+ * corrected in place, or explicitly cancelled without deleting it —
+ * `cancelledAt`/`cancelledBy` are both `null` for an active allocation and
+ * both set once cancelled. A cancelled row no longer counts toward the
+ * Case's active allocations (CLOSED's exact-sum rule, the displayed
+ * allocated sum) but its history is never removed — see
+ * `SdoClosingPortionAllocationHistoryEntry` for the append-only trail;
+ * `version` (from `Versioned`) is what a correction or cancellation must
+ * supply back. A Portion outside the linked package's own coverage is still
+ * rejected server-side.
+ */
 export interface SdoClosingPortionAllocation extends Versioned {
   sdoClosingCaseId: Uuid;
   quantityPortionId: Uuid;
   amount: Numeric;
   createdBy: Uuid;
+  cancelledAt: Timestamp | null;
+  cancelledBy: Uuid | null;
 }
 
-/** F8.3-R05 — one entry of a Portion allocation's append-only correction history. `previousAmount` is `null` exactly the first time that Portion's allocation is ever set. */
+/** F8.3-R05, extended by F8.3-19 — the kind of change one allocation-history row records. */
+export type SdoClosingPortionAllocationOperation = Known<'CREATE' | 'CORRECT' | 'CANCEL' | 'RESTORE'>;
+
+/** F8.3-R05, extended by F8.3-19 — one entry of a Portion allocation's append-only history. `previousAmount` is `null` exactly the first time that Portion's allocation is ever set; `newAmount` is `null` exactly for a `CANCEL` row (there is no new effective amount, since cancelling leaves no active allocation). */
 export interface SdoClosingPortionAllocationHistoryEntry extends Versioned {
   sdoClosingCaseId: Uuid;
   quantityPortionId: Uuid;
   previousAmount: Numeric | null;
-  newAmount: Numeric;
+  newAmount: Numeric | null;
+  operation: SdoClosingPortionAllocationOperation;
   changedBy: Uuid;
   changedAt: Timestamp;
 }

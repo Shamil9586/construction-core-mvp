@@ -142,3 +142,21 @@ export function handoffDocumentationPackageToSdo(
 ): Promise<SdoClosingCase> {
   return post(`documentation-packages/${packageId}/handoff-to-sdo`, { version, comment });
 }
+
+/**
+ * F8.3-17 "Вернуть на корректировку" — PTO's own, pre-handoff-only route
+ * back from `ACCEPTED_BY_CUSTOMER` to `CORRECTING`. Dedicated and audited,
+ * never `changeDocumentationPackageStatus` above (the backend's own
+ * transition allow-list still has `ACCEPTED_BY_CUSTOMER: []`). The backend
+ * rejects this outright once any SDO Case exists for the package, even one
+ * currently unlocked — at that point the only correction-start route is
+ * SDO/ADMIN's own "Вернуть в ПТО" (`sdoClosingApi.ts`'s
+ * `returnSdoCaseToPto`). PTO-only; ADMIN and every other role get 403.
+ */
+export function returnDocumentationPackageToCorrection(
+  packageId: Uuid,
+  version: number,
+  comment?: string,
+): Promise<DocumentationPackage> {
+  return post(`documentation-packages/${packageId}/correction`, { version, comment });
+}

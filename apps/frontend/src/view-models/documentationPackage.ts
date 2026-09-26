@@ -95,6 +95,26 @@ export function documentTypeLabel(type: DocumentationDocumentType): string {
   }
 }
 
+/**
+ * F8.3-17 — mirrors `canMutateDocumentationPackageContent()` (packages/domain):
+ * Documents, Document Versions and Portion coverage are editable only in
+ * these four statuses, and only while no SDO Case currently holds the
+ * package locked (`packageLocked` is already `false` whenever no Case
+ * exists at all, so this one check covers both "no Case" and "Case exists
+ * but unlocked"). The backend is still the sole authority that enforces
+ * this; this only decides which content-mutation controls the screen even
+ * offers — PRESENTED/ACCEPTED_BY_CUSTOMER/RETURNED must never show them.
+ */
+const DOCUMENTATION_CONTENT_EDITABLE_STATUSES: DocumentationPackageStatus[] = [
+  'DRAFT',
+  'PREPARING',
+  'READY_FOR_PRESENTATION',
+  'CORRECTING',
+];
+function isDocumentationContentEditable(status: DocumentationPackageStatus, packageLocked: boolean): boolean {
+  return DOCUMENTATION_CONTENT_EDITABLE_STATUSES.includes(status) && !packageLocked;
+}
+
 export function storageProviderLabel(provider: StorageProvider): string {
   switch (provider) {
     case 'NONE':
@@ -156,6 +176,18 @@ export interface PackageDetailSdoViewModel {
   canHandoffToSdo: boolean;
   /** The latest registered acceptance, once one exists — `null` before PTO has registered any. */
   customerAcceptance: { acceptedDate: string; reference: string | null } | null;
+  /**
+   * F8.3-17 "Вернуть на корректировку" — true once the package is
+   * ACCEPTED_BY_CUSTOMER and no SDO Case has ever been created for it yet
+   * (checked via `sdoClosingCaseId`, not `packageLocked` — an existing but
+   * currently-unlocked Case must still block this route). The backend
+   * rejects the operation outright once any Case exists at all; from that
+   * point the only correction-start route is SDO/ADMIN's own "Вернуть в
+   * ПТО". The screen further restricts this to PTO alone via
+   * `actions.onReturnToCorrection` being present, the same convention
+   * `canRegisterCustomerAcceptance`/`canHandoffToSdo` already use.
+   */
+  canReturnToCorrection: boolean;
 }
 
 export interface PackageDetailViewModel {
@@ -175,6 +207,8 @@ export interface PackageDetailViewModel {
   history: PackageDetailHistoryItemViewModel[];
   nextStatus: DocumentationPackageStatus | null;
   nextStatusLabel: string | null;
+  /** F8.3-17 — true when Documents/Versions/Portion coverage may currently be mutated; see `isDocumentationContentEditable()`. Gates the "link portion", "create document" and "add version" controls — never the status-transition control itself, which has its own independent `nextStatus` gate. */
+  contentEditable: boolean;
   sdo: PackageDetailSdoViewModel;
 }
 
@@ -254,6 +288,7 @@ export function buildPackageDetailViewModel(
     })),
     nextStatus: next,
     nextStatusLabel: next ? nextDocumentationStatusLabel(next) : null,
+    contentEditable: isDocumentationContentEditable(pkg.status, packageLocked),
     sdo: {
       ready: readinessItem?.ready ?? false,
       missingReasons: readinessItem?.missingReasons ?? [],
@@ -263,6 +298,7 @@ export function buildPackageDetailViewModel(
       customerAcceptance: latestAcceptance
         ? { acceptedDate: formatDate(latestAcceptance.acceptedDate), reference: latestAcceptance.reference }
         : null,
+      canReturnToCorrection: pkg.status === 'ACCEPTED_BY_CUSTOMER' && !readinessItem?.sdoClosingCaseId,
     },
   };
 }

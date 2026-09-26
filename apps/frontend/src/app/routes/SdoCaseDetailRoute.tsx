@@ -68,6 +68,10 @@ export function SdoCaseDetailRoute() {
             await sdoClosingApi.setSdoClosingPortionAllocation(sdoCase.id, quantityPortionId, amount, version);
             refetch();
           },
+          onCancelAllocation: async (quantityPortionId, version) => {
+            await sdoClosingApi.cancelSdoClosingPortionAllocation(sdoCase.id, quantityPortionId, version);
+            refetch();
+          },
           onAssignResponsible: async (responsibleUserId) => {
             await sdoClosingApi.assignSdoResponsible(sdoCase.id, sdoCase.version, responsibleUserId);
             refetch();

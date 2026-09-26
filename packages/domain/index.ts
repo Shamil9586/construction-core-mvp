@@ -92,6 +92,40 @@ const ALLOWED_DOCUMENTATION_STATUS_TRANSITIONS: Record<string, string[]> = {
 export function isDocumentationStatusTransitionAllowed(from: string, to: string): boolean {
     return ALLOWED_DOCUMENTATION_STATUS_TRANSITIONS[from]?.includes(to) ?? false;
 }
+// F8.3-17: Documentation Package *content* — its Documents, Document
+// Versions, and Quantity Portion coverage — is a different axis from the
+// Package's own status transitions above, but content mutation must obey
+// its own freeze rule: DRAFT/PREPARING/READY_FOR_PRESENTATION/CORRECTING are
+// content-editable; PRESENTED/ACCEPTED_BY_CUSTOMER/RETURNED are frozen
+// snapshots of what was (or will be) shown externally and must never be
+// silently mutated underneath them ("PRESENTED means this exact Package
+// content was externally presented"). An SDO Case that currently holds the
+// Package locked (package_locked=true — including a CLOSED case, which
+// never unlocks on its own) freezes content too, regardless of the
+// Package's own status column: belt-and-suspenders against any future path
+// that might otherwise leave the two disagreeing. The one shared policy,
+// called identically by every content mutation route
+// (linkDocumentationPackagePortion, createDocumentationDocument,
+// createDocumentationVersion, service.ts) so none can drift from the
+// others — the same discipline every other F8.2/F8.3 shared predicate in
+// this file already applies. Backend enforcement is authoritative; a
+// frontend control being hidden is never itself the security boundary.
+const DOCUMENTATION_CONTENT_EDITABLE_STATUSES = ['DRAFT', 'PREPARING', 'READY_FOR_PRESENTATION', 'CORRECTING'];
+export interface DocumentationContentMutationResult {
+    allowed: boolean;
+    reason: string | null;
+}
+export function canMutateDocumentationPackageContent(input: {
+    packageStatus: string;
+    sdoCaseExists: boolean;
+    sdoCasePackageLocked: boolean;
+}): DocumentationContentMutationResult {
+    if (!DOCUMENTATION_CONTENT_EDITABLE_STATUSES.includes(input.packageStatus))
+        return { allowed: false, reason: `Состав пакета нельзя изменить в статусе «${input.packageStatus}»` };
+    if (input.sdoCaseExists && input.sdoCasePackageLocked)
+        return { allowed: false, reason: 'Состав пакета заблокирован: пакет передан в СДО' };
+    return { allowed: true, reason: null };
+}
 // F8.2.1 Decision 4 — PTO Attention Queue: the one place that classifies a
 // work's documentation readiness into the three-tier signal the queue
 // shows, called identically by ReadService.snapshot() (what the queue

@@ -75,3 +75,20 @@ export function setSdoClosingPortionAllocation(
 ): Promise<SdoClosingPortionAllocation> {
   return post(`sdo-closing-cases/${sdoCaseId}/allocations`, { quantityPortionId, amount, version });
 }
+
+/**
+ * F8.3-19 — explicit, audited cancellation of an active Portion allocation:
+ * the row is marked inactive (`cancelledAt`/`cancelledBy` set), never
+ * deleted, so a mistaken allocation stops counting toward CLOSED's exact-sum
+ * rule while its history stays intact. Requires the allocation's current
+ * `version` (optimistic concurrency, same as every other F8.3 mutation).
+ * Calling `setSdoClosingPortionAllocation` again for the same Portion
+ * afterwards reactivates (`RESTORE`s) this exact row.
+ */
+export function cancelSdoClosingPortionAllocation(
+  sdoCaseId: Uuid,
+  quantityPortionId: Uuid,
+  version: number,
+): Promise<SdoClosingPortionAllocation> {
+  return post(`sdo-closing-cases/${sdoCaseId}/allocations/${quantityPortionId}/cancel`, { version });
+}

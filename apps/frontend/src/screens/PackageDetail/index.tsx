@@ -51,6 +51,15 @@ export interface PackageDetailActionHandlers {
    * optional, PTO only — see `onRegisterCustomerAcceptance` above.
    */
   onHandoffToSdo?: (comment: string | undefined) => Promise<void>;
+  /**
+   * F8.3-17 "Вернуть на корректировку" — the dedicated, audited, PTO-only,
+   * pre-handoff-only operation; never routed through `onAdvanceStatus` (the
+   * backend's own transition allow-list still has `ACCEPTED_BY_CUSTOMER:
+   * []`). Optional, PTO only — see `onRegisterCustomerAcceptance` above for
+   * the same convention. Enabled only once `viewModel.sdo.canReturnToCorrection`
+   * is true; the backend re-checks (status, no SDO Case, role) regardless.
+   */
+  onReturnToCorrection?: (comment: string | undefined) => Promise<void>;
 }
 
 export interface PackageDetailProps {
@@ -270,6 +279,43 @@ function HandoffToSdoControl({ onSubmit }: { onSubmit: (comment: string | undefi
   );
 }
 
+function ReturnToCorrectionControl({ onSubmit }: { onSubmit: (comment: string | undefined) => Promise<void> }) {
+  const [comment, setComment] = useState('');
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleClick() {
+    setPending(true);
+    setError(null);
+    try {
+      await onSubmit(comment.trim() || undefined);
+      setComment('');
+    } catch (submitError) {
+      setError(errorMessage(submitError));
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <div className={styles.inlineForm}>
+      <input
+        className={styles.input}
+        type="text"
+        placeholder="Комментарий (необязательно)"
+        value={comment}
+        onChange={(event) => setComment(event.target.value)}
+        disabled={pending}
+        aria-label="Комментарий к возврату на корректировку"
+      />
+      <button type="button" className={styles.actionButton} onClick={handleClick} disabled={pending}>
+        {pending ? 'Возврат…' : 'Вернуть на корректировку'}
+      </button>
+      {error ? <span className={styles.errorText}>{error}</span> : null}
+    </div>
+  );
+}
+
 function CreateDocumentForm({ onSubmit }: { onSubmit: (type: DocumentationDocumentType) => Promise<void> }) {
   const [type, setType] = useState<DocumentationDocumentType>('AOSR');
   const [pending, setPending] = useState(false);
@@ -451,7 +497,7 @@ export function PackageDetail({
         ) : (
           <span className={[styles.empty, typeClass('body')].join(' ')}>Участки ещё не привязаны</span>
         )}
-        {actions ? (
+        {actions && viewModel.contentEditable ? (
           <LinkPortionForm availablePortions={viewModel.availablePortions} onSubmit={actions.onLinkPortion} />
         ) : null}
       </section>
@@ -484,6 +530,9 @@ export function PackageDetail({
           <CustomerAcceptanceForm onSubmit={actions.onRegisterCustomerAcceptance} />
         ) : null}
         {actions?.onHandoffToSdo && viewModel.sdo.canHandoffToSdo ? <HandoffToSdoControl onSubmit={actions.onHandoffToSdo} /> : null}
+        {actions?.onReturnToCorrection && viewModel.sdo.canReturnToCorrection ? (
+          <ReturnToCorrectionControl onSubmit={actions.onReturnToCorrection} />
+        ) : null}
       </section>
 
       <section className={styles.section}>
@@ -507,14 +556,14 @@ export function PackageDetail({
                 ) : (
                   <span className={[styles.empty, typeClass('body')].join(' ')}>Версий ещё нет</span>
                 )}
-                {actions ? <CreateVersionForm documentId={doc.id} onSubmit={actions.onCreateVersion} /> : null}
+                {actions && viewModel.contentEditable ? <CreateVersionForm documentId={doc.id} onSubmit={actions.onCreateVersion} /> : null}
               </div>
             ))}
           </div>
         ) : (
           <span className={[styles.empty, typeClass('body')].join(' ')}>Документы ещё не созданы</span>
         )}
-        {actions ? <CreateDocumentForm onSubmit={actions.onCreateDocument} /> : null}
+        {actions && viewModel.contentEditable ? <CreateDocumentForm onSubmit={actions.onCreateDocument} /> : null}
       </section>
 
       <section className={styles.section}>

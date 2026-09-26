@@ -62,4 +62,11 @@ export class SdoClosingController {
         const d = V.sdoClosingAllocationDto.parse(b);
         return this.service.setSdoClosingPortionAllocation(await authenticate(r), V.uuid.parse(id), d);
     }
+
+    /** F8.3-19 — explicit audited cancellation; the row is marked inactive, never deleted. */
+    @Post('sdo-closing-cases/:id/allocations/:portionId/cancel')
+    async cancelAllocation(@Req() r: any, @Param('id') id: string, @Param('portionId') portionId: string, @Body() b: any) {
+        const d = V.sdoClosingAllocationCancelDto.parse(b);
+        return this.service.cancelSdoClosingPortionAllocation(await authenticate(r), V.uuid.parse(id), V.uuid.parse(portionId), d);
+    }
 }

@@ -286,14 +286,55 @@ test('F8.3: buildSdoCaseDetailViewModel — covered portions come from the case\
 test('F8.3: buildSdoCaseDetailViewModel — an allocated portion shows its own amount, and allocatedSum reflects every allocation on this case only', async () => {
   const sdoCase = baseSdoCase({ id: 'case-1', coveredQuantityPortionIds: ['portion-1'] });
   const allocations: SdoClosingPortionAllocation[] = [
-    { id: 'alloc-1', tenantId: 't', createdAt: 'x', updatedAt: 'x', version: 1, sdoClosingCaseId: 'case-1', quantityPortionId: 'portion-1', amount: '750.00', createdBy: 'sdo-1' },
-    { id: 'alloc-2', tenantId: 't', createdAt: 'x', updatedAt: 'x', version: 1, sdoClosingCaseId: 'other-case', quantityPortionId: 'portion-1', amount: '999999.00', createdBy: 'sdo-1' },
+    { id: 'alloc-1', tenantId: 't', createdAt: 'x', updatedAt: 'x', version: 1, sdoClosingCaseId: 'case-1', quantityPortionId: 'portion-1', amount: '750.00', createdBy: 'sdo-1', cancelledAt: null, cancelledBy: null },
+    { id: 'alloc-2', tenantId: 't', createdAt: 'x', updatedAt: 'x', version: 1, sdoClosingCaseId: 'other-case', quantityPortionId: 'portion-1', amount: '999999.00', createdBy: 'sdo-1', cancelledAt: null, cancelledBy: null },
   ];
   const vm = buildSdoCaseDetailViewModel(sdoCase, baseObject(), baseWork(), [baseUnit()], [basePortion()], allocations, [], [], [], []);
   assert.match(vm.portions[0].allocatedAmount ?? '', /750/);
   assert.equal(vm.portions[0].allocationVersion, 1, 'F8.3-R05: the existing allocation\'s own version, needed to correct it');
+  assert.equal(vm.portions[0].canCancel, true, 'F8.3-19: an active allocation can be cancelled');
   assert.match(vm.allocatedSum, /750/);
   assert.doesNotMatch(vm.allocatedSum, /999999/);
+});
+
+test('F8.3-19: buildSdoCaseDetailViewModel — a cancelled allocation reads as "no active allocation": null amount, not cancellable, but keeps its version for a later RESTORE', async () => {
+  const sdoCase = baseSdoCase({ id: 'case-1', coveredQuantityPortionIds: ['portion-1'] });
+  const allocations: SdoClosingPortionAllocation[] = [
+    {
+      id: 'alloc-1', tenantId: 't', createdAt: 'x', updatedAt: 'x', version: 2, sdoClosingCaseId: 'case-1', quantityPortionId: 'portion-1',
+      amount: '750.00', createdBy: 'sdo-1', cancelledAt: '2026-01-02T00:00:00Z', cancelledBy: 'sdo-1',
+    },
+  ];
+  const vm = buildSdoCaseDetailViewModel(sdoCase, baseObject(), baseWork(), [baseUnit()], [basePortion()], allocations, [], [], [], []);
+  assert.equal(vm.portions[0].allocatedAmount, null, 'a cancelled allocation is not an active one');
+  assert.equal(vm.portions[0].allocationVersion, 2, 'the cancelled row\'s own version stays available to RESTORE it');
+  assert.equal(vm.portions[0].canCancel, false, 'nothing active left to cancel');
+  assert.equal(vm.allocatedSum, '—', 'F8.3-19: CLOSED\'s exact-sum rule (and this same display) count active allocations only');
+});
+
+test('F8.3-19: buildSdoCaseDetailViewModel — allocatedSum excludes a cancelled allocation even when an active one exists on another portion', async () => {
+  const sdoCase = baseSdoCase({ id: 'case-1', coveredQuantityPortionIds: ['portion-1', 'portion-2'] });
+  const allocations: SdoClosingPortionAllocation[] = [
+    { id: 'alloc-1', tenantId: 't', createdAt: 'x', updatedAt: 'x', version: 1, sdoClosingCaseId: 'case-1', quantityPortionId: 'portion-1', amount: '300.00', createdBy: 'sdo-1', cancelledAt: null, cancelledBy: null },
+    { id: 'alloc-2', tenantId: 't', createdAt: 'x', updatedAt: 'x', version: 2, sdoClosingCaseId: 'case-1', quantityPortionId: 'portion-2', amount: '500.00', createdBy: 'sdo-1', cancelledAt: '2026-01-03T00:00:00Z', cancelledBy: 'sdo-1' },
+  ];
+  const vm = buildSdoCaseDetailViewModel(
+    sdoCase,
+    baseObject(),
+    baseWork(),
+    [baseUnit()],
+    [basePortion(), basePortion({ id: 'portion-2', label: 'Секция B' })],
+    allocations,
+    [],
+    [],
+    [],
+    [],
+  );
+  assert.match(vm.allocatedSum, /300/, 'only the active allocation counts');
+  assert.doesNotMatch(vm.allocatedSum, /500/, 'the cancelled allocation must never be silently included');
+  const portion2 = vm.portions.find((p) => p.id === 'portion-2');
+  assert.equal(portion2?.allocatedAmount, null);
+  assert.equal(portion2?.canCancel, false);
 });
 
 test('F8.3: buildSdoCaseDetailViewModel — allowedActions mirror the domain allow-list exactly, with labels', async () => {
@@ -321,9 +362,9 @@ test('F8.3: buildSdoCaseDetailViewModel — histories are scoped to this case an
   // three histories — its own entries name the Portion, since (unlike amount
   // history) there is no single case-wide figure to read the entry against.
   const allocationHistory: SdoClosingPortionAllocationHistoryEntry[] = [
-    { id: 'al1', tenantId: 't', createdAt: 'x', updatedAt: 'x', version: 1, sdoClosingCaseId: 'case-1', quantityPortionId: 'portion-1', previousAmount: null, newAmount: '400.00', changedBy: 'sdo-1', changedAt: '2026-01-01T00:00:00Z' },
-    { id: 'al2', tenantId: 't', createdAt: 'x', updatedAt: 'x', version: 1, sdoClosingCaseId: 'case-1', quantityPortionId: 'portion-1', previousAmount: '400.00', newAmount: '750.00', changedAt: '2026-01-02T00:00:00Z', changedBy: 'sdo-1' },
-    { id: 'al3', tenantId: 't', createdAt: 'x', updatedAt: 'x', version: 1, sdoClosingCaseId: 'other-case', quantityPortionId: 'portion-1', previousAmount: null, newAmount: '999.00', changedBy: 'sdo-1', changedAt: '2026-01-03T00:00:00Z' },
+    { id: 'al1', tenantId: 't', createdAt: 'x', updatedAt: 'x', version: 1, sdoClosingCaseId: 'case-1', quantityPortionId: 'portion-1', previousAmount: null, newAmount: '400.00', operation: 'CREATE', changedBy: 'sdo-1', changedAt: '2026-01-01T00:00:00Z' },
+    { id: 'al2', tenantId: 't', createdAt: 'x', updatedAt: 'x', version: 1, sdoClosingCaseId: 'case-1', quantityPortionId: 'portion-1', previousAmount: '400.00', newAmount: '750.00', operation: 'CORRECT', changedAt: '2026-01-02T00:00:00Z', changedBy: 'sdo-1' },
+    { id: 'al3', tenantId: 't', createdAt: 'x', updatedAt: 'x', version: 1, sdoClosingCaseId: 'other-case', quantityPortionId: 'portion-1', previousAmount: null, newAmount: '999.00', operation: 'CREATE', changedBy: 'sdo-1', changedAt: '2026-01-03T00:00:00Z' },
   ];
   const vm = buildSdoCaseDetailViewModel(baseSdoCase({ coveredQuantityPortionIds: ['portion-1'] }), baseObject(), baseWork(), [baseUnit()], [basePortion()], [], statusHistory, handoffHistory, amountHistory, allocationHistory);
   assert.equal(vm.statusHistory.length, 2, 'only this case\'s own rows');
@@ -334,6 +375,22 @@ test('F8.3: buildSdoCaseDetailViewModel — histories are scoped to this case an
   assert.equal(vm.allocationHistory.length, 2, 'only this case\'s own rows');
   assert.equal(vm.allocationHistory[0].id, 'al2', 'newest first');
   assert.match(vm.allocationHistory[0].portionLabel, /Секция/);
+  assert.equal(vm.allocationHistory[0].operationLabel, 'Исправлено');
+  assert.equal(vm.allocationHistory[1].operationLabel, 'Создано');
+});
+
+test('F8.3-19: buildSdoCaseDetailViewModel — allocation history labels CANCEL and RESTORE distinctly, and a CANCEL row\'s null newAmount formats as the same placeholder as any other absent amount', async () => {
+  const allocationHistory: SdoClosingPortionAllocationHistoryEntry[] = [
+    { id: 'al1', tenantId: 't', createdAt: 'x', updatedAt: 'x', version: 1, sdoClosingCaseId: 'case-1', quantityPortionId: 'portion-1', previousAmount: '500.00', newAmount: null, operation: 'CANCEL', changedBy: 'sdo-1', changedAt: '2026-01-01T00:00:00Z' },
+    { id: 'al2', tenantId: 't', createdAt: 'x', updatedAt: 'x', version: 1, sdoClosingCaseId: 'case-1', quantityPortionId: 'portion-1', previousAmount: null, newAmount: '600.00', operation: 'RESTORE', changedBy: 'sdo-1', changedAt: '2026-01-02T00:00:00Z' },
+  ];
+  const vm = buildSdoCaseDetailViewModel(baseSdoCase({ coveredQuantityPortionIds: ['portion-1'] }), baseObject(), baseWork(), [baseUnit()], [basePortion()], [], [], [], [], allocationHistory);
+  const cancelEntry = vm.allocationHistory.find((entry) => entry.id === 'al1');
+  const restoreEntry = vm.allocationHistory.find((entry) => entry.id === 'al2');
+  assert.equal(cancelEntry?.operationLabel, 'Отменено');
+  assert.equal(cancelEntry?.newAmount, '—', 'a CANCEL row has no new effective amount');
+  assert.equal(restoreEntry?.operationLabel, 'Восстановлено');
+  assert.match(restoreEntry?.newAmount ?? '', /600/);
 });
 
 /* --------------------------------------------------------------------- *
@@ -366,6 +423,51 @@ test('F8.3: buildPackageDetailViewModel — the latest customer acceptance is su
   ];
   const vm = buildPackageDetailViewModel(pkg, baseObject(), baseWork(), [], [], [], [], [], [], [], acceptances);
   assert.equal(vm.sdo.customerAcceptance?.reference, 'Акт-2', 'the most recently registered acceptance, not the first');
+});
+
+/* --------------------------------------------------------------------- *
+ * F8.3-17: content-mutation freeze / "Вернуть на корректировку"          *
+ * --------------------------------------------------------------------- */
+
+test('F8.3-17: buildPackageDetailViewModel — contentEditable is true in every content-editable status with no locking SDO Case', async () => {
+  for (const status of ['DRAFT', 'PREPARING', 'READY_FOR_PRESENTATION', 'CORRECTING'] as const) {
+    const vm = buildPackageDetailViewModel(basePackage({ status }), baseObject(), baseWork(), [], [], [], [], [], [], [], []);
+    assert.equal(vm.contentEditable, true, status);
+  }
+});
+
+test('F8.3-17: buildPackageDetailViewModel — contentEditable is false in every frozen status, even unlocked', async () => {
+  for (const status of ['PRESENTED', 'ACCEPTED_BY_CUSTOMER', 'RETURNED'] as const) {
+    const vm = buildPackageDetailViewModel(basePackage({ status }), baseObject(), baseWork(), [], [], [], [], [], [], [], []);
+    assert.equal(vm.contentEditable, false, status);
+  }
+});
+
+test('F8.3-17: buildPackageDetailViewModel — contentEditable is false while a locked SDO Case exists, even though the status itself reads CORRECTING', async () => {
+  const pkg = basePackage({ status: 'CORRECTING' });
+  const readiness = [baseReadiness({ documentationPackageId: 'package-1', packageLocked: true, sdoClosingCaseId: 'case-1' })];
+  const vm = buildPackageDetailViewModel(pkg, baseObject(), baseWork(), [], [], [], [], [], [], readiness, []);
+  assert.equal(vm.contentEditable, false);
+});
+
+test('F8.3-17: buildPackageDetailViewModel — canReturnToCorrection is true only for ACCEPTED_BY_CUSTOMER with no SDO Case at all', async () => {
+  const pkg = basePackage({ status: 'ACCEPTED_BY_CUSTOMER' });
+  const readiness = [baseReadiness({ documentationPackageId: 'package-1', sdoClosingCaseId: null })];
+  const vm = buildPackageDetailViewModel(pkg, baseObject(), baseWork(), [], [], [], [], [], [], readiness, []);
+  assert.equal(vm.sdo.canReturnToCorrection, true);
+});
+
+test('F8.3-17: buildPackageDetailViewModel — canReturnToCorrection is false once any SDO Case exists, even one currently unlocked (returned to PTO)', async () => {
+  const pkg = basePackage({ status: 'ACCEPTED_BY_CUSTOMER' });
+  const readiness = [baseReadiness({ documentationPackageId: 'package-1', packageLocked: false, sdoClosingCaseId: 'case-1' })];
+  const vm = buildPackageDetailViewModel(pkg, baseObject(), baseWork(), [], [], [], [], [], [], readiness, []);
+  assert.equal(vm.sdo.canReturnToCorrection, false, 'once a Case exists, only SDO/ADMIN\'s own "Вернуть в ПТО" starts a correction');
+});
+
+test('F8.3-17: buildPackageDetailViewModel — canReturnToCorrection is false for any status other than ACCEPTED_BY_CUSTOMER', async () => {
+  const pkg = basePackage({ status: 'PRESENTED' });
+  const vm = buildPackageDetailViewModel(pkg, baseObject(), baseWork(), [], [], [], [], [], [], [], []);
+  assert.equal(vm.sdo.canReturnToCorrection, false);
 });
 
 /* --------------------------------------------------------------------- *

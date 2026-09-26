@@ -113,5 +113,12 @@
 .portionRow {
   display: flex;
   justify-content: space-between;
+  align-items: center;
+  gap: var(--cc-p-space-12);
+}
+
+.portionRowTrailing {
+  display: flex;
+  align-items: center;
   gap: var(--cc-p-space-12);
 }

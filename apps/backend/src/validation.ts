@@ -64,3 +64,9 @@ export const sdoClosingAmountDto = z.object({ version, amount: money }).strict()
 // correcting an existing allocation; the first allocation for a Portion has
 // no prior row to conflict with. See setSdoClosingPortionAllocation(), service.ts.
 export const sdoClosingAllocationDto = z.object({ quantityPortionId: uuid, amount: money.refine(v => Number(v) > 0), version: version.optional() }).strict();
+// F8.3-19: cancelling an allocation always targets an existing row, so
+// version is required (unlike sdoClosingAllocationDto's own optional one).
+export const sdoClosingAllocationCancelDto = z.object({ version }).strict();
+// F8.3-17.2: PTO-only pre-handoff correction — same shape as sdoReturnToPtoDto
+// (SDO's own post-handoff "Вернуть в ПТО"), a separate dedicated operation.
+export const documentationPackageCorrectionDto = z.object({ version, comment: text.optional() }).strict();

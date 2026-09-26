@@ -55,7 +55,7 @@ async function harness() {
  * Package covering that portion through PRESENTED — i.e. readiness
  * criterion (a) satisfied, (b) not yet. Ends logged in as PTO.
  */
-async function setUpPresentedPackage(req: any, login: any, code: string, name: string) {
+async function setUpPresentedPackage(req: any, login: any, code: string, name: string, extraDocumentTypes: string[] = []) {
   const pm = await login('PROJECT_MANAGER');
   const dict = await req('dictionaries');
   const contractors = await req('contractors');
@@ -78,11 +78,20 @@ async function setUpPresentedPackage(req: any, login: any, code: string, name: s
   await req(`documentation-packages/${pkg.id}/portions`, { quantityPortionId: portion.id });
   const doc = await req(`documentation-packages/${pkg.id}/documents`, { type: 'AOSR' });
   await req(`documentation-documents/${doc.id}/versions`, { storageProvider: 'NONE' });
+  // F8.3-17: any further document must be added here, before PRESENTED —
+  // content is frozen from PRESENTED onward, so a caller wanting more than
+  // one document in the accepted snapshot cannot add it afterwards.
+  const extraDocs = [];
+  for (const type of extraDocumentTypes) {
+    const extraDoc = await req(`documentation-packages/${pkg.id}/documents`, { type });
+    await req(`documentation-documents/${extraDoc.id}/versions`, { storageProvider: 'NONE' });
+    extraDocs.push(extraDoc);
+  }
   let p = await req(`documentation-packages/${pkg.id}/status`, { status: 'PREPARING', version: pkg.version });
   p = await req(`documentation-packages/${pkg.id}/status`, { status: 'READY_FOR_PRESENTATION', version: p.version });
   p = await req(`documentation-packages/${pkg.id}/status`, { status: 'PRESENTED', version: p.version });
 
-  return { pm, pto, cc, object: o, work, unit, portion, pkg: p, doc };
+  return { pm, pto, cc, object: o, work, unit, portion, pkg: p, doc, extraDocs };
 }
 
 /** setUpPresentedPackage() + customer-acceptance registration (readiness true) + handoff. Ends logged in as PTO. */
@@ -268,29 +277,25 @@ test('F8.3-R02 (1): customer-acceptance snapshots the actual documentation_docum
   }
 });
 
-test('F8.3-R02 (2): a document version added after the accepted presentation cannot silently remain covered by the old acceptance', async () => {
+test('F8.3-R02/F8.3-17: a document version cannot be added directly to an ACCEPTED_BY_CUSTOMER package — content is frozen once accepted; only the correction flow can change it', async () => {
   const { app, req, login } = await harness();
   try {
     const { pkg, doc } = await setUpPresentedPackage(req, login, 'F83-R02-STALE-' + Date.now(), 'F8.3 версия после согласия');
     await login('PTO');
     const accepted = await req(`documentation-packages/${pkg.id}/customer-acceptance`, { version: pkg.version, acceptedDate: dt(0), reference: 'Акт-1' });
 
-    let snap = await req('snapshot');
-    let item = snap.sdoPackageReadiness.find((x: any) => x.documentationPackageId === accepted.id);
+    const snap = await req('snapshot');
+    const item = snap.sdoPackageReadiness.find((x: any) => x.documentationPackageId === accepted.id);
     assert.equal(item.ready, true, 'sanity check: ready immediately after a fresh, current acceptance');
 
-    // Nothing in createDocumentationVersion() requires returning to PTO or
-    // re-presenting first — the package stays ACCEPTED_BY_CUSTOMER and the
-    // original acceptance row is untouched (append-only), but it no longer
-    // represents what the customer actually saw.
-    await req(`documentation-documents/${doc.id}/versions`, { storageProvider: 'EXTERNAL_REFERENCE', storageReference: 'https://example.test/v2' });
-
-    snap = await req('snapshot');
-    item = snap.sdoPackageReadiness.find((x: any) => x.documentationPackageId === accepted.id);
-    assert.equal(item.ready, false, 'a new document version after acceptance must invalidate the now-stale snapshot');
-    assert.ok(item.missingReasons.some((r: string) => /заказчика/.test(r)));
-
-    await req(`documentation-packages/${accepted.id}/handoff-to-sdo`, { version: accepted.version }, 400);
+    // F8.3-17 corrective: content (a new document version) is frozen the
+    // moment the Package reaches ACCEPTED_BY_CUSTOMER — the backend now
+    // refuses this outright, rather than accepting it and letting
+    // readiness/handoff merely notice the mismatch afterwards (the weaker
+    // guarantee this test proved before F8.3-17 existed; see F8.3-R02 (3)
+    // for the correction flow this is now the only legal route to the same
+    // outcome).
+    await req(`documentation-documents/${doc.id}/versions`, { storageProvider: 'EXTERNAL_REFERENCE', storageReference: 'https://example.test/v2' }, 400);
   } finally {
     await app.close();
   }
@@ -336,11 +341,12 @@ test('F8.3-R02 (3): a new presentation/acceptance cycle creates a new immutable 
 test('F8.3-R02 (4): a Package with multiple Documentation Documents records every relevant accepted version in the snapshot', async () => {
   const { app, req, login } = await harness();
   try {
-    const { pkg, doc } = await setUpPresentedPackage(req, login, 'F83-R02-MULTI-' + Date.now(), 'F8.3 несколько документов');
+    // F8.3-17: the second document must exist before PRESENTED — content is
+    // frozen from PRESENTED onward (setUpPresentedPackage's own extraDocumentTypes
+    // parameter adds it at the right point, before the final status pushes).
+    const { pkg, doc, extraDocs } = await setUpPresentedPackage(req, login, 'F83-R02-MULTI-' + Date.now(), 'F8.3 несколько документов', ['ACT_CERTIFICATE']);
+    const doc2 = extraDocs[0];
     await login('PTO');
-    const doc2 = await req(`documentation-packages/${pkg.id}/documents`, { type: 'ACT_CERTIFICATE' });
-    await req(`documentation-documents/${doc2.id}/versions`, { storageProvider: 'NONE' });
-
     const accepted = await req(`documentation-packages/${pkg.id}/customer-acceptance`, { version: pkg.version, acceptedDate: dt(0), reference: 'Акт-Мульти' });
 
     const snap = await req('snapshot');
@@ -419,42 +425,47 @@ test('F8.3-R02b (3): a Package where every document has a version accepts normal
   }
 });
 
-test('F8.3-R02b (4,5,6): a versionless document added after handoff breaks readiness/re-handoff until it is versioned AND a fresh acceptance covers it', async () => {
+test('F8.3-17/F8.3-R02b: content is frozen after handoff — adding a Document requires the correction flow first; a fresh acceptance then covers every current document', async () => {
   const { app, req, login } = await harness();
   try {
     // Baseline: Document A/v1, accepted, handed off — the ordinary, fully
-    // current case (mirrors setUpHandedOffCase, but done inline so a second
-    // Documentation Document can be added to the same package afterwards).
+    // current case (mirrors setUpHandedOffCase).
     const { pkg, sdoCase } = await setUpHandedOffCase(req, login, 'F83-R02B-FLOW-' + Date.now(), 'F8.3 версия после передачи в СДО');
     await login('PTO');
 
-    // (4) Add Document B with NO version. The latest acceptance's snapshot
-    // still only covers A — now the Package also has a versionless B.
-    const docB = await req(`documentation-packages/${pkg.id}/documents`, { type: 'ACT_CERTIFICATE' });
-    let snap = await req('snapshot');
-    let item = snap.sdoPackageReadiness.find((x: any) => x.documentationPackageId === pkg.id);
-    assert.equal(item.ready, false, '(4) a versionless document breaks readiness even though A is still fully accepted');
-    // The readiness gate is checked before the "already handed off" gate, so
-    // this 400 is genuinely the coverage failure, not a re-handoff conflict.
-    await req(`documentation-packages/${pkg.id}/handoff-to-sdo`, { version: pkg.version }, 400);
+    // F8.3-17: content is frozen while ACCEPTED_BY_CUSTOMER and the Case
+    // holds the Package locked — adding a Document is refused outright,
+    // never silently accepted for readiness/handoff to notice afterwards.
+    await req(`documentation-packages/${pkg.id}/documents`, { type: 'ACT_CERTIFICATE' }, 400);
 
-    // (5) Give B a version, but do NOT re-present/re-accept. The existing
-    // acceptance record's snapshot still only names A's version — adding a
-    // version to B does not retroactively make the old snapshot cover it.
-    await req(`documentation-documents/${docB.id}/versions`, { storageProvider: 'NONE' });
-    snap = await req('snapshot');
-    item = snap.sdoPackageReadiness.find((x: any) => x.documentationPackageId === pkg.id);
-    assert.equal(item.ready, false, '(5) readiness remains false — the old acceptance snapshot does not name B\'s version');
-    await req(`documentation-packages/${pkg.id}/handoff-to-sdo`, { version: pkg.version }, 400);
-
-    // (6) Return to PTO, re-present, register a fresh acceptance — now
-    // resolved against BOTH current documents — and re-hand off.
+    // The only correction-start route once a Case exists is SDO's own
+    // "Вернуть в ПТО" (F8.3-17.2's own PTO pre-handoff correction is refused
+    // once any Case exists — proven separately elsewhere in this file).
     await login('SDO');
     const returned = await req(`sdo-closing-cases/${sdoCase.id}/return-to-pto`, { version: sdoCase.version });
     assert.equal(returned.packageLocked, false);
 
+    // Now CORRECTING — content is editable again: add Document B with no
+    // version yet. (4)
     await login('PTO');
+    const docB = await req(`documentation-packages/${pkg.id}/documents`, { type: 'ACT_CERTIFICATE' });
+    let snap = await req('snapshot');
+    let item = snap.sdoPackageReadiness.find((x: any) => x.documentationPackageId === pkg.id);
+    assert.equal(item.ready, false, '(4) a versionless Document B breaks readiness — the Package also left ACCEPTED_BY_CUSTOMER, so the old A-only acceptance is stale on both counts');
+
+    // (5) Give B a version — still CORRECTING (content-editable), no fresh
+    // acceptance registered yet, so readiness stays false.
+    await req(`documentation-documents/${docB.id}/versions`, { storageProvider: 'NONE' });
+    snap = await req('snapshot');
+    item = snap.sdoPackageReadiness.find((x: any) => x.documentationPackageId === pkg.id);
+    assert.equal(item.ready, false, '(5) readiness remains false until a fresh acceptance actually covers both documents');
+
+    // Re-present (content freezes again) and confirm handoff is still
+    // refused before the fresh acceptance exists.
     const p = await req(`documentation-packages/${pkg.id}/status`, { status: 'PRESENTED', version: pkg.version + 1 });
+    await req(`documentation-packages/${p.id}/handoff-to-sdo`, { version: p.version }, 400);
+
+    // Register the fresh acceptance — now resolved against BOTH current documents.
     const reaccepted = await req(`documentation-packages/${p.id}/customer-acceptance`, { version: p.version, acceptedDate: dt(0), reference: 'Акт-Полное-Покрытие' });
 
     snap = await req('snapshot');
@@ -469,6 +480,186 @@ test('F8.3-R02b (4,5,6): a versionless document added after handoff breaks readi
     assert.equal(item.ready, true, '(6) readiness is true once the fresh acceptance covers every current document');
     const relocked = await req(`documentation-packages/${reaccepted.id}/handoff-to-sdo`, { version: reaccepted.version });
     assert.equal(relocked.id, sdoCase.id, '(6) the same Case resumes');
+  } finally {
+    await app.close();
+  }
+});
+
+/* --------------------------------------------------------------------- *
+ * F8.3-17: Documentation Package content lifecycle                       *
+ * --------------------------------------------------------------------- */
+
+test('F8.3-17 (1,2,3): PRESENTED freezes Package content — create document, create version, link Portion are all rejected', async () => {
+  const { app, req, login } = await harness();
+  try {
+    const { pkg, doc, unit } = await setUpPresentedPackage(req, login, 'F83-17-PRESENTED-' + Date.now(), 'F8.3 заморозка: предъявлено');
+    await login('PROJECT_MANAGER');
+    const portion2 = await req(`execution-units/${unit.id}/portions`, { label: 'Секция B', plannedQuantity: 100 });
+    await login('PTO');
+    await req(`documentation-packages/${pkg.id}/documents`, { type: 'ACT_CERTIFICATE' }, 400);
+    await req(`documentation-documents/${doc.id}/versions`, { storageProvider: 'NONE' }, 400);
+    await req(`documentation-packages/${pkg.id}/portions`, { quantityPortionId: portion2.id }, 400);
+  } finally {
+    await app.close();
+  }
+});
+
+test('F8.3-17 (4,5,6): ACCEPTED_BY_CUSTOMER freezes Package content — create document, create version, link Portion are all rejected (no SDO Case involved yet)', async () => {
+  const { app, req, login } = await harness();
+  try {
+    const { pkg, doc, unit } = await setUpPresentedPackage(req, login, 'F83-17-ACCEPTED-' + Date.now(), 'F8.3 заморозка: принято заказчиком');
+    await login('PROJECT_MANAGER');
+    const portion2 = await req(`execution-units/${unit.id}/portions`, { label: 'Секция B', plannedQuantity: 100 });
+    await login('PTO');
+    const accepted = await req(`documentation-packages/${pkg.id}/customer-acceptance`, { version: pkg.version, acceptedDate: dt(0) });
+    assert.equal(accepted.status, 'ACCEPTED_BY_CUSTOMER');
+    await req(`documentation-packages/${accepted.id}/documents`, { type: 'ACT_CERTIFICATE' }, 400);
+    await req(`documentation-documents/${doc.id}/versions`, { storageProvider: 'NONE' }, 400);
+    await req(`documentation-packages/${accepted.id}/portions`, { quantityPortionId: portion2.id }, 400);
+  } finally {
+    await app.close();
+  }
+});
+
+test('F8.3-17 (7): RETURNED freezes Package content — create document is rejected', async () => {
+  const { app, req, login } = await harness();
+  try {
+    const { pkg } = await setUpPresentedPackage(req, login, 'F83-17-RETURNED-' + Date.now(), 'F8.3 заморозка: возвращено заказчиком');
+    await login('PTO');
+    const returned = await req(`documentation-packages/${pkg.id}/status`, { status: 'RETURNED', version: pkg.version });
+    assert.equal(returned.status, 'RETURNED');
+    await req(`documentation-packages/${returned.id}/documents`, { type: 'ACT_CERTIFICATE' }, 400);
+  } finally {
+    await app.close();
+  }
+});
+
+test('F8.3-17.2 (8,9,10,11): PTO-only pre-handoff correction — ACCEPTED_BY_CUSTOMER -> CORRECTING; ADMIN/PM/SDO/SC all refused; old acceptance/snapshot preserved', async () => {
+  const { app, req, login } = await harness();
+  try {
+    const { pkg, doc } = await setUpPresentedPackage(req, login, 'F83-17-PREHANDOFF-' + Date.now(), 'F8.3 корректировка до передачи');
+    await login('PTO');
+    const accepted = await req(`documentation-packages/${pkg.id}/customer-acceptance`, { version: pkg.version, acceptedDate: dt(0), reference: 'Акт-До-Передачи' });
+
+    // (9,10) non-PTO refused, Package untouched.
+    for (const role of ['ADMIN', 'PROJECT_MANAGER', 'SDO', 'CONSTRUCTION_CONTROL']) {
+      await login(role);
+      await req(`documentation-packages/${accepted.id}/correction`, { version: accepted.version }, 403);
+    }
+
+    // (8) PTO succeeds.
+    await login('PTO');
+    const corrected = await req(`documentation-packages/${accepted.id}/correction`, { version: accepted.version, comment: 'Ошибка в документе' });
+    assert.equal(corrected.status, 'CORRECTING');
+
+    // (11) the original acceptance record and its version snapshot are untouched.
+    const snap = await req('snapshot');
+    const acceptanceRecord = snap.documentationCustomerAcceptances.find((a: any) => a.documentationPackageId === pkg.id);
+    assert.equal(acceptanceRecord.reference, 'Акт-До-Передачи');
+    const versionLinks = snap.documentationCustomerAcceptanceVersions.filter((v: any) => v.customerAcceptanceId === acceptanceRecord.id);
+    assert.equal(versionLinks.length, 1);
+    const docVersion = snap.documentationVersions.find((v: any) => v.documentationDocumentId === doc.id);
+    assert.equal(versionLinks[0].documentationDocumentVersionId, docVersion.id);
+
+    const history = snap.documentationStatusHistory.filter((h: any) => h.documentationPackageId === pkg.id);
+    assert.ok(history.some((h: any) => h.fromStatus === 'ACCEPTED_BY_CUSTOMER' && h.toStatus === 'CORRECTING'));
+  } finally {
+    await app.close();
+  }
+});
+
+test('F8.3-17 (12,13,14): CORRECTING (via pre-handoff correction) allows content editing; re-presenting and a new acceptance create a new independent snapshot and restore readiness', async () => {
+  const { app, req, login } = await harness();
+  try {
+    const { pkg, doc } = await setUpPresentedPackage(req, login, 'F83-17-EDIT-' + Date.now(), 'F8.3 редактирование на корректировке');
+    await login('PTO');
+    const accepted = await req(`documentation-packages/${pkg.id}/customer-acceptance`, { version: pkg.version, acceptedDate: dt(0), reference: 'Акт-1' });
+    const corrected = await req(`documentation-packages/${accepted.id}/correction`, { version: accepted.version });
+    assert.equal(corrected.status, 'CORRECTING');
+
+    // (12) content is editable again.
+    const version2 = await req(`documentation-documents/${doc.id}/versions`, { storageProvider: 'EXTERNAL_REFERENCE', storageReference: 'https://example.test/v2' });
+    assert.equal(version2.versionNumber, 2);
+
+    // (13) re-present, register a new acceptance.
+    const presented = await req(`documentation-packages/${corrected.id}/status`, { status: 'PRESENTED', version: corrected.version });
+    const reaccepted = await req(`documentation-packages/${presented.id}/customer-acceptance`, { version: presented.version, acceptedDate: dt(0), reference: 'Акт-2' });
+
+    const snap = await req('snapshot');
+    const acceptances = snap.documentationCustomerAcceptances.filter((a: any) => a.documentationPackageId === pkg.id);
+    assert.equal(acceptances.length, 2, 'the earlier acceptance is preserved, a new independent one is created');
+    const latestAcceptance = acceptances[acceptances.length - 1];
+    const latestLinks = snap.documentationCustomerAcceptanceVersions.filter((v: any) => v.customerAcceptanceId === latestAcceptance.id);
+    assert.equal(latestLinks.length, 1);
+    assert.equal(latestLinks[0].documentationDocumentVersionId, version2.id, 'the new snapshot names the corrected version');
+
+    // (14) readiness is valid again.
+    const item = snap.sdoPackageReadiness.find((x: any) => x.documentationPackageId === pkg.id);
+    assert.equal(item.ready, true);
+    assert.equal(reaccepted.status, 'ACCEPTED_BY_CUSTOMER');
+  } finally {
+    await app.close();
+  }
+});
+
+test('F8.3-17.2 (15): once an SDO Case exists for the Package, PTO pre-handoff correction is refused — only "Вернуть в ПТО" from the Case can start a correction from then on', async () => {
+  const { app, req, login } = await harness();
+  try {
+    const { pkg } = await setUpHandedOffCase(req, login, 'F83-17-CASEEXISTS-' + Date.now(), 'F8.3 дело уже существует');
+    await login('PTO');
+    // The Package's status is only ever ACCEPTED_BY_CUSTOMER simultaneously
+    // with a Case existing while that Case is locked — returnSdoCaseToPto
+    // always moves the Package to CORRECTING in the same transaction as
+    // unlocking, so "case exists but unlocked, Package still ACCEPTED_BY_CUSTOMER"
+    // is unreachable by construction. This is the one reachable state, and
+    // it must reject.
+    await req(`documentation-packages/${pkg.id}/correction`, { version: pkg.version }, 400);
+  } finally {
+    await app.close();
+  }
+});
+
+test('F8.3-17 (18): a CLOSED Case\'s Package content cannot be changed — create document, create version and link Portion are all rejected', async () => {
+  const { app, req, login } = await harness();
+  try {
+    const { pkg, doc, unit, sdoCase } = await setUpHandedOffCase(req, login, 'F83-17-CLOSEDCONTENT-' + Date.now(), 'F8.3 контент закрытого дела');
+    await login('PROJECT_MANAGER');
+    const portion2 = await req(`execution-units/${unit.id}/portions`, { label: 'Секция B', plannedQuantity: 100 });
+    await login('SDO');
+    let c = await req(`sdo-closing-cases/${sdoCase.id}/status`, { version: sdoCase.version, status: 'VERIFICATION_PASSED' });
+    c = await req(`sdo-closing-cases/${c.id}/amount`, { version: c.version, amount: '500.00' });
+    c = await req(`sdo-closing-cases/${c.id}/status`, { version: c.version, status: 'CLOSED' });
+    assert.equal(c.status, 'CLOSED');
+
+    await login('PTO');
+    await req(`documentation-packages/${pkg.id}/documents`, { type: 'ACT_CERTIFICATE' }, 400);
+    await req(`documentation-documents/${doc.id}/versions`, { storageProvider: 'NONE' }, 400);
+    await req(`documentation-packages/${pkg.id}/portions`, { quantityPortionId: portion2.id }, 400);
+  } finally {
+    await app.close();
+  }
+});
+
+test('F8.3-17.3 (19): a deliberately stale/inconsistent acceptance state cannot reach CLOSED — revalidated at the CLOSED transition itself', async () => {
+  const { app, req, login } = await harness();
+  try {
+    // Dynamically imported, and only after harness() has set DB_MODE/PGLITE_DIR
+    // — see the other white-box tests in this file for why a static
+    // top-level import would break every test.
+    const { pool } = await import('../apps/backend/src/db');
+    const { pkg, doc, sdoCase } = await setUpHandedOffCase(req, login, 'F83-17-STALECLOSE-' + Date.now(), 'F8.3 закрытие при устаревшем согласии');
+
+    // White-box: simulate a hypothetical bug that adds a new document
+    // version directly at the database layer, bypassing the (now correctly
+    // enforced) content freeze — the only way to reach the state F8.3-17.3
+    // exists to guard against, since the ordinary API can no longer produce
+    // it at all (proven by F8.3-17 (18) above).
+    await pool.query("INSERT INTO documentation_document_versions(tenant_id,documentation_document_id,version_number,storage_provider,created_by) VALUES ($1,$2,2,'NONE',$3)", [pkg.tenantId, doc.id, doc.createdBy]);
+
+    await login('SDO');
+    let c = await req(`sdo-closing-cases/${sdoCase.id}/status`, { version: sdoCase.version, status: 'VERIFICATION_PASSED' });
+    c = await req(`sdo-closing-cases/${c.id}/amount`, { version: c.version, amount: '500.00' });
+    await req(`sdo-closing-cases/${c.id}/status`, { version: c.version, status: 'CLOSED' }, 400);
   } finally {
     await app.close();
   }
@@ -997,6 +1188,145 @@ test('F8.3-R05: returned-to-PTO also rejects correcting an EXISTING Portion allo
     assert.equal(returned.packageLocked, false);
 
     await req(`sdo-closing-cases/${sdoCase.id}/allocations`, { quantityPortionId: portion.id, amount: '150.00', version: allocation.version }, 400);
+  } finally {
+    await app.close();
+  }
+});
+
+/* --------------------------------------------------------------------- *
+ * F8.3-19: reversible Portion allocation (explicit cancellation)         *
+ * --------------------------------------------------------------------- */
+
+test('F8.3-19 (32,33,34,35): cancelling the only active allocation lets closing use the total amount alone, without deleting the allocation or its history', async () => {
+  const { app, req, login } = await harness();
+  try {
+    const { sdoCase, portion } = await setUpHandedOffCase(req, login, 'F83-19-CANCEL-' + Date.now(), 'F8.3 отмена распределения');
+    await login('SDO');
+    let c = await req(`sdo-closing-cases/${sdoCase.id}/status`, { version: sdoCase.version, status: 'VERIFICATION_PASSED' });
+    c = await req(`sdo-closing-cases/${c.id}/amount`, { version: c.version, amount: '1000.00' });
+    const allocation = await req(`sdo-closing-cases/${c.id}/allocations`, { quantityPortionId: portion.id, amount: '200.00' });
+
+    // (32) cancel it.
+    const cancelled = await req(`sdo-closing-cases/${c.id}/allocations/${portion.id}/cancel`, { version: allocation.version });
+    assert.ok(cancelled.cancelledAt, 'the row is marked cancelled, not deleted');
+    assert.ok(cancelled.cancelledBy);
+
+    // (33,35) closing now uses the total amount alone — the cancelled
+    // allocation no longer counts, where the un-cancelled 200 would have
+    // blocked CLOSED against a 1000 total.
+    const refreshed = (await req('snapshot')).sdoClosingCases.find((x: any) => x.id === c.id);
+    const closed = await req(`sdo-closing-cases/${c.id}/status`, { version: refreshed.version, status: 'CLOSED' });
+    assert.equal(closed.status, 'CLOSED');
+
+    // (34) the allocation row and its full CREATE->CANCEL history remain
+    // readable — never deleted.
+    const snap = await req('snapshot');
+    const stillThere = snap.sdoClosingPortionAllocations.find((a: any) => a.id === allocation.id);
+    assert.ok(stillThere, 'the allocation row itself is preserved, not deleted');
+    assert.ok(stillThere.cancelledAt);
+    const history = snap.sdoClosingPortionAllocationHistory.filter((h: any) => h.sdoClosingCaseId === c.id && h.quantityPortionId === portion.id);
+    assert.deepEqual(history.map((h: any) => h.operation), ['CREATE', 'CANCEL']);
+    assert.equal(history[0].previousAmount, null);
+    assert.equal(history[0].newAmount, '200.00');
+    assert.equal(history[1].previousAmount, '200.00');
+    assert.equal(history[1].newAmount, null);
+  } finally {
+    await app.close();
+  }
+});
+
+test('F8.3-19 (36): a zero total amount may also close after cancelling the only erroneous allocation', async () => {
+  const { app, req, login } = await harness();
+  try {
+    const { sdoCase, portion } = await setUpHandedOffCase(req, login, 'F83-19-ZERO-' + Date.now(), 'F8.3 нулевая сумма после отмены');
+    await login('SDO');
+    let c = await req(`sdo-closing-cases/${sdoCase.id}/status`, { version: sdoCase.version, status: 'VERIFICATION_PASSED' });
+    c = await req(`sdo-closing-cases/${c.id}/amount`, { version: c.version, amount: '0.00' });
+    const allocation = await req(`sdo-closing-cases/${c.id}/allocations`, { quantityPortionId: portion.id, amount: '50.00' });
+    await req(`sdo-closing-cases/${c.id}/allocations/${portion.id}/cancel`, { version: allocation.version });
+
+    const refreshed = (await req('snapshot')).sdoClosingCases.find((x: any) => x.id === c.id);
+    const closed = await req(`sdo-closing-cases/${c.id}/status`, { version: refreshed.version, status: 'CLOSED' });
+    assert.equal(closed.status, 'CLOSED');
+  } finally {
+    await app.close();
+  }
+});
+
+test('F8.3-19 (37): a restored (previously cancelled) allocation is active again and still participates in the exact-sum rule', async () => {
+  const { app, req, login } = await harness();
+  try {
+    const { sdoCase, portion } = await setUpHandedOffCase(req, login, 'F83-19-RESTORE-' + Date.now(), 'F8.3 восстановленное распределение');
+    await login('SDO');
+    let c = await req(`sdo-closing-cases/${sdoCase.id}/status`, { version: sdoCase.version, status: 'VERIFICATION_PASSED' });
+    c = await req(`sdo-closing-cases/${c.id}/amount`, { version: c.version, amount: '1000.00' });
+    const allocation = await req(`sdo-closing-cases/${c.id}/allocations`, { quantityPortionId: portion.id, amount: '200.00' });
+    const cancelled = await req(`sdo-closing-cases/${c.id}/allocations/${portion.id}/cancel`, { version: allocation.version });
+
+    // Restore it with a still-mismatched amount (400, not 1000).
+    const restored = await req(`sdo-closing-cases/${c.id}/allocations`, { quantityPortionId: portion.id, amount: '400.00', version: cancelled.version });
+    assert.equal(restored.cancelledAt, null, 'restoring clears the cancelled state');
+
+    const refreshed = (await req('snapshot')).sdoClosingCases.find((x: any) => x.id === c.id);
+    await req(`sdo-closing-cases/${c.id}/status`, { version: refreshed.version, status: 'CLOSED' }, 400);
+
+    const history = (await req('snapshot')).sdoClosingPortionAllocationHistory.filter((h: any) => h.sdoClosingCaseId === c.id && h.quantityPortionId === portion.id);
+    assert.deepEqual(history.map((h: any) => h.operation), ['CREATE', 'CANCEL', 'RESTORE']);
+  } finally {
+    await app.close();
+  }
+});
+
+test('F8.3-19 (38): a CLOSED Case refuses allocation cancellation — only after CLOSED -> ON_CORRECTION does cancellation succeed', async () => {
+  const { app, req, login } = await harness();
+  try {
+    const { sdoCase, portion } = await setUpHandedOffCase(req, login, 'F83-19-CLOSEDCANCEL-' + Date.now(), 'F8.3 отмена распределения закрытого дела');
+    await login('SDO');
+    let c = await req(`sdo-closing-cases/${sdoCase.id}/status`, { version: sdoCase.version, status: 'VERIFICATION_PASSED' });
+    c = await req(`sdo-closing-cases/${c.id}/amount`, { version: c.version, amount: '750.00' });
+    const allocation = await req(`sdo-closing-cases/${c.id}/allocations`, { quantityPortionId: portion.id, amount: '750.00' });
+
+    const refreshed = (await req('snapshot')).sdoClosingCases.find((x: any) => x.id === c.id);
+    c = await req(`sdo-closing-cases/${c.id}/status`, { version: refreshed.version, status: 'CLOSED' });
+    assert.equal(c.status, 'CLOSED');
+
+    await req(`sdo-closing-cases/${c.id}/allocations/${portion.id}/cancel`, { version: allocation.version }, 400);
+
+    const corrected = await req(`sdo-closing-cases/${c.id}/status`, { version: c.version, status: 'ON_CORRECTION', reason: 'Ошибка в распределении' });
+    const cancelled = await req(`sdo-closing-cases/${corrected.id}/allocations/${portion.id}/cancel`, { version: allocation.version });
+    assert.ok(cancelled.cancelledAt);
+  } finally {
+    await app.close();
+  }
+});
+
+test('F8.3-19 (39): returned-to-PTO also rejects cancelling an existing allocation', async () => {
+  const { app, req, login } = await harness();
+  try {
+    const { sdoCase, portion } = await setUpHandedOffCase(req, login, 'F83-19-RETURNEDCANCEL-' + Date.now(), 'F8.3 отмена при возврате в ПТО');
+    await login('SDO');
+    const allocation = await req(`sdo-closing-cases/${sdoCase.id}/allocations`, { quantityPortionId: portion.id, amount: '100.00' });
+    const returned = await req(`sdo-closing-cases/${sdoCase.id}/return-to-pto`, { version: sdoCase.version });
+    assert.equal(returned.packageLocked, false);
+
+    await req(`sdo-closing-cases/${sdoCase.id}/allocations/${portion.id}/cancel`, { version: allocation.version }, 400);
+  } finally {
+    await app.close();
+  }
+});
+
+test('F8.3-19: cancelling requires an existing, still-active allocation', async () => {
+  const { app, req, login } = await harness();
+  try {
+    const { sdoCase, portion } = await setUpHandedOffCase(req, login, 'F83-19-CANCELGUARDS-' + Date.now(), 'F8.3 отмена: защитные проверки');
+    await login('SDO');
+    // No allocation exists yet for this portion.
+    await req(`sdo-closing-cases/${sdoCase.id}/allocations/${portion.id}/cancel`, { version: 1 }, 400);
+
+    const allocation = await req(`sdo-closing-cases/${sdoCase.id}/allocations`, { quantityPortionId: portion.id, amount: '100.00' });
+    const cancelled = await req(`sdo-closing-cases/${sdoCase.id}/allocations/${portion.id}/cancel`, { version: allocation.version });
+    // Already cancelled.
+    await req(`sdo-closing-cases/${sdoCase.id}/allocations/${portion.id}/cancel`, { version: cancelled.version }, 400);
   } finally {
     await app.close();
   }

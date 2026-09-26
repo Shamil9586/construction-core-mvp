@@ -24,6 +24,8 @@ export interface SdoCaseDetailActionHandlers {
   onSetAmount: (amount: string) => Promise<void>;
   /** F8.3-R05 — `version` is required to correct an existing allocation, and must be omitted (undefined) to create the first one for a Portion. */
   onSetAllocation: (quantityPortionId: string, amount: string, version: number | undefined) => Promise<void>;
+  /** F8.3-19 — explicit, audited cancellation of an active allocation; the row is marked inactive, never deleted. Requires the allocation's current `version`. */
+  onCancelAllocation: (quantityPortionId: string, version: number) => Promise<void>;
   onAssignResponsible: (responsibleUserId: string) => Promise<void>;
   onReturnToPto: (comment: string | undefined) => Promise<void>;
   sdoUsers: UserSummary[];
@@ -227,6 +229,47 @@ function AllocationForm({
   );
 }
 
+/**
+ * F8.3-19 — a small, explicit control per allocated Portion: cancelling
+ * returns that Portion to "no active allocation" while the record itself is
+ * preserved (`allocationHistory` below shows the CANCEL row). Rendered only
+ * for a Portion with `canCancel` true (an active allocation exists) — a
+ * cancelled or never-allocated Portion has nothing to cancel.
+ */
+function CancelAllocationControl({
+  portionId,
+  version,
+  onSubmit,
+}: {
+  portionId: string;
+  version: number;
+  onSubmit: (quantityPortionId: string, version: number) => Promise<void>;
+}) {
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleClick() {
+    setPending(true);
+    setError(null);
+    try {
+      await onSubmit(portionId, version);
+    } catch (submitError) {
+      setError(errorMessage(submitError));
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <span className={styles.inlineForm}>
+      <button type="button" className={styles.actionButtonSecondary} onClick={handleClick} disabled={pending}>
+        {pending ? 'Отмена…' : 'Отменить распределение'}
+      </button>
+      {error ? <span className={styles.errorText}>{error}</span> : null}
+    </span>
+  );
+}
+
 function ResponsibleForm({
   sdoUsers,
   onSubmit,
@@ -389,7 +432,8 @@ export function SdoCaseDetail({
       <section className={styles.section}>
         <span className={[styles.sectionLabel, typeClass('label')].join(' ')}>Сумма закрытия</span>
         <span className={typeClass('body-strong')}>{viewModel.totalAmount}</span>
-        {actions && viewModel.packageLocked ? <AmountForm onSubmit={actions.onSetAmount} /> : null}
+        {/* F8.3-19: a CLOSED case must return to ON_CORRECTION first — the backend refuses this outright, same as F8.3-R04 already established for the case's own status. */}
+        {actions && viewModel.packageLocked && viewModel.rawStatus !== 'CLOSED' ? <AmountForm onSubmit={actions.onSetAmount} /> : null}
       </section>
 
       <section className={styles.section}>
@@ -401,7 +445,16 @@ export function SdoCaseDetail({
                 <span className={typeClass('body')}>
                   {portion.label} · {portion.plannedQuantity}
                 </span>
-                <span className={typeClass('body-strong')}>{portion.allocatedAmount ?? '—'}</span>
+                <span className={styles.portionRowTrailing}>
+                  <span className={typeClass('body-strong')}>{portion.allocatedAmount ?? '—'}</span>
+                  {actions && viewModel.packageLocked && viewModel.rawStatus !== 'CLOSED' && portion.canCancel ? (
+                    <CancelAllocationControl
+                      portionId={portion.id}
+                      version={portion.allocationVersion!}
+                      onSubmit={actions.onCancelAllocation}
+                    />
+                  ) : null}
+                </span>
               </li>
             ))}
           </ul>
@@ -409,7 +462,9 @@ export function SdoCaseDetail({
           <span className={[styles.empty, typeClass('body')].join(' ')}>Пакет не покрывает ни одного участка</span>
         )}
         <span className={[typeClass('body'), styles.secondary].join(' ')}>Распределено: {viewModel.allocatedSum}</span>
-        {actions && viewModel.packageLocked ? <AllocationForm portions={viewModel.portions} onSubmit={actions.onSetAllocation} /> : null}
+        {actions && viewModel.packageLocked && viewModel.rawStatus !== 'CLOSED' ? (
+          <AllocationForm portions={viewModel.portions} onSubmit={actions.onSetAllocation} />
+        ) : null}
       </section>
 
       <section className={styles.section}>
@@ -468,7 +523,7 @@ export function SdoCaseDetail({
             {viewModel.allocationHistory.map((entry) => (
               <li key={entry.id} className={typeClass('body')}>
                 <span className={styles.secondary}>{entry.changedAt}</span> · {entry.portionLabel} ·{' '}
-                {entry.previousAmount} → {entry.newAmount}
+                {entry.previousAmount} → {entry.newAmount} · {entry.operationLabel}
               </li>
             ))}
           </ul>

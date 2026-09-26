@@ -190,3 +190,52 @@ test('F8.3-R02b: isCustomerAcceptanceSnapshotCurrent — a versionless document 
   // rises to 2 but currentVersionIds is still just ['a-v1'] — no longer current.
   assert.equal(isCustomerAcceptanceSnapshotCurrent({ acceptedVersionIds: ['a-v1'], currentDocumentCount: 2, currentVersionIds: ['a-v1'] }), false);
 });
+
+/* --------------------------------------------------------------------- *
+ * F8.3-17: canMutateDocumentationPackageContent — the one shared content-  *
+ * freeze gate every content mutation route calls                         *
+ * --------------------------------------------------------------------- */
+
+test('F8.3-17: canMutateDocumentationPackageContent — allowed in every content-editable status with no SDO Case', async () => {
+  const { canMutateDocumentationPackageContent } = await import('../packages/domain');
+  for (const packageStatus of ['DRAFT', 'PREPARING', 'READY_FOR_PRESENTATION', 'CORRECTING']) {
+    const result = canMutateDocumentationPackageContent({ packageStatus, sdoCaseExists: false, sdoCasePackageLocked: false });
+    assert.equal(result.allowed, true, packageStatus);
+    assert.equal(result.reason, null, packageStatus);
+  }
+});
+
+test('F8.3-17: canMutateDocumentationPackageContent — rejected in every content-frozen status, even with no SDO Case', async () => {
+  const { canMutateDocumentationPackageContent } = await import('../packages/domain');
+  for (const packageStatus of ['PRESENTED', 'ACCEPTED_BY_CUSTOMER', 'RETURNED']) {
+    const result = canMutateDocumentationPackageContent({ packageStatus, sdoCaseExists: false, sdoCasePackageLocked: false });
+    assert.equal(result.allowed, false, packageStatus);
+    assert.equal(typeof result.reason, 'string', packageStatus);
+  }
+});
+
+test('F8.3-17: canMutateDocumentationPackageContent — a locked SDO Case freezes content even while the Package status itself reads CORRECTING', async () => {
+  const { canMutateDocumentationPackageContent } = await import('../packages/domain');
+  // Belt-and-suspenders: package_locked=true must never be second-guessed by
+  // packageStatus, since the two are expected to never actually disagree in
+  // practice, but the gate must not rely on that.
+  const result = canMutateDocumentationPackageContent({ packageStatus: 'CORRECTING', sdoCaseExists: true, sdoCasePackageLocked: true });
+  assert.equal(result.allowed, false);
+  assert.equal(typeof result.reason, 'string');
+});
+
+test('F8.3-17: canMutateDocumentationPackageContent — an SDO Case that exists but is unlocked (returned to PTO) does not itself block content-editable statuses', async () => {
+  const { canMutateDocumentationPackageContent } = await import('../packages/domain');
+  const result = canMutateDocumentationPackageContent({ packageStatus: 'CORRECTING', sdoCaseExists: true, sdoCasePackageLocked: false });
+  assert.equal(result.allowed, true);
+  assert.equal(result.reason, null);
+});
+
+test('F8.3-17: canMutateDocumentationPackageContent — a locked SDO Case is irrelevant once the Package status itself already rejects (no double-reason ambiguity)', async () => {
+  const { canMutateDocumentationPackageContent } = await import('../packages/domain');
+  // PRESENTED already rejects on status alone — this pins that the status
+  // check fires first, matching the function's own read order.
+  const result = canMutateDocumentationPackageContent({ packageStatus: 'PRESENTED', sdoCaseExists: true, sdoCasePackageLocked: true });
+  assert.equal(result.allowed, false);
+  assert.match(result.reason ?? '', /PRESENTED/);
+});

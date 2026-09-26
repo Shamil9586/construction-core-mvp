@@ -109,6 +109,16 @@ export function PackageDetailRoute() {
                   await documentationApi.handoffDocumentationPackageToSdo(pkg.id, pkg.version, comment);
                   refetch();
                 },
+                // F8.3-17: "Вернуть на корректировку" — PTO's own,
+                // pre-handoff-only route back to CORRECTING. The backend
+                // itself rejects this once any SDO Case exists for the
+                // package, and refuses it outright for any role but PTO
+                // (ADMIN included), matching the same PTO-only carve-out
+                // as onRegisterCustomerAcceptance/onHandoffToSdo above.
+                onReturnToCorrection: async (comment: string | undefined) => {
+                  await documentationApi.returnDocumentationPackageToCorrection(pkg.id, pkg.version, comment);
+                  refetch();
+                },
               }
             : {}),
         }

@@ -92,4 +92,16 @@ export class DocumentationController {
         const d = V.sdoHandoffDto.parse(b);
         return this.service.handoffDocumentationPackageToSdo(await authenticate(r), V.uuid.parse(id), d);
     }
+
+    /**
+     * F8.3-17.2 — PTO-only pre-handoff correction: ACCEPTED_BY_CUSTOMER ->
+     * CORRECTING, refused outright once any SDO Case exists for the Package
+     * (that Case's own "Вернуть в ПТО", sdo-closing.controller.ts, is the
+     * only correction-start route from then on).
+     */
+    @Post('documentation-packages/:id/correction')
+    async returnToCorrection(@Req() r: any, @Param('id') id: string, @Body() b: any) {
+        const d = V.documentationPackageCorrectionDto.parse(b);
+        return this.service.returnDocumentationPackageToCorrection(await authenticate(r), V.uuid.parse(id), d);
+    }
 }

@@ -48,6 +48,28 @@ export function allowedNextSdoClosingStatuses(current: SdoClosingStatus): SdoClo
   }
 }
 
+/**
+ * F8.3-19 — one allocation-history row's own operation, for display.
+ * `SdoClosingPortionAllocationOperation` is a `Known<T>` union (the column is
+ * plain `text`), so an unrecognised value falls back to the raw string
+ * rather than throwing, the same convention `scheduleStatusPresentation`
+ * (`view-models/status.ts`) already uses for its own `Known<T>` column.
+ */
+function allocationOperationLabel(operation: SdoClosingPortionAllocationHistoryEntry['operation']): string {
+  switch (operation) {
+    case 'CREATE':
+      return 'Создано';
+    case 'CORRECT':
+      return 'Исправлено';
+    case 'CANCEL':
+      return 'Отменено';
+    case 'RESTORE':
+      return 'Восстановлено';
+    default:
+      return operation;
+  }
+}
+
 /** The action button's own label for moving *to* this status — never the status badge's own label, which describes a state, not an action. */
 export function sdoClosingStatusActionLabel(next: SdoClosingStatus): string {
   switch (next) {
@@ -70,10 +92,25 @@ export interface SdoCaseDetailPortionViewModel {
   id: string;
   label: string;
   plannedQuantity: string;
-  /** `null` exactly when this covered portion has no allocation of its own yet — "optional". */
+  /**
+   * `null` exactly when this covered portion has no *active* allocation —
+   * either none was ever created, or the one that existed was cancelled
+   * (F8.3-19). A cancelled allocation reads identically to "never
+   * allocated" here; its own record is never lost, only excluded from this
+   * display and from `allocatedSum`/the exact-sum CLOSED rule.
+   */
   allocatedAmount: string | null;
-  /** F8.3-R05 — the existing allocation's own `version`, required to correct it; `null` alongside `allocatedAmount === null` (nothing to correct yet). */
+  /**
+   * F8.3-R05, extended by F8.3-19 — the current row's own `version`,
+   * required by the backend whenever ANY row exists for this (Case,
+   * Portion) pair, active or cancelled (optimistic concurrency covers a
+   * RESTORE exactly like a CORRECT). `null` only alongside
+   * `allocatedAmount === null` AND no row has ever existed at all — the
+   * one case `onSetAllocation` must omit `version` for.
+   */
   allocationVersion: number | null;
+  /** F8.3-19 — true exactly when there is a currently active allocation to cancel; false both when none was ever created and when the existing one is already cancelled. */
+  canCancel: boolean;
 }
 
 export interface SdoCaseDetailStatusHistoryItem {
@@ -98,12 +135,13 @@ export interface SdoCaseDetailAmountHistoryItem {
   changedAt: string;
 }
 
-/** F8.3-R05 — one corrected-in-place Portion allocation, named by its Portion label (there is no case-wide total here, unlike amount history). */
+/** F8.3-R05, extended by F8.3-19 — one Portion allocation history row, named by its Portion label (there is no case-wide total here, unlike amount history). `newAmount` reads as `formatMoney(null)`'s own placeholder exactly for a CANCEL row — there is no new effective amount to show. */
 export interface SdoCaseDetailAllocationHistoryItem {
   id: string;
   portionLabel: string;
   previousAmount: string;
   newAmount: string;
+  operationLabel: string;
   changedAt: string;
 }
 
@@ -154,9 +192,17 @@ export function buildSdoCaseDetailViewModel(
   // bridge to this, never `documentationPackagePortions` directly, which
   // SDO's own snapshot omits entirely (canAccessDocumentation()).
   const coveredPortionIds = new Set(sdoCase.coveredQuantityPortionIds);
+  // `allocationByPortion` deliberately keeps a cancelled row too (there is at
+  // most one row per Portion regardless of active/cancelled — the database's
+  // own uniqueness) so its `version` stays available for `onSetAllocation`
+  // to RESTORE it; only the *active* subset below feeds `allocatedSum` and
+  // each portion's own displayed `allocatedAmount` — F8.3-19's own rule that
+  // CLOSED's exact-sum check, and this same sum, count active allocations
+  // only, never a cancelled one silently still "present".
   const ownAllocations = allocations.filter((a) => a.sdoClosingCaseId === sdoCase.id);
   const allocationByPortion = new Map(ownAllocations.map((a) => [a.quantityPortionId, a]));
-  const allocatedSum = ownAllocations.reduce((sum, a) => sum.add(a.amount), new Decimal(0));
+  const activeAllocations = ownAllocations.filter((a) => !a.cancelledAt);
+  const allocatedSum = activeAllocations.reduce((sum, a) => sum.add(a.amount), new Decimal(0));
 
   const ownStatusHistory = statusHistory
     .filter((entry) => entry.sdoClosingCaseId === sdoCase.id)
@@ -196,15 +242,17 @@ export function buildSdoCaseDetailViewModel(
       .map((portion) => {
         const unit = unitById.get(portion.executionUnitId);
         const allocation = allocationByPortion.get(portion.id);
+        const isActive = !!allocation && !allocation.cancelledAt;
         return {
           id: portion.id,
           label: portion.label,
           plannedQuantity: formatQuantityWithUnit(portion.plannedQuantity, unit?.unit ?? ''),
-          allocatedAmount: allocation ? formatMoney(allocation.amount) : null,
+          allocatedAmount: isActive ? formatMoney(allocation!.amount) : null,
           allocationVersion: allocation ? allocation.version : null,
+          canCancel: isActive,
         };
       }),
-    allocatedSum: formatMoney(allocatedSum.isZero() && ownAllocations.length === 0 ? null : allocatedSum.toFixed(2)),
+    allocatedSum: formatMoney(allocatedSum.isZero() && activeAllocations.length === 0 ? null : allocatedSum.toFixed(2)),
     statusHistory: ownStatusHistory.map((entry) => ({
       id: entry.id,
       fromStatus: sdoClosingStatusPresentation(entry.fromStatus),
@@ -228,7 +276,10 @@ export function buildSdoCaseDetailViewModel(
       id: entry.id,
       portionLabel: portionLabelById.get(entry.quantityPortionId) ?? 'Участок не найден',
       previousAmount: formatMoney(entry.previousAmount),
+      // `newAmount` is `null` exactly for a CANCEL row (F8.3-19) —
+      // formatMoney's own placeholder reads correctly as "no new amount".
       newAmount: formatMoney(entry.newAmount),
+      operationLabel: allocationOperationLabel(entry.operation),
       changedAt: formatDate(entry.changedAt),
     })),
   };
