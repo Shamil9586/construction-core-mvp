@@ -17,7 +17,7 @@ order below wins, highest first:
 4. Existing repository conventions
 5. Impeccable
 6. `design-taste-frontend`
-7. Motion (not installed — see below)
+7. Motion (`.claude/skills/motion` — skill text only, no MCP server; see below)
 
 These skills are **advisory**. They must never be treated as authorities over
 the items above, and must never be used to change:
@@ -86,7 +86,7 @@ not be used to push this product toward oversized hero typography, excessive
 whitespace, decorative gradients, novelty navigation, excessive card nesting,
 reduced information density, or marketing-style composition.
 
-## Motion (official `motion-react` skill) — not installed
+## Motion
 
 The task that requested this integration named an official Motion skill
 `motion-react` at `https://motion.dev/docs/react-app-builders`. That page and
@@ -96,13 +96,28 @@ coding agents is **Motion AI Kit** (`motion.dev/docs/ai-kit`,
 skill is named `motion` (not `motion-react`) and whose installer also
 registers Motion's hosted MCP servers — a materially larger, network-service
 footprint than "install one advisory skill," and one this task's own scope
-rules did not authorize. See the integration report for details and the
-decision this needs before Motion is added.
+rules did not authorize.
 
-Until that decision is made: no Motion skill, MCP server, or the `motion` npm
-package is present in this repository. When one is installed, it stays
-subordinate to usability (drawer/panel opens, disclosure, status feedback,
-queue add/remove, success/error feedback, subtle layout transitions — not
+What's installed here is a deliberately narrower slice: `SKILL.md` and the
+static `best-practices/*.md` reference (vanilla JS, React, Vue, Base UI/Radix)
+copied verbatim from the official `motion-ai` package, under
+`.claude/skills/motion/`. No MCP server is registered, no `add-mcp`-managed
+config was written, and the `motion` npm package was **not** added to the
+application. This is intentional, not an oversight: the upstream `SKILL.md`
+itself documents this exact degraded mode ("If the Motion MCP server is
+unavailable: `best-practices/` is self-contained and works with no server at
+all — use it directly... If it is missing, tell the user the Motion MCP
+server is not connected"). Anything in the skill that depends on the MCP
+server (doc/example search, CSS spring generation, MotionScore performance
+audits, the visual transition editor, and the "Upgrading Motion" workflow)
+is unavailable until a human deliberately decides to install Motion AI Kit's
+full MCP integration — a separate decision from this one, in scope for a
+future workstream, not this one.
+
+Regardless of how much of Motion ends up installed, it stays subordinate to
+usability (drawer/panel opens, disclosure, status feedback, queue
+add/remove, success/error feedback, subtle layout transitions — not
 decorative page transitions, parallax, magnetic effects, bounce-heavy
 interaction, or continuous background animation), prefers CSS for simple
-transitions, and must respect `prefers-reduced-motion`.
+transitions, and must respect `prefers-reduced-motion`. No animation has been
+implemented in Construction Core as part of this integration.
