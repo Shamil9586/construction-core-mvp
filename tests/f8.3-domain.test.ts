@@ -146,26 +146,47 @@ test('F8.3: SdoClosingAllocationService.canClose — an over-allocation sum also
 
 test('F8.3-R02: isCustomerAcceptanceSnapshotCurrent — current when the accepted set exactly matches the current set (order-independent)', async () => {
   const { isCustomerAcceptanceSnapshotCurrent } = await import('../packages/domain');
-  assert.equal(isCustomerAcceptanceSnapshotCurrent(['v1', 'v2'], ['v2', 'v1']), true);
+  assert.equal(isCustomerAcceptanceSnapshotCurrent({ acceptedVersionIds: ['v1', 'v2'], currentDocumentCount: 2, currentVersionIds: ['v2', 'v1'] }), true);
 });
 
-test('F8.3-R02: isCustomerAcceptanceSnapshotCurrent — both empty (a package with no versioned documents) is vacuously current', async () => {
+test('F8.3-R02b: isCustomerAcceptanceSnapshotCurrent — a Package with zero Documentation Documents is never current (nothing to accept)', async () => {
   const { isCustomerAcceptanceSnapshotCurrent } = await import('../packages/domain');
-  assert.equal(isCustomerAcceptanceSnapshotCurrent([], []), true);
+  assert.equal(isCustomerAcceptanceSnapshotCurrent({ acceptedVersionIds: [], currentDocumentCount: 0, currentVersionIds: [] }), false);
 });
 
 test('F8.3-R02: isCustomerAcceptanceSnapshotCurrent — not current once a document gets a new version (the current id is no longer the accepted one)', async () => {
   const { isCustomerAcceptanceSnapshotCurrent } = await import('../packages/domain');
   // Same document, accepted at v1's id, but v2 now exists and is current.
-  assert.equal(isCustomerAcceptanceSnapshotCurrent(['v1-id'], ['v2-id']), false);
+  assert.equal(isCustomerAcceptanceSnapshotCurrent({ acceptedVersionIds: ['v1-id'], currentDocumentCount: 1, currentVersionIds: ['v2-id'] }), false);
 });
 
-test('F8.3-R02: isCustomerAcceptanceSnapshotCurrent — not current when a new document was added to the package after acceptance', async () => {
+test('F8.3-R02: isCustomerAcceptanceSnapshotCurrent — not current when a new, already-versioned document was added to the package after acceptance', async () => {
   const { isCustomerAcceptanceSnapshotCurrent } = await import('../packages/domain');
-  assert.equal(isCustomerAcceptanceSnapshotCurrent(['v1'], ['v1', 'v2-new-doc']), false);
+  assert.equal(isCustomerAcceptanceSnapshotCurrent({ acceptedVersionIds: ['v1'], currentDocumentCount: 2, currentVersionIds: ['v1', 'v2-new-doc'] }), false);
 });
 
 test('F8.3-R02: isCustomerAcceptanceSnapshotCurrent — not current when the accepted snapshot covers more than the package currently has', async () => {
   const { isCustomerAcceptanceSnapshotCurrent } = await import('../packages/domain');
-  assert.equal(isCustomerAcceptanceSnapshotCurrent(['v1', 'v2'], ['v1']), false);
+  assert.equal(isCustomerAcceptanceSnapshotCurrent({ acceptedVersionIds: ['v1', 'v2'], currentDocumentCount: 1, currentVersionIds: ['v1'] }), false);
+});
+
+/* --------------------------------------------------------------------- *
+ * F8.3-R02b corrective: every current document must have a version      *
+ * --------------------------------------------------------------------- */
+
+test('F8.3-R02b: isCustomerAcceptanceSnapshotCurrent — not current when a document has no version at all, even if the accepted set matches every version that DOES exist', async () => {
+  const { isCustomerAcceptanceSnapshotCurrent } = await import('../packages/domain');
+  // Document A has v1 (accepted); Document B exists but has no version yet.
+  // acceptedVersionIds and currentVersionIds are both ['a-v1'] — equal sets —
+  // but currentDocumentCount (2) does not match currentVersionIds.length (1).
+  assert.equal(isCustomerAcceptanceSnapshotCurrent({ acceptedVersionIds: ['a-v1'], currentDocumentCount: 2, currentVersionIds: ['a-v1'] }), false);
+});
+
+test('F8.3-R02b: isCustomerAcceptanceSnapshotCurrent — a versionless document added after acceptance immediately breaks currency, even though both id arrays are unchanged', async () => {
+  const { isCustomerAcceptanceSnapshotCurrent } = await import('../packages/domain');
+  // Before: one document, one version, accepted — current.
+  assert.equal(isCustomerAcceptanceSnapshotCurrent({ acceptedVersionIds: ['a-v1'], currentDocumentCount: 1, currentVersionIds: ['a-v1'] }), true);
+  // After a second, versionless document is added: currentDocumentCount
+  // rises to 2 but currentVersionIds is still just ['a-v1'] — no longer current.
+  assert.equal(isCustomerAcceptanceSnapshotCurrent({ acceptedVersionIds: ['a-v1'], currentDocumentCount: 2, currentVersionIds: ['a-v1'] }), false);
 });

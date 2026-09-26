@@ -358,6 +358,123 @@ test('F8.3-R02 (4): a Package with multiple Documentation Documents records ever
 });
 
 /* --------------------------------------------------------------------- *
+ * F8.3-R02b corrective: every current document must have a version       *
+ * --------------------------------------------------------------------- */
+
+test('F8.3-R02b (1): customer-acceptance is refused when a Documentation Document has no version at all', async () => {
+  const { app, req, login } = await harness();
+  try {
+    const pm = await login('PROJECT_MANAGER');
+    const dict = await req('dictionaries');
+    const contractors = await req('contractors');
+    await login('TECHNICAL_DIRECTOR');
+    const o = await req('objects', { externalCode: 'F83-R02B-NOVER-' + Date.now(), name: 'F8.3 документ без версии', address: 'Тест, 1', organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] });
+    await login('PROJECT_MANAGER');
+    const work = await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: pm.id, name: 'Работа', unit: 'м²', plannedQuantity: 100, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '20000' });
+    const pto = await login('PTO');
+    const pkg = await req('documentation-packages', { objectWorkId: work.id, responsibleUserId: pto.id });
+    // Document A is created but never given a version — the exact Case A
+    // from the corrective report.
+    await req(`documentation-packages/${pkg.id}/documents`, { type: 'AOSR' });
+    let p = await req(`documentation-packages/${pkg.id}/status`, { status: 'PREPARING', version: pkg.version });
+    p = await req(`documentation-packages/${p.id}/status`, { status: 'READY_FOR_PRESENTATION', version: p.version });
+    p = await req(`documentation-packages/${p.id}/status`, { status: 'PRESENTED', version: p.version });
+
+    await req(`documentation-packages/${p.id}/customer-acceptance`, { version: p.version, acceptedDate: dt(0) }, 400);
+  } finally {
+    await app.close();
+  }
+});
+
+test('F8.3-R02b (2): customer-acceptance is refused when the Package has zero Documentation Documents', async () => {
+  const { app, req, login } = await harness();
+  try {
+    const pm = await login('PROJECT_MANAGER');
+    const dict = await req('dictionaries');
+    const contractors = await req('contractors');
+    await login('TECHNICAL_DIRECTOR');
+    const o = await req('objects', { externalCode: 'F83-R02B-NODOC-' + Date.now(), name: 'F8.3 пакет без документов', address: 'Тест, 1', organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] });
+    await login('PROJECT_MANAGER');
+    const work = await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: pm.id, name: 'Работа', unit: 'м²', plannedQuantity: 100, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '20000' });
+    const pto = await login('PTO');
+    const pkg = await req('documentation-packages', { objectWorkId: work.id, responsibleUserId: pto.id });
+    let p = await req(`documentation-packages/${pkg.id}/status`, { status: 'PREPARING', version: pkg.version });
+    p = await req(`documentation-packages/${p.id}/status`, { status: 'READY_FOR_PRESENTATION', version: p.version });
+    p = await req(`documentation-packages/${p.id}/status`, { status: 'PRESENTED', version: p.version });
+
+    await req(`documentation-packages/${p.id}/customer-acceptance`, { version: p.version, acceptedDate: dt(0) }, 400);
+  } finally {
+    await app.close();
+  }
+});
+
+test('F8.3-R02b (3): a Package where every document has a version accepts normally — the coverage guard does not block the valid case', async () => {
+  const { app, req, login } = await harness();
+  try {
+    const { pkg } = await setUpPresentedPackage(req, login, 'F83-R02B-VALID-' + Date.now(), 'F8.3 валидный пакет (полное покрытие)');
+    const accepted = await req(`documentation-packages/${pkg.id}/customer-acceptance`, { version: pkg.version, acceptedDate: dt(0), reference: 'Акт-Валид' });
+    assert.equal(accepted.status, 'ACCEPTED_BY_CUSTOMER');
+  } finally {
+    await app.close();
+  }
+});
+
+test('F8.3-R02b (4,5,6): a versionless document added after handoff breaks readiness/re-handoff until it is versioned AND a fresh acceptance covers it', async () => {
+  const { app, req, login } = await harness();
+  try {
+    // Baseline: Document A/v1, accepted, handed off — the ordinary, fully
+    // current case (mirrors setUpHandedOffCase, but done inline so a second
+    // Documentation Document can be added to the same package afterwards).
+    const { pkg, sdoCase } = await setUpHandedOffCase(req, login, 'F83-R02B-FLOW-' + Date.now(), 'F8.3 версия после передачи в СДО');
+    await login('PTO');
+
+    // (4) Add Document B with NO version. The latest acceptance's snapshot
+    // still only covers A — now the Package also has a versionless B.
+    const docB = await req(`documentation-packages/${pkg.id}/documents`, { type: 'ACT_CERTIFICATE' });
+    let snap = await req('snapshot');
+    let item = snap.sdoPackageReadiness.find((x: any) => x.documentationPackageId === pkg.id);
+    assert.equal(item.ready, false, '(4) a versionless document breaks readiness even though A is still fully accepted');
+    // The readiness gate is checked before the "already handed off" gate, so
+    // this 400 is genuinely the coverage failure, not a re-handoff conflict.
+    await req(`documentation-packages/${pkg.id}/handoff-to-sdo`, { version: pkg.version }, 400);
+
+    // (5) Give B a version, but do NOT re-present/re-accept. The existing
+    // acceptance record's snapshot still only names A's version — adding a
+    // version to B does not retroactively make the old snapshot cover it.
+    await req(`documentation-documents/${docB.id}/versions`, { storageProvider: 'NONE' });
+    snap = await req('snapshot');
+    item = snap.sdoPackageReadiness.find((x: any) => x.documentationPackageId === pkg.id);
+    assert.equal(item.ready, false, '(5) readiness remains false — the old acceptance snapshot does not name B\'s version');
+    await req(`documentation-packages/${pkg.id}/handoff-to-sdo`, { version: pkg.version }, 400);
+
+    // (6) Return to PTO, re-present, register a fresh acceptance — now
+    // resolved against BOTH current documents — and re-hand off.
+    await login('SDO');
+    const returned = await req(`sdo-closing-cases/${sdoCase.id}/return-to-pto`, { version: sdoCase.version });
+    assert.equal(returned.packageLocked, false);
+
+    await login('PTO');
+    const p = await req(`documentation-packages/${pkg.id}/status`, { status: 'PRESENTED', version: pkg.version + 1 });
+    const reaccepted = await req(`documentation-packages/${p.id}/customer-acceptance`, { version: p.version, acceptedDate: dt(0), reference: 'Акт-Полное-Покрытие' });
+
+    snap = await req('snapshot');
+    const acceptanceRecord = snap.documentationCustomerAcceptances.find((a: any) => a.documentationPackageId === pkg.id && a.reference === 'Акт-Полное-Покрытие');
+    const versionLinks = snap.documentationCustomerAcceptanceVersions.filter((v: any) => v.customerAcceptanceId === acceptanceRecord.id);
+    const docAVersion = snap.documentationDocuments.find((d: any) => d.documentationPackageId === pkg.id && d.id !== docB.id);
+    const aVersion = snap.documentationVersions.find((v: any) => v.documentationDocumentId === docAVersion.id);
+    const bVersion = snap.documentationVersions.find((v: any) => v.documentationDocumentId === docB.id);
+    assert.deepEqual(versionLinks.map((v: any) => v.documentationDocumentVersionId).sort(), [aVersion.id, bVersion.id].sort(), '(6) the new snapshot names both A-v1 and B-v1');
+
+    item = snap.sdoPackageReadiness.find((x: any) => x.documentationPackageId === pkg.id);
+    assert.equal(item.ready, true, '(6) readiness is true once the fresh acceptance covers every current document');
+    const relocked = await req(`documentation-packages/${reaccepted.id}/handoff-to-sdo`, { version: reaccepted.version });
+    assert.equal(relocked.id, sdoCase.id, '(6) the same Case resumes');
+  } finally {
+    await app.close();
+  }
+});
+
+/* --------------------------------------------------------------------- *
  * 5-6: customer documentation acceptance registration                    *
  * --------------------------------------------------------------------- */
 

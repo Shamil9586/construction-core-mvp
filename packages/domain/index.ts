@@ -245,11 +245,36 @@ export function resolvePackageSdoReadiness(input: {
 // ReadService.snapshot()'s readiness computation (service.ts/read-service.ts),
 // so the two cannot diverge — the same discipline resolvePackageSdoReadiness
 // itself already applies.
-export function isCustomerAcceptanceSnapshotCurrent(acceptedDocumentVersionIds: string[], currentDocumentVersionIds: string[]): boolean {
-    if (acceptedDocumentVersionIds.length !== currentDocumentVersionIds.length)
+//
+// F8.3-R02b corrective: comparing acceptedVersionIds against
+// currentVersionIds alone cannot detect a document with NO version at all —
+// such a document contributes nothing to either array, so a package with
+// "Document A (has v1), Document B (no version yet)" could read as current
+// against a snapshot that only ever covered A, and adding a brand-new,
+// versionless Document B after acceptance would not change either array
+// either. `currentDocumentCount` is the fix: the caller passes the Package's
+// *total* current document count (not merely how many happen to have a
+// version), so a document with no version — whether present at registration
+// (never actually reachable: registerDocumentationCustomerAcceptance()
+// itself now refuses to register in that case) or added afterwards — makes
+// `currentVersionIds.length !== currentDocumentCount` and this returns false.
+// A Package with zero documents is never current either — there is nothing
+// for an accepted snapshot to represent.
+export function isCustomerAcceptanceSnapshotCurrent(input: {
+    acceptedVersionIds: string[];
+    /** Every Documentation Document the Package currently holds — including one with no version yet, unlike `currentVersionIds` below. */
+    currentDocumentCount: number;
+    /** The Package's current highest version id, one per document that actually has a version — shorter than `currentDocumentCount` exactly when some document has none. */
+    currentVersionIds: string[];
+}): boolean {
+    if (input.currentDocumentCount === 0)
         return false;
-    const accepted = new Set(acceptedDocumentVersionIds);
-    return currentDocumentVersionIds.every(id => accepted.has(id));
+    if (input.currentVersionIds.length !== input.currentDocumentCount)
+        return false;
+    if (input.acceptedVersionIds.length !== input.currentVersionIds.length)
+        return false;
+    const accepted = new Set(input.acceptedVersionIds);
+    return input.currentVersionIds.every(id => accepted.has(id));
 }
 // F8.3 closing amount rule: "If no allocations exist, CLOSED is allowed
 // using the total amount. If at least one Portion allocation exists, their

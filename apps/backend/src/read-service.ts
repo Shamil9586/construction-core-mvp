@@ -142,13 +142,19 @@ export class ReadService {
             const packageAcceptances = documentationCustomerAcceptances.filter(acc => acc.documentationPackageId === p.id);
             const latestAcceptance = packageAcceptances.length ? packageAcceptances[packageAcceptances.length - 1] : null;
             const acceptedVersionIds = latestAcceptance ? documentationCustomerAcceptanceVersions.filter(v => v.customerAcceptanceId === latestAcceptance.id).map(v => v.documentationDocumentVersionId) : [];
+            // F8.3-R02b corrective: `packageDocuments.length` is the Package's
+            // *total* current document count — including one with no version
+            // at all, which `currentVersionIds` below would otherwise silently
+            // omit — so isCustomerAcceptanceSnapshotCurrent() can tell "every
+            // document has a version" from "some document has none".
+            const packageDocuments = documentationDocuments.filter(d => d.documentationPackageId === p.id);
             const currentVersionIds: string[] = [];
-            for (const doc of documentationDocuments.filter(d => d.documentationPackageId === p.id)) {
+            for (const doc of packageDocuments) {
                 const docVersions = documentationVersions.filter(v => v.documentationDocumentId === doc.id);
                 if (docVersions.length)
                     currentVersionIds.push(docVersions[docVersions.length - 1].id);
             }
-            const hasCustomerAcceptance = p.status === 'ACCEPTED_BY_CUSTOMER' && !!latestAcceptance && isCustomerAcceptanceSnapshotCurrent(acceptedVersionIds, currentVersionIds);
+            const hasCustomerAcceptance = p.status === 'ACCEPTED_BY_CUSTOMER' && !!latestAcceptance && isCustomerAcceptanceSnapshotCurrent({ acceptedVersionIds, currentDocumentCount: packageDocuments.length, currentVersionIds });
             const readiness = resolvePackageSdoReadiness({ hasCustomerAcceptance, coveredPortionIds, customerScConfirmedPortionIds });
             const sdoCase = sdoClosingCasesRaw.find(s => s.documentationPackageId === p.id);
             const o = objects.find(x => x.id === p.objectId);
