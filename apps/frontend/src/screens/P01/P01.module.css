@@ -40,6 +40,28 @@
   text-align: end;
 }
 
+/*
+ * F11.4 (F11-11) — replaces a literal 🔴/🟡 emoji. A small filled circle,
+ * not an icon-library glyph; `aria-hidden` at the call site keeps it purely
+ * decorative, so it reinforces the reason sentence's own RED/YELLOW wording
+ * rather than being the only place that distinction is made.
+ */
+.attentionDot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  vertical-align: middle;
+}
+
+.attentionDot[data-level='RED'] {
+  background: var(--cc-status-blocked-text);
+}
+
+.attentionDot[data-level='YELLOW'] {
+  background: var(--cc-status-attention-text);
+}
+
 .secondary {
   color: var(--cc-text-secondary);
 }

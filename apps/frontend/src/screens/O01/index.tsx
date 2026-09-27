@@ -84,9 +84,9 @@ export function ObjectOverview({
 
       <section className={styles.section}>
         <div className={styles.readinessCard}>
-          <span className={[styles.readinessLabel, typeClass('label')].join(' ')}>
+          <h2 className={[styles.readinessLabel, typeClass('label')].join(' ')}>
             Физическая готовность
-          </span>
+          </h2>
           <span className={typeClass('display')}>{viewModel.readiness.formatted}</span>
           <div className={styles.readinessBar}>
             <ProgressBar value={viewModel.readiness.value} label="Физическая готовность" size="Block" />
@@ -94,9 +94,9 @@ export function ObjectOverview({
         </div>
 
         <div className={styles.scheduleCard}>
-          <span className={[styles.detailLabel, typeClass('label')].join(' ')}>
+          <h2 className={[styles.detailLabel, typeClass('label')].join(' ')}>
             Состояние графика
-          </span>
+          </h2>
           {/*
             No status badge here: no API field gives a confirmed per-object
             schedule status, and `healthStatus` — the one status the backend
@@ -145,9 +145,9 @@ export function ObjectOverview({
       {viewModel.blockedWorks.length > 0 ? (
         <section className={styles.section}>
           <div className={styles.blockersCard}>
-            <span className={[styles.detailLabel, typeClass('label')].join(' ')}>
+            <h2 className={[styles.detailLabel, typeClass('label')].join(' ')}>
               Блокировки в производстве
-            </span>
+            </h2>
             <ul className={styles.blockedWorkList}>
               {viewModel.blockedWorks.map((blocked) => (
                 <li key={blocked.workId} className={styles.blockedWorkItem}>

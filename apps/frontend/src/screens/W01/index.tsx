@@ -158,9 +158,9 @@ export function WorkCard({
 
       <section className={styles.section}>
         <div className={styles.card}>
-          <span className={[styles.readinessLabel, typeClass('label')].join(' ')}>
+          <h2 className={[styles.readinessLabel, typeClass('label')].join(' ')}>
             Готовность выполнения
-          </span>
+          </h2>
           <div className={styles.readinessBar}>
             <ProgressBar value={viewModel.readiness} label={viewModel.name} size="Block" />
           </div>
@@ -197,9 +197,9 @@ export function WorkCard({
       {viewModel.blockers.length > 0 ? (
         <section className={styles.section}>
           <div className={styles.card}>
-            <span className={[styles.readinessLabel, typeClass('label')].join(' ')}>
+            <h2 className={[styles.readinessLabel, typeClass('label')].join(' ')}>
               Причины блокировки
-            </span>
+            </h2>
             <ul className={styles.blockerList}>
               {viewModel.blockers.map((reason) => (
                 <li key={reason} className={typeClass('body')}>

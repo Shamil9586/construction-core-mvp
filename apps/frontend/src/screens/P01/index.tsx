@@ -154,7 +154,17 @@ function WorkRow({ row, actions }: { row: P01WorkRow; actions?: P01ActionHandler
       <td className={styles.cell}>
         {row.attentionLevel ? (
           <span className={typeClass('body')}>
-            {row.attentionLevel === 'RED' ? '🔴' : '🟡'} {row.attentionReason}
+            {/* F11.4 (F11-11) — decorative only: `aria-hidden` keeps it out of
+                the cell's accessible name, so the reason sentence is the one
+                and only thing a screen reader announces. Colour reinforces
+                the level already stated in that sentence; it never carries
+                the meaning alone. */}
+            <span
+              aria-hidden="true"
+              className={styles.attentionDot}
+              data-level={row.attentionLevel}
+            />{' '}
+            {row.attentionReason}
           </span>
         ) : (
           <span className={[typeClass('body'), styles.secondary].join(' ')}>—</span>

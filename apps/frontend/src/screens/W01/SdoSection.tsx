@@ -42,7 +42,7 @@ function SdoCaseCard({ sdoCase }: { sdoCase: W01SdoCaseViewModel }) {
 export function SdoSection({ sdoClosingCases, visible = true }: SdoSectionProps) {
   return (
     <section className={styles.section}>
-      <span className={[styles.sectionLabel, typeClass('label')].join(' ')}>СДО / Закрытие</span>
+      <h2 className={[styles.sectionLabel, typeClass('label')].join(' ')}>СДО / Закрытие</h2>
       {!visible ? (
         <span className={[styles.empty, typeClass('body')].join(' ')}>Раздел недоступен для вашей роли</span>
       ) : sdoClosingCases.length > 0 ? (

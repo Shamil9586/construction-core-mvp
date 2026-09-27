@@ -161,9 +161,9 @@ function PackageCard({
 export function DocumentationSection({ documentationPackages, actions, visible = true }: DocumentationSectionProps) {
   return (
     <section className={styles.section}>
-      <span className={[styles.sectionLabel, typeClass('label')].join(' ')}>
+      <h2 className={[styles.sectionLabel, typeClass('label')].join(' ')}>
         Исполнительная документация
-      </span>
+      </h2>
       {!visible ? (
         <span className={[styles.empty, typeClass('body')].join(' ')}>
           Раздел недоступен для вашей роли

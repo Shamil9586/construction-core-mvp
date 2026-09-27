@@ -430,7 +430,7 @@ export function ExecutionSection({ executionUnits, actions }: ExecutionSectionPr
 
   return (
     <section className={styles.section}>
-      <span className={[styles.sectionLabel, typeClass('label')].join(' ')}>Единицы исполнения и участки</span>
+      <h2 className={[styles.sectionLabel, typeClass('label')].join(' ')}>Единицы исполнения и участки</h2>
       <div className={styles.unitList}>
         {executionUnits.map((unit) => (
           <ExecutionUnitCard key={unit.id} unit={unit} actions={actions} />

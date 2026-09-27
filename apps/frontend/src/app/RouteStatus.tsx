@@ -7,12 +7,33 @@ import { AppSidebar } from './AppSidebar';
  * failed, or a route param does not match anything in it. Each still mounts
  * `AppShell`/`AppSidebar` so navigation never disappears out from under the
  * user — only `<main>`'s content differs from a real screen.
+ *
+ * F11.4 — each of these fully replaces what a screen's own `PageHeader`
+ * would give the page: its one `<h1>`. Without it, landing here (a direct
+ * link, a refresh, or a client-side navigation to a state instead of a
+ * screen) put no heading at all in the page. Using `typeClass('body')`
+ * rather than `heading-page` keeps the plain, quiet visual weight these
+ * messages already had — the type scale's own margin-included discipline
+ * (typography.css) means the element swap changes nothing else.
+ *
+ * `aria-live` (polite for Loading/NotFound/Forbidden, assertive for Error) is
+ * what lets a screen reader announce the state to someone already on the
+ * page when it changes without a route change — a mutation's own `refetch()`
+ * (`useRefetchSnapshot`) briefly setting the same route back to `Loading`,
+ * for instance. Deliberately `aria-live`, not `role="status"`/`role="alert"`:
+ * an explicit `role` replaces an element's native role rather than adding to
+ * it, so putting one on this `<h1>` would announce it as a status/alert
+ * region instead of a heading — losing the one thing this comment's first
+ * paragraph exists to guarantee. `aria-live` is a plain property; it adds
+ * the announcement behaviour without touching the element's own role.
  */
 
 export function RouteLoading() {
   return (
     <AppShell sidebar={<AppSidebar />}>
-      <p className={typeClass('body')}>Загрузка…</p>
+      <h1 aria-live="polite" className={typeClass('body')}>
+        Загрузка…
+      </h1>
     </AppShell>
   );
 }
@@ -20,7 +41,9 @@ export function RouteLoading() {
 export function RouteError({ message }: { message: string }) {
   return (
     <AppShell sidebar={<AppSidebar />}>
-      <p className={typeClass('body')}>Не удалось загрузить данные: {message}</p>
+      <h1 aria-live="assertive" className={typeClass('body')}>
+        Не удалось загрузить данные: {message}
+      </h1>
     </AppShell>
   );
 }
@@ -28,7 +51,9 @@ export function RouteError({ message }: { message: string }) {
 export function RouteNotFound({ label }: { label: string }) {
   return (
     <AppShell sidebar={<AppSidebar />}>
-      <p className={typeClass('body')}>{label}</p>
+      <h1 aria-live="polite" className={typeClass('body')}>
+        {label}
+      </h1>
     </AppShell>
   );
 }
@@ -43,7 +68,9 @@ export function RouteNotFound({ label }: { label: string }) {
 export function RouteForbidden({ label }: { label: string }) {
   return (
     <AppShell sidebar={<AppSidebar />}>
-      <p className={typeClass('body')}>{label}</p>
+      <h1 aria-live="polite" className={typeClass('body')}>
+        {label}
+      </h1>
     </AppShell>
   );
 }
