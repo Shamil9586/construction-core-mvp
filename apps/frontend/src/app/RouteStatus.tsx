@@ -16,16 +16,21 @@ import { AppSidebar } from './AppSidebar';
  * messages already had — the type scale's own margin-included discipline
  * (typography.css) means the element swap changes nothing else.
  *
- * `aria-live` (polite for Loading/NotFound/Forbidden, assertive for Error) is
- * what lets a screen reader announce the state to someone already on the
- * page when it changes without a route change — a mutation's own `refetch()`
- * (`useRefetchSnapshot`) briefly setting the same route back to `Loading`,
- * for instance. Deliberately `aria-live`, not `role="status"`/`role="alert"`:
- * an explicit `role` replaces an element's native role rather than adding to
- * it, so putting one on this `<h1>` would announce it as a status/alert
- * region instead of a heading — losing the one thing this comment's first
- * paragraph exists to guarantee. `aria-live` is a plain property; it adds
- * the announcement behaviour without touching the element's own role.
+ * `aria-live` (polite for Loading/NotFound/Forbidden, assertive for Error)
+ * marks each of these as a live region per the WAI-ARIA specification, which
+ * is how a screen reader is SPECIFIED to treat a same-route content change —
+ * a mutation's own `refetch()` (`useRefetchSnapshot`) briefly setting the
+ * same route back to `Loading`, for instance, with no navigation and so no
+ * focus change of its own. This repo's Playwright suite proves the DOM/ARIA
+ * side of that (the attribute is present, correctly valued, and does not
+ * replace the element's own heading role); it cannot independently prove
+ * that a given browser/assistive-technology combination actually voices the
+ * change — that is inherent to testing ARIA live regions via a DOM API, not
+ * a gap specific to this component. Deliberately `aria-live`, not
+ * `role="status"`/`role="alert"`: an explicit `role` replaces an element's
+ * native role rather than adding to it, so putting one on this `<h1>` would
+ * expose it as a status/alert region instead of a heading — losing the one
+ * thing this comment's first paragraph exists to guarantee.
  */
 
 export function RouteLoading() {

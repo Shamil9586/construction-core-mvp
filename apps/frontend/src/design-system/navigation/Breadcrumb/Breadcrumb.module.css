@@ -45,13 +45,19 @@
 }
 
 /*
- * F11.4 (F11-09) — the rendered text alone is 13px/18px line-height, under
- * WCAG 2.2 SC 2.5.8's 24 CSS-px minimum. `::after` grows only the hit area:
- * absolutely-positioned generated content takes no space in the flex row, so
- * neither the crumb's own visual size nor `.list`'s gap/wrapping (F11.3)
- * changes. Vertical only — every crumb's width already clears 24px on its
- * own, so widening it too would just tighten the gap to the separator/next
- * crumb for no reason.
+ * F11.4 (F11-09) — the rendered text alone is ~20px tall (13px/18px line
+ * height), under SC 2.5.8's 24 CSS-px target-size minimum. SC 2.5.8 has
+ * exceptions, including sufficient spacing from neighbouring targets, so a
+ * target under 24px is not automatically a violation on its own — whether
+ * this crumb's existing spacing already satisfied that exception was not
+ * conclusively ruled out either way. Rather than resting on that judgement
+ * call, `::after` grows the hit area to clear 24px outright, as a UX
+ * improvement that exceeds the minimum rather than a fix for a confirmed
+ * failure. It costs nothing in the flex row — an absolutely-positioned
+ * pseudo-element takes no space there — so neither the crumb's own visual
+ * size nor `.list`'s gap/wrapping (F11.3) changes. Vertical only — every
+ * crumb's width already clears 24px on its own, so widening it too would
+ * just tighten the gap to the separator/next crumb for no reason.
  */
 .crumb::after {
   content: '';

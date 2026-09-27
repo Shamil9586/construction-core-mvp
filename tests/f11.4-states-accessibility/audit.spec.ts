@@ -198,8 +198,13 @@ test.describe('Heading hierarchy (F11-08)', () => {
   });
 });
 
-test.describe('Route states — Loading/Error/NotFound/Forbidden are announced and headed', () => {
-  test('Loading: one H1, announced via aria-live rather than a role that would replace it', async ({
+test.describe('Route states — Loading/Error/NotFound/Forbidden are headed and carry aria-live', () => {
+  // "aria-live" here means the DOM/ARIA semantics this suite can actually
+  // verify: the attribute is present with the right value, on an element
+  // that keeps its native heading role. It does not, and cannot, prove that
+  // a given screen reader/browser combination audibly announces the change
+  // — see RouteStatus.tsx's module comment.
+  test('Loading: one H1, carrying aria-live rather than a role that would replace it', async ({
     page,
   }) => {
     await page.addInitScript((value: string) => window.sessionStorage.setItem('session', value), 'token-PTO');
@@ -215,7 +220,7 @@ test.describe('Route states — Loading/Error/NotFound/Forbidden are announced a
     await expect(heading).toHaveAttribute('aria-live', 'polite');
   });
 
-  test('Error: one H1, announced assertively, distinct from Loading/success', async ({ page }) => {
+  test('Error: one H1, carrying aria-live="assertive", distinct from Loading/success', async ({ page }) => {
     await page.addInitScript((value: string) => window.sessionStorage.setItem('session', value), 'token-PTO');
     await page.route('**/api/**', (route) => {
       const url = route.request().url();
@@ -265,13 +270,30 @@ test.describe('Route-change focus management', () => {
   test('a query-string-only update (P01 object filter) does not steal focus from the control', async ({ page }) => {
     await openScreen(page, PTO, '/app.html/pto');
     const select = page.locator('#p01-object-filter');
+    const urlBefore = page.url();
     await select.focus();
-    await select.selectOption({ label: new RegExp(LONG_OBJECT_NAME.split(',')[0]) as unknown as string }).catch(() => {});
-    // Selecting an option keeps focus on the <select> itself — this is a
-    // searchParams-only change, not a pathname change, so the route-change
-    // focus effect must not fire here.
-    const stillOnSelect = await select.evaluate((el) => el === document.activeElement);
-    expect(stillOnSelect).toBe(true);
+
+    // A real, unswallowed selection — 'obj-1' is the fixture's only object
+    // option's actual `value` attribute (view-models/p01.ts), not a label
+    // guessed via regex. If this selection silently failed to apply, every
+    // assertion below (value, URL, search param) would fail with it —
+    // nothing here can pass on a no-op.
+    await select.selectOption('obj-1');
+    await expect(select).toHaveValue('obj-1');
+
+    // Confirms the searchParams-only navigation this test exists to check
+    // actually happened, rather than assuming it from the select's own
+    // value: PtoRoute.tsx's onSelectObjectFilter drives the URL, not the
+    // <select> directly.
+    await expect(page).toHaveURL(/[?&]objectId=obj-1(&|$)/);
+    const urlAfter = new URL(page.url());
+    expect(urlAfter.searchParams.get('objectId')).toBe('obj-1');
+    expect(urlAfter.pathname).toBe('/app.html/pto');
+    expect(page.url()).not.toBe(urlBefore);
+
+    // Only now — after a confirmed pathname-stable URL change — does
+    // checking focus retention actually test what this test is named for.
+    await expect(select).toBeFocused();
   });
 
   test('opening/closing the F11.1 drawer without navigating still returns focus to the trigger', async ({
