@@ -108,10 +108,23 @@
   margin: 0;
 }
 
+/*
+ * F11.5-01 — was `align-items: flex-end`, hugging this cell's far edge (the
+ * edge deepest into the table's own horizontal-scroll track, farthest from
+ * the always-at-least-partly-visible fill column). At the viewport range
+ * where the table needs to scroll but this column is only partly within
+ * the still-unscrolled (scrollLeft: 0) visible window, the region's own
+ * overflow clipping bisected the right-aligned percentage — "46%" painted
+ * as "4", a complete, plausible, but wrong figure, not recognisably a
+ * truncation. `flex-start` keeps this value adjacent to the fill column's
+ * own edge instead, the side of any scrollable row most likely to already
+ * be visible, so a resting (unscrolled) view shows it whole or not at all,
+ * never bisected.
+ */
 .smr {
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
+  align-items: flex-start;
   gap: var(--cc-p-space-4);
   color: var(--cc-text-primary);
 }
