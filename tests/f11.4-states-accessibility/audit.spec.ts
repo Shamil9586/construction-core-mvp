@@ -258,13 +258,28 @@ test.describe('Route-change focus management', () => {
     const row = page.getByRole('button', { name: new RegExp(LONG_OBJECT_NAME.split(',')[0]) });
     await row.focus();
     await page.keyboard.press('Enter');
-    await page.waitForURL(/\/object\/obj-1$/);
 
+    await expect(page).toHaveURL(/\/object\/obj-1$/);
+    expect(new URL(page.url()).pathname).toBe('/app.html/object/obj-1');
+
+    // Web-first, retrying assertion, not a one-shot document.activeElement
+    // read: useFocusMainOnNavigate's effect runs in a post-render effect
+    // that fires after the pathname commits, so a single page.evaluate()
+    // taken right after the URL changes can land in the transient window
+    // before that effect has actually called .focus() — observing the old
+    // element still focused and failing even though the app is correct.
+    // toBeFocused() polls until the real end state is reached instead of
+    // asserting on that transient window.
+    const main = page.locator('#cc-main-content');
+    await expect(main).toBeFocused();
+
+    // Focus is already settled by the retrying assertion above — only one
+    // element can be document.activeElement at a time, so this is a
+    // same-tick read confirming the specific failure mode (a drop to
+    // document.body) that toBeFocused() already ruled out, not a second
+    // race.
     const isBody = await page.evaluate(() => document.activeElement === document.body);
     expect(isBody, 'focus was dropped to document.body after navigation').toBe(false);
-
-    const mainHasFocus = await page.evaluate(() => document.activeElement === document.getElementById('cc-main-content'));
-    expect(mainHasFocus).toBe(true);
   });
 
   test('a query-string-only update (P01 object filter) does not steal focus from the control', async ({ page }) => {
