@@ -34,9 +34,22 @@
   overflow: hidden;
 }
 
+/*
+ * F11.3-01 — `align-items: center` is safe to keep (it only positions
+ * whichever line each child lands on); `flex-wrap` is what fixes the actual
+ * defect. Without it, on a viewport too narrow for the badge, the name/reason
+ * column and the button all at once, flexbox had nowhere to put the excess
+ * but `.attentionBody`'s own width, clamping it to 0 — a 0-width inline
+ * container cannot lay out its text at all. With wrapping, that column
+ * instead drops to its own full-width line below the badge once it no longer
+ * fits beside both fixed-size neighbours, the same "reflow before collapse"
+ * behaviour `PageHeader`'s `.header`/`.actions` already use for the same
+ * badge/button-beside-flexible-content shape.
+ */
 .attentionRow {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--cc-p-space-16);
   padding: var(--cc-p-space-16) var(--cc-card-padding);
 }
