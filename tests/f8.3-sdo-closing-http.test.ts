@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 
 /**
  * F8.3 SDO / Closing — HTTP-level, over the real backend, PGlite. Same
@@ -102,6 +103,117 @@ async function setUpHandedOffCase(req: any, login: any, code: string, name: stri
   const sdoCase = await req(`documentation-packages/${accepted.id}/handoff-to-sdo`, { version: accepted.version });
   return { ...ctx, pkg: accepted, sdoCase };
 }
+
+// F12.1-R01: a timestamp is not a total order. Exercise both physical
+// insertion orders and both winning values; UUID order breaks timestamp
+// ties consistently, it does not claim to encode insertion chronology.
+for (const reverseInsert of [false, true]) {
+  for (const latestQuantity of ['0', '200']) {
+    test(`F12.1-R01: tied confirmations, reverseInsert=${reverseInsert}, latest=${latestQuantity}: snapshot, handoff and CLOSED agree`, async () => {
+      const { app, req, login } = await harness();
+      try {
+        const { pool, one } = await import('../apps/backend/src/db');
+        const { pm, cc, portion, pkg } = await setUpPresentedPackage(req, login, 'F121-TIE-' + randomUUID(), 'Одинаковое время подтверждений');
+        const accepted = await req(`documentation-packages/${pkg.id}/customer-acceptance`, { version: pkg.version, acceptedDate: dt(0) });
+        async function tiedPair(timestamp: string) {
+          const suffix = randomUUID().slice(8);
+          const entries = [
+            { id: '10000000' + suffix, quantity: latestQuantity === '0' ? '200' : '0' },
+            { id: '20000000' + suffix, quantity: latestQuantity },
+          ];
+          for (const entry of reverseInsert ? [...entries].reverse() : entries) {
+            await pool.query('INSERT INTO portion_quantity_confirmations(id,tenant_id,portion_id,source,quantity,recorded_by,recorded_at) VALUES($1,$2,$3,\'CUSTOMER_SC\',$4,$5,$6)', [entry.id, pm.tenantId, portion.id, entry.quantity, cc.id, timestamp]);
+          }
+        }
+        async function correction(timestamp: string) {
+          await pool.query('INSERT INTO portion_quantity_confirmations(tenant_id,portion_id,source,quantity,recorded_by,recorded_at) VALUES($1,$2,\'CUSTOMER_SC\',200,$3,$4)', [pm.tenantId, portion.id, cc.id, timestamp]);
+        }
+        async function assertReadiness(expected: boolean) {
+          const snap = await req('snapshot');
+          assert.equal(snap.sdoPackageReadiness.find((x: any) => x.documentationPackageId === pkg.id).ready, expected);
+          assert.equal(snap.portions.find((x: any) => x.id === portion.id).customerScConfirmedQuantity, expected ? '200.0000' : '0.0000');
+        }
+        async function state() {
+          return {
+            pkg: await one(pool, 'SELECT * FROM documentation_packages WHERE id=$1', [pkg.id]),
+            sdoCase: await one(pool, 'SELECT * FROM sdo_closing_cases WHERE documentation_package_id=$1', [pkg.id]),
+            handoffs: await one(pool, 'SELECT count(*) FROM sdo_closing_handoff_history WHERE sdo_closing_case_id IN (SELECT id FROM sdo_closing_cases WHERE documentation_package_id=$1)', [pkg.id]),
+            history: await one(pool, 'SELECT count(*) FROM sdo_closing_status_history WHERE sdo_closing_case_id IN (SELECT id FROM sdo_closing_cases WHERE documentation_package_id=$1)', [pkg.id]),
+            audit: await one(pool, 'SELECT count(*) FROM audit_logs WHERE tenant_id=$1', [pm.tenantId]),
+            events: await one(pool, 'SELECT count(*) FROM domain_events WHERE tenant_id=$1', [pm.tenantId]),
+          };
+        }
+
+        await tiedPair('2099-01-01T00:00:00.123456Z');
+        await assertReadiness(latestQuantity !== '0');
+        if (latestQuantity === '0') {
+          const before = await state();
+          await req(`documentation-packages/${pkg.id}/handoff-to-sdo`, { version: accepted.version }, 400);
+          assert.deepEqual(await state(), before, 'refused handoff must have no side effects');
+          await correction('2099-01-02T00:00:00Z');
+          await assertReadiness(true);
+        }
+        let sdoCase = await req(`documentation-packages/${pkg.id}/handoff-to-sdo`, { version: accepted.version });
+        await login('SDO');
+        sdoCase = await req(`sdo-closing-cases/${sdoCase.id}/status`, { version: sdoCase.version, status: 'VERIFICATION_PASSED' });
+        sdoCase = await req(`sdo-closing-cases/${sdoCase.id}/amount`, { version: sdoCase.version, amount: '100.00' });
+
+        await tiedPair('2099-01-03T00:00:00.123456Z');
+        await assertReadiness(latestQuantity !== '0');
+        if (latestQuantity === '0') {
+          const before = await state();
+          await req(`sdo-closing-cases/${sdoCase.id}/status`, { version: sdoCase.version, status: 'CLOSED' }, 400);
+          assert.deepEqual(await state(), before, 'refused CLOSED must have no side effects');
+          await correction('2099-01-04T00:00:00Z');
+          await assertReadiness(true);
+        }
+        const closed = await req(`sdo-closing-cases/${sdoCase.id}/status`, { version: sdoCase.version, status: 'CLOSED' });
+        assert.equal(closed.status, 'CLOSED');
+      } finally {
+        await app.close();
+      }
+    });
+  }
+}
+
+test('F12.1-R02: HTTP Customer SC acceptance validates the persisted four-decimal quantity before any mutation', async () => {
+  const { app, req, login } = await harness();
+  try {
+    const { pool, one } = await import('../apps/backend/src/db');
+    const { pm, unit, work } = await setUpPresentedPackage(req, login, 'F121-PRECISION-' + randomUUID(), 'Точность объёма приёмки');
+    for (const [input, stored] of [[0.00005, '0.0001'], ['0.0001', '0.0001'], [1.23445, '1.2345'], [200, '200.0000']] as const) {
+      await login('PROJECT_MANAGER');
+      const portion = await req(`execution-units/${unit.id}/portions`, { label: 'Проверка точности', plannedQuantity: 1 });
+      await req(`portions/${portion.id}/fact`, { quantity: 1, version: portion.version });
+      const inspection = await req(`portions/${portion.id}/inspection-request`, { inspectionType: 'CUSTOMER_SC', version: portion.version + 1 });
+      await login('CONSTRUCTION_CONTROL');
+      const attachment = await req('attachments', { fileName: 'precision.png', mimeType: 'image/png', base64: PNG_BASE64 });
+      await req(`inspections/${inspection.id}/photos`, { attachmentId: attachment.id });
+      async function state() {
+        return {
+          inspection: await one(pool, 'SELECT * FROM inspections WHERE id=$1', [inspection.id]),
+          work: await one(pool, 'SELECT * FROM works WHERE id=$1', [work.id]),
+          confirmations: (await pool.query('SELECT * FROM portion_quantity_confirmations WHERE portion_id=$1 ORDER BY id', [portion.id])).rows,
+          audit: await one(pool, 'SELECT count(*) FROM audit_logs WHERE tenant_id=$1', [pm.tenantId]),
+          events: await one(pool, 'SELECT count(*) FROM domain_events WHERE tenant_id=$1', [pm.tenantId]),
+        };
+      }
+      const before = await state();
+      for (const quantity of [0, 0.00001, '0.00001', '1e-5', 0.00004999]) {
+        const error = await req(`inspections/${inspection.id}/accept`, { version: inspection.version, comment: 'Объём округляется до нуля', quantity }, 400);
+        if (typeof quantity === 'number') assert.match(JSON.stringify(error), /должен быть больше нуля/);
+        assert.deepEqual(await state(), before, `refused quantity ${quantity} must not change inspection, work, confirmations, audit or events`);
+      }
+      const accepted = await req(`inspections/${inspection.id}/accept`, { version: inspection.version, comment: 'Положительный сохраняемый объём', quantity: input });
+      assert.equal(accepted.status, 'ACCEPTED');
+      const confirmation = await one(pool, "SELECT quantity FROM portion_quantity_confirmations WHERE inspection_id=$1 AND source='CUSTOMER_SC'", [inspection.id]);
+      assert.equal(confirmation.quantity, stored);
+      assert.equal(confirmation.quantity, (await one(pool, 'SELECT $1::numeric(20,4) AS quantity', [input])).quantity, 'normalization matches PostgreSQL rounding');
+    }
+  } finally {
+    await app.close();
+  }
+});
 
 /* --------------------------------------------------------------------- *
  * 1-4: visibility and readiness                                          *

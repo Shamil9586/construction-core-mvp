@@ -45,7 +45,10 @@ export class ReadService {
         const unitIds = executionUnits.map(u => u.id);
         const executionUnitLayers = await rows(pool, 'SELECT * FROM execution_unit_layers WHERE tenant_id=$1 AND execution_unit_id=ANY($2::uuid[]) ORDER BY sort_order', [t, unitIds]);
         const portions = await rows(pool, 'SELECT * FROM quantity_portions WHERE tenant_id=$1 AND execution_unit_id=ANY($2::uuid[])', [t, unitIds]);
-        const portionConfirmations = await rows(pool, 'SELECT * FROM portion_quantity_confirmations WHERE tenant_id=$1 AND portion_id=ANY($2::uuid[]) ORDER BY recorded_at', [t, portions.map(p => p.id)]);
+        // F12.1-R01: latestConfirmation takes the last row. Use the exact
+        // reverse of the write-side (recorded_at DESC, id DESC) total order;
+        // timestamps alone can tie, including within one transaction.
+        const portionConfirmations = await rows(pool, 'SELECT * FROM portion_quantity_confirmations WHERE tenant_id=$1 AND portion_id=ANY($2::uuid[]) ORDER BY recorded_at, id', [t, portions.map(p => p.id)]);
         // F8.2 PTO / Executive Documentation Foundation. Scoped by work id, the
         // same as execution units above — a Documentation Package hangs off a
         // work, never directly off an object. Fetched unconditionally;
