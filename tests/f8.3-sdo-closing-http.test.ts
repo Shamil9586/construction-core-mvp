@@ -772,6 +772,79 @@ test('F8.3 HTTP (2,7): handoff (and so every operational SDO action) is refused 
   }
 });
 
+/**
+ * F12-QTY-02 (locked F12-D01): the Customer SC quantity condition in
+ * resolvePackageSdoReadiness() must be satisfied only by a portion's LATEST
+ * Customer SC confirmation being > 0 — never mere row existence, and never
+ * an older positive row outranking a newer non-positive one. This must fail
+ * closed against historical/malformed data (a quantity=0 row inserted
+ * directly, simulating a legacy import, a manual fix, or any state that
+ * predates F12-QTY-03's own mutation-path guard), and read-side/write-side
+ * must agree throughout — both go through the one shared
+ * resolvePackageReadiness()/resolvePackageSdoReadiness() path.
+ */
+test('F12-QTY-02: a newer CUSTOMER_SC confirmation of 0 overrides an older positive one and fails readiness closed — read-side and write-side agree, and a genuine later correction restores readiness', async () => {
+  const { app, req, login } = await harness();
+  try {
+    const { pool } = await import('../apps/backend/src/db');
+    const { pm, portion, pkg } = await setUpPresentedPackage(req, login, 'F12-QTY02-' + Date.now(), 'F12-QTY-02 историческая нулевая приёмка СК заказчика');
+
+    await login('PTO');
+    const accepted = await req(`documentation-packages/${pkg.id}/customer-acceptance`, { version: pkg.version, acceptedDate: dt(0), reference: 'Акт-1' });
+
+    // Sanity check: readiness is genuinely true right now, from the normal
+    // flow's real, positive (200) Customer SC confirmation.
+    await login('SDO');
+    let snap = await req('snapshot');
+    let item = snap.sdoPackageReadiness.find((x: any) => x.documentationPackageId === accepted.id);
+    assert.equal(item.ready, true, 'sanity check: ready from the normal flow before any malformed data is injected');
+
+    // Simulate historical/malformed data: a NEWER CUSTOMER_SC confirmation
+    // row with quantity=0 for the same portion, inserted directly — the same
+    // "bypassing the API entirely" technique this file already uses above
+    // (the corrupted-status-column test) to simulate a hypothetical bug or a
+    // direct data edit. F12-QTY-03's own guard only ever applies to the
+    // mutation path (inspectionAction) — this proves the read/write
+    // readiness gate fails closed regardless of how such a row came to
+    // exist, not merely that the new mutation path refuses to create one.
+    const cc = await login('CONSTRUCTION_CONTROL');
+    await pool.query(
+      "INSERT INTO portion_quantity_confirmations(tenant_id,portion_id,source,quantity,recorded_by,recorded_at,comment) VALUES($1,$2,'CUSTOMER_SC','0',$3,now() + interval '1 hour','Историческая нулевая запись (симуляция)')",
+      [pm.tenantId, portion.id, cc.id],
+    );
+
+    await login('SDO');
+    snap = await req('snapshot');
+    item = snap.sdoPackageReadiness.find((x: any) => x.documentationPackageId === accepted.id);
+    assert.equal(item.ready, false, 'a newer CUSTOMER_SC confirmation of 0 must override the older positive one — latest wins, and a hollow zero must not read as ready');
+    assert.ok(item.missingReasons.some((r: string) => /СК заказчика/.test(r)), 'the missing reason must correctly identify the absent valid Customer SC quantity confirmation');
+
+    await login('PTO');
+    await req(`documentation-packages/${accepted.id}/handoff-to-sdo`, { version: accepted.version }, 400);
+    const caseAfterRefusedHandoff = await pool.query('SELECT id FROM sdo_closing_cases WHERE tenant_id=$1 AND documentation_package_id=$2', [pm.tenantId, accepted.id]);
+    assert.equal(caseAfterRefusedHandoff.rows.length, 0, 'no SDO Case may be created/locked by a refused handoff');
+
+    // A genuine later correction (a real, newer positive confirmation) must
+    // restore readiness — proving this fails closed against malformed data
+    // without becoming permanently, irrecoverably broken once one bad row
+    // exists.
+    await pool.query(
+      "INSERT INTO portion_quantity_confirmations(tenant_id,portion_id,source,quantity,recorded_by,recorded_at,comment) VALUES($1,$2,'CUSTOMER_SC','200',$3,now() + interval '2 hour','Корректировка')",
+      [pm.tenantId, portion.id, cc.id],
+    );
+    await login('SDO');
+    snap = await req('snapshot');
+    item = snap.sdoPackageReadiness.find((x: any) => x.documentationPackageId === accepted.id);
+    assert.equal(item.ready, true, 'a genuine later positive correction must restore readiness');
+
+    await login('PTO');
+    const sdoCase = await req(`documentation-packages/${accepted.id}/handoff-to-sdo`, { version: accepted.version });
+    assert.ok(sdoCase.id, 'write-side handoff succeeds once the latest confirmation is genuinely positive again — read and write agree throughout');
+  } finally {
+    await app.close();
+  }
+});
+
 test('F8.3 HTTP (8,9): handoff creates exactly one SDO Case, and a second handoff attempt for the same package is rejected', async () => {
   const { app, req, login } = await harness();
   try {

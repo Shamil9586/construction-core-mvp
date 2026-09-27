@@ -424,6 +424,77 @@ test('F8.1: an empty confirmed-quantity input is refused before submission — n
   expect(state.portions[0]!.internalScAccepted).toBe(false);
 });
 
+// F12-QTY-01 — the same `Number('')===0` landmine InternalScDecisionForm was
+// already fixed for (the test above) was still present in FactForm's own,
+// separate parsing: a blank "Объём" field passed `!Number.isFinite(parsed)`
+// and `parsed < 0` unharmed (0 is finite and not negative), so it silently
+// submitted a real fact of 0. Real DOM, real component: the field is left
+// untouched (never filled), proving the actual FactForm code blocks
+// submission before any request is sent — an empty string is refused, a
+// whitespace-only string is refused the same way, and an explicit real fact
+// still works normally afterwards (blank and 0 stay distinct concepts).
+test('F12-QTY-01: an empty or whitespace-only RP Fact quantity is refused before submission — no fact request is ever sent, and the existing fact is not silently overwritten', async ({
+  page,
+}) => {
+  const state: { portions: FakePortion[]; inspections: FakeInspection[] } = {
+    portions: [
+      {
+        id: 'portion-1',
+        executionUnitId: UNIT_ID,
+        label: 'Секция A',
+        plannedQuantity: '300',
+        rpFactQuantity: '150',
+        internalScAccepted: false,
+        internalScConfirmedQuantity: null,
+        customerScAccepted: false,
+        customerScConfirmedQuantity: null,
+        version: 2,
+      },
+    ],
+    inspections: [],
+  };
+  let factCalls = 0;
+
+  await seedSession(page, 'f8-1-browser-token-blank-fact');
+  await mockApi(page, {
+    'GET /api/me': () => ({ status: 200, body: PM }),
+    'GET /api/snapshot': () => ({ status: 200, body: buildSnapshot(state) }),
+    'POST /api/portions/portion-1/fact': (request) => {
+      factCalls += 1;
+      const portion = state.portions.find((p) => p.id === 'portion-1')!;
+      const body = request.postDataJSON() as { quantity: number };
+      portion.rpFactQuantity = String(body.quantity);
+      portion.version += 1;
+      return { status: 201, body: { id: 'confirmation-1', portionId: portion.id, source: 'RP_FACT' } };
+    },
+  });
+
+  await page.goto(`/app.html/object/${OBJECT_ID}/work/${WORK_ID}`);
+  await expect(page.getByRole('heading', { level: 1, name: 'Штукатурка стен' })).toBeVisible();
+
+  const portionRow = page.getByText('Секция A', { exact: true }).locator('..').locator('..');
+
+  // The "Объём" field is deliberately left blank; only the required comment is filled.
+  await portionRow.getByLabel('Комментарий к факту по участку Секция A').fill('Ошибочная пустая отправка');
+  await portionRow.getByRole('button', { name: 'Сохранить факт' }).click();
+
+  await expect(portionRow.getByText('Введите неотрицательное число')).toBeVisible();
+  expect(factCalls, 'the request must never be sent for a blank quantity, not merely be rejected once sent').toBe(0);
+  expect(state.portions[0]!.rpFactQuantity, 'the existing fact must not be silently overwritten by a blank submission').toBe('150');
+
+  // Whitespace-only is the same landmine in disguise — Number('   ') is also 0.
+  await portionRow.getByLabel('Факт по участку Секция A').fill('   ');
+  await portionRow.getByRole('button', { name: 'Сохранить факт' }).click();
+  await expect(portionRow.getByText('Введите неотрицательное число')).toBeVisible();
+  expect(factCalls).toBe(0);
+
+  // An explicit, real fact must still work normally afterwards.
+  await portionRow.getByLabel('Факт по участку Секция A').fill('250');
+  await portionRow.getByRole('button', { name: 'Сохранить факт' }).click();
+  await expect.poll(() => factCalls).toBe(1);
+  expect(state.portions[0]!.rpFactQuantity).toBe('250');
+});
+
 // The mock/demo runtime (`App.tsx`'s `MOCK_RUNTIME`, `session: null`) never
 // reaches `/api/*` at all — `mockDataProvider` returns fixtures in memory —
 // and this config's dev server is started once with `VITE_DATA_PROVIDER=real`

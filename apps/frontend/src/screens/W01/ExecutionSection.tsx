@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { StatusBadge, typeClass } from '../../design-system';
 import type { W01ExecutionUnitViewModel, W01PortionViewModel } from '../../view-models/w01';
-import { confirmationVariant, confirmationLabel, parseConfirmedQuantityInput } from '../../view-models/w01';
+import { confirmationVariant, confirmationLabel, parseConfirmedQuantityInput, parseNonNegativeQuantityInput } from '../../view-models/w01';
 import styles from './ExecutionSection.module.css';
 
 /**
@@ -81,9 +81,13 @@ function FactForm({
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
-    const parsed = Number(quantity);
-    if (!Number.isFinite(parsed) || parsed < 0) {
-      setError('Введите неотрицательное число');
+    // F12-QTY-01: parsed through parseNonNegativeQuantityInput, not a raw
+    // Number(quantity) — an empty or whitespace-only field must not silently
+    // become a real fact of 0 (Number('') === 0 in JavaScript). An explicit
+    // 0 remains a real, deliberate RP Fact value once the field is non-empty.
+    const parsed = parseNonNegativeQuantityInput(quantity, 'Введите неотрицательное число');
+    if (parsed.ok === false) {
+      setError(parsed.error);
       return;
     }
     if (!comment.trim()) {
@@ -93,7 +97,7 @@ function FactForm({
     setPending(true);
     setError(null);
     try {
-      await onSubmit(parsed, comment.trim());
+      await onSubmit(parsed.value, comment.trim());
       setQuantity('');
       setComment('');
     } catch (submitError) {

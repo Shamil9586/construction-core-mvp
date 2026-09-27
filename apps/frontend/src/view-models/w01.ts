@@ -186,22 +186,30 @@ const DECIDABLE_INTERNAL_SC_STATUSES = new Set<InspectionStatus>([
 export type ConfirmedQuantityParseResult = { ok: true; value: number } | { ok: false; error: string };
 
 /**
- * F8.1 Final corrective — `Number('')` and `Number('   ')` both evaluate to
- * `0` in JavaScript, so a blank or whitespace-only "Подтверждённый объём"
- * field on the Internal SC decision form (`ExecutionSection.tsx`) used to
- * silently submit a confirmed quantity of zero instead of being refused.
+ * F8.1 Final corrective / F12-QTY-01 — `Number('')` and `Number('   ')` both
+ * evaluate to `0` in JavaScript, so a blank or whitespace-only quantity
+ * field used to silently submit a value of zero instead of being refused.
  * Trimming first and rejecting an empty result catches both; a non-numeric
- * or negative input is rejected the same way it already was. An explicitly
- * typed `0` is a real, deliberate value once the input is non-empty, and is
- * not itself forbidden here — the backend's own `qty` schema already allows
- * a nonnegative zero.
+ * or negative input is rejected the same way. An explicitly typed `0` is a
+ * real, deliberate value once the input is non-empty, and is not itself
+ * forbidden here — each caller's own backend contract decides whether zero
+ * is actually accepted (RP Fact allows it; a portion-scoped Customer SC
+ * ACCEPT does not, per F12-D01, enforced server-side — see
+ * apps/backend/src/service.ts `inspectionAction`). `error` is the caller's
+ * own wording, so each field keeps its own appropriate message rather than
+ * every quantity field in the app sharing one generic string.
  */
-export function parseConfirmedQuantityInput(raw: string): ConfirmedQuantityParseResult {
+export function parseNonNegativeQuantityInput(raw: string, error: string): ConfirmedQuantityParseResult {
   const trimmed = raw.trim();
-  if (trimmed === '') return { ok: false, error: 'Укажите подтверждённый объём' };
+  if (trimmed === '') return { ok: false, error };
   const value = Number(trimmed);
-  if (!Number.isFinite(value) || value < 0) return { ok: false, error: 'Укажите подтверждённый объём' };
+  if (!Number.isFinite(value) || value < 0) return { ok: false, error };
   return { ok: true, value };
+}
+
+/** The Internal SC decision form's own confirmed-quantity field — see `parseNonNegativeQuantityInput`. */
+export function parseConfirmedQuantityInput(raw: string): ConfirmedQuantityParseResult {
+  return parseNonNegativeQuantityInput(raw, 'Укажите подтверждённый объём');
 }
 
 export interface W01PortionViewModel {

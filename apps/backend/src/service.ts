@@ -75,6 +75,15 @@ export class ProductionService {
         // is a portion to confirm a quantity against; a whole-work
         // inspection has none, so none is asked for or stored.
         ensure(!i.portionId || (quantity !== undefined && quantity !== null), 'Укажите подтверждённый объём');
+        // F12-D01 (locked): a portion-scoped Customer SC decision may be
+        // ACCEPTED only with a confirmed quantity > 0 — zero remains a real,
+        // storable value everywhere else in this system (Internal SC keeps
+        // its own existing presence-only rule, unchanged, immediately above),
+        // but "ACCEPTED with 0" is not a valid accepted Customer SC quantity
+        // and must not be representable. Checked before any write below, so a
+        // refused attempt leaves the inspection and confirmation history
+        // exactly as they were.
+        ensure(i.inspectionType !== 'CUSTOMER_SC' || !i.portionId || new Decimal(quantity).gt(0), 'Подтверждённый объём приёмки СК заказчика должен быть больше нуля');
     } const n = await one(c, "UPDATE inspections SET status=$3,decision=$3,comment=$4,inspector_id=$5,inspection_date=now(),accepted_at=CASE WHEN $3='ACCEPTED' THEN now() ELSE NULL END,version=version+1 WHERE tenant_id=$1 AND id=$2 RETURNING *", [a.tenantId, id, action === 'accept' ? 'ACCEPTED' : 'REJECTED', comment, a.id]); await c.query('UPDATE works SET version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2', [a.tenantId, i.objectWorkId]);
     // F8.1-01 (Independent Review): an ACCEPTED portion-scoped inspection —
     // Internal SC or Customer SC alike, one workflow, decision 5 — leaves
@@ -137,9 +146,12 @@ export class ProductionService {
     // progress(), on portion_quantity_confirmations (source RP_FACT) rather than
     // work_progress/works.actual_quantity, which this leaves untouched. The
     // freeze-after-submission rule from business rule 6 is preserved at the new
-    // granularity: once the portion has a non-rejected INTERNAL_SC inspection,
-    // its own fact is locked, exactly as a whole work's is today — but a
-    // sibling portion, or the work's own whole-work tracking, is never affected.
+    // granularity: once the portion has a non-rejected inspection of EITHER
+    // applicable SC control contour (F12-QTY-04: Internal SC or Customer SC —
+    // a route without Internal SC must still freeze once presented to
+    // Customer SC alone), its own fact is locked, exactly as a whole work's is
+    // today — but a sibling portion, or the work's own whole-work tracking, is
+    // never affected.
     async recordPortionFact(a: Actor, portionId: string, d: any) { requirePermission(a, P.WORK_UPDATE_PROGRESS); return transaction(async (c) => { const portion = await scoped(c, 'quantity_portions', portionId, a, true); const unit = await scoped(c, 'work_execution_units', portion.executionUnitId, a); const w = await scoped(c, 'works', unit.objectWorkId, a); await objectAccess(c, a, w.objectId, true); checkVersion(portion, d.version);
     // F8.1-03 corrective, second pass (Independent Re-Review, Patch 2): the
     // portion-level freeze guard below only ever knew about *this* portion's
@@ -151,7 +163,7 @@ export class ProductionService {
     // makes recordPortionFact() subject to the identical rule, not a
     // separately-maintained approximation of it. A work with no
     // dependencies is unaffected — canStartWork([]) is vacuously allowed.
-    const allowed = await this.transition(c, a, w.id); ensure(allowed.allowed, allowed.reasons.join('; ')); ensure(!await one(c, "SELECT id FROM inspections WHERE tenant_id=$1 AND portion_id=$2 AND inspection_type='INTERNAL_SC' AND status NOT IN ('REJECTED','NOT_SUBMITTED')", [a.tenantId, portionId]), 'После предъявления СК факт участка заблокирован. Требуется отдельная корректировка'); const confirmation = await insert(c, 'portion_quantity_confirmations', a.tenantId, { portionId, source: 'RP_FACT', quantity: d.quantity, recordedBy: a.id, comment: d.comment ?? null }); await c.query('UPDATE quantity_portions SET version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2', [a.tenantId, portionId]); await audit(c, a, 'QuantityPortion', portionId, 'RP_FACT', null, confirmation, 'WorkProgressUpdated'); return confirmation; }); }
+    const allowed = await this.transition(c, a, w.id); ensure(allowed.allowed, allowed.reasons.join('; ')); ensure(!await one(c, "SELECT id FROM inspections WHERE tenant_id=$1 AND portion_id=$2 AND inspection_type IN ('INTERNAL_SC','CUSTOMER_SC') AND status NOT IN ('REJECTED','NOT_SUBMITTED')", [a.tenantId, portionId]), 'После предъявления СК факт участка заблокирован. Требуется отдельная корректировка'); const confirmation = await insert(c, 'portion_quantity_confirmations', a.tenantId, { portionId, source: 'RP_FACT', quantity: d.quantity, recordedBy: a.id, comment: d.comment ?? null }); await c.query('UPDATE quantity_portions SET version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2', [a.tenantId, portionId]); await audit(c, a, 'QuantityPortion', portionId, 'RP_FACT', null, confirmation, 'WorkProgressUpdated'); return confirmation; }); }
     // Internal SC and Customer SC both request through this one method (F8.1
     // decision 5 — one workflow, not two): only inspectionType differs. "Для
     // MVP предъявляется полный объём" (business rule 6) is preserved at the
@@ -312,7 +324,16 @@ export class ProductionService {
     // consistent, race-free snapshot of the Package's own content/acceptance
     // state — no concurrent content mutation or re-acceptance can interleave.
     async resolvePackageReadiness(c: any, a: Actor, pkg: any) {
-        const covered = await rows(c, 'SELECT quantity_portion_id FROM documentation_package_portions WHERE tenant_id=$1 AND documentation_package_id=$2', [a.tenantId, pkg.id]); const coveredPortionIds = covered.map((p: any) => p.quantityPortionId); const confirmed = coveredPortionIds.length ? await rows(c, "SELECT DISTINCT portion_id FROM portion_quantity_confirmations WHERE tenant_id=$1 AND portion_id=ANY($2::uuid[]) AND source='CUSTOMER_SC'", [a.tenantId, coveredPortionIds]) : []; const latestAcceptance = await one(c, 'SELECT * FROM documentation_customer_acceptances WHERE tenant_id=$1 AND documentation_package_id=$2 ORDER BY created_at DESC LIMIT 1', [a.tenantId, pkg.id]); const acceptedVersionIds = latestAcceptance ? (await rows(c, 'SELECT documentation_document_version_id FROM documentation_customer_acceptance_versions WHERE tenant_id=$1 AND customer_acceptance_id=$2', [a.tenantId, latestAcceptance.id])).map((x: any) => x.documentationDocumentVersionId) : []; const currentDocumentIds = (await rows(c, 'SELECT id FROM documentation_documents WHERE tenant_id=$1 AND documentation_package_id=$2', [a.tenantId, pkg.id])).map((x: any) => x.id); const currentVersionIds = currentDocumentIds.length ? (await rows(c, 'SELECT DISTINCT ON (documentation_document_id) documentation_document_id,id FROM documentation_document_versions WHERE tenant_id=$1 AND documentation_document_id=ANY($2::uuid[]) ORDER BY documentation_document_id,version_number DESC', [a.tenantId, currentDocumentIds])).map((x: any) => x.id) : []; const hasCustomerAcceptance = pkg.status === 'ACCEPTED_BY_CUSTOMER' && !!latestAcceptance && isCustomerAcceptanceSnapshotCurrent({ acceptedVersionIds, currentDocumentCount: currentDocumentIds.length, currentVersionIds }); return resolvePackageSdoReadiness({ hasCustomerAcceptance, coveredPortionIds, customerScConfirmedPortionIds: confirmed.map((x: any) => x.portionId) });
+        const covered = await rows(c, 'SELECT quantity_portion_id FROM documentation_package_portions WHERE tenant_id=$1 AND documentation_package_id=$2', [a.tenantId, pkg.id]); const coveredPortionIds = covered.map((p: any) => p.quantityPortionId);
+        // F12-QTY-02 (locked F12-D01): satisfied only by a portion's LATEST
+        // Customer SC confirmation (DISTINCT ON ... ORDER BY recorded_at DESC
+        // — the same "latest per group" idiom transition() already uses for
+        // INTERNAL_SC/RP_FACT above) being > 0 — row existence alone is never
+        // enough, and an older positive confirmation must never outrank a
+        // newer non-positive one. Fails closed against historical/malformed
+        // CUSTOMER_SC rows with quantity=0 exactly the same way a missing
+        // confirmation already does.
+        const latestCustomerSc = coveredPortionIds.length ? await rows(c, "SELECT DISTINCT ON (portion_id) portion_id,quantity FROM portion_quantity_confirmations WHERE tenant_id=$1 AND portion_id=ANY($2::uuid[]) AND source='CUSTOMER_SC' ORDER BY portion_id,recorded_at DESC", [a.tenantId, coveredPortionIds]) : []; const confirmed = latestCustomerSc.filter((x: any) => new Decimal(x.quantity).gt(0)); const latestAcceptance = await one(c, 'SELECT * FROM documentation_customer_acceptances WHERE tenant_id=$1 AND documentation_package_id=$2 ORDER BY created_at DESC LIMIT 1', [a.tenantId, pkg.id]); const acceptedVersionIds = latestAcceptance ? (await rows(c, 'SELECT documentation_document_version_id FROM documentation_customer_acceptance_versions WHERE tenant_id=$1 AND customer_acceptance_id=$2', [a.tenantId, latestAcceptance.id])).map((x: any) => x.documentationDocumentVersionId) : []; const currentDocumentIds = (await rows(c, 'SELECT id FROM documentation_documents WHERE tenant_id=$1 AND documentation_package_id=$2', [a.tenantId, pkg.id])).map((x: any) => x.id); const currentVersionIds = currentDocumentIds.length ? (await rows(c, 'SELECT DISTINCT ON (documentation_document_id) documentation_document_id,id FROM documentation_document_versions WHERE tenant_id=$1 AND documentation_document_id=ANY($2::uuid[]) ORDER BY documentation_document_id,version_number DESC', [a.tenantId, currentDocumentIds])).map((x: any) => x.id) : []; const hasCustomerAcceptance = pkg.status === 'ACCEPTED_BY_CUSTOMER' && !!latestAcceptance && isCustomerAcceptanceSnapshotCurrent({ acceptedVersionIds, currentDocumentCount: currentDocumentIds.length, currentVersionIds }); return resolvePackageSdoReadiness({ hasCustomerAcceptance, coveredPortionIds, customerScConfirmedPortionIds: confirmed.map((x: any) => x.portionId) });
     }
     async handoffDocumentationPackageToSdo(a: Actor, packageId: string, d: any) { requirePermission(a, P.DOCUMENTATION_MANAGE); if (a.role !== 'PTO')
         throw new ForbiddenException('Передать в СДО может только ПТО'); return transaction(async (c) => { const pkg = await scoped(c, 'documentation_packages', packageId, a, true); const w = await scoped(c, 'works', pkg.objectWorkId, a); await objectAccess(c, a, w.objectId, true); checkVersion(pkg, d.version); const readiness = await this.resolvePackageReadiness(c, a, pkg); ensure(readiness.ready, readiness.missingReasons.join('; ')); const existing = await one(c, 'SELECT * FROM sdo_closing_cases WHERE tenant_id=$1 AND documentation_package_id=$2 FOR UPDATE', [a.tenantId, packageId]); ensure(!existing || !existing.packageLocked, 'Пакет уже передан в СДО'); const sdoCase = existing ? await one(c, 'UPDATE sdo_closing_cases SET package_locked=true,version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2 RETURNING *', [a.tenantId, existing.id]) : await insert(c, 'sdo_closing_cases', a.tenantId, { objectId: pkg.objectId, objectWorkId: pkg.objectWorkId, documentationPackageId: packageId, createdBy: a.id }); await insert(c, 'sdo_closing_handoff_history', a.tenantId, { sdoClosingCaseId: sdoCase.id, event: 'HANDED_OFF', actorId: a.id, comment: d.comment ?? null }); await audit(c, a, 'SdoClosingCase', sdoCase.id, existing ? 'RE_HANDOFF' : 'HANDOFF', existing ?? null, sdoCase); return sdoCase; }); }

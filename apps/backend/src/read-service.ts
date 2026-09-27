@@ -123,9 +123,22 @@ export class ReadService {
         // `handoffPending` is true exactly when PTO could hand the package
         // off right now but has not (yet) locked it with SDO — the signal
         // the "Upcoming packages" section filters on.
+        // Hoisted above its other use further down (internalScConfirmedQuantity/
+        // customerScConfirmedQuantity per portion) so both call sites share
+        // the one latest-per-source lookup rather than two independent copies.
+        const latestConfirmation = (portionId: string, source: string) => { const own = portionConfirmations.filter(c => c.portionId === portionId && c.source === source); return own.length ? own[own.length - 1] : undefined; };
         const sdoPackageReadiness = documentationPackages.map(p => {
             const coveredPortionIds = documentationPackagePortions.filter(link => link.documentationPackageId === p.id).map(link => link.quantityPortionId);
-            const customerScConfirmedPortionIds = portionConfirmations.filter(c => c.source === 'CUSTOMER_SC' && coveredPortionIds.includes(c.portionId)).map(c => c.portionId);
+            // F12-QTY-02 (locked F12-D01): satisfied only by a portion's
+            // LATEST Customer SC confirmation being > 0 — never mere row
+            // existence, and never an older positive row outranking a newer
+            // non-positive one. Fails closed against historical/malformed
+            // quantity=0 rows exactly the way a missing confirmation already
+            // does. Must stay in lock-step with service.ts's
+            // resolvePackageReadiness() — the write-side handoff/CLOSED-
+            // revalidation gate — same rule, same latest-confirmation lookup,
+            // so read and write can never disagree about the same package.
+            const customerScConfirmedPortionIds = coveredPortionIds.filter(id => { const latest = latestConfirmation(id, 'CUSTOMER_SC'); return !!latest && new Decimal(latest.quantity).gt(0); });
             // F8.3 decisions 9-10, extended by F8.3-R02: the audited
             // documentation_customer_acceptances record is the authoritative
             // fact, never the package status flip alone (resolvePackageSdoReadiness's
@@ -195,7 +208,6 @@ export class ReadService {
         // portion_id IS NULL — decision 6: Internal SC completion and Customer
         // SC acceptance are kept apart as two separately-named results, never
         // merged into one generic "accepted".
-        const latestConfirmation = (portionId: string, source: string) => { const own = portionConfirmations.filter(c => c.portionId === portionId && c.source === source); return own.length ? own[own.length - 1] : undefined; };
         const portionAccepted = (portionId: string, inspectionType: string) => inspections.some(i => i.portionId === portionId && i.inspectionType === inspectionType && i.status === 'ACCEPTED');
         const scCompletion = new PortionCompletionService();
         // Each portion's own current figures (latest per source — RP fact never
