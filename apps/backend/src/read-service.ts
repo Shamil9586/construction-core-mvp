@@ -2,7 +2,7 @@ import { Injectable } from '@nestjs/common';
 import Decimal from 'decimal.js';
 import { pool, rows, one } from './db';
 import { Actor, requirePermission, objectAccess } from './security';
-import { Permission as P, ProgressCalculationService, ScheduleStatusService, PotentialClosingService, ObjectHealthService, PortionCompletionService, defaultRisk, resolveInternalScAccepted, resolveActualQuantity, canAccessDocumentation, resolveDocumentationAttention, resolvePackageSdoReadiness, isCustomerAcceptanceSnapshotCurrent } from '../../../packages/domain';
+import { Permission as P, ProgressCalculationService, ScheduleStatusService, PotentialClosingService, ObjectHealthService, PortionCompletionService, defaultRisk, resolveInternalScAccepted, resolveActualQuantity, canAccessDocumentation, resolveDocumentationAttention, resolvePackageSdoReadiness, isCustomerAcceptanceSnapshotCurrent, resolveCustomerScLatestGroup } from '../../../packages/domain';
 @Injectable()
 export class ReadService {
     async snapshot(a: Actor, filters: { contractorId?: string } = {}) {
@@ -45,10 +45,24 @@ export class ReadService {
         const unitIds = executionUnits.map(u => u.id);
         const executionUnitLayers = await rows(pool, 'SELECT * FROM execution_unit_layers WHERE tenant_id=$1 AND execution_unit_id=ANY($2::uuid[]) ORDER BY sort_order', [t, unitIds]);
         const portions = await rows(pool, 'SELECT * FROM quantity_portions WHERE tenant_id=$1 AND execution_unit_id=ANY($2::uuid[])', [t, unitIds]);
-        // F12.1-R01: latestConfirmation takes the last row. Use the exact
-        // reverse of the write-side (recorded_at DESC, id DESC) total order;
-        // timestamps alone can tie, including within one transaction.
-        const portionConfirmations = await rows(pool, 'SELECT * FROM portion_quantity_confirmations WHERE tenant_id=$1 AND portion_id=ANY($2::uuid[]) ORDER BY recorded_at, id', [t, portions.map(p => p.id)]);
+        const portionConfirmations = await rows(pool, 'SELECT * FROM portion_quantity_confirmations WHERE tenant_id=$1 AND portion_id=ANY($2::uuid[]) ORDER BY recorded_at', [t, portions.map(p => p.id)]);
+        // F12.1-R01 corrective (Corrective Patch 2 — Patch 1's (recorded_at,id)
+        // tie-break above was NOT accepted): Customer SC's own "latest
+        // confirmation" can never be one row picked out of portionConfirmations
+        // by array order — a UUID is not chronology, and now() is
+        // transaction-stable, so two rows can share the exact same recorded_at.
+        // The comparison that decides which rows belong to a portion's latest
+        // timestamp group must happen inside PostgreSQL, on the native
+        // timestamptz column (MAX()/JOIN equality below) — never in JS, where
+        // the default timestamptz parser only carries millisecond precision
+        // and could either falsely tie two genuinely distinct microsecond-
+        // precision timestamps or (more subtly) simply never be asked to
+        // compare them at all if the array-order approach above were reused.
+        // A dedicated query, scoped to CUSTOMER_SC alone: RP_FACT/INTERNAL_SC
+        // keep the plain single-latest-wins reading above (portionConfirmations
+        // + latestConfirmation() below), unaffected by R01.
+        const customerScLatestGroupRows = portions.length ? await rows(pool, "SELECT c.portion_id,c.quantity FROM portion_quantity_confirmations c JOIN (SELECT portion_id,MAX(recorded_at) AS max_at FROM portion_quantity_confirmations WHERE tenant_id=$1 AND portion_id=ANY($2::uuid[]) AND source='CUSTOMER_SC' GROUP BY portion_id) m ON m.portion_id=c.portion_id AND m.max_at=c.recorded_at WHERE c.tenant_id=$1 AND c.source='CUSTOMER_SC'", [t, portions.map(p => p.id)]) : [];
+        const customerScResolutionByPortion = new Map<string, ReturnType<typeof resolveCustomerScLatestGroup>>(portions.map(p => [p.id, resolveCustomerScLatestGroup(customerScLatestGroupRows.filter(r => r.portionId === p.id).map(r => r.quantity))]));
         // F8.2 PTO / Executive Documentation Foundation. Scoped by work id, the
         // same as execution units above — a Documentation Package hangs off a
         // work, never directly off an object. Fetched unconditionally;
@@ -126,22 +140,28 @@ export class ReadService {
         // `handoffPending` is true exactly when PTO could hand the package
         // off right now but has not (yet) locked it with SDO — the signal
         // the "Upcoming packages" section filters on.
-        // Hoisted above its other use further down (internalScConfirmedQuantity/
-        // customerScConfirmedQuantity per portion) so both call sites share
-        // the one latest-per-source lookup rather than two independent copies.
+        // Hoisted above its other use further down (internalScConfirmedQuantity
+        // per portion) so both call sites share the one latest-per-source
+        // lookup rather than two independent copies. RP_FACT/INTERNAL_SC only
+        // — CUSTOMER_SC reads its own latest-timestamp-GROUP resolution
+        // (customerScResolutionByPortion) above instead; a single "last row"
+        // is never a valid reading for CUSTOMER_SC (F12.1-R01).
         const latestConfirmation = (portionId: string, source: string) => { const own = portionConfirmations.filter(c => c.portionId === portionId && c.source === source); return own.length ? own[own.length - 1] : undefined; };
         const sdoPackageReadiness = documentationPackages.map(p => {
             const coveredPortionIds = documentationPackagePortions.filter(link => link.documentationPackageId === p.id).map(link => link.quantityPortionId);
-            // F12-QTY-02 (locked F12-D01): satisfied only by a portion's
-            // LATEST Customer SC confirmation being > 0 — never mere row
-            // existence, and never an older positive row outranking a newer
-            // non-positive one. Fails closed against historical/malformed
-            // quantity=0 rows exactly the way a missing confirmation already
-            // does. Must stay in lock-step with service.ts's
-            // resolvePackageReadiness() — the write-side handoff/CLOSED-
-            // revalidation gate — same rule, same latest-confirmation lookup,
-            // so read and write can never disagree about the same package.
-            const customerScConfirmedPortionIds = coveredPortionIds.filter(id => { const latest = latestConfirmation(id, 'CUSTOMER_SC'); return !!latest && new Decimal(latest.quantity).gt(0); });
+            // F12-QTY-02 (locked F12-D01), F12.1-R01 corrective: satisfied only
+            // by a portion's latest-timestamp-GROUP resolving to ready (a
+            // single positive value, or every distinct value in a tied group
+            // positive) — never mere row existence, never a single row picked
+            // out of a tie by any incidental order, and never an older
+            // positive row outranking a newer non-positive one. Fails closed
+            // against historical/malformed quantity=0 rows and against
+            // genuinely ambiguous tied groups alike. Must stay in lock-step
+            // with service.ts's resolvePackageReadiness() — the write-side
+            // handoff/CLOSED-revalidation gate — same shared
+            // resolveCustomerScLatestGroup() (packages/domain), so read and
+            // write can never disagree about the same package.
+            const customerScConfirmedPortionIds = coveredPortionIds.filter(id => customerScResolutionByPortion.get(id)?.ready ?? false);
             // F8.3 decisions 9-10, extended by F8.3-R02: the audited
             // documentation_customer_acceptances record is the authoritative
             // fact, never the package status flip alone (resolvePackageSdoReadiness's
@@ -224,7 +244,13 @@ export class ReadService {
         // internalScStatus/customerScStatus (F8.1-02 corrective) are the
         // literal PARTIAL/COMPLETE/NONE distinction the Independent Review
         // required be visible, not merely correctly computed internally.
-        const portionsWithStatus = portions.map(p => ({ ...p, rpFactQuantity: latestConfirmation(p.id, 'RP_FACT')?.quantity ?? null, internalScAccepted: portionAccepted(p.id, 'INTERNAL_SC'), internalScConfirmedQuantity: latestConfirmation(p.id, 'INTERNAL_SC')?.quantity ?? null, customerScAccepted: portionAccepted(p.id, 'CUSTOMER_SC'), customerScConfirmedQuantity: latestConfirmation(p.id, 'CUSTOMER_SC')?.quantity ?? null }));
+        // F12.1-R01 corrective: customerScConfirmedQuantity reads the shared
+        // latest-timestamp-GROUP resolution (customerScResolutionByPortion
+        // above), never latestConfirmation()'s single last-row-in-array-order
+        // pick — a tied group with more than one distinct value displays
+        // null/unknown rather than inventing a figure (0 remains a real,
+        // displayable value, distinct from unknown).
+        const portionsWithStatus = portions.map(p => ({ ...p, rpFactQuantity: latestConfirmation(p.id, 'RP_FACT')?.quantity ?? null, internalScAccepted: portionAccepted(p.id, 'INTERNAL_SC'), internalScConfirmedQuantity: latestConfirmation(p.id, 'INTERNAL_SC')?.quantity ?? null, customerScAccepted: portionAccepted(p.id, 'CUSTOMER_SC'), customerScConfirmedQuantity: customerScResolutionByPortion.get(p.id)?.quantity ?? null }));
         const executionUnitsWithTotals = executionUnits.map(u => { const ownPortions = portionsWithStatus.filter(p => p.executionUnitId === u.id); return { ...u, actualQuantity: ownPortions.reduce((s, p) => s.add(p.rpFactQuantity ?? 0), new Decimal(0)).toFixed(4), internalScStatus: scCompletion.unitCoverage(u.plannedQuantity, ownPortions.map(p => ({ confirmedQuantity: p.internalScConfirmedQuantity }))), customerScStatus: scCompletion.unitCoverage(u.plannedQuantity, ownPortions.map(p => ({ confirmedQuantity: p.customerScConfirmedQuantity }))) }; });
         // F8.1-04 corrective (Independent Review, not accepted first pass): a
         // work with any execution unit treats them as its sole production fact

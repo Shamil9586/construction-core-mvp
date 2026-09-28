@@ -255,6 +255,55 @@ export function resolvePackageSdoReadiness(input: {
     }
     return { ready: reasons.length === 0, missingReasons: reasons };
 }
+// F12.1-R01 corrective (Independent Re-Review, Corrective Patch 2 — Patch 1's
+// (recorded_at,id) tie-break was NOT accepted): a UUID is random identity,
+// never chronology, so it can never legitimately decide which Customer SC
+// confirmation is "latest" — and PostgreSQL's now() is transaction-stable,
+// so two confirmations written by one transaction can share the exact same
+// recorded_at. That is a real tie, not a hypothetical one, and no
+// incidental order (UUID, id, physical row order, insertion order) may
+// resolve it. The only correct interpretation of "the latest Customer SC
+// confirmation" for one Quantity Portion is the full set of rows tied at
+// that portion's own true max recorded_at (its "latest timestamp group"),
+// never a single row picked out of it.
+//
+// A group with exactly one distinct value is unambiguous regardless of how
+// many rows repeat it: positive is ready with that value displayed; zero (a
+// real, storable value, never "unknown") is not ready but still displays as
+// 0 — 0 and unknown are never the same thing. A group with more than one
+// distinct value can never be resolved to one authoritative figure: if
+// every distinct value is positive, the positivity prerequisite is still
+// satisfied (an SDO Case may still form) but the exact quantity is unknown;
+// if any distinct value is non-positive, the whole group is not ready, and
+// the exact quantity is unknown either way. Callers pass every quantity in
+// the group, already grouped in SQL by the group's own true max
+// recorded_at — this function never receives or compares a timestamp, so it
+// cannot itself be sensitive to any JS Date precision loss a caller's own
+// SQL might otherwise have introduced.
+//
+// Called identically by ReadService.snapshot() (the displayed figure and
+// read-side readiness) and ProductionService.resolvePackageReadiness() (the
+// write-side handoff and CLOSED-revalidation gate — F8.3-17.3 reuses the
+// same function for both) — one interpretation, never two independently
+// drifting ones.
+export interface CustomerScLatestGroupResolution {
+    ready: boolean;
+    quantity: string | null;
+}
+export function resolveCustomerScLatestGroup(quantities: (string | number)[]): CustomerScLatestGroupResolution {
+    if (quantities.length === 0)
+        return { ready: false, quantity: null };
+    const distinct = new Map<string, Decimal>();
+    for (const q of quantities) {
+        const d = new Decimal(q);
+        distinct.set(d.toFixed(4), d);
+    }
+    if (distinct.size === 1) {
+        const only = [...distinct.values()][0];
+        return { ready: only.gt(0), quantity: only.toFixed(4) };
+    }
+    return { ready: [...distinct.values()].every(d => d.gt(0)), quantity: null };
+}
 // F8.3-R02 corrective: documentation_customer_acceptances.documentation_package_version
 // is the Package's own optimistic-lock row version, never a Documentation
 // Document Version — a Package can hold several independently versioned

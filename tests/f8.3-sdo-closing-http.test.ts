@@ -104,77 +104,224 @@ async function setUpHandedOffCase(req: any, login: any, code: string, name: stri
   return { ...ctx, pkg: accepted, sdoCase };
 }
 
-// F12.1-R01: a timestamp is not a total order. Exercise both physical
-// insertion orders and both winning values; UUID order breaks timestamp
-// ties consistently, it does not claim to encode insertion chronology.
-for (const reverseInsert of [false, true]) {
-  for (const latestQuantity of ['0', '200']) {
-    test(`F12.1-R01: tied confirmations, reverseInsert=${reverseInsert}, latest=${latestQuantity}: snapshot, handoff and CLOSED agree`, async () => {
-      const { app, req, login } = await harness();
-      try {
-        const { pool, one } = await import('../apps/backend/src/db');
-        const { pm, cc, portion, pkg } = await setUpPresentedPackage(req, login, 'F121-TIE-' + randomUUID(), 'Одинаковое время подтверждений');
-        const accepted = await req(`documentation-packages/${pkg.id}/customer-acceptance`, { version: pkg.version, acceptedDate: dt(0) });
-        async function tiedPair(timestamp: string) {
-          const suffix = randomUUID().slice(8);
-          const entries = [
-            { id: '10000000' + suffix, quantity: latestQuantity === '0' ? '200' : '0' },
-            { id: '20000000' + suffix, quantity: latestQuantity },
-          ];
-          for (const entry of reverseInsert ? [...entries].reverse() : entries) {
-            await pool.query('INSERT INTO portion_quantity_confirmations(id,tenant_id,portion_id,source,quantity,recorded_by,recorded_at) VALUES($1,$2,$3,\'CUSTOMER_SC\',$4,$5,$6)', [entry.id, pm.tenantId, portion.id, entry.quantity, cc.id, timestamp]);
-          }
-        }
-        async function correction(timestamp: string) {
-          await pool.query('INSERT INTO portion_quantity_confirmations(tenant_id,portion_id,source,quantity,recorded_by,recorded_at) VALUES($1,$2,\'CUSTOMER_SC\',200,$3,$4)', [pm.tenantId, portion.id, cc.id, timestamp]);
-        }
-        async function assertReadiness(expected: boolean) {
-          const snap = await req('snapshot');
-          assert.equal(snap.sdoPackageReadiness.find((x: any) => x.documentationPackageId === pkg.id).ready, expected);
-          assert.equal(snap.portions.find((x: any) => x.id === portion.id).customerScConfirmedQuantity, expected ? '200.0000' : '0.0000');
-        }
-        async function state() {
-          return {
-            pkg: await one(pool, 'SELECT * FROM documentation_packages WHERE id=$1', [pkg.id]),
-            sdoCase: await one(pool, 'SELECT * FROM sdo_closing_cases WHERE documentation_package_id=$1', [pkg.id]),
-            handoffs: await one(pool, 'SELECT count(*) FROM sdo_closing_handoff_history WHERE sdo_closing_case_id IN (SELECT id FROM sdo_closing_cases WHERE documentation_package_id=$1)', [pkg.id]),
-            history: await one(pool, 'SELECT count(*) FROM sdo_closing_status_history WHERE sdo_closing_case_id IN (SELECT id FROM sdo_closing_cases WHERE documentation_package_id=$1)', [pkg.id]),
-            audit: await one(pool, 'SELECT count(*) FROM audit_logs WHERE tenant_id=$1', [pm.tenantId]),
-            events: await one(pool, 'SELECT count(*) FROM domain_events WHERE tenant_id=$1', [pm.tenantId]),
-          };
-        }
-
-        await tiedPair('2099-01-01T00:00:00.123456Z');
-        await assertReadiness(latestQuantity !== '0');
-        if (latestQuantity === '0') {
-          const before = await state();
-          await req(`documentation-packages/${pkg.id}/handoff-to-sdo`, { version: accepted.version }, 400);
-          assert.deepEqual(await state(), before, 'refused handoff must have no side effects');
-          await correction('2099-01-02T00:00:00Z');
-          await assertReadiness(true);
-        }
-        let sdoCase = await req(`documentation-packages/${pkg.id}/handoff-to-sdo`, { version: accepted.version });
-        await login('SDO');
-        sdoCase = await req(`sdo-closing-cases/${sdoCase.id}/status`, { version: sdoCase.version, status: 'VERIFICATION_PASSED' });
-        sdoCase = await req(`sdo-closing-cases/${sdoCase.id}/amount`, { version: sdoCase.version, amount: '100.00' });
-
-        await tiedPair('2099-01-03T00:00:00.123456Z');
-        await assertReadiness(latestQuantity !== '0');
-        if (latestQuantity === '0') {
-          const before = await state();
-          await req(`sdo-closing-cases/${sdoCase.id}/status`, { version: sdoCase.version, status: 'CLOSED' }, 400);
-          assert.deepEqual(await state(), before, 'refused CLOSED must have no side effects');
-          await correction('2099-01-04T00:00:00Z');
-          await assertReadiness(true);
-        }
-        const closed = await req(`sdo-closing-cases/${sdoCase.id}/status`, { version: sdoCase.version, status: 'CLOSED' });
-        assert.equal(closed.status, 'CLOSED');
-      } finally {
-        await app.close();
-      }
-    });
-  }
+// F12.1-R01 (Independent Re-Review, Corrective Patch 2 — Patch 1's
+// (recorded_at,id) tie-break, exercised by the tests this block replaces,
+// was NOT accepted: a UUID is random identity, never chronology). The only
+// correct interpretation of "the latest Customer SC confirmation" for one
+// Quantity Portion is the full set of rows tied at that portion's own true
+// max recorded_at (its "latest timestamp group"), never a single row picked
+// out of it by any incidental order — UUID, id, physical row order or
+// insertion order. now() is transaction-stable, so two rows written by one
+// transaction can share the exact same recorded_at: every case below
+// constructs that tie directly with raw inserts (never through two separate
+// mutating requests, which could never collide on recorded_at) and proves
+// ReadService, the write-side handoff gate and the CLOSED revalidation gate
+// all agree on the one shared interpretation (resolveCustomerScLatestGroup,
+// packages/domain).
+function tieId(prefix: string) { return prefix + randomUUID().slice(8); }
+async function insertCustomerSc(pool: any, tenantId: string, portionId: string, ccId: string, rowId: string, quantity: string, recordedAt: string) {
+  await pool.query("INSERT INTO portion_quantity_confirmations(id,tenant_id,portion_id,source,quantity,recorded_by,recorded_at) VALUES($1,$2,$3,'CUSTOMER_SC',$4,$5,$6)", [rowId, tenantId, portionId, quantity, ccId, recordedAt]);
 }
+async function customerScSnapshot(req: any, pkg: any, portion: any) {
+  const snap = await req('snapshot');
+  return {
+    ready: snap.sdoPackageReadiness.find((x: any) => x.documentationPackageId === pkg.id).ready,
+    quantity: snap.portions.find((x: any) => x.id === portion.id).customerScConfirmedQuantity,
+  };
+}
+
+// Cases A/B (locked semantics section 9): a tied positive+zero group must
+// fail closed regardless of which row the OLD, rejected (recorded_at,id)
+// tie-break would have picked as "latest" (Case A: the id arrangement that
+// makes the old rule pick the POSITIVE row), regardless of the arrangement
+// being reversed (Case B: the ZERO row now holds the larger id instead) and
+// regardless of physical insertion order.
+for (const reverseInsert of [false, true]) {
+  test(`F12.1-R01 Case A/B: a tied positive+zero group at the latest timestamp fails closed, whichever row the old UUID tie-break would have picked (reverseInsert=${reverseInsert})`, async () => {
+    const { app, req, login } = await harness();
+    try {
+      const { pool } = await import('../apps/backend/src/db');
+      const { pm, cc, portion, pkg } = await setUpPresentedPackage(req, login, 'F121-AB-' + randomUUID(), 'Совпадающее время: плюс и ноль');
+      const accepted = await req(`documentation-packages/${pkg.id}/customer-acceptance`, { version: pkg.version, acceptedDate: dt(0) });
+      // Case A: give the POSITIVE row the larger id — the row the old
+      // (recorded_at DESC, id DESC) / (recorded_at, id) rule would have
+      // picked as "latest" on both the write side (DISTINCT ON ... id DESC)
+      // and the read side (last element after ORDER BY recorded_at, id).
+      const t1 = '2099-01-01T00:00:00.123456Z';
+      const rowsA = [{ rowId: tieId('10000000'), quantity: '0' }, { rowId: tieId('20000000'), quantity: '200' }];
+      for (const r of reverseInsert ? [...rowsA].reverse() : rowsA) await insertCustomerSc(pool, pm.tenantId, portion.id, cc.id, r.rowId, r.quantity, t1);
+      let snap = await customerScSnapshot(req, pkg, portion);
+      assert.equal(snap.ready, false, 'Case A: tied positive+zero must never read ready, even though the old tie-break would have resolved this exact arrangement to the positive row');
+      assert.equal(snap.quantity, null, 'Case A: an ambiguous tied group displays unknown, never the old tie-break\'s resolved figure');
+      await req(`documentation-packages/${pkg.id}/handoff-to-sdo`, { version: accepted.version }, 400);
+      // Case B: a later tie with the arrangement reversed — the ZERO row now
+      // holds the larger id. The old rule would have picked zero this time
+      // (same readiness bool, different — wrong — displayed figure); the fix
+      // must refuse identically either way, proving this is not merely a
+      // different arbitrary winner.
+      const t2 = '2099-01-02T00:00:00.123456Z';
+      const rowsB = [{ rowId: tieId('30000000'), quantity: '200' }, { rowId: tieId('40000000'), quantity: '0' }];
+      for (const r of reverseInsert ? [...rowsB].reverse() : rowsB) await insertCustomerSc(pool, pm.tenantId, portion.id, cc.id, r.rowId, r.quantity, t2);
+      snap = await customerScSnapshot(req, pkg, portion);
+      assert.equal(snap.ready, false, 'Case B: reversing which row holds the larger id must not change the refusal');
+      assert.equal(snap.quantity, null, 'Case B: still unknown, never a resolved figure');
+      await req(`documentation-packages/${pkg.id}/handoff-to-sdo`, { version: accepted.version }, 400);
+      // A genuinely later positive confirmation restores readiness (Case F).
+      await insertCustomerSc(pool, pm.tenantId, portion.id, cc.id, tieId('50000000'), '200', '2099-01-03T00:00:00Z');
+      snap = await customerScSnapshot(req, pkg, portion);
+      assert.equal(snap.ready, true);
+      assert.equal(snap.quantity, '200.0000');
+      const sdoCase = await req(`documentation-packages/${pkg.id}/handoff-to-sdo`, { version: accepted.version });
+      assert.ok(sdoCase.id);
+    } finally {
+      await app.close();
+    }
+  });
+}
+
+test('F12.1-R01 Case C: tied identical positives resolve to the shared value — the quantity prerequisite is unambiguously satisfied', async () => {
+  const { app, req, login } = await harness();
+  try {
+    const { pool } = await import('../apps/backend/src/db');
+    const { pm, cc, portion, pkg } = await setUpPresentedPackage(req, login, 'F121-C-' + randomUUID(), 'Совпадающее время: два одинаковых плюса');
+    const accepted = await req(`documentation-packages/${pkg.id}/customer-acceptance`, { version: pkg.version, acceptedDate: dt(0) });
+    const t1 = '2099-01-01T00:00:00.123456Z';
+    await insertCustomerSc(pool, pm.tenantId, portion.id, cc.id, tieId('10000000'), '200', t1);
+    await insertCustomerSc(pool, pm.tenantId, portion.id, cc.id, tieId('20000000'), '200', t1);
+    const snap = await customerScSnapshot(req, pkg, portion);
+    assert.equal(snap.ready, true);
+    assert.equal(snap.quantity, '200.0000');
+    const sdoCase = await req(`documentation-packages/${pkg.id}/handoff-to-sdo`, { version: accepted.version });
+    assert.ok(sdoCase.id);
+  } finally {
+    await app.close();
+  }
+});
+
+test('F12.1-R01 Case D: tied different positives satisfy the positivity prerequisite but the exact quantity is unknown — read and write agree', async () => {
+  const { app, req, login } = await harness();
+  try {
+    const { pool } = await import('../apps/backend/src/db');
+    const { pm, cc, portion, pkg } = await setUpPresentedPackage(req, login, 'F121-D-' + randomUUID(), 'Совпадающее время: два разных плюса');
+    const accepted = await req(`documentation-packages/${pkg.id}/customer-acceptance`, { version: pkg.version, acceptedDate: dt(0) });
+    const t1 = '2099-01-01T00:00:00.123456Z';
+    await insertCustomerSc(pool, pm.tenantId, portion.id, cc.id, tieId('10000000'), '200', t1);
+    await insertCustomerSc(pool, pm.tenantId, portion.id, cc.id, tieId('20000000'), '150', t1);
+    const snap = await customerScSnapshot(req, pkg, portion);
+    assert.equal(snap.ready, true, 'both distinct values are positive: the positivity prerequisite is satisfied even though neither alone is authoritative');
+    assert.equal(snap.quantity, null, 'the exact figure is genuinely ambiguous and must never be invented');
+    const sdoCase = await req(`documentation-packages/${pkg.id}/handoff-to-sdo`, { version: accepted.version });
+    assert.ok(sdoCase.id, 'write-side readiness must agree with the read-side true above');
+  } finally {
+    await app.close();
+  }
+});
+
+test('F12.1-R01 Case E: a single latest zero displays as 0, never as unknown, and is not ready — 0 != unknown', async () => {
+  const { app, req, login } = await harness();
+  try {
+    const { pool } = await import('../apps/backend/src/db');
+    const { pm, cc, portion, pkg } = await setUpPresentedPackage(req, login, 'F121-E-' + randomUUID(), 'Единственный последний ноль');
+    const accepted = await req(`documentation-packages/${pkg.id}/customer-acceptance`, { version: pkg.version, acceptedDate: dt(0) });
+    await insertCustomerSc(pool, pm.tenantId, portion.id, cc.id, tieId('10000000'), '0', '2099-01-01T00:00:00Z');
+    const snap = await customerScSnapshot(req, pkg, portion);
+    assert.equal(snap.ready, false);
+    assert.equal(snap.quantity, '0.0000', '0 is a real, displayable value — distinct from an ambiguous unknown');
+    await req(`documentation-packages/${pkg.id}/handoff-to-sdo`, { version: accepted.version }, 400);
+  } finally {
+    await app.close();
+  }
+});
+
+test('F12.1-R01 Case F: a genuinely later positive confirmation restores read and write readiness after an ambiguous group', async () => {
+  const { app, req, login } = await harness();
+  try {
+    const { pool } = await import('../apps/backend/src/db');
+    const { pm, cc, portion, pkg } = await setUpPresentedPackage(req, login, 'F121-F-' + randomUUID(), 'Позднее подтверждение восстанавливает готовность');
+    const accepted = await req(`documentation-packages/${pkg.id}/customer-acceptance`, { version: pkg.version, acceptedDate: dt(0) });
+    const t1 = '2099-01-01T00:00:00.123456Z';
+    await insertCustomerSc(pool, pm.tenantId, portion.id, cc.id, tieId('10000000'), '200', t1);
+    await insertCustomerSc(pool, pm.tenantId, portion.id, cc.id, tieId('20000000'), '0', t1);
+    let snap = await customerScSnapshot(req, pkg, portion);
+    assert.equal(snap.ready, false);
+    assert.equal(snap.quantity, null);
+    await req(`documentation-packages/${pkg.id}/handoff-to-sdo`, { version: accepted.version }, 400);
+    await insertCustomerSc(pool, pm.tenantId, portion.id, cc.id, tieId('30000000'), '200', '2099-01-02T00:00:00Z');
+    snap = await customerScSnapshot(req, pkg, portion);
+    assert.equal(snap.ready, true, 'read readiness restored');
+    assert.equal(snap.quantity, '200.0000', 'display is the later positive');
+    const sdoCase = await req(`documentation-packages/${pkg.id}/handoff-to-sdo`, { version: accepted.version });
+    assert.ok(sdoCase.id, 'write readiness restored');
+  } finally {
+    await app.close();
+  }
+});
+
+// Section 7 (timestamp precision): PostgreSQL's timestamptz carries
+// microsecond precision, but the default node-postgres parser for it
+// produces a JS Date, which only carries millisecond precision. Two rows
+// below are genuinely distinct at the DB level (differ in their last three
+// microsecond digits) yet truncate to the exact same millisecond under JS
+// Date — proving the implementation's latest-timestamp-GROUP comparison
+// runs inside PostgreSQL (MAX()/JOIN equality on the native column) and
+// never re-derives grouping from a JS Date value, which would have falsely
+// tied these two rows.
+test('F12.1-R01: sub-millisecond-distinct timestamps are never falsely treated as tied', async () => {
+  const { app, req, login } = await harness();
+  try {
+    const { pool } = await import('../apps/backend/src/db');
+    const { pm, cc, portion, pkg } = await setUpPresentedPackage(req, login, 'F121-PRECISION-' + randomUUID(), 'Точность временной метки');
+    const accepted = await req(`documentation-packages/${pkg.id}/customer-acceptance`, { version: pkg.version, acceptedDate: dt(0) });
+    await insertCustomerSc(pool, pm.tenantId, portion.id, cc.id, tieId('10000000'), '0', '2099-01-01T00:00:00.100200Z');
+    await insertCustomerSc(pool, pm.tenantId, portion.id, cc.id, tieId('20000000'), '200', '2099-01-01T00:00:00.100800Z');
+    const snap = await customerScSnapshot(req, pkg, portion);
+    assert.equal(snap.ready, true, 'the microsecond-later positive row genuinely supersedes the zero row alone — this is not a tie');
+    assert.equal(snap.quantity, '200.0000');
+    const sdoCase = await req(`documentation-packages/${pkg.id}/handoff-to-sdo`, { version: accepted.version });
+    assert.ok(sdoCase.id);
+  } finally {
+    await app.close();
+  }
+});
+
+// Section 10: CLOSED revalidation must apply the identical rule under the
+// same shared function, not merely the handoff gate — a document/version
+// change or a re-acceptance going stale is F8.3-17.3's own concern, but an
+// ambiguous Customer SC history reaching CLOSED unnoticed is R01's.
+test('F12.1-R01: CLOSED revalidation refuses an ambiguous tied group with zero side effects, and succeeds once resolved', async () => {
+  const { app, req, login } = await harness();
+  try {
+    const { pool, one } = await import('../apps/backend/src/db');
+    const { pm, cc, portion, sdoCase: initialCase } = await setUpHandedOffCase(req, login, 'F121-CLOSED-' + randomUUID(), 'Ревалидация закрытия');
+    await login('SDO');
+    let sdoCase = await req(`sdo-closing-cases/${initialCase.id}/status`, { version: initialCase.version, status: 'VERIFICATION_PASSED' });
+    sdoCase = await req(`sdo-closing-cases/${sdoCase.id}/amount`, { version: sdoCase.version, amount: '100.00' });
+    async function state() {
+      return {
+        sdoCase: await one(pool, 'SELECT * FROM sdo_closing_cases WHERE id=$1', [sdoCase.id]),
+        history: await one(pool, 'SELECT count(*) FROM sdo_closing_status_history WHERE sdo_closing_case_id=$1', [sdoCase.id]),
+        audit: await one(pool, 'SELECT count(*) FROM audit_logs WHERE tenant_id=$1', [pm.tenantId]),
+        events: await one(pool, 'SELECT count(*) FROM domain_events WHERE tenant_id=$1', [pm.tenantId]),
+      };
+    }
+    // The positive row deliberately holds the larger id — the row the old,
+    // rejected (recorded_at,id) tie-break would have picked as "latest" on
+    // both the read and write side, which would have let CLOSED through.
+    const t1 = '2099-01-01T00:00:00.123456Z';
+    await insertCustomerSc(pool, pm.tenantId, portion.id, cc.id, tieId('10000000'), '0', t1);
+    await insertCustomerSc(pool, pm.tenantId, portion.id, cc.id, tieId('20000000'), '200', t1);
+    const before = await state();
+    assert.notEqual(before.sdoCase.status, 'CLOSED');
+    assert.equal(before.sdoCase.closedAt, null);
+    await req(`sdo-closing-cases/${sdoCase.id}/status`, { version: sdoCase.version, status: 'CLOSED' }, 400);
+    assert.deepEqual(await state(), before, 'a refused CLOSED revalidation must leave status, version, closedAt and every history/audit trail untouched');
+    await insertCustomerSc(pool, pm.tenantId, portion.id, cc.id, tieId('30000000'), '200', '2099-01-02T00:00:00Z');
+    const closed = await req(`sdo-closing-cases/${sdoCase.id}/status`, { version: sdoCase.version, status: 'CLOSED' });
+    assert.equal(closed.status, 'CLOSED');
+  } finally {
+    await app.close();
+  }
+});
 
 test('F12.1-R02: HTTP Customer SC acceptance validates the persisted four-decimal quantity before any mutation', async () => {
   const { app, req, login } = await harness();
