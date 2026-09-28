@@ -1,8 +1,10 @@
 import { test, expect } from '@playwright/test';
 
-// Core 2.1: assign/remove a contractor on the object card, and verify ContractorPanel
-// membership follows the same active-relation source (not historical works).
-test('Core 2.1: assign/remove contractor on object card, ContractorPanel membership follows it', async ({ page }, info) => {
+// F12.2: assign a contractor on the object card — the tag is display-only (no
+// close/remove control; the retired POST .../remove route must never be
+// invoked from the UI) — and verify ContractorPanel membership follows the
+// same active-relation source (not historical works).
+test('F12.2: assign contractor on object card is display-only, ContractorPanel membership follows it', async ({ page }, info) => {
   if (!process.env.MOCK_LOGIN_KEY) throw Error('Set mock test key for seeded test deployment');
   await page.goto('/');
   await page.locator('.login .ant-select-selector').click();
@@ -32,6 +34,9 @@ test('Core 2.1: assign/remove contractor on object card, ContractorPanel members
   await expect(contractorTags()).toHaveCount(before + 1);
   const newTag = contractorTags().filter({ hasText: addedName });
   await expect(newTag).toBeVisible();
+  // F12.2: the tag is display-only — no close/remove control is rendered, so no
+  // request to the retired remove route can ever be emitted from it.
+  await expect(newTag.locator('.ant-tag-close-icon')).toHaveCount(0);
   await page.screenshot({ path: info.outputPath('object-contractor-assigned.png'), fullPage: true });
 
   // ContractorPanel groups this object under the newly-assigned contractor (active relation).
@@ -40,40 +45,14 @@ test('Core 2.1: assign/remove contractor on object card, ContractorPanel members
   await panel.getByLabel('Субподрядчик', { exact: true }).selectOption({ label: addedName });
   await expect(panel.locator('.portfolio-object', { hasText: objectName })).toBeVisible();
 
-  // Remove it again — object leaves that contractor's group, tag disappears from the card.
+  // F12.2: object history shows only the ASSIGN event — removeContractor is
+  // retired, so a REMOVE (or a remove+reassign pair) can never appear again.
   await page.getByRole('link', { name: objectName, exact: true }).first().click();
-  await page.getByRole('tab', { name: 'Обзор', exact: true }).click();
-  await newTag.locator('.ant-tag-close-icon').click();
-  await expect(contractorTags()).toHaveCount(before);
-  await expect(contractorTags().filter({ hasText: addedName })).toHaveCount(0);
-  await page.screenshot({ path: info.outputPath('object-contractor-removed.png'), fullPage: true });
-
-  await page.getByRole('link', { name: 'Субподрядчики', exact: true }).click();
-  await panel.getByLabel('Субподрядчик', { exact: true }).selectOption({ label: addedName });
-  await expect(panel.locator('.portfolio-object', { hasText: objectName })).toHaveCount(0);
-
-  // Reassign — object rejoins that contractor's group. Navigate via the objects
-  // grid, not a link on the current page: the ContractorPanel is still filtered
-  // to `addedName`, and the object was just confirmed absent from that filtered
-  // view (line above) — there is no longer a link with objectName on this page.
-  await page.getByRole('link', { name: 'Объекты', exact: true }).click();
-  await page.locator('.objects-grid .object-card h2', { hasText: objectName }).click();
-  await expect(page.getByRole('heading', { name: objectName, exact: true })).toBeVisible();
-  await page.getByRole('tab', { name: 'Обзор', exact: true }).click();
-  await page.getByRole('button', { name: 'Добавить подрядчика', exact: true }).click();
-  await dialog.getByLabel('Субподрядчик', { exact: true }).selectOption({ label: addedName });
-  await dialog.getByRole('button', { name: 'Сохранить', exact: true }).click();
-  await expect(dialog).toHaveCount(0);
-  await expect(contractorTags().filter({ hasText: addedName })).toBeVisible();
-
-  // F4: object history shows ASSIGN, REMOVE and the reassign ASSIGN, in order (newest
-  // first, per the audit feed's own ordering) — a removed relation's history must not
-  // disappear once it's no longer an active relation.
   await page.getByRole('tab', { name: 'История', exact: true }).click();
   const historyItems = page.locator('.ant-timeline-item-content').filter({ hasText: 'ObjectContractor' });
-  await expect(historyItems).toHaveCount(3);
+  await expect(historyItems).toHaveCount(1);
   const historyActions = (await historyItems.allInnerTexts()).map(t => t.split(' · ')[0]);
-  expect(historyActions).toEqual(['ASSIGN', 'REMOVE', 'ASSIGN']);
+  expect(historyActions).toEqual(['ASSIGN']);
   await page.screenshot({ path: info.outputPath('object-contractor-history.png'), fullPage: true });
 });
 
