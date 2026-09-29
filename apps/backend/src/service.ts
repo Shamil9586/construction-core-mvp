@@ -1,7 +1,7 @@
 import { Injectable, BadRequestException, ForbiddenException, NotFoundException, ConflictException } from '@nestjs/common';
 import Decimal from 'decimal.js';
 import { pool, one, rows, insert, transaction } from './db';
-import { Actor, requirePermission, checkVersion, scoped, objectAccess, audit, ensure } from './security';
+import { Actor, requirePermission, checkVersion, scoped, objectAccess, audit, ensure, ensureAttachmentObjectScope } from './security';
 import { Permission as P, ProgressCalculationService, ScheduleStatusService, WorkTransitionPolicy, PtoPackageValidationService, PotentialClosingService, ObjectHealthService, defaultRisk, AosrDraftEngine, QuantityPortionPolicy, resolveInternalScAccepted, resolveActualQuantity, isDocumentationStatusTransitionAllowed, canMutateDocumentationPackageContent, resolvePackageSdoReadiness, isSdoClosingStatusTransitionAllowed, isCustomerAcceptanceSnapshotCurrent, SdoClosingAllocationService, resolveCustomerScLatestGroup } from '../../../packages/domain';
 @Injectable()
 export class ProductionService {
@@ -12,8 +12,11 @@ export class ProductionService {
     async assignContractor(a: Actor, objectId: string, contractorId: string) { requirePermission(a, P.OBJECT_MANAGE_CONTRACTORS); return transaction(async (c) => { await objectAccess(c, a, objectId, true); await scoped(c, 'contractors', contractorId, a); if (await one(c, 'SELECT id FROM object_contractors_active WHERE tenant_id=$1 AND object_id=$2 AND contractor_id=$3', [a.tenantId, objectId, contractorId]))
         throw new ConflictException('Подрядчик уже назначен на объект'); const row = await insert(c, 'object_contractors', a.tenantId, { objectId, contractorId }); await audit(c, a, 'ObjectContractor', row.id, 'ASSIGN', null, row); return row; }); }
     async editObject(a: Actor, id: string, d: any) { requirePermission(a, P.OBJECT_EDIT); return transaction(async (c) => { const o = await scoped(c, 'objects', id, a, true); await objectAccess(c, a, id, true); checkVersion(o, d.version); if ('projectManagerId' in d) {
-        if (!['TECHNICAL_DIRECTOR', 'ADMIN'].includes(a.role))
-            throw new ForbiddenException('Только технический директор или администратор может переназначить РП');
+        // F12.3 (LOCKED DECISION 1): DEPUTY_DIRECTOR holds the same PM-reassignment
+        // authority the technical-director managerial role already had —
+        // TECHNICAL_DIRECTOR itself stays for legacy-assigned users.
+        if (!['TECHNICAL_DIRECTOR', 'DEPUTY_DIRECTOR', 'ADMIN'].includes(a.role))
+            throw new ForbiddenException('Только технический директор, заместитель директора или администратор может переназначить РП');
         if (d.projectManagerId !== o.projectManagerId) {
             const pm = await scoped(c, 'users', d.projectManagerId, a);
             ensure(pm.role === 'PROJECT_MANAGER' && pm.isActive, 'Назначьте активного РП');
@@ -102,8 +105,21 @@ export class ProductionService {
         await insert(c, 'portion_quantity_confirmations', a.tenantId, { portionId: i.portionId, source: i.inspectionType, quantity, inspectionId: id, recordedBy: a.id, comment: comment ?? null });
     } await audit(c, a, 'Inspection', id, action.toUpperCase(), i, n, action === 'accept' ? 'InspectionAccepted' : 'InspectionRejected'); return n; }); }
     async createPackage(a: Actor, workId: string) { requirePermission(a, P.PTO_EDIT); return transaction(async (c) => { const w = await scoped(c, 'works', workId, a); await objectAccess(c, a, w.objectId); const p = await insert(c, 'executive_packages', a.tenantId, { objectId: w.objectId, objectWorkId: workId, createdBy: a.id }); await audit(c, a, 'Package', p.id, 'CREATE', null, p); return p; }); }
-    async createDocument(a: Actor, d: any) { requirePermission(a, P.PTO_EDIT); return transaction(async (c) => { const p = await scoped(c, 'executive_packages', d.packageId, a, true); await objectAccess(c, a, p.objectId); ensure(!['TRANSFERRED_TO_SDO'].includes(p.status), 'Пакет уже передан'); const w = await scoped(c, 'works', p.objectWorkId, a), o = await scoped(c, 'objects', p.objectId, a); if (d.fileId)
-        await scoped(c, 'attachments', d.fileId, a); const draft = new AosrDraftEngine().render({ Объект: o.name, Адрес: o.address, Работа: w.name, Начало: w.actualStartDate, Окончание: w.actualFinishDate }); const doc = await insert(c, 'executive_documents', a.tenantId, { objectId: p.objectId, objectWorkId: p.objectWorkId, type: d.type, number: d.number, documentDate: d.documentDate, status: 'DRAFT', fileId: d.fileId ?? null, draftContent: draft.content, createdBy: a.id }); await insert(c, 'package_documents', a.tenantId, { packageId: p.id, documentId: doc.id }); await c.query("UPDATE executive_packages SET status='IN_PROGRESS',version=version+1 WHERE tenant_id=$1 AND id=$2", [a.tenantId, p.id]); await audit(c, a, 'Document', doc.id, 'DRAFT', null, doc); return doc; }); }
+    // F12-FILE-01 (LOCKED DECISION 3): an ordinary object file belongs to one
+    // object. scoped() on 'attachments' below only ever proved the file exists
+    // in this tenant — it said nothing about which object it was already used
+    // under, so any tenant member could point an executive document at an
+    // attachment first uploaded for a completely different object.
+    // ensureAttachmentObjectScope() (security.ts) closes exactly that gap:
+    // first use establishes the file's object, same-object reuse keeps
+    // working, cross-object reuse is refused. Material passports/certificates
+    // (materials.controller.ts) are the one deliberate exception this never
+    // touches — they remain the company-level shared library the locked
+    // decision requires.
+    async createDocument(a: Actor, d: any) { requirePermission(a, P.PTO_EDIT); return transaction(async (c) => { const p = await scoped(c, 'executive_packages', d.packageId, a, true); await objectAccess(c, a, p.objectId); ensure(!['TRANSFERRED_TO_SDO'].includes(p.status), 'Пакет уже передан'); const w = await scoped(c, 'works', p.objectWorkId, a), o = await scoped(c, 'objects', p.objectId, a); if (d.fileId) {
+        await scoped(c, 'attachments', d.fileId, a);
+        await ensureAttachmentObjectScope(c, a, d.fileId, p.objectId);
+    } const draft = new AosrDraftEngine().render({ Объект: o.name, Адрес: o.address, Работа: w.name, Начало: w.actualStartDate, Окончание: w.actualFinishDate }); const doc = await insert(c, 'executive_documents', a.tenantId, { objectId: p.objectId, objectWorkId: p.objectWorkId, type: d.type, number: d.number, documentDate: d.documentDate, status: 'DRAFT', fileId: d.fileId ?? null, draftContent: draft.content, createdBy: a.id }); await insert(c, 'package_documents', a.tenantId, { packageId: p.id, documentId: doc.id }); await c.query("UPDATE executive_packages SET status='IN_PROGRESS',version=version+1 WHERE tenant_id=$1 AND id=$2", [a.tenantId, p.id]); await audit(c, a, 'Document', doc.id, 'DRAFT', null, doc); return doc; }); }
     async approveDocument(a: Actor, id: string, v: number) { requirePermission(a, P.PTO_EDIT); return transaction(async (c) => { const doc = await scoped(c, 'executive_documents', id, a, true); await objectAccess(c, a, doc.objectId); checkVersion(doc, v); ensure(doc.status !== 'APPROVED', 'Документ уже подтверждён'); ensure(!!doc.fileId, 'Прикрепите проверенный документ; текст черновика не заменяет файл'); const n = await one(c, "UPDATE executive_documents SET status='APPROVED',approved_by=$3,approved_at=now(),version=version+1 WHERE tenant_id=$1 AND id=$2 RETURNING *", [a.tenantId, id, a.id]); await audit(c, a, 'Document', id, 'APPROVE', doc, n); return n; }); }
     async packageValidation(c: any, a: Actor, id: string) { const p = await scoped(c, 'executive_packages', id, a); await objectAccess(c, a, p.objectId); const w = await one(c, 'SELECT w.*,t.requires_inspection,t.requires_materials FROM works w JOIN work_types t ON t.id=w.work_type_id AND t.tenant_id=w.tenant_id WHERE w.tenant_id=$1 AND w.id=$2', [a.tenantId, p.objectWorkId]); const docs = await rows(c, 'SELECT d.* FROM package_documents p JOIN executive_documents d ON d.id=p.document_id AND d.tenant_id=p.tenant_id WHERE p.tenant_id=$1 AND p.package_id=$2', [a.tenantId, id]); const materials = await rows(c, `SELECT wm.id,EXISTS(SELECT 1 FROM material_documents d WHERE d.tenant_id=wm.tenant_id AND d.material_batch_id=wm.material_batch_id AND d.type IN ('CERTIFICATE','PASSPORT','DECLARATION','QUALITY_DOCUMENT') AND (d.valid_from IS NULL OR d.valid_from<=CURRENT_DATE) AND (d.valid_until IS NULL OR d.valid_until>=CURRENT_DATE)) AS valid FROM work_materials wm WHERE wm.tenant_id=$1 AND wm.object_work_id=$2`, [a.tenantId, w.id]); const accepted = !!await one(c, "SELECT id FROM inspections WHERE tenant_id=$1 AND object_work_id=$2 AND status='ACCEPTED'", [a.tenantId, w.id]); return new PtoPackageValidationService().validate({ accepted, requiresInspection: w.requiresInspection, documents: docs, requiresMaterials: w.requiresMaterials, materialsValid: materials.length > 0 && materials.every(x => x.valid) }); }
     async packageAction(a: Actor, id: string, v: number, action: string) { requirePermission(a, action === 'transfer-sdo' ? P.PTO_TRANSFER_SDO : P.PTO_EDIT); return transaction(async (c) => { const p = await scoped(c, 'executive_packages', id, a, true); checkVersion(p, v); ensure(p.status !== 'TRANSFERRED_TO_SDO', 'Пакет уже передан'); const validation = await this.packageValidation(c, a, id); ensure(validation.allowed, validation.reasons.join('; ')); if (action === 'ready') {
@@ -136,7 +152,22 @@ export class ProductionService {
     // unrelated execution unit ever being able to form one actual quantity;
     // resolveActualQuantity() (packages/domain) carries a matching defence
     // of its own for anything that reaches it regardless of this check.
-    async createExecutionUnit(a: Actor, d: any) { requirePermission(a, P.EXECUTION_UNIT_MANAGE); return transaction(async (c) => { const w = await scoped(c, 'works', d.objectWorkId, a); await objectAccess(c, a, w.objectId, true); await scoped(c, 'work_types', d.workTypeId, a); if (d.finishTypeId)
+    // F12-QTY-06 (LOCKED DECISION 2): a plain INSERT with no target row to
+    // version-check against — a network retry, a timeout after the first
+    // request already committed, or a double click can resubmit the same
+    // logical command and create a second, duplicate execution unit. Same
+    // idempotency-key pattern close()/financial_closings already established:
+    // a repeat key returns the original row unchanged (after proving the
+    // payload still matches) instead of inserting again. Optional — a caller
+    // that omits idempotencyKey falls straight through to the pre-existing
+    // behaviour below, unchanged.
+    async createExecutionUnit(a: Actor, d: any) { requirePermission(a, P.EXECUTION_UNIT_MANAGE); return transaction(async (c) => { if (d.idempotencyKey) {
+        const existing = await one(c, 'SELECT * FROM work_execution_units WHERE tenant_id=$1 AND idempotency_key=$2', [a.tenantId, d.idempotencyKey]);
+        if (existing) {
+            ensure(existing.objectWorkId === d.objectWorkId && existing.workTypeId === d.workTypeId && (existing.finishTypeId ?? null) === (d.finishTypeId ?? null) && (existing.executionConditions ?? null) === (d.executionConditions ?? null) && (existing.location ?? null) === (d.location ?? null) && existing.contractorId === d.contractorId && existing.unit === d.unit && new Decimal(existing.plannedQuantity).eq(d.plannedQuantity), 'Idempotency key уже использован с другими данными');
+            return existing;
+        }
+    } const w = await scoped(c, 'works', d.objectWorkId, a); await objectAccess(c, a, w.objectId, true); await scoped(c, 'work_types', d.workTypeId, a); if (d.finishTypeId)
         await scoped(c, 'finish_types', d.finishTypeId, a); ensure(d.unit === w.unit, 'Единица измерения единицы исполнения должна совпадать с единицей измерения работы'); ensure(d.workTypeId === w.workTypeId, 'Вид работ единицы исполнения должен совпадать с видом работ'); ensure(!!await one(c, 'SELECT id FROM object_contractors_active WHERE tenant_id=$1 AND object_id=$2 AND contractor_id=$3', [a.tenantId, w.objectId, d.contractorId]), 'Субподрядчик не назначен на объект'); const unit = await insert(c, 'work_execution_units', a.tenantId, d); await audit(c, a, 'ExecutionUnit', unit.id, 'CREATE', null, unit, 'ExecutionUnitCreated'); return unit; }); }
     async addExecutionUnitLayer(a: Actor, unitId: string, d: any) { requirePermission(a, P.EXECUTION_UNIT_MANAGE); return transaction(async (c) => { const unit = await scoped(c, 'work_execution_units', unitId, a); const w = await scoped(c, 'works', unit.objectWorkId, a); await objectAccess(c, a, w.objectId, true); const layer = await insert(c, 'execution_unit_layers', a.tenantId, { executionUnitId: unitId, ...d }); await audit(c, a, 'ExecutionUnitLayer', layer.id, 'CREATE', null, layer); return layer; }); }
     // D4: a candidate portion is rejected — never silently clamped — if it would
@@ -144,7 +175,18 @@ export class ProductionService {
     // unit row is locked FOR UPDATE for the duration of the sum-and-insert so two
     // concurrent portion creations cannot both pass the check against the same
     // stale sum.
-    async createQuantityPortion(a: Actor, unitId: string, d: any) { requirePermission(a, P.EXECUTION_UNIT_MANAGE); return transaction(async (c) => { const unit = await scoped(c, 'work_execution_units', unitId, a, true); const w = await scoped(c, 'works', unit.objectWorkId, a); await objectAccess(c, a, w.objectId, true); const sum = await one(c, 'SELECT coalesce(sum(planned_quantity),0) AS total FROM quantity_portions WHERE tenant_id=$1 AND execution_unit_id=$2', [a.tenantId, unitId]); ensure(new QuantityPortionPolicy().fits(unit.plannedQuantity, sum.total, d.plannedQuantity), 'Сумма объёма участков превышает плановый объём единицы исполнения'); const portion = await insert(c, 'quantity_portions', a.tenantId, { executionUnitId: unitId, ...d }); await audit(c, a, 'QuantityPortion', portion.id, 'CREATE', null, portion); return portion; }); }
+    // F12-QTY-06 (LOCKED DECISION 2): explicitly named as the primary retry
+    // risk — an append-only-shaped create with no target row of its own to
+    // version-check, and the unit's own FOR UPDATE lock (D4 above) only
+    // protects the *sum* invariant, not "was this exact create already done".
+    // Same optional idempotency-key pattern as createExecutionUnit() above.
+    async createQuantityPortion(a: Actor, unitId: string, d: any) { requirePermission(a, P.EXECUTION_UNIT_MANAGE); return transaction(async (c) => { if (d.idempotencyKey) {
+        const existing = await one(c, 'SELECT * FROM quantity_portions WHERE tenant_id=$1 AND idempotency_key=$2', [a.tenantId, d.idempotencyKey]);
+        if (existing) {
+            ensure(existing.executionUnitId === unitId && existing.label === d.label && new Decimal(existing.plannedQuantity).eq(d.plannedQuantity), 'Idempotency key уже использован с другими данными');
+            return existing;
+        }
+    } const unit = await scoped(c, 'work_execution_units', unitId, a, true); const w = await scoped(c, 'works', unit.objectWorkId, a); await objectAccess(c, a, w.objectId, true); const sum = await one(c, 'SELECT coalesce(sum(planned_quantity),0) AS total FROM quantity_portions WHERE tenant_id=$1 AND execution_unit_id=$2', [a.tenantId, unitId]); ensure(new QuantityPortionPolicy().fits(unit.plannedQuantity, sum.total, d.plannedQuantity), 'Сумма объёма участков превышает плановый объём единицы исполнения'); const portion = await insert(c, 'quantity_portions', a.tenantId, { executionUnitId: unitId, ...d }); await audit(c, a, 'QuantityPortion', portion.id, 'CREATE', null, portion); return portion; }); }
     // "RP enters fact" (F8.1 decision 7) — the portion-scoped analogue of
     // progress(), on portion_quantity_confirmations (source RP_FACT) rather than
     // work_progress/works.actual_quantity, which this leaves untouched. The

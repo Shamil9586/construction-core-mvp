@@ -41,12 +41,24 @@ export function recordPortionFact(
   return post(`portions/${portionId}/fact`, { quantity, version, comment });
 }
 
+/**
+ * F12-QTY-06 (LOCKED DECISION 2): idempotencyKey is the caller's — generated
+ * once per logical add-portion attempt (AddPortionForm, ExecutionSection.tsx)
+ * and reused across every retry of that same attempt, not minted fresh here
+ * per call. A network retry, a timeout after the first call already
+ * committed, or the user manually resubmitting after a perceived failure all
+ * carry the same key and resolve to the same portion server-side instead of
+ * creating a duplicate (see createQuantityPortion(), service.ts). Matches the
+ * same crypto.randomUUID() idempotencyKey pattern main.tsx's own
+ * financial-closing form already uses.
+ */
 export function createQuantityPortion(
   executionUnitId: Uuid,
   label: string,
   plannedQuantity: number,
+  idempotencyKey: string,
 ): Promise<QuantityPortion> {
-  return post(`execution-units/${executionUnitId}/portions`, { label, plannedQuantity });
+  return post(`execution-units/${executionUnitId}/portions`, { label, plannedQuantity, idempotencyKey });
 }
 
 export function requestInternalScInspection(portionId: Uuid, version: number): Promise<Inspection> {

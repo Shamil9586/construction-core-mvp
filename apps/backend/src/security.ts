@@ -30,9 +30,36 @@ export async function objectAccess(c: any, a: Actor, objectId: string, write = f
     throw new ForbiddenException('Нет доступа к объекту'); return o; }
 export async function audit(c: any, a: Actor, entityType: string, entityId: string, action: string, oldValue: any, newValue: any, eventType?: string) { await insert(c, 'audit_logs', a.tenantId, { userId: a.id, entityType, entityId, action, oldValue: oldValue ? JSON.stringify(oldValue) : null, newValue: JSON.stringify(newValue) }); if (eventType) {
     const event = await insert(c, 'domain_events', a.tenantId, { eventType, entityId, payload: JSON.stringify({ actorId: a.id, entityType, entityId }) });
-    const users = (await c.query("SELECT id FROM users WHERE tenant_id=$1 AND is_active=true AND role IN ('PTO','TECHNICAL_DIRECTOR','GENERAL_DIRECTOR','CONSTRUCTION_CONTROL','SDO','PROJECT_MANAGER')", [a.tenantId])).rows;
+    // F12.3 (LOCKED DECISION 1): DEPUTY_DIRECTOR gets the same oversight
+    // notifications the technical-director managerial role already received —
+    // TECHNICAL_DIRECTOR itself stays for any still-active legacy-assigned user.
+    const users = (await c.query("SELECT id FROM users WHERE tenant_id=$1 AND is_active=true AND role IN ('PTO','TECHNICAL_DIRECTOR','DEPUTY_DIRECTOR','GENERAL_DIRECTOR','CONSTRUCTION_CONTROL','SDO','PROJECT_MANAGER')", [a.tenantId])).rows;
     for (const user of users)
         await c.query('INSERT INTO notifications(tenant_id,user_id,event_id,title,dedupe_key) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING', [a.tenantId, user.id, event.id, eventType, `${event.id}:${user.id}`]);
 } }
 export function ensure(allowed: boolean, message: string) { if (!allowed)
     throw new BadRequestException(message); }
+// F12-FILE-01 (LOCKED DECISION 3): an ordinary object file (a document or an
+// inspection photo) belongs to exactly one object. `attachments` itself
+// carries no object_id — it is a bare tenant-scoped blob store — so
+// ownership exists only implicitly, through whichever other row references
+// an attachment's id first. This proves that reference against every other
+// *ordinary* reference already made across the whole tenant: an attachment
+// already used by an executive_documents row, or already used as an
+// inspection photo, for a *different* object is refused. First use for an
+// object establishes nothing persistent (there is no column to set) — it
+// simply means no conflicting reference exists yet, so same-object reuse
+// (any later document/photo under that same object) keeps working exactly
+// as before. Deliberately excludes material_documents: material passports
+// and quality certificates are the one locked exception — a company-level
+// shared library legitimately reused across multiple objects in the same
+// tenant (materials.controller.ts never calls this).
+export async function ensureAttachmentObjectScope(c: any, a: Actor, fileId: string, objectId: string) {
+    const conflict = await one(c,
+        `SELECT 1 FROM executive_documents WHERE tenant_id=$1 AND file_id=$2 AND object_id<>$3
+         UNION ALL
+         SELECT 1 FROM inspection_photos p JOIN inspections i ON i.tenant_id=p.tenant_id AND i.id=p.inspection_id WHERE p.tenant_id=$1 AND p.attachment_id=$2 AND i.object_id<>$3
+         LIMIT 1`,
+        [a.tenantId, fileId, objectId]);
+    ensure(!conflict, 'Файл уже используется в другом объекте');
+}

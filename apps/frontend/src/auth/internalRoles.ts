@@ -30,6 +30,8 @@ export const INTERNAL_CORE_ROLES = [
   'SDO',
   'ADMIN',
   'DEPARTMENT_HEAD',
+  // F12.3 (LOCKED DECISION 1): the canonical current managerial role.
+  'DEPUTY_DIRECTOR',
 ] as const satisfies readonly Role[];
 
 export type InternalCoreRole = (typeof INTERNAL_CORE_ROLES)[number];
@@ -47,6 +49,7 @@ export const INTERNAL_ROLE_LABELS: Record<InternalCoreRole, string> = {
   SDO: 'СДО',
   ADMIN: 'Администратор',
   DEPARTMENT_HEAD: 'Руководитель направления',
+  DEPUTY_DIRECTOR: 'Заместитель директора',
 };
 
 export type CoreRoleAccess =

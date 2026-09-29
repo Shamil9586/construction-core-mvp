@@ -61,8 +61,8 @@ export function WorkRoute() {
           await executionUnitsApi.recordPortionFact(portionId, quantity, version, comment);
           refetch();
         },
-        onCreatePortion: async (executionUnitId, label, plannedQuantity) => {
-          await executionUnitsApi.createQuantityPortion(executionUnitId, label, plannedQuantity);
+        onCreatePortion: async (executionUnitId, label, plannedQuantity, idempotencyKey) => {
+          await executionUnitsApi.createQuantityPortion(executionUnitId, label, plannedQuantity, idempotencyKey);
           refetch();
         },
         onRequestInternalSc: async (portionId, version) => {

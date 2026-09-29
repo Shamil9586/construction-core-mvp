@@ -1,5 +1,14 @@
 import Decimal from 'decimal.js';
-export const roles = ['GENERAL_DIRECTOR', 'TECHNICAL_DIRECTOR', 'PROJECT_MANAGER', 'CONSTRUCTION_CONTROL', 'PTO', 'SDO', 'DEPARTMENT_HEAD', 'ADMIN', 'CONTRACTOR_VIEWER'] as const;
+// F12.3 (LOCKED DECISION 1): DEPUTY_DIRECTOR ("Заместитель директора") is the
+// canonical current managerial role — one person over both the construction
+// contour (RP/SK) and the technical contour (PTO/SDO). Appended at the end,
+// never inserted between existing entries: scripts/seed.ts pairs this array
+// with its own fixed-position name list purely by index, so any reordering
+// would silently relabel every role after the insertion point. TECHNICAL_DIRECTOR
+// stays for backward compatibility with existing stored/audited data — it is
+// no longer the intended role for new assignments (see `grants` below and
+// every UI/mock/seed call site that now offers DEPUTY_DIRECTOR instead).
+export const roles = ['GENERAL_DIRECTOR', 'TECHNICAL_DIRECTOR', 'PROJECT_MANAGER', 'CONSTRUCTION_CONTROL', 'PTO', 'SDO', 'DEPARTMENT_HEAD', 'ADMIN', 'CONTRACTOR_VIEWER', 'DEPUTY_DIRECTOR'] as const;
 export type Role = typeof roles[number];
 export enum Permission {
     OBJECT_VIEW = 'OBJECT_VIEW',
@@ -58,7 +67,14 @@ export enum Permission {
     SDO_CASE_MANAGE = 'SDO_CASE_MANAGE'
 }
 const view = [Permission.OBJECT_VIEW, Permission.WORK_VIEW, Permission.PTO_VIEW, Permission.SDO_VIEW, Permission.FINANCE_VIEW];
-const grants: Record<Role, Permission[]> = { ADMIN: Object.values(Permission), GENERAL_DIRECTOR: view, TECHNICAL_DIRECTOR: [...view, Permission.OBJECT_CREATE, Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE, Permission.EXECUTION_UNIT_MANAGE], DEPARTMENT_HEAD: view, PROJECT_MANAGER: [...view, Permission.OBJECT_CREATE, Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE, Permission.EXECUTION_UNIT_MANAGE, Permission.WORK_UPDATE_PROGRESS, Permission.INSPECTION_REQUEST, Permission.ISSUE_RESOLVE], CONSTRUCTION_CONTROL: [...view, Permission.INSPECTION_ACCEPT, Permission.INSPECTION_REJECT, Permission.ISSUE_CREATE, Permission.ISSUE_VERIFY], PTO: [...view, Permission.PTO_EDIT, Permission.PTO_TRANSFER_SDO, Permission.DOCUMENTATION_MANAGE], SDO: [...view, Permission.SDO_EDIT, Permission.SDO_CLOSE, Permission.FINANCE_EDIT, Permission.SDO_CASE_MANAGE], CONTRACTOR_VIEWER: [Permission.OBJECT_VIEW, Permission.WORK_VIEW] };
+// F12.3 (LOCKED DECISION 1): DEPUTY_DIRECTOR gets exactly the current
+// TECHNICAL_DIRECTOR managerial grant — company/object/work visibility (`view`)
+// plus the same object/work management bundle — never PTO's DOCUMENTATION_MANAGE,
+// SDO's SDO_CASE_MANAGE, or Construction Control's INSPECTION_ACCEPT/REJECT and
+// ISSUE_CREATE/VERIFY. A managerial role oversees those departments; it does not
+// perform their operational mutations merely because they report to it
+// (segregation of duties, explicitly required by the locked decision).
+const grants: Record<Role, Permission[]> = { ADMIN: Object.values(Permission), GENERAL_DIRECTOR: view, TECHNICAL_DIRECTOR: [...view, Permission.OBJECT_CREATE, Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE, Permission.EXECUTION_UNIT_MANAGE], DEPUTY_DIRECTOR: [...view, Permission.OBJECT_CREATE, Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE, Permission.EXECUTION_UNIT_MANAGE], DEPARTMENT_HEAD: view, PROJECT_MANAGER: [...view, Permission.OBJECT_CREATE, Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE, Permission.EXECUTION_UNIT_MANAGE, Permission.WORK_UPDATE_PROGRESS, Permission.INSPECTION_REQUEST, Permission.ISSUE_RESOLVE], CONSTRUCTION_CONTROL: [...view, Permission.INSPECTION_ACCEPT, Permission.INSPECTION_REJECT, Permission.ISSUE_CREATE, Permission.ISSUE_VERIFY], PTO: [...view, Permission.PTO_EDIT, Permission.PTO_TRANSFER_SDO, Permission.DOCUMENTATION_MANAGE], SDO: [...view, Permission.SDO_EDIT, Permission.SDO_CLOSE, Permission.FINANCE_EDIT, Permission.SDO_CASE_MANAGE], CONTRACTOR_VIEWER: [Permission.OBJECT_VIEW, Permission.WORK_VIEW] };
 export const hasPermission = (role: Role, p: Permission) => grants[role]?.includes(p) ?? false;
 // F8.2 Architecture Contract: "SDO: No F8.2 access" and no contractor portal
 // — the one place that decides who may see Executive Documentation data at

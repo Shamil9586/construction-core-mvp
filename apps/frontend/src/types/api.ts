@@ -46,7 +46,10 @@ export type Role =
   | 'SDO'
   | 'DEPARTMENT_HEAD'
   | 'ADMIN'
-  | 'CONTRACTOR_VIEWER';
+  | 'CONTRACTOR_VIEWER'
+  // F12.3 (LOCKED DECISION 1): the canonical current managerial role —
+  // TECHNICAL_DIRECTOR stays above for legacy-assigned users/historical data.
+  | 'DEPUTY_DIRECTOR';
 
 /**
  * Output of `ScheduleStatusService`. A degree of variance against the schedule —

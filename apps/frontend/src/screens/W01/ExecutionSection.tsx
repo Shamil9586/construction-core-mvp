@@ -25,7 +25,14 @@ import styles from './ExecutionSection.module.css';
 
 export interface W01ActionHandlers {
   onRecordFact: (portionId: string, quantity: number, version: number, comment: string) => Promise<void>;
-  onCreatePortion: (executionUnitId: string, label: string, plannedQuantity: number) => Promise<void>;
+  /**
+   * F12-QTY-06 (LOCKED DECISION 2) — `idempotencyKey` is minted once per
+   * logical attempt by `AddPortionForm` below and reused across every retry
+   * of that same attempt, so a network retry, a timeout after the first call
+   * already committed, or the user manually resubmitting after a perceived
+   * failure all resolve to the same portion server-side.
+   */
+  onCreatePortion: (executionUnitId: string, label: string, plannedQuantity: number, idempotencyKey: string) => Promise<void>;
   onRequestInternalSc: (portionId: string, version: number) => Promise<void>;
   /**
    * `quantity` is the inspector's own independently confirmed figure —
@@ -292,12 +299,18 @@ function AddPortionForm({
   onSubmit,
 }: {
   unit: W01ExecutionUnitViewModel;
-  onSubmit: (label: string, plannedQuantity: number) => Promise<void>;
+  onSubmit: (label: string, plannedQuantity: number, idempotencyKey: string) => Promise<void>;
 }) {
   const [label, setLabel] = useState('');
   const [plannedQuantity, setPlannedQuantity] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // F12-QTY-06 (LOCKED DECISION 2): one key per logical attempt, reused across
+  // every retry of that same attempt (this form does not clear its fields on
+  // error, so a manual resubmit reuses the same visible values); a fresh key
+  // is minted only once an attempt actually succeeds, for the next
+  // independent portion.
+  const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -313,9 +326,10 @@ function AddPortionForm({
     setPending(true);
     setError(null);
     try {
-      await onSubmit(label.trim(), parsed);
+      await onSubmit(label.trim(), parsed, idempotencyKey);
       setLabel('');
       setPlannedQuantity('');
+      setIdempotencyKey(crypto.randomUUID());
     } catch (submitError) {
       setError(errorMessage(submitError));
     } finally {
@@ -423,7 +437,7 @@ function ExecutionUnitCard({ unit, actions }: { unit: W01ExecutionUnitViewModel;
         <span className={[styles.meta, typeClass('body')].join(' ')}>Участки ещё не выделены</span>
       )}
       {actions ? (
-        <AddPortionForm unit={unit} onSubmit={(label, qty) => actions.onCreatePortion(unit.id, label, qty)} />
+        <AddPortionForm unit={unit} onSubmit={(label, qty, idempotencyKey) => actions.onCreatePortion(unit.id, label, qty, idempotencyKey)} />
       ) : null}
     </div>
   );
