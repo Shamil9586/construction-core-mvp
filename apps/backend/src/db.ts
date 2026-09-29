@@ -37,3 +37,19 @@ const tables = new Set(['users', 'contractors', 'objects', 'object_contractors',
 export async function insert(c: any, table: string, tenantId: string, data: any) { if (!tables.has(table))
     throw Error('Invalid table'); const d = { tenant_id: tenantId, ...Object.fromEntries(Object.entries(data).map(([k, v]) => [k.replace(/[A-Z]/g, x => '_' + x.toLowerCase()), v])) }; const keys = Object.keys(d); if (keys.some(k => !/^[a-z_]+$/.test(k)))
     throw Error('Invalid column'); return one(c, `INSERT INTO ${table} (${keys.join(',')}) VALUES (${keys.map((_, i) => '$' + (i + 1)).join(',')}) RETURNING *`, Object.values(d)); }
+// F12.3 FINAL-R01: the atomic counterpart of insert() for a table with its
+// own (tenant_id,idempotency_key) partial unique index (infra/013) — targets
+// that exact index with ON CONFLICT ... DO NOTHING, PostgreSQL's own atomic
+// primitive for "two concurrent transactions racing the same key converge on
+// one row": the second inserter blocks on the first's uncommitted
+// conflicting tuple rather than both observing "not found" and both
+// inserting. Returns the inserted row, or undefined if another transaction
+// already committed one with the same (tenant_id,idempotency_key) — the
+// caller is expected to fetch and validate that row itself (see
+// createExecutionUnit()/createQuantityPortion(), service.ts). A row with no
+// idempotency_key (data omits it, or it is null) never conflicts — this is
+// exactly equivalent to insert() for that case, so every existing caller
+// that does not opt in is unaffected.
+export async function insertIdempotent(c: any, table: string, tenantId: string, data: any): Promise<any> { if (!tables.has(table))
+    throw Error('Invalid table'); const d = { tenant_id: tenantId, ...Object.fromEntries(Object.entries(data).map(([k, v]) => [k.replace(/[A-Z]/g, x => '_' + x.toLowerCase()), v])) }; const keys = Object.keys(d); if (keys.some(k => !/^[a-z_]+$/.test(k)))
+    throw Error('Invalid column'); return one(c, `INSERT INTO ${table} (${keys.join(',')}) VALUES (${keys.map((_, i) => '$' + (i + 1)).join(',')}) ON CONFLICT (tenant_id,idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING RETURNING *`, Object.values(d)); }

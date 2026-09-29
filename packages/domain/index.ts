@@ -10,6 +10,22 @@ import Decimal from 'decimal.js';
 // every UI/mock/seed call site that now offers DEPUTY_DIRECTOR instead).
 export const roles = ['GENERAL_DIRECTOR', 'TECHNICAL_DIRECTOR', 'PROJECT_MANAGER', 'CONSTRUCTION_CONTROL', 'PTO', 'SDO', 'DEPARTMENT_HEAD', 'ADMIN', 'CONTRACTOR_VIEWER', 'DEPUTY_DIRECTOR'] as const;
 export type Role = typeof roles[number];
+// F12.3 FINAL-R04 (LOCKED DECISION 1, clarified): `roles` above is the full
+// STORAGE/LEGACY-COMPATIBLE set — every value the DB CHECK constraint
+// accepts and every value an existing row/session may already carry.
+// CURRENT_ASSIGNABLE_ROLES is the strictly narrower set a *new* user may be
+// created with: the same list minus TECHNICAL_DIRECTOR, which remains valid
+// only for rows/sessions that already exist. POST /users (users.controller.ts)
+// validates against this list, not `roles` — an ADMIN can no longer create a
+// new TECHNICAL_DIRECTOR user through the normal assignment path, while an
+// existing TECHNICAL_DIRECTOR row keeps authenticating and keeps its
+// existing grants unchanged (`grants` below is keyed by the full `Role`
+// type and is not narrowed by this list). auth/mock intentionally keeps
+// validating against the full `roles` list, not this one — it authenticates
+// as an *existing* (possibly legacy) seeded user, which is exactly the
+// "existing sessions/users continue to authenticate" case, not a new
+// assignment.
+export const CURRENT_ASSIGNABLE_ROLES = ['GENERAL_DIRECTOR', 'PROJECT_MANAGER', 'CONSTRUCTION_CONTROL', 'PTO', 'SDO', 'DEPARTMENT_HEAD', 'ADMIN', 'CONTRACTOR_VIEWER', 'DEPUTY_DIRECTOR'] as const;
 export enum Permission {
     OBJECT_VIEW = 'OBJECT_VIEW',
     OBJECT_CREATE = 'OBJECT_CREATE',

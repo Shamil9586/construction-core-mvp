@@ -135,12 +135,14 @@ export function registerDocumentationCustomerAcceptance(
  * authority; this only sends the request). Readiness (`sdoPackageReadiness`
  * in the snapshot) decides whether the screen even offers this action.
  */
+/** F12.3 FINAL-R02 (LOCKED DECISION 2, Option A): idempotencyKey is the caller's — one per logical handoff attempt (HandoffToSdoControl, screens/PackageDetail/index.tsx). */
 export function handoffDocumentationPackageToSdo(
   packageId: Uuid,
   version: number,
-  comment?: string,
+  comment: string | undefined,
+  idempotencyKey: string,
 ): Promise<SdoClosingCase> {
-  return post(`documentation-packages/${packageId}/handoff-to-sdo`, { version, comment });
+  return post(`documentation-packages/${packageId}/handoff-to-sdo`, { version, comment, idempotencyKey });
 }
 
 /**

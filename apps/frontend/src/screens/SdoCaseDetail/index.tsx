@@ -20,14 +20,16 @@ import styles from './SdoCaseDetail.module.css';
  */
 
 export interface SdoCaseDetailActionHandlers {
-  onChangeStatus: (status: SdoClosingStatus, reason: string | undefined) => Promise<void>;
+  /** F12.3 FINAL-R02 (LOCKED DECISION 2, Option A): `idempotencyKey` is minted once per logical status-change attempt by `StatusActionControl` below and reused across every retry. */
+  onChangeStatus: (status: SdoClosingStatus, reason: string | undefined, idempotencyKey: string) => Promise<void>;
   onSetAmount: (amount: string) => Promise<void>;
   /** F8.3-R05 — `version` is required to correct an existing allocation, and must be omitted (undefined) to create the first one for a Portion. */
   onSetAllocation: (quantityPortionId: string, amount: string, version: number | undefined) => Promise<void>;
   /** F8.3-19 — explicit, audited cancellation of an active allocation; the row is marked inactive, never deleted. Requires the allocation's current `version`. */
   onCancelAllocation: (quantityPortionId: string, version: number) => Promise<void>;
   onAssignResponsible: (responsibleUserId: string) => Promise<void>;
-  onReturnToPto: (comment: string | undefined) => Promise<void>;
+  /** F12.3 FINAL-R02: `idempotencyKey` is minted once per logical return-to-PTO attempt by `ReturnToPtoControl` below and reused across every retry. */
+  onReturnToPto: (comment: string | undefined, idempotencyKey: string) => Promise<void>;
   sdoUsers: UserSummary[];
 }
 
@@ -59,11 +61,15 @@ function StatusActionControl({
   requiresReason: boolean;
   /** F8.3-15 — worded for the actual source status: "закрытого дела" is only accurate when the Case really is CLOSED, so VERIFICATION_PASSED gets its own, source-neutral wording. */
   reasonMissingMessage: string;
-  onSubmit: (status: SdoClosingStatus, reason: string | undefined) => Promise<void>;
+  onSubmit: (status: SdoClosingStatus, reason: string | undefined, idempotencyKey: string) => Promise<void>;
 }) {
   const [reason, setReason] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // F12.3 FINAL-R02 (LOCKED DECISION 2): one key per logical attempt, reused
+  // across every retry of that same attempt; a fresh key is minted only
+  // once an attempt actually succeeds.
+  const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
 
   async function handleClick() {
     if (requiresReason && !reason.trim()) {
@@ -73,8 +79,9 @@ function StatusActionControl({
     setPending(true);
     setError(null);
     try {
-      await onSubmit(status, reason.trim() || undefined);
+      await onSubmit(status, reason.trim() || undefined, idempotencyKey);
       setReason('');
+      setIdempotencyKey(crypto.randomUUID());
     } catch (submitError) {
       setError(errorMessage(submitError));
     } finally {
@@ -329,17 +336,22 @@ function ResponsibleForm({
   );
 }
 
-function ReturnToPtoControl({ onSubmit }: { onSubmit: (comment: string | undefined) => Promise<void> }) {
+function ReturnToPtoControl({ onSubmit }: { onSubmit: (comment: string | undefined, idempotencyKey: string) => Promise<void> }) {
   const [comment, setComment] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // F12.3 FINAL-R02 (LOCKED DECISION 2): one key per logical attempt, reused
+  // across every retry of that same attempt; a fresh key is minted only
+  // once an attempt actually succeeds.
+  const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
 
   async function handleClick() {
     setPending(true);
     setError(null);
     try {
-      await onSubmit(comment.trim() || undefined);
+      await onSubmit(comment.trim() || undefined, idempotencyKey);
       setComment('');
+      setIdempotencyKey(crypto.randomUUID());
     } catch (submitError) {
       setError(errorMessage(submitError));
     } finally {

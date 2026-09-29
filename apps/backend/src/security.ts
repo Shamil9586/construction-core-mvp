@@ -54,7 +54,26 @@ export function ensure(allowed: boolean, message: string) { if (!allowed)
 // and quality certificates are the one locked exception — a company-level
 // shared library legitimately reused across multiple objects in the same
 // tenant (materials.controller.ts never calls this).
+// F12.3 FINAL-R03 corrective: the check above (conflict query) and the
+// caller's own insert of the new executive_documents/inspection_photos
+// reference are two separate statements — without a shared lock, two
+// concurrent first-uses of the SAME never-before-referenced attachment,
+// one under Object A and one under Object B, can both run the conflict
+// query before either has inserted its reference, both find nothing, and
+// both proceed, leaving the one attachment referenced by two objects at
+// once. Locking the attachments row itself FOR UPDATE first closes this:
+// PostgreSQL serializes any two transactions attempting to lock the same
+// row, so the second one blocks until the first COMMITS (by which point its
+// reference is visible to the conflict query) or ROLLS BACK (by which point
+// there is nothing to conflict with). The lock is held for the rest of the
+// enclosing transaction by ordinary PostgreSQL semantics — callers do
+// nothing extra to "hold" it through their own subsequent insert. Lock
+// order is Attachment-only relative to whatever the caller already locked
+// first (Package in createDocument(), Inspection in the photo-attach
+// route) — always acquired *after* that primary entity, in both current
+// callers, so no reverse-order cycle exists between them.
 export async function ensureAttachmentObjectScope(c: any, a: Actor, fileId: string, objectId: string) {
+    await c.query('SELECT id FROM attachments WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [a.tenantId, fileId]);
     const conflict = await one(c,
         `SELECT 1 FROM executive_documents WHERE tenant_id=$1 AND file_id=$2 AND object_id<>$3
          UNION ALL
@@ -62,4 +81,56 @@ export async function ensureAttachmentObjectScope(c: any, a: Actor, fileId: stri
          LIMIT 1`,
         [a.tenantId, fileId, objectId]);
     ensure(!conflict, 'Файл уже используется в другом объекте');
+}
+// F12.3 FINAL-R02 corrective: true command idempotency (LOCKED DECISION 2,
+// Option A) for operations that mutate an *existing* versioned row rather
+// than creating an independent new one — recordPortionFact(),
+// requestPortionInspection(), handoffDocumentationPackageToSdo(),
+// returnSdoCaseToPto(), changeSdoClosingStatus() (service.ts). Those already
+// lock and version-check the row they mutate, which prevents duplicate
+// writes but resolves a retry to 400/409 — proving the first call probably
+// succeeded, never returning/referencing what it actually produced. This is
+// the minimum mechanism to close that gap: a small, shared, opt-in ledger
+// used only by those five confirmed paths, not wired into any other
+// mutation in the repository.
+//
+// claimIdempotentCommand() is called first, before the operation's own
+// checkVersion()/row locks, so a retry carrying the same (now-stale)
+// version short-circuits to the stored response instead of hitting a
+// conflict a genuinely new, unrelated command would still correctly hit.
+// The claim's own INSERT ... ON CONFLICT DO NOTHING is the same atomic
+// primitive insertIdempotent() uses (db.ts): a concurrent same-key claim
+// blocks on the first transaction's uncommitted claim row rather than both
+// observing "not found". Claim and mutation share one transaction, so a
+// business-rule failure rolls back the claim together with everything else
+// — a genuinely failed attempt leaves nothing behind, and a stale command
+// without a matching prior success keeps failing normally on retry.
+export type IdempotentClaim = { replay: false } | { replay: true; response: any };
+function payloadEquals(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
+    const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+    for (const k of keys)
+        if (JSON.stringify(a[k]) !== JSON.stringify(b[k]))
+            return false;
+    return true;
+}
+export async function claimIdempotentCommand(c: any, a: Actor, operation: string, idempotencyKey: string | undefined | null, scopeId: string, payload: Record<string, unknown>): Promise<IdempotentClaim> {
+    if (!idempotencyKey)
+        return { replay: false };
+    const existing = await one(c, 'SELECT * FROM idempotent_commands WHERE tenant_id=$1 AND operation=$2 AND idempotency_key=$3', [a.tenantId, operation, idempotencyKey]);
+    if (existing) {
+        ensure(existing.scopeId === scopeId && payloadEquals(existing.payload, payload), 'Idempotency key уже использован с другими данными');
+        return { replay: true, response: existing.response };
+    }
+    const claimed = await one(c, 'INSERT INTO idempotent_commands(tenant_id,operation,idempotency_key,scope_id,payload,created_by) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT (tenant_id,operation,idempotency_key) DO NOTHING RETURNING *', [a.tenantId, operation, idempotencyKey, scopeId, JSON.stringify(payload), a.id]);
+    if (claimed)
+        return { replay: false };
+    const raced = await one(c, 'SELECT * FROM idempotent_commands WHERE tenant_id=$1 AND operation=$2 AND idempotency_key=$3', [a.tenantId, operation, idempotencyKey]);
+    ensure(!!raced, 'Idempotency key conflict');
+    ensure(raced.scopeId === scopeId && payloadEquals(raced.payload, payload), 'Idempotency key уже использован с другими данными');
+    return { replay: true, response: raced.response };
+}
+export async function completeIdempotentCommand(c: any, a: Actor, operation: string, idempotencyKey: string | undefined | null, response: any): Promise<void> {
+    if (!idempotencyKey)
+        return;
+    await c.query('UPDATE idempotent_commands SET response=$4 WHERE tenant_id=$1 AND operation=$2 AND idempotency_key=$3', [a.tenantId, operation, idempotencyKey, JSON.stringify(response)]);
 }

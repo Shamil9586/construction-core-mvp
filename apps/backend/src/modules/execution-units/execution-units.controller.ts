@@ -48,6 +48,6 @@ export class ExecutionUnitsController {
     @Post('portions/:id/inspection-request')
     async requestInspection(@Req() r: any, @Param('id') id: string, @Body() b: any) {
         const d = V.portionInspectionRequestDto.parse(b);
-        return this.service.requestPortionInspection(await authenticate(r), V.uuid.parse(id), d.version, d.inspectionType);
+        return this.service.requestPortionInspection(await authenticate(r), V.uuid.parse(id), d.version, d.inspectionType, d.idempotencyKey);
     }
 }

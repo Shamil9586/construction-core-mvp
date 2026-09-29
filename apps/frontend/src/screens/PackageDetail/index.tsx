@@ -50,7 +50,8 @@ export interface PackageDetailActionHandlers {
    * is true; the backend re-checks readiness regardless. F8.3-R01 corrective:
    * optional, PTO only — see `onRegisterCustomerAcceptance` above.
    */
-  onHandoffToSdo?: (comment: string | undefined) => Promise<void>;
+  /** F12.3 FINAL-R02: `idempotencyKey` is minted once per logical handoff attempt by `HandoffToSdoControl` below and reused across every retry. */
+  onHandoffToSdo?: (comment: string | undefined, idempotencyKey: string) => Promise<void>;
   /**
    * F8.3-17 "Вернуть на корректировку" — the dedicated, audited, PTO-only,
    * pre-handoff-only operation; never routed through `onAdvanceStatus` (the
@@ -242,17 +243,22 @@ function CustomerAcceptanceForm({
   );
 }
 
-function HandoffToSdoControl({ onSubmit }: { onSubmit: (comment: string | undefined) => Promise<void> }) {
+function HandoffToSdoControl({ onSubmit }: { onSubmit: (comment: string | undefined, idempotencyKey: string) => Promise<void> }) {
   const [comment, setComment] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // F12.3 FINAL-R02 (LOCKED DECISION 2): one key per logical attempt, reused
+  // across every retry of that same attempt; a fresh key is minted only
+  // once an attempt actually succeeds.
+  const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
 
   async function handleClick() {
     setPending(true);
     setError(null);
     try {
-      await onSubmit(comment.trim() || undefined);
+      await onSubmit(comment.trim() || undefined, idempotencyKey);
       setComment('');
+      setIdempotencyKey(crypto.randomUUID());
     } catch (submitError) {
       setError(errorMessage(submitError));
     } finally {

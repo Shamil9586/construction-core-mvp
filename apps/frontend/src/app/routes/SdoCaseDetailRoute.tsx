@@ -56,8 +56,8 @@ export function SdoCaseDetailRoute() {
   const actions: SdoCaseDetailActionHandlers | undefined =
     session && canAccessSdoWorkspace(session.user.role)
       ? {
-          onChangeStatus: async (status, reason) => {
-            await sdoClosingApi.changeSdoClosingStatus(sdoCase.id, status, sdoCase.version, reason);
+          onChangeStatus: async (status, reason, idempotencyKey) => {
+            await sdoClosingApi.changeSdoClosingStatus(sdoCase.id, status, sdoCase.version, reason, idempotencyKey);
             refetch();
           },
           onSetAmount: async (amount) => {
@@ -76,8 +76,8 @@ export function SdoCaseDetailRoute() {
             await sdoClosingApi.assignSdoResponsible(sdoCase.id, sdoCase.version, responsibleUserId);
             refetch();
           },
-          onReturnToPto: async (comment) => {
-            await sdoClosingApi.returnSdoCaseToPto(sdoCase.id, sdoCase.version, comment);
+          onReturnToPto: async (comment, idempotencyKey) => {
+            await sdoClosingApi.returnSdoCaseToPto(sdoCase.id, sdoCase.version, comment, idempotencyKey);
             refetch();
           },
           sdoUsers,

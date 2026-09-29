@@ -28,8 +28,11 @@ export const closeDto = z.object({ sdoCaseId: uuid, amount: money.refine(v => Nu
 export const executionUnitDto = z.object({ objectWorkId: uuid, workTypeId: uuid, finishTypeId: uuid.optional(), executionConditions: text.optional(), location: text.optional(), contractorId: uuid, unit: text, plannedQuantity: qty.refine(v => Number(v) > 0), idempotencyKey: uuid.optional() }).strict();
 export const executionUnitLayerDto = z.object({ sortOrder: z.number().int().nonnegative(), name: text }).strict();
 export const quantityPortionDto = z.object({ label: text, plannedQuantity: qty.refine(v => Number(v) > 0), idempotencyKey: uuid.optional() }).strict();
-export const portionFactDto = z.object({ quantity: qty, version, comment: text.optional() }).strict();
-export const portionInspectionRequestDto = z.object({ inspectionType: z.enum(['INTERNAL_SC', 'CUSTOMER_SC']), version }).strict();
+// F12.3 FINAL-R02: idempotencyKey optional, same as executionUnitDto/
+// quantityPortionDto above — a caller that omits it keeps the exact
+// pre-existing (version-gated only) behaviour.
+export const portionFactDto = z.object({ quantity: qty, version, comment: text.optional(), idempotencyKey: uuid.optional() }).strict();
+export const portionInspectionRequestDto = z.object({ inspectionType: z.enum(['INTERNAL_SC', 'CUSTOMER_SC']), version, idempotencyKey: uuid.optional() }).strict();
 // F8.1-01 corrective, second pass (Independent Re-Review, Patch 2): `quantity`
 // is the inspector's own confirmed figure — optional here (a whole-work
 // inspection has none to confirm) but required by inspectionAction() itself
@@ -55,10 +58,11 @@ export const documentationPackageStatusDto = z.object({ status: z.enum(['DRAFT',
 // customer actually signed); reference is an optional customer-side
 // document/act number.
 export const sdoCustomerAcceptanceDto = z.object({ version, acceptedDate: date, reference: text.optional(), comment: text.optional() }).strict();
-export const sdoHandoffDto = z.object({ version, comment: text.optional() }).strict();
-export const sdoReturnToPtoDto = z.object({ version, comment: text.optional() }).strict();
+// F12.3 FINAL-R02: idempotencyKey optional on the three corrected F8.3 paths.
+export const sdoHandoffDto = z.object({ version, comment: text.optional(), idempotencyKey: uuid.optional() }).strict();
+export const sdoReturnToPtoDto = z.object({ version, comment: text.optional(), idempotencyKey: uuid.optional() }).strict();
 export const sdoResponsibleDto = z.object({ version, responsibleUserId: uuid }).strict();
-export const sdoClosingStatusDto = z.object({ version, status: z.enum(['ON_RECONCILIATION', 'VERIFICATION_PASSED', 'ON_CORRECTION', 'CLOSED']), reason: text.optional() }).strict();
+export const sdoClosingStatusDto = z.object({ version, status: z.enum(['ON_RECONCILIATION', 'VERIFICATION_PASSED', 'ON_CORRECTION', 'CLOSED']), reason: text.optional(), idempotencyKey: uuid.optional() }).strict();
 export const sdoClosingAmountDto = z.object({ version, amount: money }).strict();
 // F8.3-R05 corrective: version is optional — required (and checked) only when
 // correcting an existing allocation; the first allocation for a Portion has

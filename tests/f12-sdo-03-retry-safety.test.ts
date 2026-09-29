@@ -3,29 +3,25 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 
 /**
- * F12-SDO-03 re-verification: current F8.3 handoff/return/status-transition
- * paths only (handoffDocumentationPackageToSdo(), returnSdoCaseToPto(),
- * changeSdoClosingStatus() — service.ts). The legacy pre-F8.3 pipeline
- * (executive_packages/sdo_cases/financial_closings) is untouched.
+ * F12-SDO-03 re-verification, corrected for FINAL-R02 (independent review of
+ * the first candidate, 424afaf): current F8.3 handoff/return/status-
+ * transition paths only (handoffDocumentationPackageToSdo(),
+ * returnSdoCaseToPto(), changeSdoClosingStatus() — service.ts). The legacy
+ * pre-F8.3 pipeline (executive_packages/sdo_cases/financial_closings) is
+ * untouched.
  *
- * NOT A DEFECT, confirmed by re-inspection: every one of these already locks
- * and version-checks (or, for the Case's own creation, DB-uniqueness-checks)
- * the exact row it is about to mutate, inside the same transaction as the
- * write:
- *  - handoffDocumentationPackageToSdo() locks the Package FOR UPDATE, then
- *    checks `!existing || !existing.packageLocked` against the Case it is
- *    about to create/re-lock — a retry after a successful first call always
- *    finds packageLocked=true and is refused before any second Case or
- *    handoff-history row could be written. sdo_closing_cases_unique
- *    (infra/008_sdo_closing.sql, tenant_id+documentation_package_id) is a
- *    second, DB-level backstop for the same rule.
- *  - returnSdoCaseToPto()/changeSdoClosingStatus() both call checkVersion()
- *    on the Case, locked FOR UPDATE, before any write — a retry with the
- *    same (necessarily stale, since the first call already bumped it)
- *    version is rejected with 409 before a second history row can be
- *    written.
- * This test proves both hold, rather than adding unneeded idempotency-key
- * infrastructure to operations that already have correct retry semantics.
+ * All three already lock and version-check (or, for the Case's own
+ * creation, DB-uniqueness-check) the exact row they mutate, inside the same
+ * transaction as the write — that was, and remains, correct: it prevents a
+ * second Case/history row from ever being written. What the first
+ * candidate mislabelled is what a retry gets back once that guard fires:
+ * 400 ("уже передан")/409 only prove duplication was prevented, never that
+ * the caller received what its own first, possibly-unacknowledged call
+ * actually produced (LOCKED DECISION 2, Option A). All three now accept an
+ * idempotencyKey: a retry carrying the same key and payload returns/
+ * references the original response instead of that error; a stale command
+ * with no matching key (or a fresh one) still hits the exact same guard as
+ * before — proven below, not merely asserted away.
  */
 test('F12-SDO-03: handoff/return/status-change are already retry-safe via Package-first locking, version-gating and sdo_closing_cases_unique', async () => {
   if (!process.env.E2E_DATABASE_URL) delete process.env.DATABASE_URL;
@@ -87,27 +83,39 @@ test('F12-SDO-03: handoff/return/status-change are already retry-safe via Packag
     pkg = await req(`documentation-packages/${pkg.id}/status`, { status: 'PRESENTED', version: pkg.version });
     pkg = await req(`documentation-packages/${pkg.id}/customer-acceptance`, { version: pkg.version, acceptedDate: dt(0), reference: 'Акт-1' });
 
-    // ---- handoffDocumentationPackageToSdo(): first call creates the one Case ----
+    // ---- handoffDocumentationPackageToSdo(): FINAL-R02 — true idempotency ----
     const casesBefore = await countRows('sdo_closing_cases', tenantId);
     const historyBefore = await countRows('sdo_closing_handoff_history', tenantId);
-    const sdoCase1 = await req(`documentation-packages/${pkg.id}/handoff-to-sdo`, { version: pkg.version });
+    const handoffKey = randomUUID();
+    const sdoCase1 = await req(`documentation-packages/${pkg.id}/handoff-to-sdo`, { version: pkg.version, idempotencyKey: handoffKey });
     assert.equal(await countRows('sdo_closing_cases', tenantId), casesBefore + 1);
     assert.equal(await countRows('sdo_closing_handoff_history', tenantId), historyBefore + 1);
-    // Retry with the identical (still-valid — this operation never bumps the
-    // Package's own version) request: refused via the packageLocked guard,
-    // not a second Case or a second handoff-history row.
-    const retryHandoff = await req(`documentation-packages/${pkg.id}/handoff-to-sdo`, { version: pkg.version }, 400);
-    assert.match(retryHandoff.message, /уже передан/);
+    // Retry with the SAME key/payload (this operation never bumps the
+    // Package's own version, so a real retry is byte-identical): must
+    // return/reference the same Case, not the packageLocked-guard error.
+    const handoffRetry = await req(`documentation-packages/${pkg.id}/handoff-to-sdo`, { version: pkg.version, idempotencyKey: handoffKey });
+    assert.equal(handoffRetry.id, sdoCase1.id, 'a same-key retry must return/reference the original Case, not "уже передан"');
     assert.equal(await countRows('sdo_closing_cases', tenantId), casesBefore + 1, 'retry must not create a second SDO Case');
     assert.equal(await countRows('sdo_closing_handoff_history', tenantId), historyBefore + 1, 'retry must not create a second handoff-history row');
+    // A genuinely new command (no key) hits the exact same packageLocked guard as before this pass.
+    const noKeyRetry = await req(`documentation-packages/${pkg.id}/handoff-to-sdo`, { version: pkg.version }, 400);
+    assert.match(noKeyRetry.message, /уже передан/);
+    assert.equal(await countRows('sdo_closing_cases', tenantId), casesBefore + 1);
 
-    // ---- returnSdoCaseToPto(): version-gated on the Case itself ----
+    // ---- returnSdoCaseToPto(): FINAL-R02 — true idempotency ----
     await login('SDO');
-    const returned = await req(`sdo-closing-cases/${sdoCase1.id}/return-to-pto`, { version: sdoCase1.version });
+    const returnKey = randomUUID();
+    const returned = await req(`sdo-closing-cases/${sdoCase1.id}/return-to-pto`, { version: sdoCase1.version, idempotencyKey: returnKey });
     assert.equal(await countRows('sdo_closing_handoff_history', tenantId), historyBefore + 2);
-    // Retry with the same (now stale) Case version: 409, not a second RETURNED_TO_PTO row.
+    // Retry with the SAME key/payload (the first call's version is now
+    // stale — exactly the "client never saw success" case): must return the
+    // same result, not 409, and must not insert a second history row.
+    const returnRetry = await req(`sdo-closing-cases/${sdoCase1.id}/return-to-pto`, { version: sdoCase1.version, idempotencyKey: returnKey });
+    assert.equal(returnRetry.id, returned.id, 'a same-key retry must return/reference the original result, not 409');
+    assert.equal(await countRows('sdo_closing_handoff_history', tenantId), historyBefore + 2, 'a same-key retry must not insert a second handoff-history row');
+    // A genuinely new command (no key) with the same stale version still 409s, exactly as before this pass.
     await req(`sdo-closing-cases/${sdoCase1.id}/return-to-pto`, { version: sdoCase1.version }, 409);
-    assert.equal(await countRows('sdo_closing_handoff_history', tenantId), historyBefore + 2, 'a stale-version retry must not insert a second handoff-history row');
+    assert.equal(await countRows('sdo_closing_handoff_history', tenantId), historyBefore + 2, 'a stale-version request with no matching key must still fail normally');
 
     // ---- re-handoff shares the identical existing/packageLocked guard proven above ----
     // returnSdoCaseToPto() already moved the Package straight to CORRECTING
@@ -115,26 +123,37 @@ test('F12-SDO-03: handoff/return/status-change are already retry-safe via Packag
     // that dedicated endpoint is the *pre-handoff* correction start, and
     // refuses outright once any SDO Case exists at all). CORRECTING ->
     // PRESENTED is a direct edge (isDocumentationStatusTransitionAllowed).
+    // A fresh idempotency key here proves first-handoff and re-handoff stay
+    // semantically distinct commands — this is never treated as a replay of
+    // the earlier handoffKey attempt above.
     await login('PTO');
     pkg = (await req('documentation-packages')).find((x: any) => x.id === pkg.id);
     assert.equal(pkg.status, 'CORRECTING');
     pkg = await req(`documentation-packages/${pkg.id}/status`, { status: 'PRESENTED', version: pkg.version });
     pkg = await req(`documentation-packages/${pkg.id}/customer-acceptance`, { version: pkg.version, acceptedDate: dt(1), reference: 'Акт-2' });
-    const sdoCase2 = await req(`documentation-packages/${pkg.id}/handoff-to-sdo`, { version: pkg.version });
+    const sdoCase2 = await req(`documentation-packages/${pkg.id}/handoff-to-sdo`, { version: pkg.version, idempotencyKey: randomUUID() });
     assert.equal(sdoCase2.id, sdoCase1.id, 're-handoff must resume the same Case, never create a second one');
     assert.equal(await countRows('sdo_closing_cases', tenantId), casesBefore + 1, 're-handoff must not create a second SDO Case');
 
-    // ---- changeSdoClosingStatus(): version-gated on the Case itself ----
+    // ---- changeSdoClosingStatus(): FINAL-R02 — true idempotency ----
     await login('SDO');
     const statusHistoryBefore = await countRows('sdo_closing_status_history', tenantId);
-    const passed = await req(`sdo-closing-cases/${sdoCase2.id}/status`, { status: 'VERIFICATION_PASSED', version: sdoCase2.version });
+    const statusKey = randomUUID();
+    const passed = await req(`sdo-closing-cases/${sdoCase2.id}/status`, { status: 'VERIFICATION_PASSED', version: sdoCase2.version, idempotencyKey: statusKey });
     assert.equal(await countRows('sdo_closing_status_history', tenantId), statusHistoryBefore + 1);
-    // Retry with the same (now stale) Case version: 409, not a second status-history row.
+    // Retry with the SAME key/payload: must return the same result, not 409.
+    const passedRetry = await req(`sdo-closing-cases/${sdoCase2.id}/status`, { status: 'VERIFICATION_PASSED', version: sdoCase2.version, idempotencyKey: statusKey });
+    assert.equal(passedRetry.id, passed.id, 'a same-key retry must return/reference the original result, not 409');
+    assert.equal(await countRows('sdo_closing_status_history', tenantId), statusHistoryBefore + 1, 'a same-key retry must not insert a second status-history row');
+    // Same key, a different target status: rejected as a different command, never silently applied.
+    const statusConflict = await req(`sdo-closing-cases/${sdoCase2.id}/status`, { status: 'ON_CORRECTION', version: sdoCase2.version, reason: 'x', idempotencyKey: statusKey }, 400);
+    assert.match(statusConflict.message, /Idempotency key/);
+    // A genuinely new command (no key) with the same stale version still 409s.
     await req(`sdo-closing-cases/${sdoCase2.id}/status`, { status: 'VERIFICATION_PASSED', version: sdoCase2.version }, 409);
-    assert.equal(await countRows('sdo_closing_status_history', tenantId), statusHistoryBefore + 1, 'a stale-version retry must not insert a second status-history row');
+    assert.equal(await countRows('sdo_closing_status_history', tenantId), statusHistoryBefore + 1, 'a stale-version request with no matching key must still fail normally');
     assert.ok(passed.id);
 
-    console.log('F12-SDO-03 VERIFIED: handoff/re-handoff/return/status-change all already retry-safe — no code change required');
+    console.log('F12-SDO-03 VERIFIED: handoff/re-handoff/return/status-change now truly idempotent (same-result retry) without weakening version-gating for genuinely new/stale commands');
   } finally {
     await app.close();
   }

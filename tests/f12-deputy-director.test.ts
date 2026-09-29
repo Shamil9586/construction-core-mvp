@@ -96,12 +96,43 @@ test('F12.3: DEPUTY_DIRECTOR performs manager operations and company/object visi
     await req(`inspections/${nowhere}/issues`, { version: 1, title: 'x', severity: 'LOW', responsibleUserId: pm.id, dueDate: dt(1) }, 403); // ISSUE_CREATE (SK)
     await req(`sdo-closing-cases/${nowhere}/status`, { status: 'VERIFICATION_PASSED', version: 1 }, 403); // SDO_CASE_MANAGE (SDO)
 
-    // ---- TECHNICAL_DIRECTOR is unaffected by this pass ----
-    await login('TECHNICAL_DIRECTOR');
+    // ---- FINAL-R04: an existing TECHNICAL_DIRECTOR row/session still authenticates and keeps its legacy grants ----
+    const legacyTd = await login('TECHNICAL_DIRECTOR');
+    assert.equal(legacyTd.role, 'TECHNICAL_DIRECTOR');
     const tdWork = await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: pm.id, name: 'Работа ТД', unit: 'м²', plannedQuantity: 10, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '5000' });
-    assert.ok(tdWork.id);
+    assert.ok(tdWork.id, 'an existing TECHNICAL_DIRECTOR session must keep its managerial grant (WORK_CREATE)');
 
-    console.log('F12.3 VERIFIED: DEPUTY_DIRECTOR has manager/visibility permissions without PTO/SDO/SC operational access; TECHNICAL_DIRECTOR unchanged');
+    // ---- FINAL-R04: POST /users (new assignment) offers DEPUTY_DIRECTOR, not TECHNICAL_DIRECTOR ----
+    await login('ADMIN');
+    const legacyTdBefore = (await req('users')).find((u: any) => u.role === 'TECHNICAL_DIRECTOR');
+    assert.ok(legacyTdBefore, 'seed must still carry the legacy TECHNICAL_DIRECTOR fixture');
+    // bitrixUserId must be digits-only (validation.ts) but otherwise arbitrary;
+    // minted from the clock rather than a fixed literal because seed() reuses
+    // the same persistent demo tenant on every call against a real, non-
+    // per-run-isolated Postgres DB (E2E_DATABASE_URL) — a fixed literal would
+    // collide with the row this same test left behind on its previous run.
+    const freshBitrixId = () => String(Date.now()) + String(Math.floor(Math.random() * 1000)).padStart(3, '0');
+    const rejectedNewTd = await req('users', { bitrixUserId: freshBitrixId(), name: 'Новый Технический Директор', role: 'TECHNICAL_DIRECTOR' }, 400);
+    // Assert the semantic property the locked decision requires, not a specific
+    // Zod message wording (message text differs across Zod versions/releases):
+    // the rejection is a role-validation failure whose offered choice-list
+    // excludes TECHNICAL_DIRECTOR and includes DEPUTY_DIRECTOR. Matched against
+    // the raw `.message` string (plain literal quotes) rather than
+    // JSON.stringify(rejectedNewTd) — stringifying re-escapes the quotes Zod
+    // already put around each choice, so a `"DEPUTY_DIRECTOR"` pattern could
+    // never match the resulting `\"DEPUTY_DIRECTOR\"` text and a `doesNotMatch`
+    // check would pass vacuously regardless of what the message says.
+    const rejectedNewTdMessage = String(rejectedNewTd.message);
+    assert.match(rejectedNewTdMessage, /role/i, 'rejection must be a role-validation failure');
+    assert.doesNotMatch(rejectedNewTdMessage, /"TECHNICAL_DIRECTOR"/, 'TECHNICAL_DIRECTOR must not be offered as an assignable role choice');
+    assert.match(rejectedNewTdMessage, /"DEPUTY_DIRECTOR"/, 'DEPUTY_DIRECTOR must be offered as an assignable role choice');
+    const newDeputy = await req('users', { bitrixUserId: freshBitrixId(), name: 'Новый Заместитель', role: 'DEPUTY_DIRECTOR' });
+    assert.equal(newDeputy.role, 'DEPUTY_DIRECTOR', 'ADMIN must be able to create a new DEPUTY_DIRECTOR user through the normal assignment path');
+    // No historical row was rewritten by any of the above.
+    const legacyTdAfter = (await req('users')).find((u: any) => u.id === legacyTdBefore.id);
+    assert.deepEqual(legacyTdAfter, legacyTdBefore, 'the pre-existing legacy TECHNICAL_DIRECTOR row must be untouched');
+
+    console.log('F12.3 VERIFIED: DEPUTY_DIRECTOR has manager/visibility permissions without PTO/SDO/SC operational access; TECHNICAL_DIRECTOR unchanged; POST /users offers DEPUTY_DIRECTOR for new assignment and refuses a new TECHNICAL_DIRECTOR while the existing legacy row/session is untouched and keeps authenticating');
   } finally {
     await app.close();
   }

@@ -24,7 +24,14 @@ import styles from './ExecutionSection.module.css';
  */
 
 export interface W01ActionHandlers {
-  onRecordFact: (portionId: string, quantity: number, version: number, comment: string) => Promise<void>;
+  /**
+   * F12.3 FINAL-R02 (LOCKED DECISION 2, Option A) — `idempotencyKey` is
+   * minted once per logical fact-entry attempt by `FactForm` below and
+   * reused across every retry of that same attempt: a retry that reaches
+   * the backend after the first call already committed returns/references
+   * that same confirmation instead of a version-conflict error.
+   */
+  onRecordFact: (portionId: string, quantity: number, version: number, comment: string, idempotencyKey: string) => Promise<void>;
   /**
    * F12-QTY-06 (LOCKED DECISION 2) — `idempotencyKey` is minted once per
    * logical attempt by `AddPortionForm` below and reused across every retry
@@ -33,7 +40,8 @@ export interface W01ActionHandlers {
    * failure all resolve to the same portion server-side.
    */
   onCreatePortion: (executionUnitId: string, label: string, plannedQuantity: number, idempotencyKey: string) => Promise<void>;
-  onRequestInternalSc: (portionId: string, version: number) => Promise<void>;
+  /** F12.3 FINAL-R02 — same idempotencyKey lifecycle as onRecordFact above, minted by `RequestInternalScButton` below. */
+  onRequestInternalSc: (portionId: string, version: number, idempotencyKey: string) => Promise<void>;
   /**
    * `quantity` is the inspector's own independently confirmed figure —
    * required by the backend for `decision: 'accept'` (never defaulted or
@@ -79,12 +87,17 @@ function FactForm({
   onSubmit,
 }: {
   portion: W01PortionViewModel;
-  onSubmit: (quantity: number, comment: string) => Promise<void>;
+  onSubmit: (quantity: number, comment: string, idempotencyKey: string) => Promise<void>;
 }) {
   const [quantity, setQuantity] = useState('');
   const [comment, setComment] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // F12.3 FINAL-R02 (LOCKED DECISION 2): one key per logical attempt, reused
+  // across every retry of that same attempt (this form does not clear its
+  // fields on error, so a manual resubmit reuses the same visible values); a
+  // fresh key is minted only once an attempt actually succeeds.
+  const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -104,9 +117,10 @@ function FactForm({
     setPending(true);
     setError(null);
     try {
-      await onSubmit(parsed.value, comment.trim());
+      await onSubmit(parsed.value, comment.trim(), idempotencyKey);
       setQuantity('');
       setComment('');
+      setIdempotencyKey(crypto.randomUUID());
     } catch (submitError) {
       setError(errorMessage(submitError));
     } finally {
@@ -148,15 +162,20 @@ function FactForm({
   );
 }
 
-function RequestInternalScButton({ onSubmit }: { onSubmit: () => Promise<void> }) {
+function RequestInternalScButton({ onSubmit }: { onSubmit: (idempotencyKey: string) => Promise<void> }) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // F12.3 FINAL-R02: one key per logical attempt, reused across every retry
+  // (repeated clicks after a perceived failure); a fresh key is minted only
+  // once an attempt actually succeeds.
+  const [idempotencyKey, setIdempotencyKey] = useState(() => crypto.randomUUID());
 
   async function handleClick() {
     setPending(true);
     setError(null);
     try {
-      await onSubmit();
+      await onSubmit(idempotencyKey);
+      setIdempotencyKey(crypto.randomUUID());
     } catch (submitError) {
       setError(errorMessage(submitError));
     } finally {
@@ -393,11 +412,11 @@ function PortionRow({ portion, actions }: { portion: W01PortionViewModel; action
       {actions && portion.canEnterFact ? (
         <FactForm
           portion={portion}
-          onSubmit={(quantity, comment) => actions.onRecordFact(portion.id, quantity, portion.version, comment)}
+          onSubmit={(quantity, comment, idempotencyKey) => actions.onRecordFact(portion.id, quantity, portion.version, comment, idempotencyKey)}
         />
       ) : null}
       {actions && portion.canRequestInternalSc ? (
-        <RequestInternalScButton onSubmit={() => actions.onRequestInternalSc(portion.id, portion.version)} />
+        <RequestInternalScButton onSubmit={(idempotencyKey) => actions.onRequestInternalSc(portion.id, portion.version, idempotencyKey)} />
       ) : null}
       {actions && portion.decidableInspection ? (
         <InternalScDecisionForm

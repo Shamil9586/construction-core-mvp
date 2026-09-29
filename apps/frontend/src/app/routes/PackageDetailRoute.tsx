@@ -105,8 +105,8 @@ export function PackageDetailRoute() {
                   await documentationApi.registerDocumentationCustomerAcceptance(pkg.id, pkg.version, acceptedDate, reference, comment);
                   refetch();
                 },
-                onHandoffToSdo: async (comment: string | undefined) => {
-                  await documentationApi.handoffDocumentationPackageToSdo(pkg.id, pkg.version, comment);
+                onHandoffToSdo: async (comment: string | undefined, idempotencyKey: string) => {
+                  await documentationApi.handoffDocumentationPackageToSdo(pkg.id, pkg.version, comment, idempotencyKey);
                   refetch();
                 },
                 // F8.3-17: "Вернуть на корректировку" — PTO's own,

@@ -1,7 +1,7 @@
 import { Injectable, BadRequestException, ForbiddenException, NotFoundException, ConflictException } from '@nestjs/common';
 import Decimal from 'decimal.js';
-import { pool, one, rows, insert, transaction } from './db';
-import { Actor, requirePermission, checkVersion, scoped, objectAccess, audit, ensure, ensureAttachmentObjectScope } from './security';
+import { pool, one, rows, insert, insertIdempotent, transaction } from './db';
+import { Actor, requirePermission, checkVersion, scoped, objectAccess, audit, ensure, ensureAttachmentObjectScope, claimIdempotentCommand, completeIdempotentCommand } from './security';
 import { Permission as P, ProgressCalculationService, ScheduleStatusService, WorkTransitionPolicy, PtoPackageValidationService, PotentialClosingService, ObjectHealthService, defaultRisk, AosrDraftEngine, QuantityPortionPolicy, resolveInternalScAccepted, resolveActualQuantity, isDocumentationStatusTransitionAllowed, canMutateDocumentationPackageContent, resolvePackageSdoReadiness, isSdoClosingStatusTransitionAllowed, isCustomerAcceptanceSnapshotCurrent, SdoClosingAllocationService, resolveCustomerScLatestGroup } from '../../../packages/domain';
 @Injectable()
 export class ProductionService {
@@ -152,41 +152,67 @@ export class ProductionService {
     // unrelated execution unit ever being able to form one actual quantity;
     // resolveActualQuantity() (packages/domain) carries a matching defence
     // of its own for anything that reaches it regardless of this check.
-    // F12-QTY-06 (LOCKED DECISION 2): a plain INSERT with no target row to
-    // version-check against — a network retry, a timeout after the first
-    // request already committed, or a double click can resubmit the same
-    // logical command and create a second, duplicate execution unit. Same
-    // idempotency-key pattern close()/financial_closings already established:
-    // a repeat key returns the original row unchanged (after proving the
-    // payload still matches) instead of inserting again. Optional — a caller
-    // that omits idempotencyKey falls straight through to the pre-existing
-    // behaviour below, unchanged.
-    async createExecutionUnit(a: Actor, d: any) { requirePermission(a, P.EXECUTION_UNIT_MANAGE); return transaction(async (c) => { if (d.idempotencyKey) {
-        const existing = await one(c, 'SELECT * FROM work_execution_units WHERE tenant_id=$1 AND idempotency_key=$2', [a.tenantId, d.idempotencyKey]);
-        if (existing) {
-            ensure(existing.objectWorkId === d.objectWorkId && existing.workTypeId === d.workTypeId && (existing.finishTypeId ?? null) === (d.finishTypeId ?? null) && (existing.executionConditions ?? null) === (d.executionConditions ?? null) && (existing.location ?? null) === (d.location ?? null) && existing.contractorId === d.contractorId && existing.unit === d.unit && new Decimal(existing.plannedQuantity).eq(d.plannedQuantity), 'Idempotency key уже использован с другими данными');
-            return existing;
-        }
-    } const w = await scoped(c, 'works', d.objectWorkId, a); await objectAccess(c, a, w.objectId, true); await scoped(c, 'work_types', d.workTypeId, a); if (d.finishTypeId)
-        await scoped(c, 'finish_types', d.finishTypeId, a); ensure(d.unit === w.unit, 'Единица измерения единицы исполнения должна совпадать с единицей измерения работы'); ensure(d.workTypeId === w.workTypeId, 'Вид работ единицы исполнения должен совпадать с видом работ'); ensure(!!await one(c, 'SELECT id FROM object_contractors_active WHERE tenant_id=$1 AND object_id=$2 AND contractor_id=$3', [a.tenantId, w.objectId, d.contractorId]), 'Субподрядчик не назначен на объект'); const unit = await insert(c, 'work_execution_units', a.tenantId, d); await audit(c, a, 'ExecutionUnit', unit.id, 'CREATE', null, unit, 'ExecutionUnitCreated'); return unit; }); }
+    // F12-QTY-06 (LOCKED DECISION 2). FINAL-R01 corrective: a fast pre-check
+    // by key (unchanged from the prior pass — a sequential retry after the
+    // key's row is already visible skips validation entirely and returns it
+    // directly) is no longer followed by a plain INSERT: two genuinely
+    // concurrent transactions with the same key could both pass that SELECT
+    // before either committed, then both attempt to insert, and the loser
+    // resolved to a raw constraint error rather than the winner's row.
+    // insertIdempotent() (db.ts) closes that with INSERT ... ON CONFLICT ...
+    // DO NOTHING RETURNING * against the same 013 partial unique index — a
+    // concurrent second inserter blocks on the first's uncommitted row and,
+    // once unblocked, this method fetches and returns that committed row
+    // instead of ever having inserted its own. Optional — a caller that
+    // omits idempotencyKey is unaffected (insertIdempotent() behaves exactly
+    // like insert() when the key is absent).
+    async createExecutionUnit(a: Actor, d: any) { requirePermission(a, P.EXECUTION_UNIT_MANAGE); return transaction(async (c) => {
+        const matches = (existing: any) => existing.objectWorkId === d.objectWorkId && existing.workTypeId === d.workTypeId && (existing.finishTypeId ?? null) === (d.finishTypeId ?? null) && (existing.executionConditions ?? null) === (d.executionConditions ?? null) && (existing.location ?? null) === (d.location ?? null) && existing.contractorId === d.contractorId && existing.unit === d.unit && new Decimal(existing.plannedQuantity).eq(d.plannedQuantity);
+        if (d.idempotencyKey) {
+            const existing = await one(c, 'SELECT * FROM work_execution_units WHERE tenant_id=$1 AND idempotency_key=$2', [a.tenantId, d.idempotencyKey]);
+            if (existing) {
+                ensure(matches(existing), 'Idempotency key уже использован с другими данными');
+                return existing;
+            }
+        } const w = await scoped(c, 'works', d.objectWorkId, a); await objectAccess(c, a, w.objectId, true); await scoped(c, 'work_types', d.workTypeId, a); if (d.finishTypeId)
+        await scoped(c, 'finish_types', d.finishTypeId, a); ensure(d.unit === w.unit, 'Единица измерения единицы исполнения должна совпадать с единицей измерения работы'); ensure(d.workTypeId === w.workTypeId, 'Вид работ единицы исполнения должен совпадать с видом работ'); ensure(!!await one(c, 'SELECT id FROM object_contractors_active WHERE tenant_id=$1 AND object_id=$2 AND contractor_id=$3', [a.tenantId, w.objectId, d.contractorId]), 'Субподрядчик не назначен на объект'); const unit = await insertIdempotent(c, 'work_execution_units', a.tenantId, d); if (unit) {
+            await audit(c, a, 'ExecutionUnit', unit.id, 'CREATE', null, unit, 'ExecutionUnitCreated');
+            return unit;
+        } const raced = await one(c, 'SELECT * FROM work_execution_units WHERE tenant_id=$1 AND idempotency_key=$2', [a.tenantId, d.idempotencyKey]); ensure(!!raced, 'Idempotency key conflict'); ensure(matches(raced), 'Idempotency key уже использован с другими данными'); return raced; }); }
     async addExecutionUnitLayer(a: Actor, unitId: string, d: any) { requirePermission(a, P.EXECUTION_UNIT_MANAGE); return transaction(async (c) => { const unit = await scoped(c, 'work_execution_units', unitId, a); const w = await scoped(c, 'works', unit.objectWorkId, a); await objectAccess(c, a, w.objectId, true); const layer = await insert(c, 'execution_unit_layers', a.tenantId, { executionUnitId: unitId, ...d }); await audit(c, a, 'ExecutionUnitLayer', layer.id, 'CREATE', null, layer); return layer; }); }
     // D4: a candidate portion is rejected — never silently clamped — if it would
     // push the unit's portion total past the unit's own planned_quantity. The
     // unit row is locked FOR UPDATE for the duration of the sum-and-insert so two
     // concurrent portion creations cannot both pass the check against the same
     // stale sum.
-    // F12-QTY-06 (LOCKED DECISION 2): explicitly named as the primary retry
-    // risk — an append-only-shaped create with no target row of its own to
-    // version-check, and the unit's own FOR UPDATE lock (D4 above) only
-    // protects the *sum* invariant, not "was this exact create already done".
-    // Same optional idempotency-key pattern as createExecutionUnit() above.
-    async createQuantityPortion(a: Actor, unitId: string, d: any) { requirePermission(a, P.EXECUTION_UNIT_MANAGE); return transaction(async (c) => { if (d.idempotencyKey) {
-        const existing = await one(c, 'SELECT * FROM quantity_portions WHERE tenant_id=$1 AND idempotency_key=$2', [a.tenantId, d.idempotencyKey]);
-        if (existing) {
-            ensure(existing.executionUnitId === unitId && existing.label === d.label && new Decimal(existing.plannedQuantity).eq(d.plannedQuantity), 'Idempotency key уже использован с другими данными');
-            return existing;
-        }
-    } const unit = await scoped(c, 'work_execution_units', unitId, a, true); const w = await scoped(c, 'works', unit.objectWorkId, a); await objectAccess(c, a, w.objectId, true); const sum = await one(c, 'SELECT coalesce(sum(planned_quantity),0) AS total FROM quantity_portions WHERE tenant_id=$1 AND execution_unit_id=$2', [a.tenantId, unitId]); ensure(new QuantityPortionPolicy().fits(unit.plannedQuantity, sum.total, d.plannedQuantity), 'Сумма объёма участков превышает плановый объём единицы исполнения'); const portion = await insert(c, 'quantity_portions', a.tenantId, { executionUnitId: unitId, ...d }); await audit(c, a, 'QuantityPortion', portion.id, 'CREATE', null, portion); return portion; }); }
+    // F12-QTY-06 (LOCKED DECISION 2). FINAL-R01 corrective: explicitly named
+    // as the primary retry risk — an append-only-shaped create with no
+    // target row of its own to version-check, and the unit's own FOR UPDATE
+    // lock (D4 above) only protected the *sum* invariant, not "was this
+    // exact create already done" concurrently. Two checks by key: a fast
+    // pre-lock one (a sequential retry after the key's row is already
+    // visible returns it directly, without ever taking the unit lock or
+    // touching the sum), and a second one immediately *after* acquiring the
+    // unit's FOR UPDATE lock — the one that actually closes the concurrency
+    // race, since it guarantees that by the time the sum is computed for a
+    // request that reaches it, no concurrent same-key request for this same
+    // unit can still be in flight (the unit lock serializes them, and the
+    // loser's post-lock re-check now finds the winner's already-committed
+    // row instead of proceeding to double-count it in the sum). The trailing
+    // insertIdempotent()-then-refetch is defence in depth against the same
+    // key being reused for a *different* unit concurrently (no shared lock
+    // between two different units) — resolved as "different payload",
+    // rejected, never a raw constraint error.
+    async createQuantityPortion(a: Actor, unitId: string, d: any) { requirePermission(a, P.EXECUTION_UNIT_MANAGE); return transaction(async (c) => {
+        const matches = (existing: any) => existing.executionUnitId === unitId && existing.label === d.label && new Decimal(existing.plannedQuantity).eq(d.plannedQuantity);
+        const checkExisting = async () => { if (!d.idempotencyKey) return null; const existing = await one(c, 'SELECT * FROM quantity_portions WHERE tenant_id=$1 AND idempotency_key=$2', [a.tenantId, d.idempotencyKey]); if (!existing) return null; ensure(matches(existing), 'Idempotency key уже использован с другими данными'); return existing; };
+        const fast = await checkExisting(); if (fast) return fast;
+        const unit = await scoped(c, 'work_execution_units', unitId, a, true); const w = await scoped(c, 'works', unit.objectWorkId, a); await objectAccess(c, a, w.objectId, true);
+        const afterLock = await checkExisting(); if (afterLock) return afterLock;
+        const sum = await one(c, 'SELECT coalesce(sum(planned_quantity),0) AS total FROM quantity_portions WHERE tenant_id=$1 AND execution_unit_id=$2', [a.tenantId, unitId]); ensure(new QuantityPortionPolicy().fits(unit.plannedQuantity, sum.total, d.plannedQuantity), 'Сумма объёма участков превышает плановый объём единицы исполнения'); const portion = await insertIdempotent(c, 'quantity_portions', a.tenantId, { executionUnitId: unitId, ...d }); if (portion) {
+            await audit(c, a, 'QuantityPortion', portion.id, 'CREATE', null, portion);
+            return portion;
+        } const raced = await checkExisting(); ensure(!!raced, 'Idempotency key conflict'); return raced; }); }
     // "RP enters fact" (F8.1 decision 7) — the portion-scoped analogue of
     // progress(), on portion_quantity_confirmations (source RP_FACT) rather than
     // work_progress/works.actual_quantity, which this leaves untouched. The
@@ -197,7 +223,17 @@ export class ProductionService {
     // Customer SC alone), its own fact is locked, exactly as a whole work's is
     // today — but a sibling portion, or the work's own whole-work tracking, is
     // never affected.
-    async recordPortionFact(a: Actor, portionId: string, d: any) { requirePermission(a, P.WORK_UPDATE_PROGRESS); return transaction(async (c) => { const portion = await scoped(c, 'quantity_portions', portionId, a, true); const unit = await scoped(c, 'work_execution_units', portion.executionUnitId, a); const w = await scoped(c, 'works', unit.objectWorkId, a); await objectAccess(c, a, w.objectId, true); checkVersion(portion, d.version);
+    // FINAL-R02 corrective: recordPortionFact() already locked and
+    // version-checked the exact row it mutates, which prevented a duplicate
+    // confirmation but resolved a retry to 409 — proving the first call
+    // probably committed, never returning what it actually produced
+    // (LOCKED DECISION 2, Option A). claimIdempotentCommand() runs first,
+    // before checkVersion(), so a retry carrying the same (now-stale)
+    // version returns the original confirmation instead of a conflict; a
+    // genuinely new command (no key, or a fresh key) is completely
+    // unaffected and keeps the exact version-gated behaviour below.
+    async recordPortionFact(a: Actor, portionId: string, d: any) { requirePermission(a, P.WORK_UPDATE_PROGRESS); return transaction(async (c) => { const claim = await claimIdempotentCommand(c, a, 'PORTION_FACT', d.idempotencyKey, portionId, { quantity: new Decimal(d.quantity).toFixed(4), version: d.version, comment: d.comment ?? null }); if (claim.replay)
+        return claim.response; const portion = await scoped(c, 'quantity_portions', portionId, a, true); const unit = await scoped(c, 'work_execution_units', portion.executionUnitId, a); const w = await scoped(c, 'works', unit.objectWorkId, a); await objectAccess(c, a, w.objectId, true); checkVersion(portion, d.version);
     // F8.1-03 corrective, second pass (Independent Re-Review, Patch 2): the
     // portion-level freeze guard below only ever knew about *this* portion's
     // own inspection history — it had nothing to say about the work's own
@@ -208,7 +244,7 @@ export class ProductionService {
     // makes recordPortionFact() subject to the identical rule, not a
     // separately-maintained approximation of it. A work with no
     // dependencies is unaffected — canStartWork([]) is vacuously allowed.
-    const allowed = await this.transition(c, a, w.id); ensure(allowed.allowed, allowed.reasons.join('; ')); ensure(!await one(c, "SELECT id FROM inspections WHERE tenant_id=$1 AND portion_id=$2 AND inspection_type IN ('INTERNAL_SC','CUSTOMER_SC') AND status NOT IN ('REJECTED','NOT_SUBMITTED')", [a.tenantId, portionId]), 'После предъявления СК факт участка заблокирован. Требуется отдельная корректировка'); const confirmation = await insert(c, 'portion_quantity_confirmations', a.tenantId, { portionId, source: 'RP_FACT', quantity: d.quantity, recordedBy: a.id, comment: d.comment ?? null }); await c.query('UPDATE quantity_portions SET version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2', [a.tenantId, portionId]); await audit(c, a, 'QuantityPortion', portionId, 'RP_FACT', null, confirmation, 'WorkProgressUpdated'); return confirmation; }); }
+    const allowed = await this.transition(c, a, w.id); ensure(allowed.allowed, allowed.reasons.join('; ')); ensure(!await one(c, "SELECT id FROM inspections WHERE tenant_id=$1 AND portion_id=$2 AND inspection_type IN ('INTERNAL_SC','CUSTOMER_SC') AND status NOT IN ('REJECTED','NOT_SUBMITTED')", [a.tenantId, portionId]), 'После предъявления СК факт участка заблокирован. Требуется отдельная корректировка'); const confirmation = await insert(c, 'portion_quantity_confirmations', a.tenantId, { portionId, source: 'RP_FACT', quantity: d.quantity, recordedBy: a.id, comment: d.comment ?? null }); await c.query('UPDATE quantity_portions SET version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2', [a.tenantId, portionId]); await audit(c, a, 'QuantityPortion', portionId, 'RP_FACT', null, confirmation, 'WorkProgressUpdated'); await completeIdempotentCommand(c, a, 'PORTION_FACT', d.idempotencyKey, confirmation); return confirmation; }); }
     // Internal SC and Customer SC both request through this one method (F8.1
     // decision 5 — one workflow, not two): only inspectionType differs. "Для
     // MVP предъявляется полный объём" (business rule 6) is preserved at the
@@ -216,7 +252,15 @@ export class ProductionService {
     // confirmation — a sibling portion's fact never satisfies it. A previously
     // REJECTED inspection of the same type does not block a fresh request; any
     // other existing status does.
-    async requestPortionInspection(a: Actor, portionId: string, v: number, inspectionType: 'INTERNAL_SC' | 'CUSTOMER_SC') { requirePermission(a, P.INSPECTION_REQUEST); return transaction(async (c) => { const portion = await scoped(c, 'quantity_portions', portionId, a, true); checkVersion(portion, v); const unit = await scoped(c, 'work_execution_units', portion.executionUnitId, a); const w = await scoped(c, 'works', unit.objectWorkId, a); await objectAccess(c, a, w.objectId, true); const fact = await one(c, "SELECT quantity FROM portion_quantity_confirmations WHERE tenant_id=$1 AND portion_id=$2 AND source='RP_FACT' ORDER BY recorded_at DESC LIMIT 1", [a.tenantId, portionId]); ensure(!!fact && new Decimal(fact.quantity).gte(portion.plannedQuantity), 'Для MVP предъявляется полный объём участка'); ensure(!await one(c, "SELECT id FROM inspections WHERE tenant_id=$1 AND portion_id=$2 AND inspection_type=$3 AND status<>'REJECTED'", [a.tenantId, portionId, inspectionType]), 'Проверка уже предъявлена или принята'); const i = await insert(c, 'inspections', a.tenantId, { objectId: w.objectId, objectWorkId: w.id, portionId, inspectionType, requestedBy: a.id }); await c.query('UPDATE quantity_portions SET version=version+1 WHERE tenant_id=$1 AND id=$2', [a.tenantId, portionId]); await audit(c, a, 'Inspection', i.id, 'REQUEST', null, i, 'InspectionRequested'); return i; }); }
+    // FINAL-R02 corrective: same fix as recordPortionFact() above — the
+    // version-gated 409 a retry hit before this pass proved duplication was
+    // prevented, not that the client got back the inspection it already
+    // created. idempotencyKey is a new, optional 5th parameter (threaded
+    // from portionInspectionRequestDto via the controller) precisely because
+    // this method's signature already takes v/inspectionType destructured
+    // rather than the raw DTO object.
+    async requestPortionInspection(a: Actor, portionId: string, v: number, inspectionType: 'INTERNAL_SC' | 'CUSTOMER_SC', idempotencyKey?: string) { requirePermission(a, P.INSPECTION_REQUEST); return transaction(async (c) => { const claim = await claimIdempotentCommand(c, a, 'PORTION_INSPECTION_REQUEST', idempotencyKey, portionId, { version: v, inspectionType }); if (claim.replay)
+        return claim.response; const portion = await scoped(c, 'quantity_portions', portionId, a, true); checkVersion(portion, v); const unit = await scoped(c, 'work_execution_units', portion.executionUnitId, a); const w = await scoped(c, 'works', unit.objectWorkId, a); await objectAccess(c, a, w.objectId, true); const fact = await one(c, "SELECT quantity FROM portion_quantity_confirmations WHERE tenant_id=$1 AND portion_id=$2 AND source='RP_FACT' ORDER BY recorded_at DESC LIMIT 1", [a.tenantId, portionId]); ensure(!!fact && new Decimal(fact.quantity).gte(portion.plannedQuantity), 'Для MVP предъявляется полный объём участка'); ensure(!await one(c, "SELECT id FROM inspections WHERE tenant_id=$1 AND portion_id=$2 AND inspection_type=$3 AND status<>'REJECTED'", [a.tenantId, portionId, inspectionType]), 'Проверка уже предъявлена или принята'); const i = await insert(c, 'inspections', a.tenantId, { objectId: w.objectId, objectWorkId: w.id, portionId, inspectionType, requestedBy: a.id }); await c.query('UPDATE quantity_portions SET version=version+1 WHERE tenant_id=$1 AND id=$2', [a.tenantId, portionId]); await audit(c, a, 'Inspection', i.id, 'REQUEST', null, i, 'InspectionRequested'); await completeIdempotentCommand(c, a, 'PORTION_INSPECTION_REQUEST', idempotencyKey, i); return i; }); }
     // ---------------------------------------------------------------------
     // F8.2 PTO / Executive Documentation Foundation. A Documentation Package
     // hangs off an existing work, exactly like an execution unit does — it
@@ -390,8 +434,17 @@ export class ProductionService {
         // can never disagree about the same package.
         const customerScGroupRows = coveredPortionIds.length ? await rows(c, "SELECT c.portion_id,c.quantity FROM portion_quantity_confirmations c JOIN (SELECT portion_id,MAX(recorded_at) AS max_at FROM portion_quantity_confirmations WHERE tenant_id=$1 AND portion_id=ANY($2::uuid[]) AND source='CUSTOMER_SC' GROUP BY portion_id) m ON m.portion_id=c.portion_id AND m.max_at=c.recorded_at WHERE c.tenant_id=$1 AND c.source='CUSTOMER_SC'", [a.tenantId, coveredPortionIds]) : []; const customerScConfirmedPortionIds = coveredPortionIds.filter(id => resolveCustomerScLatestGroup(customerScGroupRows.filter((x: any) => x.portionId === id).map((x: any) => x.quantity)).ready); const latestAcceptance = await one(c, 'SELECT * FROM documentation_customer_acceptances WHERE tenant_id=$1 AND documentation_package_id=$2 ORDER BY created_at DESC LIMIT 1', [a.tenantId, pkg.id]); const acceptedVersionIds = latestAcceptance ? (await rows(c, 'SELECT documentation_document_version_id FROM documentation_customer_acceptance_versions WHERE tenant_id=$1 AND customer_acceptance_id=$2', [a.tenantId, latestAcceptance.id])).map((x: any) => x.documentationDocumentVersionId) : []; const currentDocumentIds = (await rows(c, 'SELECT id FROM documentation_documents WHERE tenant_id=$1 AND documentation_package_id=$2', [a.tenantId, pkg.id])).map((x: any) => x.id); const currentVersionIds = currentDocumentIds.length ? (await rows(c, 'SELECT DISTINCT ON (documentation_document_id) documentation_document_id,id FROM documentation_document_versions WHERE tenant_id=$1 AND documentation_document_id=ANY($2::uuid[]) ORDER BY documentation_document_id,version_number DESC', [a.tenantId, currentDocumentIds])).map((x: any) => x.id) : []; const hasCustomerAcceptance = pkg.status === 'ACCEPTED_BY_CUSTOMER' && !!latestAcceptance && isCustomerAcceptanceSnapshotCurrent({ acceptedVersionIds, currentDocumentCount: currentDocumentIds.length, currentVersionIds }); return resolvePackageSdoReadiness({ hasCustomerAcceptance, coveredPortionIds, customerScConfirmedPortionIds });
     }
+    // FINAL-R02 corrective: same fix, applied without disturbing first-
+    // handoff vs re-handoff's own distinctness — that distinction is decided
+    // entirely by `existing`/`existing.packageLocked` below (unchanged), and
+    // remains the *only* thing that decides it. The idempotency claim only
+    // recognises a byte-identical retry of the *same* logical attempt (same
+    // client-minted key); a later, deliberate re-handoff after a real
+    // "Вернуть в ПТО" always carries a fresh key from the caller, so it is
+    // never confused with a replay of the earlier handoff.
     async handoffDocumentationPackageToSdo(a: Actor, packageId: string, d: any) { requirePermission(a, P.DOCUMENTATION_MANAGE); if (a.role !== 'PTO')
-        throw new ForbiddenException('Передать в СДО может только ПТО'); return transaction(async (c) => { const pkg = await scoped(c, 'documentation_packages', packageId, a, true); const w = await scoped(c, 'works', pkg.objectWorkId, a); await objectAccess(c, a, w.objectId, true); checkVersion(pkg, d.version); const readiness = await this.resolvePackageReadiness(c, a, pkg); ensure(readiness.ready, readiness.missingReasons.join('; ')); const existing = await one(c, 'SELECT * FROM sdo_closing_cases WHERE tenant_id=$1 AND documentation_package_id=$2 FOR UPDATE', [a.tenantId, packageId]); ensure(!existing || !existing.packageLocked, 'Пакет уже передан в СДО'); const sdoCase = existing ? await one(c, 'UPDATE sdo_closing_cases SET package_locked=true,version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2 RETURNING *', [a.tenantId, existing.id]) : await insert(c, 'sdo_closing_cases', a.tenantId, { objectId: pkg.objectId, objectWorkId: pkg.objectWorkId, documentationPackageId: packageId, createdBy: a.id }); await insert(c, 'sdo_closing_handoff_history', a.tenantId, { sdoClosingCaseId: sdoCase.id, event: 'HANDED_OFF', actorId: a.id, comment: d.comment ?? null }); await audit(c, a, 'SdoClosingCase', sdoCase.id, existing ? 'RE_HANDOFF' : 'HANDOFF', existing ?? null, sdoCase); return sdoCase; }); }
+        throw new ForbiddenException('Передать в СДО может только ПТО'); return transaction(async (c) => { const claim = await claimIdempotentCommand(c, a, 'SDO_HANDOFF', d.idempotencyKey, packageId, { version: d.version, comment: d.comment ?? null }); if (claim.replay)
+        return claim.response; const pkg = await scoped(c, 'documentation_packages', packageId, a, true); const w = await scoped(c, 'works', pkg.objectWorkId, a); await objectAccess(c, a, w.objectId, true); checkVersion(pkg, d.version); const readiness = await this.resolvePackageReadiness(c, a, pkg); ensure(readiness.ready, readiness.missingReasons.join('; ')); const existing = await one(c, 'SELECT * FROM sdo_closing_cases WHERE tenant_id=$1 AND documentation_package_id=$2 FOR UPDATE', [a.tenantId, packageId]); ensure(!existing || !existing.packageLocked, 'Пакет уже передан в СДО'); const sdoCase = existing ? await one(c, 'UPDATE sdo_closing_cases SET package_locked=true,version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2 RETURNING *', [a.tenantId, existing.id]) : await insert(c, 'sdo_closing_cases', a.tenantId, { objectId: pkg.objectId, objectWorkId: pkg.objectWorkId, documentationPackageId: packageId, createdBy: a.id }); await insert(c, 'sdo_closing_handoff_history', a.tenantId, { sdoClosingCaseId: sdoCase.id, event: 'HANDED_OFF', actorId: a.id, comment: d.comment ?? null }); await audit(c, a, 'SdoClosingCase', sdoCase.id, existing ? 'RE_HANDOFF' : 'HANDOFF', existing ?? null, sdoCase); await completeIdempotentCommand(c, a, 'SDO_HANDOFF', d.idempotencyKey, sdoCase); return sdoCase; }); }
     // F8.3 decision 13: "Вернуть в ПТО" — SDO/ADMIN only (SDO_CASE_MANAGE),
     // never PTO. Unlocks Package composition and moves the package back to
     // CORRECTING (a dedicated transition, bypassing
@@ -409,13 +462,22 @@ export class ProductionService {
     // reverse of what this used to do (Case first, Package second), which
     // was a lock-order inversion against handoffDocumentationPackageToSdo()'s
     // own Package-first order and could deadlock against it.
-    async returnSdoCaseToPto(a: Actor, id: string, d: any) { requirePermission(a, P.SDO_CASE_MANAGE); return transaction(async (c) => { const caseRef = await scoped(c, 'sdo_closing_cases', id, a); const pkg = await scoped(c, 'documentation_packages', caseRef.documentationPackageId, a, true); const sdoCase = await scoped(c, 'sdo_closing_cases', id, a, true); const w = await scoped(c, 'works', sdoCase.objectWorkId, a); await objectAccess(c, a, w.objectId); checkVersion(sdoCase, d.version);
+    // FINAL-R02 corrective: same fix as handoffDocumentationPackageToSdo()
+    // above — "return-to-PTO remains a separate command" from handoff/
+    // re-handoff/status-change is preserved by construction, since this
+    // claims its own 'SDO_RETURN_TO_PTO' operation name, never sharing a
+    // ledger row with any other command even if a caller reused a key
+    // (payload/scope would differ, or the operation name itself would not
+    // match — either way, this is never treated as a replay of a different
+    // command).
+    async returnSdoCaseToPto(a: Actor, id: string, d: any) { requirePermission(a, P.SDO_CASE_MANAGE); return transaction(async (c) => { const claim = await claimIdempotentCommand(c, a, 'SDO_RETURN_TO_PTO', d.idempotencyKey, id, { version: d.version, comment: d.comment ?? null }); if (claim.replay)
+        return claim.response; const caseRef = await scoped(c, 'sdo_closing_cases', id, a); const pkg = await scoped(c, 'documentation_packages', caseRef.documentationPackageId, a, true); const sdoCase = await scoped(c, 'sdo_closing_cases', id, a, true); const w = await scoped(c, 'works', sdoCase.objectWorkId, a); await objectAccess(c, a, w.objectId); checkVersion(sdoCase, d.version);
         // F8.3-R04 corrective: a CLOSED case must first go through the
         // dedicated CLOSED -> ON_CORRECTION step (changeSdoClosingStatus,
         // mandatory non-empty reason) before it can be returned to PTO — this
         // guard is what actually enforces that "no direct edit" route, since
         // package_locked alone said nothing about the case's own status.
-        ensure(sdoCase.status !== 'CLOSED', 'Закрытое дело нельзя вернуть в ПТО напрямую — сначала переведите его на корректировку с указанием причины'); ensure(sdoCase.packageLocked, 'Пакет уже возвращён в ПТО'); ensure(pkg.status === 'ACCEPTED_BY_CUSTOMER', 'Пакет должен находиться в статусе «Принято заказчиком»'); const n = await one(c, 'UPDATE sdo_closing_cases SET package_locked=false,version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2 RETURNING *', [a.tenantId, id]); await one(c, "UPDATE documentation_packages SET status='CORRECTING',version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2 RETURNING *", [a.tenantId, pkg.id]); await insert(c, 'documentation_package_status_history', a.tenantId, { documentationPackageId: pkg.id, fromStatus: 'ACCEPTED_BY_CUSTOMER', toStatus: 'CORRECTING', changedBy: a.id, comment: d.comment ?? null }); await insert(c, 'sdo_closing_handoff_history', a.tenantId, { sdoClosingCaseId: id, event: 'RETURNED_TO_PTO', actorId: a.id, comment: d.comment ?? null }); await audit(c, a, 'SdoClosingCase', id, 'RETURN_TO_PTO', sdoCase, n); return n; }); }
+        ensure(sdoCase.status !== 'CLOSED', 'Закрытое дело нельзя вернуть в ПТО напрямую — сначала переведите его на корректировку с указанием причины'); ensure(sdoCase.packageLocked, 'Пакет уже возвращён в ПТО'); ensure(pkg.status === 'ACCEPTED_BY_CUSTOMER', 'Пакет должен находиться в статусе «Принято заказчиком»'); const n = await one(c, 'UPDATE sdo_closing_cases SET package_locked=false,version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2 RETURNING *', [a.tenantId, id]); await one(c, "UPDATE documentation_packages SET status='CORRECTING',version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2 RETURNING *", [a.tenantId, pkg.id]); await insert(c, 'documentation_package_status_history', a.tenantId, { documentationPackageId: pkg.id, fromStatus: 'ACCEPTED_BY_CUSTOMER', toStatus: 'CORRECTING', changedBy: a.id, comment: d.comment ?? null }); await insert(c, 'sdo_closing_handoff_history', a.tenantId, { sdoClosingCaseId: id, event: 'RETURNED_TO_PTO', actorId: a.id, comment: d.comment ?? null }); await audit(c, a, 'SdoClosingCase', id, 'RETURN_TO_PTO', sdoCase, n); await completeIdempotentCommand(c, a, 'SDO_RETURN_TO_PTO', d.idempotencyKey, n); return n; }); }
     // F8.3 RESPONSIBILITY: assigned by SDO or ADMIN only (SDO_CASE_MANAGE —
     // PTO holds no such permission: "PTO does NOT assign work inside the
     // SDO department"); the target must be an active SDO user, the same
@@ -437,7 +499,14 @@ export class ProductionService {
     // F8.3-18: Package-first lock order (see returnSdoCaseToPto's comment) —
     // `pkg` is what makes the F8.3-17.3 CLOSED revalidation below possible
     // without a second, separately-ordered lookup.
-    async changeSdoClosingStatus(a: Actor, id: string, d: any) { requirePermission(a, P.SDO_CASE_MANAGE); return transaction(async (c) => { const caseRef = await scoped(c, 'sdo_closing_cases', id, a); const pkg = await scoped(c, 'documentation_packages', caseRef.documentationPackageId, a, true); const sdoCase = await scoped(c, 'sdo_closing_cases', id, a, true); const w = await scoped(c, 'works', sdoCase.objectWorkId, a); await objectAccess(c, a, w.objectId); checkVersion(sdoCase, d.version);
+    // FINAL-R02 corrective: same fix — "each status transition remains a
+    // separate command" is preserved because the claim's payload includes
+    // the target `status`, so a fresh command to a *different* status never
+    // matches a stored claim for an earlier transition even if a caller
+    // mistakenly reused a key (rejected as "different payload", never
+    // silently treated as a replay of the earlier transition).
+    async changeSdoClosingStatus(a: Actor, id: string, d: any) { requirePermission(a, P.SDO_CASE_MANAGE); return transaction(async (c) => { const claim = await claimIdempotentCommand(c, a, 'SDO_STATUS_CHANGE', d.idempotencyKey, id, { version: d.version, status: d.status, reason: d.reason ?? null }); if (claim.replay)
+        return claim.response; const caseRef = await scoped(c, 'sdo_closing_cases', id, a); const pkg = await scoped(c, 'documentation_packages', caseRef.documentationPackageId, a, true); const sdoCase = await scoped(c, 'sdo_closing_cases', id, a, true); const w = await scoped(c, 'works', sdoCase.objectWorkId, a); await objectAccess(c, a, w.objectId); checkVersion(sdoCase, d.version);
         // F8.3-R03 corrective: while custody is with PTO (package_locked=false,
         // set by returnSdoCaseToPto()), no SDO operational work may progress —
         // package_locked alone did nothing to stop it before this guard.
@@ -470,7 +539,7 @@ export class ProductionService {
         const allocations = await rows(c, 'SELECT amount FROM sdo_closing_portion_allocations WHERE tenant_id=$1 AND sdo_closing_case_id=$2 AND cancelled_at IS NULL', [a.tenantId, id]);
         const closeCheck = new SdoClosingAllocationService().canClose(sdoCase.totalAmount, allocations);
         ensure(closeCheck.allowed, closeCheck.reason ?? 'Закрытие невозможно');
-    } const n = await one(c, "UPDATE sdo_closing_cases SET status=$3,closed_at=CASE WHEN $3='CLOSED' THEN now() ELSE NULL END,version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2 RETURNING *", [a.tenantId, id, d.status]); await insert(c, 'sdo_closing_status_history', a.tenantId, { sdoClosingCaseId: id, fromStatus: sdoCase.status, toStatus: d.status, reason: d.reason ?? null, changedBy: a.id }); await audit(c, a, 'SdoClosingCase', id, 'STATUS_CHANGE', sdoCase, n); return n; }); }
+    } const n = await one(c, "UPDATE sdo_closing_cases SET status=$3,closed_at=CASE WHEN $3='CLOSED' THEN now() ELSE NULL END,version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2 RETURNING *", [a.tenantId, id, d.status]); await insert(c, 'sdo_closing_status_history', a.tenantId, { sdoClosingCaseId: id, fromStatus: sdoCase.status, toStatus: d.status, reason: d.reason ?? null, changedBy: a.id }); await audit(c, a, 'SdoClosingCase', id, 'STATUS_CHANGE', sdoCase, n); await completeIdempotentCommand(c, a, 'SDO_STATUS_CHANGE', d.idempotencyKey, n); return n; }); }
     // F8.3 CLOSING AMOUNT: total amount only — never payment, invoice,
     // accounting or KS-2/KS-3. History is append-only
     // (sdo_closing_amount_history, immutable by trigger — "Do not overwrite

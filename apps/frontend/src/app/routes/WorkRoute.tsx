@@ -57,16 +57,16 @@ export function WorkRoute() {
   // was, and the calling form shows the backend's own error inline.
   const actions: W01ActionHandlers | undefined = session
     ? {
-        onRecordFact: async (portionId, quantity, version, comment) => {
-          await executionUnitsApi.recordPortionFact(portionId, quantity, version, comment);
+        onRecordFact: async (portionId, quantity, version, comment, idempotencyKey) => {
+          await executionUnitsApi.recordPortionFact(portionId, quantity, version, comment, idempotencyKey);
           refetch();
         },
         onCreatePortion: async (executionUnitId, label, plannedQuantity, idempotencyKey) => {
           await executionUnitsApi.createQuantityPortion(executionUnitId, label, plannedQuantity, idempotencyKey);
           refetch();
         },
-        onRequestInternalSc: async (portionId, version) => {
-          await executionUnitsApi.requestInternalScInspection(portionId, version);
+        onRequestInternalSc: async (portionId, version, idempotencyKey) => {
+          await executionUnitsApi.requestInternalScInspection(portionId, version, idempotencyKey);
           refetch();
         },
         onRegisterInternalScDecision: async (inspectionId, version, decision, comment, photo, quantity) => {

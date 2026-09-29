@@ -26,8 +26,9 @@ async function post<T>(path: string, body: unknown): Promise<T> {
  * Package's Portion composition and retains the same SDO Case; the case's
  * own reconciliation status is untouched ("resumes" on re-handoff).
  */
-export function returnSdoCaseToPto(sdoCaseId: Uuid, version: number, comment?: string): Promise<SdoClosingCase> {
-  return post(`sdo-closing-cases/${sdoCaseId}/return-to-pto`, { version, comment });
+/** F12.3 FINAL-R02: idempotencyKey is the caller's — one per logical return-to-PTO attempt (ReturnToPtoControl, screens/SdoCaseDetail/index.tsx). */
+export function returnSdoCaseToPto(sdoCaseId: Uuid, version: number, comment: string | undefined, idempotencyKey: string): Promise<SdoClosingCase> {
+  return post(`sdo-closing-cases/${sdoCaseId}/return-to-pto`, { version, comment, idempotencyKey });
 }
 
 /**
@@ -45,13 +46,15 @@ export function assignSdoResponsible(sdoCaseId: Uuid, version: number, responsib
  * packages/domain); this only sends the requested target status. `reason`
  * is required by the backend exactly for CLOSED -> ON_CORRECTION.
  */
+/** F12.3 FINAL-R02: idempotencyKey is the caller's — one per logical status-change attempt (StatusActionControl, screens/SdoCaseDetail/index.tsx). */
 export function changeSdoClosingStatus(
   sdoCaseId: Uuid,
   status: SdoClosingStatus,
   version: number,
-  reason?: string,
+  reason: string | undefined,
+  idempotencyKey: string,
 ): Promise<SdoClosingCase> {
-  return post(`sdo-closing-cases/${sdoCaseId}/status`, { status, version, reason });
+  return post(`sdo-closing-cases/${sdoCaseId}/status`, { status, version, reason, idempotencyKey });
 }
 
 /** F8.3 CLOSING AMOUNT — never payment/invoice/accounting. Refused server-side once the case is CLOSED (must go back to ON_CORRECTION first). History is append-only and read from the snapshot, never from this call's own response. */

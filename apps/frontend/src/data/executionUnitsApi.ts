@@ -32,13 +32,21 @@ async function post<T>(path: string, body: unknown): Promise<T> {
   return parseResponse(response) as Promise<T>;
 }
 
+/**
+ * F12.3 FINAL-R02 (LOCKED DECISION 2, Option A): idempotencyKey is the
+ * caller's — one per logical fact-entry attempt (FactForm, ExecutionSection.tsx),
+ * reused across every retry of that same attempt. A retry that reaches the
+ * backend after the first call already committed now returns/references
+ * that same confirmation instead of a version-conflict error.
+ */
 export function recordPortionFact(
   portionId: Uuid,
   quantity: number,
   version: number,
   comment: string,
+  idempotencyKey: string,
 ): Promise<PortionQuantityConfirmation> {
-  return post(`portions/${portionId}/fact`, { quantity, version, comment });
+  return post(`portions/${portionId}/fact`, { quantity, version, comment, idempotencyKey });
 }
 
 /**
@@ -61,8 +69,9 @@ export function createQuantityPortion(
   return post(`execution-units/${executionUnitId}/portions`, { label, plannedQuantity, idempotencyKey });
 }
 
-export function requestInternalScInspection(portionId: Uuid, version: number): Promise<Inspection> {
-  return post(`portions/${portionId}/inspection-request`, { inspectionType: 'INTERNAL_SC', version });
+/** F12.3 FINAL-R02: idempotencyKey is the caller's — one per logical request attempt (RequestInternalScButton, ExecutionSection.tsx). */
+export function requestInternalScInspection(portionId: Uuid, version: number, idempotencyKey: string): Promise<Inspection> {
+  return post(`portions/${portionId}/inspection-request`, { inspectionType: 'INTERNAL_SC', version, idempotencyKey });
 }
 
 export function uploadInspectionPhotoAttachment(

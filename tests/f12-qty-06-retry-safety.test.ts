@@ -3,25 +3,29 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 
 /**
- * F12-QTY-06 (LOCKED DECISION 2) re-verification.
+ * F12-QTY-06 (LOCKED DECISION 2) re-verification, corrected for FINAL-R01/
+ * FINAL-R02 (independent review of the first candidate, 424afaf).
  *
- * createExecutionUnit()/createQuantityPortion() are plain INSERTs with no
- * target row to version-check against — a network retry, a timeout after the
- * first request already committed, or a double click can resubmit the exact
- * same logical command and create a second, duplicate row. CONFIRMED LIVE
- * DEFECT: against baseline 9ce729b99014c0e39817f1acf5a31cdcc326444b, the two
- * "exactly one row" assertions below fail (each retry inserts a second row;
- * see the F12.3 hardening report for the stash-verified RED/GREEN evidence)
- * because that baseline's DTOs do not even accept an idempotencyKey field.
+ * createExecutionUnit()/createQuantityPortion() are creates with no target
+ * row to version-check against — a network retry, a timeout after the first
+ * request already committed, or a double click can resubmit the exact same
+ * logical command. FINAL-R01: the first candidate's SELECT-then-INSERT was
+ * only *sequentially* idempotent — two genuinely concurrent same-key
+ * transactions could both observe "not found" and both attempt to insert.
+ * Sequential retry-safety (this file, PGlite-adequate) and concurrent
+ * same-key convergence (tests/f12-final-corrective-postgres-concurrency.test.ts,
+ * real PostgreSQL only) are both required; this file proves the former.
  *
- * recordPortionFact()/requestPortionInspection() are the opposite finding:
- * both already lock and version-check the very row they mutate in the same
- * transaction as their write, so a retry with the (necessarily stale, since
- * the first call already bumped it) same version is rejected with 409 before
- * any second row can be written — this test proves that holds, rather than
- * adding unneeded idempotency-key infrastructure to operations that already
- * have correct retry semantics (explicitly out of scope per the locked
- * decision).
+ * FINAL-R02: recordPortionFact()/requestPortionInspection() were previously
+ * (mis)classified "already retry-safe" because their existing version-gate
+ * turns a retry into 409 instead of a duplicate row — true, but a 409 only
+ * proves duplication was prevented, not that the client got back what its
+ * first, possibly-unacknowledged call actually produced (LOCKED DECISION 2,
+ * Option A). Both now accept an idempotencyKey: a retry carrying the same
+ * key and payload returns/references the original response; a stale command
+ * with no matching key (or a fresh one) still hits the exact same
+ * version-gated 409 as before — that half of the original test is kept
+ * un-weakened below, just no longer mislabelled as the whole story.
  */
 test('F12-QTY-06: createExecutionUnit/createQuantityPortion are retry-safe with an idempotency key; recordPortionFact/requestPortionInspection are already retry-safe via version-gating', async () => {
   if (!process.env.E2E_DATABASE_URL) delete process.env.DATABASE_URL;
@@ -92,28 +96,49 @@ test('F12-QTY-06: createExecutionUnit/createQuantityPortion are retry-safe with 
     assert.match(portionConflict.message, /Idempotency key/);
     assert.equal(await countRows('quantity_portions', tenantId), portionsBefore + 1);
 
-    // ---- recordPortionFact(): already retry-safe via version-gating (NOT a defect) ----
+    // ---- recordPortionFact(): FINAL-R02 — true idempotency, not just duplicate prevention ----
     // recordPortionFact() returns the new confirmation row, not the portion —
     // the portion's own version (checked/bumped in the same transaction) is
     // tracked here independently: portion1.version, then +1 after one
     // successful fact, +2 after one successful inspection-request below.
     const confirmationsBefore = await countRows('portion_quantity_confirmations', tenantId);
-    await req(`portions/${portion1.id}/fact`, { quantity: 10, version: portion1.version, comment: 'Факт' });
+    const factKey = randomUUID();
+    const fact1 = await req(`portions/${portion1.id}/fact`, { quantity: 10, version: portion1.version, comment: 'Факт', idempotencyKey: factKey });
     assert.equal(await countRows('portion_quantity_confirmations', tenantId), confirmationsBefore + 1);
-    // Retry with the same (now stale — the first call already bumped it) version: rejected, not a second insert.
-    await req(`portions/${portion1.id}/fact`, { quantity: 10, version: portion1.version, comment: 'Факт' }, 409);
-    assert.equal(await countRows('portion_quantity_confirmations', tenantId), confirmationsBefore + 1, 'a stale-version retry must not insert a second confirmation row');
+    // Retry with the SAME key/payload (the first call's version is now stale
+    // — that is exactly the "client never saw the success response" case
+    // Option A targets): must return the SAME confirmation, not a 409, and
+    // must not insert a second row.
+    const fact1Retry = await req(`portions/${portion1.id}/fact`, { quantity: 10, version: portion1.version, comment: 'Факт', idempotencyKey: factKey });
+    assert.equal(fact1Retry.id, fact1.id, 'a same-key retry must return/reference the original confirmation, not 409');
+    assert.equal(await countRows('portion_quantity_confirmations', tenantId), confirmationsBefore + 1, 'a same-key retry must not insert a second confirmation row');
+    // Same key, materially different payload: rejected, not silently treated as the same command.
+    const factConflict = await req(`portions/${portion1.id}/fact`, { quantity: 20, version: portion1.version, comment: 'Факт', idempotencyKey: factKey }, 400);
+    assert.match(factConflict.message, /Idempotency key/);
+    assert.equal(await countRows('portion_quantity_confirmations', tenantId), confirmationsBefore + 1);
     const portionVersionAfterFact = portion1.version + 1;
+    // A genuinely new command (no key) with a stale version still hits the
+    // exact same version guard as before this pass — idempotency handling
+    // never converts a stale, unrelated command into success.
+    await req(`portions/${portion1.id}/fact`, { quantity: 10, version: portion1.version, comment: 'Другая попытка' }, 409);
+    assert.equal(await countRows('portion_quantity_confirmations', tenantId), confirmationsBefore + 1, 'a stale-version request with no matching key must still fail normally');
 
-    // ---- requestPortionInspection(): already retry-safe via version-gating + DB unique index (NOT a defect) ----
+    // ---- requestPortionInspection(): FINAL-R02 — same true-idempotency fix ----
     const inspectionsBefore = await countRows('inspections', tenantId);
-    const inspection1 = await req(`portions/${portion1.id}/inspection-request`, { inspectionType: 'INTERNAL_SC', version: portionVersionAfterFact });
+    const inspectionKey = randomUUID();
+    const inspection1 = await req(`portions/${portion1.id}/inspection-request`, { inspectionType: 'INTERNAL_SC', version: portionVersionAfterFact, idempotencyKey: inspectionKey });
     assert.equal(await countRows('inspections', tenantId), inspectionsBefore + 1);
+    const inspection1Retry = await req(`portions/${portion1.id}/inspection-request`, { inspectionType: 'INTERNAL_SC', version: portionVersionAfterFact, idempotencyKey: inspectionKey });
+    assert.equal(inspection1Retry.id, inspection1.id, 'a same-key retry must return/reference the original inspection, not 409');
+    assert.equal(await countRows('inspections', tenantId), inspectionsBefore + 1, 'a same-key retry must not insert a second inspection row');
+    const inspectionConflict = await req(`portions/${portion1.id}/inspection-request`, { inspectionType: 'CUSTOMER_SC', version: portionVersionAfterFact, idempotencyKey: inspectionKey }, 400);
+    assert.match(inspectionConflict.message, /Idempotency key/);
+    // A genuinely new command (no key) with a stale version still 409s.
     await req(`portions/${portion1.id}/inspection-request`, { inspectionType: 'INTERNAL_SC', version: portionVersionAfterFact }, 409);
-    assert.equal(await countRows('inspections', tenantId), inspectionsBefore + 1, 'a stale-version retry must not insert a second inspection row');
+    assert.equal(await countRows('inspections', tenantId), inspectionsBefore + 1, 'a stale-version request with no matching key must still fail normally');
     assert.ok(inspection1.id);
 
-    console.log('F12-QTY-06 VERIFIED: createExecutionUnit/createQuantityPortion retry-safe with idempotency key; recordPortionFact/requestPortionInspection already retry-safe via version-gating');
+    console.log('F12-QTY-06 VERIFIED: createExecutionUnit/createQuantityPortion retry-safe with idempotency key; recordPortionFact/requestPortionInspection now truly idempotent (same-result retry), stale unrelated commands still fail normally');
   } finally {
     await app.close();
   }
