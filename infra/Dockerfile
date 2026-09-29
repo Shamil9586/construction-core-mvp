@@ -4,7 +4,12 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci
 COPY . .
-RUN npm run build
+# The web image serves /app.html (the Bitrix24 launch lands there). app.html is
+# produced only by the explicit Core build (F7: `npm run build:core`), which
+# also emits index.html and refuses to run without an explicit
+# VITE_DATA_PROVIDER. The value is set inline so it applies to this build only
+# and is not inherited by the api stage.
+RUN VITE_DATA_PROVIDER=real npm run build:core
 FROM node:24-bookworm-slim AS api
 WORKDIR /app
 ENV NODE_ENV=test BIND_HOST=0.0.0.0
