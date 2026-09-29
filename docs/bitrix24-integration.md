@@ -18,6 +18,8 @@
 
 Browser-driven install/launch теперь проверяет `member_id` + `APPLICATION_TOKEN` до выдачи Construction Core session. Launch сначала сверяет portal/member/installation и timing-safe reference token, и только после этого вызывает `user.current`. Это защищает публичный handler независимо от дополнительной проверки HTTP Origin.
 
+PBX-1: успешные install и launch приводят пользователя в `/app.html` (внутреннее приложение Core), не в legacy `/`. Идентичность — `user.current.ID → users.bitrix_user_id` (активный существующий пользователь Core); неизвестный или неактивный пользователь получает отказ, обычный launch никого не создаёт и не меняет роль. Роль и права берутся только из Core; WORK_POSITION/подразделения Bitrix права не выдают. В браузер попадает только непрозрачный Core-токен (`sessionStorage['session']`); Bitrix access/refresh/application токены остаются на backend.
+
 `DOMAIN` для wizard handlers берётся из query string с fallback на прежний body-format; остальные auth-поля остаются в POST body. Это соответствует simplified OAuth flow server-side local application with UI.
 
 `BITRIX_INSTALL_WEBHOOK_ENABLED` остаётся `false`: server-to-server ONAPPINSTALL и event handlers не включаются этим проходом.

@@ -17,6 +17,9 @@ import { bitrixLogin, installBitrix, MockBitrixAdapter } from '../../bitrix';
 // pin, active internal user), and the HTML these handlers return still pins
 // frame-ancestors to the portal, which is the browser-side control Origin was
 // standing in for.
+// PBX-1: a successful Bitrix install/launch lands in the internal Core
+// application, never in the legacy `/` entry.
+export const CORE_LANDING_PATH = '/app.html';
 @Controller()
 @ApiTags('Auth')
 @ApiBearerAuth()
@@ -49,7 +52,7 @@ export class AuthController {
     @Res()
     res: any) { const result = await bitrixLogin(this.bitrixPayload(r, b)); this.launchHtml(res, result, false); }
     private bitrixPayload(r: any, b: any) { const queryDomain = typeof r.query?.DOMAIN === 'string' ? r.query.DOMAIN : typeof r.query?.domain === 'string' ? r.query.domain : undefined; return queryDomain ? { ...(b ?? {}), DOMAIN: queryDomain } : (b ?? {}); }
-    private launchHtml(res: any, result: any, install: boolean) { const nonce = require('node:crypto').randomBytes(18).toString('base64'); res.setHeader('Cache-Control', 'no-store'); res.setHeader('Content-Security-Policy', `default-src 'none'; script-src 'nonce-${nonce}' https://api.bitrix24.com; frame-ancestors https://${process.env.BITRIX_PORTAL}; base-uri 'none'`); res.type('html').send(`<!doctype html><html lang="ru"><meta charset="utf-8"><title>Вход в приложение</title><body><p>Открываем производственную систему…</p>${install ? '<script src="https://api.bitrix24.com/api/v1/"></script>' : ''}<script nonce="${nonce}">sessionStorage.setItem('session',${JSON.stringify(result.token)});${install ? "BX24.init(function(){BX24.installFinish();location.replace('/')});" : "location.replace('/');"}</script></body></html>`); }
+    private launchHtml(res: any, result: any, install: boolean) { const nonce = require('node:crypto').randomBytes(18).toString('base64'); res.setHeader('Cache-Control', 'no-store'); res.setHeader('Content-Security-Policy', `default-src 'none'; script-src 'nonce-${nonce}' https://api.bitrix24.com; frame-ancestors https://${process.env.BITRIX_PORTAL}; base-uri 'none'`); res.type('html').send(`<!doctype html><html lang="ru"><meta charset="utf-8"><title>Вход в приложение</title><body><p>Открываем производственную систему…</p>${install ? '<script src="https://api.bitrix24.com/api/v1/"></script>' : ''}<script nonce="${nonce}">sessionStorage.setItem('session',${JSON.stringify(result.token).replace(/</g, '\\u003c')});${install ? "BX24.init(function(){BX24.installFinish();location.replace('"+CORE_LANDING_PATH+"')});" : "location.replace('"+CORE_LANDING_PATH+"');"}</script></body></html>`); }
     @Post('auth/logout') async logout(@Req() r:any){const a=await authenticate(r);await pool.query('DELETE FROM sessions WHERE tenant_id=$1 AND token_hash=$2',[a.tenantId,hash(r.headers.authorization.replace(/^Bearer /,''))]);return {loggedOut:true};}
     @Get('me')
     me(
