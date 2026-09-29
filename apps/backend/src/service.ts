@@ -166,15 +166,26 @@ export class ProductionService {
     // instead of ever having inserted its own. Optional — a caller that
     // omits idempotencyKey is unaffected (insertIdempotent() behaves exactly
     // like insert() when the key is absent).
+    // FINAL-R06-A: idempotency is retry safety, not an authorization
+    // mechanism — a fast idempotency-key lookup must never hand back an
+    // existing row before the caller's own authorization for that row's
+    // object is checked. objectAccess() (and the works scoped() read it
+    // needs) is evaluated first, against the caller's OWN d.objectWorkId,
+    // before any idempotency-key branch runs at all; matches() below already
+    // requires a same-payload replay's existing.objectWorkId to equal
+    // d.objectWorkId, so this authorizes a replay identically to a fresh
+    // create. A caller who is not authorized for that object is rejected
+    // here even if they supply another actor's valid idempotency key.
     async createExecutionUnit(a: Actor, d: any) { requirePermission(a, P.EXECUTION_UNIT_MANAGE); return transaction(async (c) => {
         const matches = (existing: any) => existing.objectWorkId === d.objectWorkId && existing.workTypeId === d.workTypeId && (existing.finishTypeId ?? null) === (d.finishTypeId ?? null) && (existing.executionConditions ?? null) === (d.executionConditions ?? null) && (existing.location ?? null) === (d.location ?? null) && existing.contractorId === d.contractorId && existing.unit === d.unit && new Decimal(existing.plannedQuantity).eq(d.plannedQuantity);
+        const w = await scoped(c, 'works', d.objectWorkId, a); await objectAccess(c, a, w.objectId, true);
         if (d.idempotencyKey) {
             const existing = await one(c, 'SELECT * FROM work_execution_units WHERE tenant_id=$1 AND idempotency_key=$2', [a.tenantId, d.idempotencyKey]);
             if (existing) {
                 ensure(matches(existing), 'Idempotency key уже использован с другими данными');
                 return existing;
             }
-        } const w = await scoped(c, 'works', d.objectWorkId, a); await objectAccess(c, a, w.objectId, true); await scoped(c, 'work_types', d.workTypeId, a); if (d.finishTypeId)
+        } await scoped(c, 'work_types', d.workTypeId, a); if (d.finishTypeId)
         await scoped(c, 'finish_types', d.finishTypeId, a); ensure(d.unit === w.unit, 'Единица измерения единицы исполнения должна совпадать с единицей измерения работы'); ensure(d.workTypeId === w.workTypeId, 'Вид работ единицы исполнения должен совпадать с видом работ'); ensure(!!await one(c, 'SELECT id FROM object_contractors_active WHERE tenant_id=$1 AND object_id=$2 AND contractor_id=$3', [a.tenantId, w.objectId, d.contractorId]), 'Субподрядчик не назначен на объект'); const unit = await insertIdempotent(c, 'work_execution_units', a.tenantId, d); if (unit) {
             await audit(c, a, 'ExecutionUnit', unit.id, 'CREATE', null, unit, 'ExecutionUnitCreated');
             return unit;
@@ -189,26 +200,32 @@ export class ProductionService {
     // as the primary retry risk — an append-only-shaped create with no
     // target row of its own to version-check, and the unit's own FOR UPDATE
     // lock (D4 above) only protected the *sum* invariant, not "was this
-    // exact create already done" concurrently. Two checks by key: a fast
-    // pre-lock one (a sequential retry after the key's row is already
-    // visible returns it directly, without ever taking the unit lock or
-    // touching the sum), and a second one immediately *after* acquiring the
-    // unit's FOR UPDATE lock — the one that actually closes the concurrency
-    // race, since it guarantees that by the time the sum is computed for a
-    // request that reaches it, no concurrent same-key request for this same
-    // unit can still be in flight (the unit lock serializes them, and the
-    // loser's post-lock re-check now finds the winner's already-committed
-    // row instead of proceeding to double-count it in the sum). The trailing
-    // insertIdempotent()-then-refetch is defence in depth against the same
-    // key being reused for a *different* unit concurrently (no shared lock
-    // between two different units) — resolved as "different payload",
-    // rejected, never a raw constraint error.
+    // exact create already done" concurrently. The idempotency-key check
+    // runs immediately *after* acquiring the unit's FOR UPDATE lock — this
+    // is what actually closes the concurrency race, since it guarantees that
+    // by the time the sum is computed for a request that reaches it, no
+    // concurrent same-key request for this same unit can still be in flight
+    // (the unit lock serializes them, and the loser's post-lock re-check now
+    // finds the winner's already-committed row instead of proceeding to
+    // double-count it in the sum). The trailing insertIdempotent()-then-
+    // refetch is defence in depth against the same key being reused for a
+    // *different* unit concurrently (no shared lock between two different
+    // units) — resolved as "different payload", rejected, never a raw
+    // constraint error.
+    //
+    // FINAL-R06-B: there is deliberately no separate fast pre-lock
+    // idempotency check anymore (an earlier version had one, purely as a
+    // lock-avoidance optimisation for a sequential retry). objectAccess()
+    // must run before ANY idempotency-key branch can return an existing row
+    // — the same reasoning as createExecutionUnit's FINAL-R06-A comment —
+    // and objectAccess() needs the locked unit fetched first anyway, so the
+    // single post-lock check below is now also the only one, always gated
+    // behind the caller's own authorization for this unit's object.
     async createQuantityPortion(a: Actor, unitId: string, d: any) { requirePermission(a, P.EXECUTION_UNIT_MANAGE); return transaction(async (c) => {
         const matches = (existing: any) => existing.executionUnitId === unitId && existing.label === d.label && new Decimal(existing.plannedQuantity).eq(d.plannedQuantity);
         const checkExisting = async () => { if (!d.idempotencyKey) return null; const existing = await one(c, 'SELECT * FROM quantity_portions WHERE tenant_id=$1 AND idempotency_key=$2', [a.tenantId, d.idempotencyKey]); if (!existing) return null; ensure(matches(existing), 'Idempotency key уже использован с другими данными'); return existing; };
-        const fast = await checkExisting(); if (fast) return fast;
         const unit = await scoped(c, 'work_execution_units', unitId, a, true); const w = await scoped(c, 'works', unit.objectWorkId, a); await objectAccess(c, a, w.objectId, true);
-        const afterLock = await checkExisting(); if (afterLock) return afterLock;
+        const existing = await checkExisting(); if (existing) return existing;
         const sum = await one(c, 'SELECT coalesce(sum(planned_quantity),0) AS total FROM quantity_portions WHERE tenant_id=$1 AND execution_unit_id=$2', [a.tenantId, unitId]); ensure(new QuantityPortionPolicy().fits(unit.plannedQuantity, sum.total, d.plannedQuantity), 'Сумма объёма участков превышает плановый объём единицы исполнения'); const portion = await insertIdempotent(c, 'quantity_portions', a.tenantId, { executionUnitId: unitId, ...d }); if (portion) {
             await audit(c, a, 'QuantityPortion', portion.id, 'CREATE', null, portion);
             return portion;
@@ -227,13 +244,22 @@ export class ProductionService {
     // version-checked the exact row it mutates, which prevented a duplicate
     // confirmation but resolved a retry to 409 — proving the first call
     // probably committed, never returning what it actually produced
-    // (LOCKED DECISION 2, Option A). claimIdempotentCommand() runs first,
-    // before checkVersion(), so a retry carrying the same (now-stale)
-    // version returns the original confirmation instead of a conflict; a
-    // genuinely new command (no key, or a fresh key) is completely
-    // unaffected and keeps the exact version-gated behaviour below.
-    async recordPortionFact(a: Actor, portionId: string, d: any) { requirePermission(a, P.WORK_UPDATE_PROGRESS); return transaction(async (c) => { const claim = await claimIdempotentCommand(c, a, 'PORTION_FACT', d.idempotencyKey, portionId, { quantity: new Decimal(d.quantity).toFixed(4), version: d.version, comment: d.comment ?? null }); if (claim.replay)
-        return claim.response; const portion = await scoped(c, 'quantity_portions', portionId, a, true); const unit = await scoped(c, 'work_execution_units', portion.executionUnitId, a); const w = await scoped(c, 'works', unit.objectWorkId, a); await objectAccess(c, a, w.objectId, true); checkVersion(portion, d.version);
+    // (LOCKED DECISION 2, Option A). A genuinely new command (no key, or a
+    // fresh key) is completely unaffected and keeps the exact version-gated
+    // behaviour below.
+    // FINAL-R06-D: objectAccess() (and the portion/unit/work reads it needs)
+    // now runs before claimIdempotentCommand(), not after — a replay must
+    // not bypass the same object-level authorization a fresh mutation
+    // requires. portionId is the caller's own path parameter, so this
+    // applies identically whether this call turns out to be a replay or a
+    // fresh mutation. (claimIdempotentCommand() also independently rejects a
+    // different actor reusing this actor's key at all — see FINAL-R06-C,
+    // security.ts — this additionally re-checks the actor's own current
+    // object access on every call, replay included.)
+    async recordPortionFact(a: Actor, portionId: string, d: any) { requirePermission(a, P.WORK_UPDATE_PROGRESS); return transaction(async (c) => {
+        const portion = await scoped(c, 'quantity_portions', portionId, a, true); const unit = await scoped(c, 'work_execution_units', portion.executionUnitId, a); const w = await scoped(c, 'works', unit.objectWorkId, a); await objectAccess(c, a, w.objectId, true);
+        const claim = await claimIdempotentCommand(c, a, 'PORTION_FACT', d.idempotencyKey, portionId, { quantity: new Decimal(d.quantity).toFixed(4), version: d.version, comment: d.comment ?? null }); if (claim.replay)
+        return claim.response; checkVersion(portion, d.version);
     // F8.1-03 corrective, second pass (Independent Re-Review, Patch 2): the
     // portion-level freeze guard below only ever knew about *this* portion's
     // own inspection history — it had nothing to say about the work's own
@@ -259,8 +285,14 @@ export class ProductionService {
     // from portionInspectionRequestDto via the controller) precisely because
     // this method's signature already takes v/inspectionType destructured
     // rather than the raw DTO object.
-    async requestPortionInspection(a: Actor, portionId: string, v: number, inspectionType: 'INTERNAL_SC' | 'CUSTOMER_SC', idempotencyKey?: string) { requirePermission(a, P.INSPECTION_REQUEST); return transaction(async (c) => { const claim = await claimIdempotentCommand(c, a, 'PORTION_INSPECTION_REQUEST', idempotencyKey, portionId, { version: v, inspectionType }); if (claim.replay)
-        return claim.response; const portion = await scoped(c, 'quantity_portions', portionId, a, true); checkVersion(portion, v); const unit = await scoped(c, 'work_execution_units', portion.executionUnitId, a); const w = await scoped(c, 'works', unit.objectWorkId, a); await objectAccess(c, a, w.objectId, true); const fact = await one(c, "SELECT quantity FROM portion_quantity_confirmations WHERE tenant_id=$1 AND portion_id=$2 AND source='RP_FACT' ORDER BY recorded_at DESC LIMIT 1", [a.tenantId, portionId]); ensure(!!fact && new Decimal(fact.quantity).gte(portion.plannedQuantity), 'Для MVP предъявляется полный объём участка'); ensure(!await one(c, "SELECT id FROM inspections WHERE tenant_id=$1 AND portion_id=$2 AND inspection_type=$3 AND status<>'REJECTED'", [a.tenantId, portionId, inspectionType]), 'Проверка уже предъявлена или принята'); const i = await insert(c, 'inspections', a.tenantId, { objectId: w.objectId, objectWorkId: w.id, portionId, inspectionType, requestedBy: a.id }); await c.query('UPDATE quantity_portions SET version=version+1 WHERE tenant_id=$1 AND id=$2', [a.tenantId, portionId]); await audit(c, a, 'Inspection', i.id, 'REQUEST', null, i, 'InspectionRequested'); await completeIdempotentCommand(c, a, 'PORTION_INSPECTION_REQUEST', idempotencyKey, i); return i; }); }
+    // FINAL-R06-D: same reordering as recordPortionFact() above —
+    // objectAccess() (and the portion/unit/work reads it needs) now runs
+    // before claimIdempotentCommand(), so a replay cannot bypass the same
+    // object-level authorization a fresh request requires.
+    async requestPortionInspection(a: Actor, portionId: string, v: number, inspectionType: 'INTERNAL_SC' | 'CUSTOMER_SC', idempotencyKey?: string) { requirePermission(a, P.INSPECTION_REQUEST); return transaction(async (c) => {
+        const portion = await scoped(c, 'quantity_portions', portionId, a, true); const unit = await scoped(c, 'work_execution_units', portion.executionUnitId, a); const w = await scoped(c, 'works', unit.objectWorkId, a); await objectAccess(c, a, w.objectId, true);
+        const claim = await claimIdempotentCommand(c, a, 'PORTION_INSPECTION_REQUEST', idempotencyKey, portionId, { version: v, inspectionType }); if (claim.replay)
+        return claim.response; checkVersion(portion, v); const fact = await one(c, "SELECT quantity FROM portion_quantity_confirmations WHERE tenant_id=$1 AND portion_id=$2 AND source='RP_FACT' ORDER BY recorded_at DESC LIMIT 1", [a.tenantId, portionId]); ensure(!!fact && new Decimal(fact.quantity).gte(portion.plannedQuantity), 'Для MVP предъявляется полный объём участка'); ensure(!await one(c, "SELECT id FROM inspections WHERE tenant_id=$1 AND portion_id=$2 AND inspection_type=$3 AND status<>'REJECTED'", [a.tenantId, portionId, inspectionType]), 'Проверка уже предъявлена или принята'); const i = await insert(c, 'inspections', a.tenantId, { objectId: w.objectId, objectWorkId: w.id, portionId, inspectionType, requestedBy: a.id }); await c.query('UPDATE quantity_portions SET version=version+1 WHERE tenant_id=$1 AND id=$2', [a.tenantId, portionId]); await audit(c, a, 'Inspection', i.id, 'REQUEST', null, i, 'InspectionRequested'); await completeIdempotentCommand(c, a, 'PORTION_INSPECTION_REQUEST', idempotencyKey, i); return i; }); }
     // ---------------------------------------------------------------------
     // F8.2 PTO / Executive Documentation Foundation. A Documentation Package
     // hangs off an existing work, exactly like an execution unit does — it

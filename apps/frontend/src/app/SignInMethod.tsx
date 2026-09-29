@@ -1,7 +1,7 @@
 import { useEffect, useId, useState, type FormEvent } from 'react';
 import { Button, typeClass } from '../design-system';
 import {
-  INTERNAL_CORE_ROLES,
+  CURRENT_MOCK_SIGN_IN_ROLES,
   INTERNAL_ROLE_LABELS,
   isInternalCoreRole,
   type InternalCoreRole,
@@ -82,12 +82,12 @@ export function SignInMethod({ onSignedIn }: SignInMethodProps) {
 
 /**
  * The test sign-in. Offers the internal roles only (Architecture Decision 3):
- * the options come from `INTERNAL_CORE_ROLES`, so `CONTRACTOR_VIEWER` is not
- * a value this form can produce, and `signInWithMockKey` re-checks the role
- * before any request is sent.
+ * the options come from `CURRENT_MOCK_SIGN_IN_ROLES` (F12.3 FINAL-R05) — a
+ * NEW sign-in never offers legacy `TECHNICAL_DIRECTOR` or `CONTRACTOR_VIEWER`
+ * — and `signInWithMockKey` re-checks the role before any request is sent.
  */
 function MockSignInForm({ onSignedIn }: SignInMethodProps) {
-  const [role, setRole] = useState<InternalCoreRole>(INTERNAL_CORE_ROLES[0]);
+  const [role, setRole] = useState<InternalCoreRole>(CURRENT_MOCK_SIGN_IN_ROLES[0]);
   const [key, setKey] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -128,7 +128,7 @@ function MockSignInForm({ onSignedIn }: SignInMethodProps) {
             if (isInternalCoreRole(event.target.value)) setRole(event.target.value);
           }}
         >
-          {INTERNAL_CORE_ROLES.map((option) => (
+          {CURRENT_MOCK_SIGN_IN_ROLES.map((option) => (
             <option key={option} value={option}>
               {INTERNAL_ROLE_LABELS[option]}
             </option>

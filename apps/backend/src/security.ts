@@ -105,6 +105,16 @@ export async function ensureAttachmentObjectScope(c: any, a: Actor, fileId: stri
 // business-rule failure rolls back the claim together with everything else
 // — a genuinely failed attempt leaves nothing behind, and a stale command
 // without a matching prior success keeps failing normally on retry.
+//
+// FINAL-R06-C: idempotency is retry safety, not an authorization mechanism.
+// A command row's own `created_by` binds a replay to the actor who first
+// made it — a different actor who merely learns/reuses the same key is
+// rejected outright, even with an identical payload, rather than receiving
+// the original actor's response or silently starting a second command under
+// the same key. Checked in both the initial-existing branch and the
+// post-ON-CONFLICT raced branch, before the payload/scope check, so the
+// rejection is reported as "someone else's key" rather than conflated with
+// "different data".
 export type IdempotentClaim = { replay: false } | { replay: true; response: any };
 function payloadEquals(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
     const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
@@ -118,6 +128,7 @@ export async function claimIdempotentCommand(c: any, a: Actor, operation: string
         return { replay: false };
     const existing = await one(c, 'SELECT * FROM idempotent_commands WHERE tenant_id=$1 AND operation=$2 AND idempotency_key=$3', [a.tenantId, operation, idempotencyKey]);
     if (existing) {
+        ensure(existing.createdBy === a.id, 'Idempotency key уже использован другим пользователем');
         ensure(existing.scopeId === scopeId && payloadEquals(existing.payload, payload), 'Idempotency key уже использован с другими данными');
         return { replay: true, response: existing.response };
     }
@@ -126,6 +137,7 @@ export async function claimIdempotentCommand(c: any, a: Actor, operation: string
         return { replay: false };
     const raced = await one(c, 'SELECT * FROM idempotent_commands WHERE tenant_id=$1 AND operation=$2 AND idempotency_key=$3', [a.tenantId, operation, idempotencyKey]);
     ensure(!!raced, 'Idempotency key conflict');
+    ensure(raced.createdBy === a.id, 'Idempotency key уже использован другим пользователем');
     ensure(raced.scopeId === scopeId && payloadEquals(raced.payload, payload), 'Idempotency key уже использован с другими данными');
     return { replay: true, response: raced.response };
 }

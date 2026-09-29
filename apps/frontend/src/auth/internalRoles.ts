@@ -39,6 +39,30 @@ export type InternalCoreRole = (typeof INTERNAL_CORE_ROLES)[number];
 /** The one external-participant role the backend defines today. */
 export const EXTERNAL_PARTICIPANT_ROLE = 'CONTRACTOR_VIEWER' satisfies Role;
 
+/**
+ * F12.3 FINAL-R05: the roles Core's test sign-in offers for a NEW mock
+ * session, distinct from `INTERNAL_CORE_ROLES` above.
+ *
+ * `INTERNAL_CORE_ROLES` answers two different questions at once: which roles
+ * an EXISTING session may carry (it must keep legacy `TECHNICAL_DIRECTOR` for
+ * that — sessions already authenticated with it must keep working), and
+ * which roles a NEW sign-in should offer. `DEPUTY_DIRECTOR` is the canonical
+ * CURRENT managerial role (LOCKED DECISION 1); `TECHNICAL_DIRECTOR` is
+ * legacy-only and must not be presented as a normal current choice, so a new
+ * mock sign-in needs the narrower list below instead. `CONTRACTOR_VIEWER` is
+ * already excluded by construction — `INTERNAL_CORE_ROLES` is itself an
+ * explicit allowlist that never contains it (see the test pinning this) — so
+ * filtering out `TECHNICAL_DIRECTOR` alone is sufficient here.
+ *
+ * The backend's own `POST /users` draws the same distinction with
+ * `CURRENT_ASSIGNABLE_ROLES` (packages/domain); this is that same current/
+ * legacy split, kept for the one other place Core offers a role as a new
+ * choice rather than reading one an existing user already has.
+ */
+export const CURRENT_MOCK_SIGN_IN_ROLES: readonly InternalCoreRole[] = INTERNAL_CORE_ROLES.filter(
+  (role) => role !== 'TECHNICAL_DIRECTOR',
+);
+
 /** The same Russian wording the legacy entry shows for these roles (main.tsx `roleNames`). */
 export const INTERNAL_ROLE_LABELS: Record<InternalCoreRole, string> = {
   GENERAL_DIRECTOR: 'Генеральный директор',
