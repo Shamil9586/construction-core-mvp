@@ -26,6 +26,11 @@ export type Role = typeof roles[number];
 // "existing sessions/users continue to authenticate" case, not a new
 // assignment.
 export const CURRENT_ASSIGNABLE_ROLES = ['GENERAL_DIRECTOR', 'PROJECT_MANAGER', 'CONSTRUCTION_CONTROL', 'PTO', 'SDO', 'DEPARTMENT_HEAD', 'ADMIN', 'CONTRACTOR_VIEWER', 'DEPUTY_DIRECTOR'] as const;
+// PBX-2: roles the internal Users & Access administration may assign or change
+// to. Narrower than CURRENT_ASSIGNABLE_ROLES: CONTRACTOR_VIEWER is the
+// external-participant role (outside the internal Bitrix Core contour) and
+// TECHNICAL_DIRECTOR is legacy-only; neither is a target of this screen.
+export const INTERNAL_ASSIGNABLE_ROLES = ['GENERAL_DIRECTOR', 'DEPUTY_DIRECTOR', 'PROJECT_MANAGER', 'CONSTRUCTION_CONTROL', 'PTO', 'SDO', 'DEPARTMENT_HEAD', 'ADMIN'] as const;
 export enum Permission {
     OBJECT_VIEW = 'OBJECT_VIEW',
     OBJECT_CREATE = 'OBJECT_CREATE',

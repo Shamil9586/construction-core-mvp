@@ -3,7 +3,7 @@ import { Sidebar, typeClass, type NavItem } from '../design-system';
 import { ROUTE_PATHS } from './routePaths';
 import { RuntimeFooter } from './RuntimeFooter';
 import { useCoreRuntime } from './CoreRuntimeContext';
-import { canManageDocumentation, canAccessSdoWorkspace } from '../auth/internalRoles';
+import { canManageDocumentation, canAccessSdoWorkspace, canAdministerUsers } from '../auth/internalRoles';
 
 /**
  * The routing adapter `Sidebar`'s own doc comment asks for: "a screen — or a
@@ -30,6 +30,8 @@ const NAV_ITEMS: NavItem[] = [
   { key: 'company', label: 'Портфель' },
   { key: 'pto', label: 'ПТО' },
   { key: 'sdo', label: 'СДО' },
+  // PBX-2: shown to a confirmed ADMIN session only (never in the session-less mock runtime).
+  { key: 'admin-users', label: 'Пользователи и доступ' },
 ];
 
 export function AppSidebar() {
@@ -46,7 +48,9 @@ export function AppSidebar() {
         ? 'pto'
         : location.pathname.startsWith('/sdo')
           ? 'sdo'
-          : '';
+          : location.pathname === ROUTE_PATHS.adminUsers
+            ? 'admin-users'
+            : '';
 
   // F8.2.1 Corrective Patch (F8.2.1-02) — the PTO Workspace is PTO's own
   // working area (and ADMIN's, per existing administration convention), not
@@ -65,9 +69,10 @@ export function AppSidebar() {
     ? NAV_ITEMS.filter(
         (item) =>
           (item.key !== 'pto' || canManageDocumentation(session.user.role)) &&
-          (item.key !== 'sdo' || canAccessSdoWorkspace(session.user.role)),
+          (item.key !== 'sdo' || canAccessSdoWorkspace(session.user.role)) &&
+          (item.key !== 'admin-users' || canAdministerUsers(session.user.role)),
       )
-    : NAV_ITEMS;
+    : NAV_ITEMS.filter((item) => item.key !== 'admin-users');
 
   return (
     <Sidebar
@@ -79,6 +84,7 @@ export function AppSidebar() {
         if (key === 'company') navigate(ROUTE_PATHS.company);
         if (key === 'pto') navigate(ROUTE_PATHS.pto);
         if (key === 'sdo') navigate(ROUTE_PATHS.sdo);
+        if (key === 'admin-users') navigate(ROUTE_PATHS.adminUsers);
       }}
       footer={<RuntimeFooter />}
     />

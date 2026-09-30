@@ -136,3 +136,36 @@ export function canManageDocumentation(role: string): boolean {
 export function canAccessSdoWorkspace(role: string): boolean {
   return role === 'SDO' || role === 'ADMIN';
 }
+
+/**
+ * PBX-2 — the roles the «Пользователи и доступ» screen offers as a TARGET, in
+ * display order. Mirrors the backend's `INTERNAL_ASSIGNABLE_ROLES`
+ * (packages/domain; a test pins the two together). Deliberately excludes
+ * legacy `TECHNICAL_DIRECTOR` (an existing user keeps it and it stays readable,
+ * but it is never a choice) and `CONTRACTOR_VIEWER` (external participant,
+ * outside the internal Bitrix Core contour).
+ */
+export const ADMIN_ASSIGNABLE_ROLES = [
+  'GENERAL_DIRECTOR',
+  'DEPUTY_DIRECTOR',
+  'PROJECT_MANAGER',
+  'CONSTRUCTION_CONTROL',
+  'PTO',
+  'SDO',
+  'DEPARTMENT_HEAD',
+  'ADMIN',
+] as const satisfies readonly InternalCoreRole[];
+
+export type AdminAssignableRole = (typeof ADMIN_ASSIGNABLE_ROLES)[number];
+
+/** Russian role label for the admin screen — never a raw enum name. */
+export function adminRoleLabel(role: string): string {
+  if (isInternalCoreRole(role)) return INTERNAL_ROLE_LABELS[role];
+  if (role === EXTERNAL_PARTICIPANT_ROLE) return 'Внешний участник';
+  return 'Неизвестная роль';
+}
+
+/** Only ADMIN administers users; the backend enforces ADMIN_USERS independently. */
+export function canAdministerUsers(role: string): boolean {
+  return role === 'ADMIN';
+}

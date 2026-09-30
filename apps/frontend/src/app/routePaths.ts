@@ -21,6 +21,8 @@ export const ROUTE_PATHS = {
   sdo: '/sdo',
   /** F8.3 — SDO Case detail, reachable only from the SDO workspace's own "Активные дела СДО" table. */
   sdoCase: '/sdo/case/:caseId',
+  /** PBX-2 — Администрирование → Пользователи и доступ (ADMIN only). */
+  adminUsers: '/admin/users',
 } as const;
 
 export function objectPath(objectId: string): string {

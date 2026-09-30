@@ -1,0 +1,118 @@
+.messages {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-8);
+  margin-top: var(--cc-p-space-16);
+}
+
+.banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--cc-p-space-12);
+  box-sizing: border-box;
+  padding: var(--cc-p-space-12) var(--cc-p-space-16);
+  border: var(--cc-border-width) solid var(--cc-border-interactive);
+  border-radius: var(--cc-p-radius-6);
+  background: var(--cc-background-surface);
+  color: var(--cc-text-primary);
+}
+
+.bannerError {
+  background: var(--cc-status-blocked-fill);
+  color: var(--cc-status-blocked-text);
+}
+
+.bannerWarning {
+  background: var(--cc-status-attention-fill);
+  color: var(--cc-status-attention-text);
+}
+
+.bannerSuccess {
+  background: var(--cc-status-on-track-fill);
+  color: var(--cc-status-on-track-text);
+}
+
+.linkButton {
+  border: 0;
+  background: none;
+  padding: var(--cc-p-space-4);
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.linkButton:focus-visible,
+.input:focus-visible {
+  outline: var(--cc-focus-ring-width) solid var(--cc-focus-ring);
+  outline-offset: var(--cc-focus-ring-offset);
+}
+
+.tableSpacing {
+  margin-top: var(--cc-p-space-20);
+}
+
+.row {
+  border-top: var(--cc-border-width) solid var(--cc-border-default);
+}
+
+.panelRow {
+  background: var(--cc-background-selected);
+}
+
+.cell {
+  box-sizing: border-box;
+  padding: var(--cc-p-space-12) var(--cc-p-space-16);
+  vertical-align: top;
+  overflow-wrap: break-word;
+}
+
+.alignEnd {
+  text-align: end;
+}
+
+.secondary {
+  color: var(--cc-text-secondary);
+}
+
+.rowBadge {
+  margin-top: var(--cc-p-space-4);
+}
+
+.rowActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--cc-p-space-8);
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-12);
+  max-width: 560px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-4);
+}
+
+.input {
+  box-sizing: border-box;
+  padding: var(--cc-p-space-8) var(--cc-p-space-12);
+  border: var(--cc-border-width) solid var(--cc-border-interactive);
+  border-radius: var(--cc-p-radius-6);
+  background: var(--cc-background-surface);
+  color: var(--cc-text-primary);
+  font: inherit;
+}
+
+.panelActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--cc-p-space-8);
+}
