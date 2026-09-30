@@ -27,6 +27,7 @@ test('HTTP E2E: object → 20t/10t → SK issue → acceptance → PTO → SDO �
     const base = `http://127.0.0.1:${address.port}`;
     let token = '';
     async function req(path: string, body?: any, expected = body === undefined ? 200 : 201) { const r = await fetch(base + '/' + path, { method: body === undefined ? 'GET' : 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: body === undefined ? undefined : JSON.stringify(body) }); const data: any = await r.json(); if (path === 'objects' && body !== undefined && r.status === 201) await (await import('./helpers/pbx3-fixtures')).assignPtoToObject(data.id); assert.equal(r.status, expected, path + ': ' + JSON.stringify(data)); return data; }
+    async function asDeputy<T>(fn: () => Promise<T>): Promise<T> { const prev = token; await login('DEPUTY_DIRECTOR'); try { return await fn(); } finally { token = prev; } } // OBJ-1: object creation is Deputy/Admin authority; fixture only, the test's subject role is restored
     async function login(role: string) { const d = await req('auth/mock', { role, key: 'e2e-local-test' }); token = d.token; return d.user; }
     try {
         await req('dashboard/executive', undefined, 401);
@@ -34,7 +35,7 @@ test('HTTP E2E: object → 20t/10t → SK issue → acceptance → PTO → SDO �
         const contractors = await req('contractors'), dict = await req('dictionaries');
         const c = contractors[0];
         const dt = (delta: number) => new Date(Date.now() + delta * 86400000).toISOString().slice(0, 10);
-        const o = await req('objects', { externalCode: 'E2E-' + randomUUID(), name: 'E2E фундамент', address: 'Тестовый город, ул. Проверочная, 1', organizationName: 'ООО Тест', projectManagerId: pm.id, startDate: dt(-20), plannedFinishDate: dt(10), contractValue: '2000000', contractorIds: [c.id] });
+        const o = await asDeputy(() => req('objects', { externalCode: 'E2E-' + randomUUID(), name: 'E2E фундамент', address: 'Тестовый город, ул. Проверочная, 1', organizationName: 'ООО Тест', projectManagerId: pm.id, startDate: dt(-20), plannedFinishDate: dt(10), contractValue: '2000000', contractorIds: [c.id] }));
         const body = { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: c.id, responsibleUserId: pm.id, name: 'Армирование фундамента', unit: 'т', plannedQuantity: 20, plannedStartDate: dt(-20), plannedFinishDate: dt(5), estimatedCost: '1000000' };
         let w = await req('works', body), next = await req('works', { ...body, name: 'Бетонирование', unit: 'м³', plannedQuantity: 100, plannedStartDate: dt(6), plannedFinishDate: dt(10) });
         await req('work-dependencies', { predecessorWorkId: w.id, successorWorkId: next.id, requiresAcceptance: true });

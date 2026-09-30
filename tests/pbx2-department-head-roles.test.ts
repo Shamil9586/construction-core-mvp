@@ -48,7 +48,10 @@ test('DEPARTMENT_HEAD keeps its previous grants exactly (read-only view bundle);
   assert.deepEqual(grantsOf('DEPARTMENT_HEAD'), grantsOf('GENERAL_DIRECTOR').filter((p) => p !== Permission.PTO_TEAM_READ));
   assert.equal(hasPermission('DEPARTMENT_HEAD', Permission.OBJECT_VIEW), true);
   for (const p of [Permission.OBJECT_CREATE, Permission.PTO_EDIT, Permission.SDO_EDIT, Permission.INSPECTION_ACCEPT, Permission.ADMIN_USERS, Permission.DOCUMENTATION_MANAGE]) assert.equal(hasPermission('DEPARTMENT_HEAD', p), false, p);
-  assert.ok(hasPermission('TECHNICAL_DIRECTOR', Permission.OBJECT_CREATE));
+  // OBJ-1: current object-create authority is DEPUTY_DIRECTOR / ADMIN; legacy TECHNICAL_DIRECTOR no longer holds it.
+  assert.equal(hasPermission('TECHNICAL_DIRECTOR', Permission.OBJECT_CREATE), false);
+  for (const role of ['DEPUTY_DIRECTOR', 'ADMIN'] as const) assert.ok(hasPermission(role, Permission.OBJECT_CREATE), role);
+  assert.ok(hasPermission('TECHNICAL_DIRECTOR', Permission.OBJECT_EDIT), 'TD keeps its other managerial grants');
   assert.equal(hasPermission('TECHNICAL_DIRECTOR', Permission.PTO_EDIT), false);
 });
 
@@ -117,12 +120,12 @@ test('HTTP (mock auth): heads behave like their department role; legacy POST /us
     return d.token as string;
   };
   try {
-    for (const r of ['ADMIN', 'PROJECT_MANAGER', 'TECHNICAL_DIRECTOR', 'PTO', 'PTO_HEAD', 'SDO', 'SDO_HEAD', 'CONSTRUCTION_CONTROL', 'CONSTRUCTION_CONTROL_HEAD', 'DEPARTMENT_HEAD']) await login(r);
+    for (const r of ['ADMIN', 'DEPUTY_DIRECTOR', 'PROJECT_MANAGER', 'TECHNICAL_DIRECTOR', 'PTO', 'PTO_HEAD', 'SDO', 'SDO_HEAD', 'CONSTRUCTION_CONTROL', 'CONSTRUCTION_CONTROL_HEAD', 'DEPARTMENT_HEAD']) await login(r);
     for (const r of ['PTO_HEAD', 'SDO_HEAD', 'CONSTRUCTION_CONTROL_HEAD']) assert.equal(users[r].role, r);
 
     const dict = (await call('GET', 'dictionaries', tokens.PROJECT_MANAGER)).data;
     const contractors = (await call('GET', 'contractors', tokens.PROJECT_MANAGER)).data;
-    const object = (await call('POST', 'objects', tokens.TECHNICAL_DIRECTOR, { externalCode: 'HEADS-' + Date.now(), name: 'Head roles', address: 'Тест, 1', organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: users.PROJECT_MANAGER.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] })).data;
+    const object = (await call('POST', 'objects', tokens.DEPUTY_DIRECTOR, { externalCode: 'HEADS-' + Date.now(), name: 'Head roles', address: 'Тест, 1', organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: users.PROJECT_MANAGER.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] })).data;
     // PBX-3A: PTO / PTO_HEAD operate only on objects they are assigned to (seeded head leads, seeded engineer is a member).
     await (await import('./helpers/pbx3-fixtures')).assignPtoToObject(object.id);
     const mkWork = async (name: string) => (await call('POST', 'works', tokens.PROJECT_MANAGER, { objectId: object.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: users.PROJECT_MANAGER.id, name, unit: 'м²', plannedQuantity: 100, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '20000' })).data;
@@ -163,6 +166,9 @@ test('HTTP (mock auth): heads behave like their department role; legacy POST /us
     }
     // an operational route the base role lacks is refused identically for the head (validation runs after the permission check there)
     const objectBody = { externalCode: 'X-' + Date.now(), name: 'n', address: 'a', organizationName: 'o', projectManagerId: users.PROJECT_MANAGER.id, startDate: dt(-1), plannedFinishDate: dt(5), contractValue: '1', contractorIds: [contractors[0].id] };
+    // OBJ-1: legacy TECHNICAL_DIRECTOR and PROJECT_MANAGER are not current object-create actors either.
+    assert.equal((await call('POST', 'objects', tokens.TECHNICAL_DIRECTOR, objectBody)).status, 403);
+    assert.equal((await call('POST', 'objects', tokens.PROJECT_MANAGER, objectBody)).status, 403);
     assert.equal((await call('POST', 'objects', tokens.CONSTRUCTION_CONTROL, objectBody)).status, 403);
     assert.equal((await call('POST', 'objects', tokens.CONSTRUCTION_CONTROL_HEAD, objectBody)).status, 403);
     assert.equal((await call('POST', 'objects', tokens.PTO_HEAD, objectBody)).status, 403);

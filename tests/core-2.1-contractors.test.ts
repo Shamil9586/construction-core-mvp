@@ -44,6 +44,7 @@ test('F12.2: removeContractor retired — assignment/RBAC intact, retired route 
     const base = `http://127.0.0.1:${address.port}`;
     let token = '';
     async function req(path: string, body?: any, expected = body === undefined ? 200 : 201) { const r = await fetch(base + '/' + path, { method: body === undefined ? 'GET' : 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: body === undefined ? undefined : JSON.stringify(body) }); const data: any = await r.json(); assert.equal(r.status, expected, path + ': ' + JSON.stringify(data)); return data; }
+    async function asDeputy<T>(fn: () => Promise<T>): Promise<T> { const prev = token; await login('DEPUTY_DIRECTOR'); try { return await fn(); } finally { token = prev; } } // OBJ-1: object creation is Deputy/Admin authority; fixture only, the test's subject role is restored
     async function login(role: string) { const d = await req('auth/mock', { role, key: 'core-2-1-key' }); token = d.token; return d.user; }
     const dt = (delta: number) => new Date(Date.now() + delta * 86400000).toISOString().slice(0, 10);
     try {
@@ -57,8 +58,8 @@ test('F12.2: removeContractor retired — assignment/RBAC intact, retired route 
         // this user — tied to `target` — instead of the seeded demo contractor viewer.
         await req('users', { bitrixUserId: '0', name: 'F12.2 CONTRACTOR_VIEWER', role: 'CONTRACTOR_VIEWER', contractorId: target.id });
         await login('PROJECT_MANAGER');
-        const o = await req('objects', { externalCode: 'F12.2-' + randomUUID(), name: 'F12.2 объект', address: 'Тестовая, 122', organizationName: 'ООО Тест', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [placeholder.id] });
-        const oHist = await req('objects', { externalCode: 'F12.2-HIST-' + randomUUID(), name: 'F12.2 объект (историческая запись)', address: 'Тестовая, 123', organizationName: 'ООО Тест', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [placeholder.id] });
+        const o = await asDeputy(() => req('objects', { externalCode: 'F12.2-' + randomUUID(), name: 'F12.2 объект', address: 'Тестовая, 122', organizationName: 'ООО Тест', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [placeholder.id] }));
+        const oHist = await asDeputy(() => req('objects', { externalCode: 'F12.2-HIST-' + randomUUID(), name: 'F12.2 объект (историческая запись)', address: 'Тестовая, 123', organizationName: 'ООО Тест', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [placeholder.id] }));
 
         // --- assignContractor(): unchanged — active relation, removedAt=null ---
         const relation = await req(`objects/${o.id}/contractors`, { contractorId: target.id });

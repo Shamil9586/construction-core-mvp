@@ -25,8 +25,10 @@ test('hasPermission(DEPUTY_DIRECTOR): exactly the technical-director managerial 
   for (const p of [Permission.DOCUMENTATION_MANAGE, Permission.PTO_EDIT, Permission.PTO_TRANSFER_SDO, Permission.SDO_CASE_MANAGE, Permission.SDO_EDIT, Permission.SDO_CLOSE, Permission.FINANCE_EDIT, Permission.INSPECTION_ACCEPT, Permission.INSPECTION_REJECT, Permission.ISSUE_CREATE, Permission.ISSUE_VERIFY, Permission.WORK_UPDATE_PROGRESS, Permission.INSPECTION_REQUEST, Permission.ISSUE_RESOLVE, Permission.ADMIN_USERS, Permission.ADMIN_DICTIONARIES])
     assert.equal(hasPermission('DEPUTY_DIRECTOR' as any, p), false, `DEPUTY_DIRECTOR must NOT hold ${p}`);
   // TECHNICAL_DIRECTOR's own grant is unaffected — same set as before this pass.
-  for (const p of [Permission.OBJECT_CREATE, Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE, Permission.EXECUTION_UNIT_MANAGE])
+  // (OBJ-1: except OBJECT_CREATE — creating an object appoints its РП, a Deputy Director/ADMIN act; legacy TD no longer holds it.)
+  for (const p of [Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE, Permission.EXECUTION_UNIT_MANAGE])
     assert.equal(hasPermission('TECHNICAL_DIRECTOR', p), true);
+  assert.equal(hasPermission('TECHNICAL_DIRECTOR', Permission.OBJECT_CREATE), false);
   assert.equal(hasPermission('TECHNICAL_DIRECTOR', Permission.DOCUMENTATION_MANAGE), false);
 });
 
@@ -54,6 +56,7 @@ test('F12.3: DEPUTY_DIRECTOR performs manager operations and company/object visi
     assert.equal(r.status, expected, path + ': ' + JSON.stringify(data));
     return data;
   }
+  async function asDeputy<T>(fn: () => Promise<T>): Promise<T> { const prev = token; await login('DEPUTY_DIRECTOR'); try { return await fn(); } finally { token = prev; } } // OBJ-1: object creation is Deputy/Admin authority; fixture only, the test's subject role is restored
   async function login(role: string) {
     const d = await req('auth/mock', { role, key: 'f12-deputy-director-key' });
     token = d.token;
@@ -69,7 +72,7 @@ test('F12.3: DEPUTY_DIRECTOR performs manager operations and company/object visi
     assert.equal(deputy.role, 'DEPUTY_DIRECTOR');
 
     // ---- manager operations: object/work creation, PM reassignment ----
-    const o = await req('objects', { externalCode: 'F12-DD-' + randomUUID(), name: 'F12 Deputy Director', address: 'Тест, 1', organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] });
+    const o = await asDeputy(() => req('objects', { externalCode: 'F12-DD-' + randomUUID(), name: 'F12 Deputy Director', address: 'Тест, 1', organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] }));
     const work = await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: pm.id, name: 'Работа ЗД', unit: 'м²', plannedQuantity: 50, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '10000' });
     await req('execution-units', { objectWorkId: work.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, unit: 'м²', plannedQuantity: 50 });
     const otherPm = (await req('users')).find((u: any) => u.role === 'PROJECT_MANAGER' && u.id !== pm.id);

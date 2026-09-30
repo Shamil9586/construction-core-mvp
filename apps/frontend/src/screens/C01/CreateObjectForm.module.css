@@ -1,0 +1,108 @@
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-16);
+  box-sizing: border-box;
+  margin-top: var(--cc-p-space-20);
+  padding: var(--cc-p-space-16);
+  border: var(--cc-border-width) solid var(--cc-border-default);
+  border-radius: var(--cc-p-radius-6);
+  background: var(--cc-background-surface);
+}
+
+.form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--cc-p-space-16);
+}
+
+.wide,
+.fieldset,
+.banner,
+.actions,
+.hint {
+  grid-column: 1 / -1;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-4);
+  min-width: 0;
+}
+
+.fieldset {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-8);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: var(--cc-p-space-8);
+}
+
+.input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 40px;
+  padding: var(--cc-p-space-8) var(--cc-p-space-12);
+  border: var(--cc-border-width) solid var(--cc-border-interactive);
+  border-radius: var(--cc-p-radius-6);
+  background: var(--cc-background-surface);
+  color: var(--cc-text-primary);
+  font: inherit;
+}
+
+.input:focus-visible,
+.check input:focus-visible {
+  outline: var(--cc-focus-ring-width) solid var(--cc-focus-ring);
+  outline-offset: var(--cc-focus-ring-offset);
+}
+
+.input[aria-invalid='true'] {
+  border-color: var(--cc-status-blocked-text);
+}
+
+.hint {
+  color: var(--cc-text-secondary);
+}
+
+.error {
+  color: var(--cc-status-blocked-text);
+}
+
+.banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--cc-p-space-12);
+  padding: var(--cc-p-space-12) var(--cc-p-space-16);
+  border-radius: var(--cc-p-radius-6);
+  background: var(--cc-status-blocked-fill);
+  color: var(--cc-status-blocked-text);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--cc-p-space-8);
+}
+
+@media (max-width: 720px) {
+  .form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .wide,
+  .fieldset,
+  .banner,
+  .actions,
+  .hint {
+    grid-column: auto;
+  }
+}

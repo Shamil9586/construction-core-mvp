@@ -30,6 +30,7 @@ test('Regression net ERP -> Core: object self-assignment, work/dependency guards
     const base = `http://127.0.0.1:${address.port}`;
     let token = '';
     async function req(path: string, body?: any, expected = body === undefined ? 200 : 201) { const r = await fetch(base + '/' + path, { method: body === undefined ? 'GET' : 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: body === undefined ? undefined : JSON.stringify(body) }); const data: any = await r.json(); if (path === 'objects' && body !== undefined && r.status === 201) await (await import('./helpers/pbx3-fixtures')).assignPtoToObject(data.id); assert.equal(r.status, expected, path + ': ' + JSON.stringify(data)); return data; }
+    async function asDeputy<T>(fn: () => Promise<T>): Promise<T> { const prev = token; await login('DEPUTY_DIRECTOR'); try { return await fn(); } finally { token = prev; } } // OBJ-1: object creation is Deputy/Admin authority; fixture only, the test's subject role is restored
     async function login(role: string) { const d = await req('auth/mock', { role, key: 'regression-erp-parity-key' }); token = d.token; return d.user; }
     const dt = (delta: number) => new Date(Date.now() + delta * 86400000).toISOString().slice(0, 10);
     try {
@@ -39,13 +40,13 @@ test('Regression net ERP -> Core: object self-assignment, work/dependency guards
         const workTypeId = dict.workTypes[0].id;
         const otherPm = users.find((u: any) => u.role === 'PROJECT_MANAGER' && u.id !== pm.id);
 
-        // ---- A. Объект: РП может создать объект только для себя (service.ts createObject,
-        // ---- "ensure(pm.id === a.id, 'РП может создать объект только для себя')") — уже
-        // ---- реализовано, но не было закреплено тестом (ERP source: business-rules.md/permissions.md,
-        // ---- РП ведёт только свои объекты).
-        await req('objects', { externalCode: 'REG-A-' + randomUUID(), name: 'Объект чужого РП', address: 'Тестовая, 1', organizationName: 'ООО Тест', projectManagerId: otherPm.id, startDate: dt(-1), plannedFinishDate: dt(30), contractValue: '1000000', contractorIds: [c1.id] }, 400);
+        // ---- A. Объект (OBJ-1 / OBJ1-D01): создание объекта = назначение РП, полномочие заместителя директора
+        // ---- (ADMIN — override). РП НЕ создаёт объект и не назначает себя: ни на себя, ни на другого РП.
+        assert.ok(otherPm, 'seed must carry a second PROJECT_MANAGER');
+        for (const projectManagerId of [pm.id, otherPm.id])
+            await req('objects', { externalCode: 'REG-A-' + randomUUID(), name: 'Объект, созданный РП', address: 'Тестовая, 1', organizationName: 'ООО Тест', projectManagerId, startDate: dt(-1), plannedFinishDate: dt(30), contractValue: '1000000', contractorIds: [c1.id] }, 403);
 
-        const o = await req('objects', { externalCode: 'REG-O-' + randomUUID(), name: 'Регрессионный объект', address: 'Тестовая, 2', organizationName: 'ООО Тест', projectManagerId: pm.id, startDate: dt(-1), plannedFinishDate: dt(60), contractValue: '5000000', contractorIds: [c1.id] });
+        const o = await asDeputy(() => req('objects', { externalCode: 'REG-O-' + randomUUID(), name: 'Регрессионный объект', address: 'Тестовая, 2', organizationName: 'ООО Тест', projectManagerId: pm.id, startDate: dt(-1), plannedFinishDate: dt(60), contractValue: '5000000', contractorIds: [c1.id] }));
 
         // ---- B. Работы: создание работы с contractorId, не назначенным на объект — 400
         // ---- (service.ts createWork, "Субподрядчик не назначен на объект") — уже реализовано

@@ -28,13 +28,13 @@ async function openAs(page: Page, token: string, path: string) {
 }
 
 test('Deputy redistributes Kuznetsov\'s team in the UI; lead swap keeps members, Akhmetov/Orlov swap is one operation', async ({ page }) => {
-  const admin = await mockLogin('ADMIN'), deputy = await mockLogin('DEPUTY_DIRECTOR'), td = await mockLogin('TECHNICAL_DIRECTOR'), pm = await mockLogin('PROJECT_MANAGER'), head = await mockLogin('PTO_HEAD');
+  const admin = await mockLogin('ADMIN'), deputy = await mockLogin('DEPUTY_DIRECTOR'), pm = await mockLogin('PROJECT_MANAGER'), head = await mockLogin('PTO_HEAD');
   const smirnov = head.user;
   const mk = async (name: string, role: string, i: number) => (await api(admin.token, 'POST', 'users', { bitrixUserId: String(700 + i), name, role }, 201)).data;
   const kuznetsov = await mk('Кузнецов Игорь', 'PTO_HEAD', 1), ivanov = await mk('Иванов Олег', 'PTO_HEAD', 2);
   const petrov = await mk('Петров Пётр', 'PTO', 3), sidorov = await mk('Сидоров Семён', 'PTO', 4), akhmetov = await mk('Ахметов Ахмет', 'PTO', 5), orlov = await mk('Орлов Олег', 'PTO', 6);
   const dict = (await api(pm.token, 'GET', 'dictionaries')).data, contractors = (await api(pm.token, 'GET', 'contractors')).data;
-  const mkObject = async (name: string) => (await api(td.token, 'POST', 'objects', { externalCode: `PBX3A-${name}-${Date.now()}`, name, address: 'Тест, 1', organizationName: 'ООО СЗ', projectManagerId: pm.user.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] }, 201)).data;
+  const mkObject = async (name: string) => (await api(deputy.token, 'POST', 'objects', { externalCode: `PBX3A-${name}-${Date.now()}`, name, address: 'Тест, 1', organizationName: 'ООО СЗ', projectManagerId: pm.user.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] }, 201)).data;
   const obj3 = await mkObject('Объект-3'), obj4 = await mkObject('Объект-4');
   void dict;
 

@@ -49,6 +49,7 @@ test('F12-SDO-03: handoff/return/status-change are already retry-safe via Packag
     assert.equal(r.status, expected, path + ': ' + JSON.stringify(data));
     return data;
   }
+  async function asDeputy<T>(fn: () => Promise<T>): Promise<T> { const prev = token; await login('DEPUTY_DIRECTOR'); try { return await fn(); } finally { token = prev; } } // OBJ-1: object creation is Deputy/Admin authority; fixture only, the test's subject role is restored
   async function login(role: string) {
     const d = await req('auth/mock', { role, key: 'f12-sdo-03-key' });
     token = d.token;
@@ -62,7 +63,7 @@ test('F12-SDO-03: handoff/return/status-change are already retry-safe via Packag
     const pm = await login('PROJECT_MANAGER');
     const dict = await req('dictionaries'), contractors = await req('contractors');
     const tenantId = pm.tenantId;
-    const o = await req('objects', { externalCode: 'F12-SDO03-' + randomUUID(), name: 'F12-SDO-03', address: 'Тест, 1', organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] });
+    const o = await asDeputy(() => req('objects', { externalCode: 'F12-SDO03-' + randomUUID(), name: 'F12-SDO-03', address: 'Тест, 1', organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] }));
     const work = await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: pm.id, name: 'Работа', unit: 'м²', plannedQuantity: 200, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '100000' });
     const unit = await req('execution-units', { objectWorkId: work.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, unit: 'м²', plannedQuantity: 200 });
     const portion = await req(`execution-units/${unit.id}/portions`, { label: 'Секция A', plannedQuantity: 200 });

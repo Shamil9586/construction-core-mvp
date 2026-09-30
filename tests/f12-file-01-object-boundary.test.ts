@@ -45,6 +45,7 @@ test('F12-FILE-01: ordinary object files cannot cross objects; same-object reuse
     assert.equal(r.status, expected, path + ': ' + JSON.stringify(data));
     return data;
   }
+  async function asDeputy<T>(fn: () => Promise<T>): Promise<T> { const prev = token; await login('DEPUTY_DIRECTOR'); try { return await fn(); } finally { token = prev; } } // OBJ-1: object creation is Deputy/Admin authority; fixture only, the test's subject role is restored
   async function login(role: string) {
     const d = await req('auth/mock', { role, key: 'f12-file-01-key' });
     token = d.token;
@@ -63,7 +64,7 @@ test('F12-FILE-01: ordinary object files cannot cross objects; same-object reuse
     // ("Для MVP предъявляется полный объём работы") — each work is brought to
     // 100% before its inspection is requested.
     async function makeObjectAndWork(label: string) {
-      const o = await req('objects', { externalCode: 'F12-FILE01-' + label + '-' + randomUUID(), name: 'F12-FILE-01 ' + label, address: 'Тест, ' + label, organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [c.id] });
+      const o = await asDeputy(() => req('objects', { externalCode: 'F12-FILE01-' + label + '-' + randomUUID(), name: 'F12-FILE-01 ' + label, address: 'Тест, ' + label, organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [c.id] }));
       let w = await req('works', { objectId: o.id, workTypeId, contractorId: c.id, responsibleUserId: pm.id, name: 'Работа ' + label, unit: 'м²', plannedQuantity: 10, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '10000' });
       w = await req(`works/${w.id}/progress`, { totalQuantity: 10, version: w.version, comment: 'Готово' });
       return { o, w };

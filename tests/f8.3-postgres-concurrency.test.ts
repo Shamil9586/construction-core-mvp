@@ -135,7 +135,8 @@ async function setUpHandedOffCase(req: any, login: any, code: string, name: stri
   const contractors = (await req('contractors', undefined, pmToken, 200)).data;
   const tdToken = await login('TECHNICAL_DIRECTOR');
   const pm = (await req('me', undefined, pmToken, 200)).data;
-  const o = (await req('objects', { externalCode: code, name, address: 'Тест, 1', organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] }, tdToken, 201)).data;
+  const deputyToken = await login('DEPUTY_DIRECTOR'); // OBJ-1: object creation is Deputy/Admin authority; tdToken still drives the rest
+  const o = (await req('objects', { externalCode: code, name, address: 'Тест, 1', organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] }, deputyToken, 201)).data;
   const work = (await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: pm.id, name, unit: 'м²', plannedQuantity: 500, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '100000' }, pmToken, 201)).data;
   const unit = (await req('execution-units', { objectWorkId: work.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, unit: 'м²', plannedQuantity: 500 }, pmToken, 201)).data;
   const portion = (await req(`execution-units/${unit.id}/portions`, { label: 'Секция A', plannedQuantity: 200 }, pmToken, 201)).data;
@@ -171,7 +172,8 @@ async function setUpAcceptedNotHandedOff(req: any, login: any, code: string, nam
   const dict = (await req('dictionaries', undefined, pmToken, 200)).data;
   const contractors = (await req('contractors', undefined, pmToken, 200)).data;
   const pm = (await req('me', undefined, pmToken, 200)).data;
-  const o = (await req('objects', { externalCode: code, name, address: 'Тест, 1', organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] }, tdToken, 201)).data;
+  const deputyToken = await login('DEPUTY_DIRECTOR'); // OBJ-1: object creation is Deputy/Admin authority; tdToken still drives the rest
+  const o = (await req('objects', { externalCode: code, name, address: 'Тест, 1', organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] }, deputyToken, 201)).data;
   const work = (await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: pm.id, name, unit: 'м²', plannedQuantity: 500, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '100000' }, pmToken, 201)).data;
   const unit = (await req('execution-units', { objectWorkId: work.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, unit: 'м²', plannedQuantity: 500 }, pmToken, 201)).data;
   const portion = (await req(`execution-units/${unit.id}/portions`, { label: 'Секция A', plannedQuantity: 200 }, pmToken, 201)).data;

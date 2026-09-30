@@ -43,7 +43,7 @@ async function makeObject(h: any, name: string) {
   const pm = await h.login('PROJECT_MANAGER');
   const dict = await h.req('dictionaries');
   const contractors = await h.req('contractors');
-  await h.login('TECHNICAL_DIRECTOR');
+  await h.login('DEPUTY_DIRECTOR'); // OBJ-1: object creation is Deputy/Admin authority (setup only; next line restores PM)
   const o = await h.req('objects', { externalCode: 'PBX3-' + name + '-' + Date.now() + Math.random().toString(36).slice(2, 6), name, address: 'Тест, 1', organizationName: 'ООО СЗ', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] });
   await h.login('PROJECT_MANAGER');
   const work = await h.req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: pm.id, name: 'Работа ' + name, unit: 'м²', plannedQuantity: 100, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '20000' });

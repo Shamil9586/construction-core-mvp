@@ -43,12 +43,13 @@ async function harness() {
     assert.equal(r.status, expected, path + ': ' + JSON.stringify(data));
     return data;
   }
+  async function asDeputy<T>(fn: () => Promise<T>): Promise<T> { const prev = token; await login('DEPUTY_DIRECTOR'); try { return await fn(); } finally { token = prev; } } // OBJ-1: object creation is Deputy/Admin authority; fixture only, the test's subject role is restored
   async function login(role: string) {
     const d = await req('auth/mock', { role, key: 'f8-3-http-key' });
     token = d.token;
     return d.user;
   }
-  return { app, req, login };
+  return { app, req, login, asDeputy };
 }
 
 /**
@@ -61,7 +62,7 @@ async function setUpPresentedPackage(req: any, login: any, code: string, name: s
   const pm = await login('PROJECT_MANAGER');
   const dict = await req('dictionaries');
   const contractors = await req('contractors');
-  await login('TECHNICAL_DIRECTOR');
+  await login('DEPUTY_DIRECTOR'); // OBJ-1: object creation is Deputy/Admin authority (setup only; PM is restored next)
   const o = await req('objects', { externalCode: code, name, address: 'Тест, 1', organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] });
   await login('PROJECT_MANAGER');
   const work = await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: pm.id, name, unit: 'м²', plannedQuantity: 500, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '100000' });
@@ -368,13 +369,13 @@ test('F12.1-R02: HTTP Customer SC acceptance validates the persisted four-decima
  * --------------------------------------------------------------------- */
 
 test('F8.3 HTTP (1): an upcoming package is visible to SDO before it is ready — SDO still has no F8.2 access', async () => {
-  const { app, req, login } = await harness();
+  const { app, req, login, asDeputy } = await harness();
   try {
     const pm = await login('PROJECT_MANAGER');
     const dict = await req('dictionaries');
     const contractors = await req('contractors');
     await login('TECHNICAL_DIRECTOR');
-    const o = await req('objects', { externalCode: 'F83-UP-' + Date.now(), name: 'F8.3 очередь СДО', address: 'Тест, 1', organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] });
+    const o = await asDeputy(() => req('objects', { externalCode: 'F83-UP-' + Date.now(), name: 'F8.3 очередь СДО', address: 'Тест, 1', organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] }));
     await login('PROJECT_MANAGER');
     const work = await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: pm.id, name: 'Работа', unit: 'м²', plannedQuantity: 100, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '20000' });
     const pto = await login('PTO');
@@ -408,13 +409,13 @@ test('F8.3 HTTP (4): readiness is false while customer documentation acceptance 
 });
 
 test('F8.3 HTTP (3): readiness is false when the Customer SC quantity confirmation is missing, even once documentation is accepted', async () => {
-  const { app, req, login } = await harness();
+  const { app, req, login, asDeputy } = await harness();
   try {
     const pm = await login('PROJECT_MANAGER');
     const dict = await req('dictionaries');
     const contractors = await req('contractors');
     await login('TECHNICAL_DIRECTOR');
-    const o = await req('objects', { externalCode: 'F83-READY-A-' + Date.now(), name: 'F8.3 готовность (а)', address: 'Тест, 1', organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] });
+    const o = await asDeputy(() => req('objects', { externalCode: 'F83-READY-A-' + Date.now(), name: 'F8.3 готовность (а)', address: 'Тест, 1', organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] }));
     await login('PROJECT_MANAGER');
     const work = await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: pm.id, name: 'Работа', unit: 'м²', plannedQuantity: 200, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '20000' });
     const unit = await req('execution-units', { objectWorkId: work.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, unit: 'м²', plannedQuantity: 200 });
@@ -628,13 +629,13 @@ test('F8.3-R02 (4): a Package with multiple Documentation Documents records ever
  * --------------------------------------------------------------------- */
 
 test('F8.3-R02b (1): customer-acceptance is refused when a Documentation Document has no version at all', async () => {
-  const { app, req, login } = await harness();
+  const { app, req, login, asDeputy } = await harness();
   try {
     const pm = await login('PROJECT_MANAGER');
     const dict = await req('dictionaries');
     const contractors = await req('contractors');
     await login('TECHNICAL_DIRECTOR');
-    const o = await req('objects', { externalCode: 'F83-R02B-NOVER-' + Date.now(), name: 'F8.3 документ без версии', address: 'Тест, 1', organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] });
+    const o = await asDeputy(() => req('objects', { externalCode: 'F83-R02B-NOVER-' + Date.now(), name: 'F8.3 документ без версии', address: 'Тест, 1', organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] }));
     await login('PROJECT_MANAGER');
     const work = await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: pm.id, name: 'Работа', unit: 'м²', plannedQuantity: 100, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '20000' });
     const pto = await login('PTO');
@@ -653,13 +654,13 @@ test('F8.3-R02b (1): customer-acceptance is refused when a Documentation Documen
 });
 
 test('F8.3-R02b (2): customer-acceptance is refused when the Package has zero Documentation Documents', async () => {
-  const { app, req, login } = await harness();
+  const { app, req, login, asDeputy } = await harness();
   try {
     const pm = await login('PROJECT_MANAGER');
     const dict = await req('dictionaries');
     const contractors = await req('contractors');
     await login('TECHNICAL_DIRECTOR');
-    const o = await req('objects', { externalCode: 'F83-R02B-NODOC-' + Date.now(), name: 'F8.3 пакет без документов', address: 'Тест, 1', organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] });
+    const o = await asDeputy(() => req('objects', { externalCode: 'F83-R02B-NODOC-' + Date.now(), name: 'F8.3 пакет без документов', address: 'Тест, 1', organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] }));
     await login('PROJECT_MANAGER');
     const work = await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: pm.id, name: 'Работа', unit: 'м²', plannedQuantity: 100, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '20000' });
     const pto = await login('PTO');
@@ -945,13 +946,13 @@ test('F8.3 HTTP (5): PTO registers external documentation acceptance, tied to th
 });
 
 test('F8.3 HTTP: customer-acceptance is refused before PRESENTED (still an ordinary status, not free-floating)', async () => {
-  const { app, req, login } = await harness();
+  const { app, req, login, asDeputy } = await harness();
   try {
     const pm = await login('PROJECT_MANAGER');
     const dict = await req('dictionaries');
     const contractors = await req('contractors');
     await login('TECHNICAL_DIRECTOR');
-    const o = await req('objects', { externalCode: 'F83-ACCEPT-EARLY-' + Date.now(), name: 'F8.3 раннее согласие', address: 'Тест, 1', organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] });
+    const o = await asDeputy(() => req('objects', { externalCode: 'F83-ACCEPT-EARLY-' + Date.now(), name: 'F8.3 раннее согласие', address: 'Тест, 1', organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] }));
     await login('PROJECT_MANAGER');
     const work = await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: pm.id, name: 'Работа', unit: 'м²', plannedQuantity: 100, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '20000' });
     const pto = await login('PTO');

@@ -38,6 +38,10 @@ export interface C01Props {
   sidebar: ReactNode;
   topbar?: ReactNode;
   onSelectObject: (objectId: string) => void;
+  /** OBJ-1 — supplied only for a session with create-object authority; absent = no control at all. */
+  onAddObject?: () => void;
+  /** OBJ-1 — the open create form and/or the post-create notice, rendered under the header. */
+  createSlot?: ReactNode;
   className?: string;
 }
 
@@ -46,6 +50,8 @@ export function CompanyControlCenter({
   sidebar,
   topbar,
   onSelectObject,
+  onAddObject,
+  createSlot,
   className,
 }: C01Props) {
   // A portfolio row's highlight follows the same confirmed attention queue
@@ -59,7 +65,9 @@ export function CompanyControlCenter({
         eyebrow="ИСПОЛНИТЕЛЬНЫЙ ОБЗОР"
         title="Портфель объектов"
         description="Физическая готовность, состояние графика и объекты, которые требуют внимания."
+        actions={onAddObject ? <Button onClick={onAddObject}>Добавить объект</Button> : undefined}
       />
+      {createSlot}
 
       <section className={styles.section}>
         <DataTable

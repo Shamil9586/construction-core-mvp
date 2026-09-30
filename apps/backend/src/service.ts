@@ -2,13 +2,48 @@ import { Injectable, BadRequestException, ForbiddenException, NotFoundException,
 import Decimal from 'decimal.js';
 import { pool, one, rows, insert, insertIdempotent, transaction } from './db';
 import { Actor, requirePermission, checkVersion, scoped, objectAccess, audit, ensure, ensureAttachmentObjectScope, ensurePtoResponsibleOnObject, claimIdempotentCommand, completeIdempotentCommand } from './security';
-import { Permission as P, isPtoRole, isSdoRole, ProgressCalculationService, ScheduleStatusService, WorkTransitionPolicy, PtoPackageValidationService, PotentialClosingService, ObjectHealthService, defaultRisk, AosrDraftEngine, QuantityPortionPolicy, resolveInternalScAccepted, resolveActualQuantity, isDocumentationStatusTransitionAllowed, canMutateDocumentationPackageContent, resolvePackageSdoReadiness, isSdoClosingStatusTransitionAllowed, isCustomerAcceptanceSnapshotCurrent, SdoClosingAllocationService, resolveCustomerScLatestGroup } from '../../../packages/domain';
+import { Permission as P, canCreateObject, isPtoRole, isSdoRole, ProgressCalculationService, ScheduleStatusService, WorkTransitionPolicy, PtoPackageValidationService, PotentialClosingService, ObjectHealthService, defaultRisk, AosrDraftEngine, QuantityPortionPolicy, resolveInternalScAccepted, resolveActualQuantity, isDocumentationStatusTransitionAllowed, canMutateDocumentationPackageContent, resolvePackageSdoReadiness, isSdoClosingStatusTransitionAllowed, isCustomerAcceptanceSnapshotCurrent, SdoClosingAllocationService, resolveCustomerScLatestGroup } from '../../../packages/domain';
 @Injectable()
 export class ProductionService {
-    async createObject(a: Actor, d: any) { requirePermission(a, P.OBJECT_CREATE); return transaction(async (c) => { ensure(d.plannedFinishDate >= d.startDate, 'Дата окончания раньше начала'); const pm = await scoped(c, 'users', d.projectManagerId, a); ensure(pm.role === 'PROJECT_MANAGER' && pm.isActive, 'Назначьте активного РП'); if (a.role === 'PROJECT_MANAGER')
-        ensure(pm.id === a.id, 'РП может создать объект только для себя'); for (const id of d.contractorIds)
-        await scoped(c, 'contractors', id, a); const { contractorIds, ...data } = d; const o = await insert(c, 'objects', a.tenantId, data); for (const contractorId of contractorIds)
-        await insert(c, 'object_contractors', a.tenantId, { objectId: o.id, contractorId }); await audit(c, a, 'Object', o.id, 'CREATE', null, o); return o; }); }
+    async createObject(a: Actor, d: any) {
+        requirePermission(a, P.OBJECT_CREATE);
+        // OBJ1-D01: defence in depth — the permission grant and the role rule must agree.
+        if (!canCreateObject(a.role))
+            throw new ForbiddenException('Создавать объект и назначать РП может только заместитель директора или администратор');
+        const contractorIds: string[] = [...new Set<string>(d.contractorIds ?? [])];
+        try {
+            return await transaction(async (c) => {
+                ensure(d.plannedFinishDate >= d.startDate, 'Дата окончания раньше начала');
+                const pm = await scoped(c, 'users', d.projectManagerId, a);
+                ensure(pm.role === 'PROJECT_MANAGER' && pm.isActive, 'Назначьте активного РП');
+                for (const id of contractorIds)
+                    await scoped(c, 'contractors', id, a);
+                const { contractorIds: _omit, ...data } = d;
+                const o = await insert(c, 'objects', a.tenantId, data);
+                for (const contractorId of contractorIds)
+                    await insert(c, 'object_contractors', a.tenantId, { objectId: o.id, contractorId });
+                await audit(c, a, 'Object', o.id, 'CREATE', null, o);
+                return o;
+            });
+        }
+        catch (e: any) {
+            // OBJ-1: the authoritative duplicate guard is the DB unique index
+            // (tenant_id, source, external_code) — a pre-check would be race-prone.
+            if (e?.code === '23505' && (e.constraint === 'objects_unique' || String(e.message ?? '').includes('objects_unique')))
+                throw new ConflictException('Объект с таким кодом уже существует');
+            throw e;
+        }
+    }
+    /** OBJ-1: narrow, tenant-scoped picker data for the create-object form — never general user administration. */
+    async objectCreateOptions(a: Actor) {
+        requirePermission(a, P.OBJECT_CREATE);
+        if (!canCreateObject(a.role))
+            throw new ForbiddenException('Недостаточно прав');
+        return {
+            projectManagers: await rows(pool, "SELECT id,name FROM users WHERE tenant_id=$1 AND role='PROJECT_MANAGER' AND is_active=true ORDER BY name", [a.tenantId]),
+            contractors: await rows(pool, "SELECT id,name FROM contractors WHERE tenant_id=$1 AND status='ACTIVE' ORDER BY name", [a.tenantId])
+        };
+    }
     async assignContractor(a: Actor, objectId: string, contractorId: string) { requirePermission(a, P.OBJECT_MANAGE_CONTRACTORS); return transaction(async (c) => { await objectAccess(c, a, objectId, true); await scoped(c, 'contractors', contractorId, a); if (await one(c, 'SELECT id FROM object_contractors_active WHERE tenant_id=$1 AND object_id=$2 AND contractor_id=$3', [a.tenantId, objectId, contractorId]))
         throw new ConflictException('Подрядчик уже назначен на объект'); const row = await insert(c, 'object_contractors', a.tenantId, { objectId, contractorId }); await audit(c, a, 'ObjectContractor', row.id, 'ASSIGN', null, row); return row; }); }
     async editObject(a: Actor, id: string, d: any) { requirePermission(a, P.OBJECT_EDIT); return transaction(async (c) => { const o = await scoped(c, 'objects', id, a, true); await objectAccess(c, a, id, true); checkVersion(o, d.version); if ('projectManagerId' in d) {

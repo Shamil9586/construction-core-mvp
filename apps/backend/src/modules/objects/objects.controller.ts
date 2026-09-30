@@ -16,6 +16,10 @@ export class ObjectsController {
     r: any,
     @Query('contractorId')
     contractorId?: string) { const a = await authenticate(r); return (await this.read.snapshot(a, contractorId ? { contractorId: V.uuid.parse(contractorId) } : {})).objects; }
+    @Get('object-create-options')
+    async createOptions(
+    @Req()
+    r: any) { return this.service.objectCreateOptions(await authenticate(r)); }
     @Get('objects/:id')
     async object(
     @Req()

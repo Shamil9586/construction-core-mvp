@@ -52,6 +52,7 @@ test('F12-QTY-06: createExecutionUnit/createQuantityPortion are retry-safe with 
     assert.equal(r.status, expected, path + ': ' + JSON.stringify(data));
     return data;
   }
+  async function asDeputy<T>(fn: () => Promise<T>): Promise<T> { const prev = token; await login('DEPUTY_DIRECTOR'); try { return await fn(); } finally { token = prev; } } // OBJ-1: object creation is Deputy/Admin authority; fixture only, the test's subject role is restored
   async function login(role: string) {
     const d = await req('auth/mock', { role, key: 'f12-qty-06-key' });
     token = d.token;
@@ -64,7 +65,7 @@ test('F12-QTY-06: createExecutionUnit/createQuantityPortion are retry-safe with 
     const pm = await login('PROJECT_MANAGER');
     const contractors = await req('contractors'), dict = await req('dictionaries');
     const c = contractors[0], workTypeId = dict.workTypes[0].id;
-    const o = await req('objects', { externalCode: 'F12-QTY06-' + randomUUID(), name: 'F12-QTY-06', address: 'Тест, 1', organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [c.id] });
+    const o = await asDeputy(() => req('objects', { externalCode: 'F12-QTY06-' + randomUUID(), name: 'F12-QTY-06', address: 'Тест, 1', organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [c.id] }));
     const w = await req('works', { objectId: o.id, workTypeId, contractorId: c.id, responsibleUserId: pm.id, name: 'Работа', unit: 'м²', plannedQuantity: 100, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '10000' });
 
     // ---- createExecutionUnit(): retry with the same key resolves to the same row ----

@@ -202,3 +202,11 @@ export const canRedistributeTeams = (role: string): boolean => role === 'DEPUTY_
 export const canViewMyPtoTeam = (role: string): boolean => role === 'PTO_HEAD' || role === 'PTO';
 /** May read the PTO block on an object screen (backend: PTO_TEAM_READ). */
 export const canViewObjectPtoTeam = (role: string): boolean => canViewTeamsOverview(role) || canViewMyPtoTeam(role);
+
+/**
+ * OBJ-1 — «Добавить объект»: creating an object appoints its РП, a managerial act of the
+ * Deputy Director (ADMIN = system override). PROJECT_MANAGER, GENERAL_DIRECTOR and legacy
+ * TECHNICAL_DIRECTOR never get the control. Based on the confirmed Core role only — never
+ * on Bitrix position/department. The backend (OBJECT_CREATE + role rule) enforces it independently.
+ */
+export const canCreateObject = (role: string): boolean => role === 'DEPUTY_DIRECTOR' || role === 'ADMIN';

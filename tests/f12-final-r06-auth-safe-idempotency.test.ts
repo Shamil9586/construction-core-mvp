@@ -51,6 +51,7 @@ test('FINAL-R06: an idempotency-key replay never bypasses the authorization the 
     assert.equal(r.status, expected, path + ': ' + JSON.stringify(data));
     return data;
   }
+  async function asDeputy<T>(fn: () => Promise<T>): Promise<T> { const prev = token; await login('DEPUTY_DIRECTOR'); try { return await fn(); } finally { token = prev; } } // OBJ-1: object creation is Deputy/Admin authority; fixture only, the test's subject role is restored
   async function login(role: string) {
     const d = await req('auth/mock', { role, key: 'f12-final-r06-key' });
     token = d.token;
@@ -74,7 +75,7 @@ test('FINAL-R06: an idempotency-key replay never bypasses the authorization the 
     assert.notEqual(pmBRow.id, pmA.id);
 
     const c = contractors[0], workTypeId = dict.workTypes[0].id;
-    const objectA = await req('objects', { externalCode: 'F12-R06-' + randomUUID(), name: 'FINAL-R06 Object A', address: 'Тест, 1', organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: pmA.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [c.id] });
+    const objectA = await asDeputy(() => req('objects', { externalCode: 'F12-R06-' + randomUUID(), name: 'FINAL-R06 Object A', address: 'Тест, 1', organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: pmA.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [c.id] }));
     const work = await req('works', { objectId: objectA.id, workTypeId, contractorId: c.id, responsibleUserId: pmA.id, name: 'Работа FINAL-R06', unit: 'м²', plannedQuantity: 100, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '10000' });
 
     /* ------------------------------------------------------------------- *
