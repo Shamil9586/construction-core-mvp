@@ -150,7 +150,7 @@ test('B2 concurrent lead replacements on one object serialise: exactly one activ
   const eng = await makeUser('B2 Инж.', 'PTO');
   await ctx.svc.redistribute(ctx.deputy, cmd({ memberAdds: [{ objectId: o, memberUserId: eng.id }] }));
   const memberBefore = (await ctx.db.pool.query('SELECT * FROM object_function_member_assignments WHERE object_id=$1', [o])).rows;
-  const results = await Promise.allSettled(heads.map((h) => ctx.svc.assignObjectLead(ctx.deputy, o, { leadUserId: h.id })));
+  const results = await Promise.allSettled(heads.map((h) => ctx.svc.redistribute(ctx.deputy, cmd({ leadChanges: [{ objectId: o, leadUserId: h.id }] }))));
   const failed = results.filter((r) => r.status === 'rejected') as PromiseRejectedResult[];
   assert.equal(failed.length, 0, 'serialised, not failed: ' + failed.map((f) => f.reason?.message ?? f.reason?.code).join(', '));
   const rows = (await ctx.db.pool.query("SELECT * FROM object_function_lead_assignments WHERE object_id=$1 AND function_code='PTO'", [o])).rows;

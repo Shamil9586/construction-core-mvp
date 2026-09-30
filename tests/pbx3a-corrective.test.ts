@@ -58,24 +58,38 @@ async function state() {
   return [await q('functional_team_memberships'), await q('object_function_lead_assignments'), await q('object_function_member_assignments'), await q('object_function_handovers'), await q('audit_logs')].join('|');
 }
 
-test('PBX3A-R01: lead expectedVersion is honoured — current version succeeds, stale returns 409 with zero mutation', async () => {
+test('PBX3A-R01: lead replacement is gated by assignment identity + version — stale view of a replaced assignment returns 409 with zero mutation', async () => {
   const h = await harness();
   try {
-    const l1 = await makeUser('R01 Нач. 1', 'PTO_HEAD'), l2 = await makeUser('R01 Нач. 2', 'PTO_HEAD'), l3 = await makeUser('R01 Нач. 3', 'PTO_HEAD');
+    const smirnov = await makeUser('R01 Смирнов', 'PTO_HEAD'), ivanov = await makeUser('R01 Иванов', 'PTO_HEAD'), kuznetsov = await makeUser('R01 Кузнецов', 'PTO_HEAD');
     const { o } = await makeObject(h, 'R01');
     await h.login(DEPUTY);
-    const first = await h.req(`objects/${o.id}/function-team/pto/lead`, { leadUserId: l1.id }); // initial: no expectedVersion needed
-    assert.equal(first.lead.version, 1);
+    const path = `objects/${o.id}/function-team/pto/lead`;
+    // A: initial assignment needs no precondition
+    const a = (await h.req(path, { leadUserId: smirnov.id })).lead;
+    assert.equal(a.version, 1);
+    // a replacement that does not identify the current assignment is refused (no write)
+    const before0 = await state();
+    assert.equal((await h.raw(path, { leadUserId: ivanov.id })).status, 400);
+    assert.equal((await h.raw(path, { leadUserId: ivanov.id, expectedVersion: 1 })).status, 400);
+    assert.equal(await state(), before0);
+    // B: replace Smirnov -> Ivanov naming A / version 1
+    const rb = await h.req(path, { leadUserId: ivanov.id, expectedAssignmentId: a.id, expectedVersion: 1 });
+    const b = rb.lead;
+    assert.notEqual(b.id, a.id);
+    assert.equal(b.version, 1, 'the new active row ALSO has version 1 — version alone cannot detect the replacement');
+    assert.ok(rb.handover);
+    // C: stale caller still holding A / version 1 tries Smirnov-view -> Kuznetsov: 409, nothing changes
     const before = await state();
-    const stale = await h.raw(`objects/${o.id}/function-team/pto/lead`, { leadUserId: l2.id, expectedVersion: first.lead.version + 1 });
-    assert.equal(stale.status, 409);
-    assert.equal(await state(), before, 'no lead ended, no lead created, no handover, no audit row');
-    const ok = await h.req(`objects/${o.id}/function-team/pto/lead`, { leadUserId: l2.id, expectedVersion: first.lead.version });
-    assert.equal(ok.previousLead.leadUserId, l1.id); assert.ok(ok.handover);
-    // a stale value is rejected again against the new current assignment
-    const before2 = await state();
-    assert.equal((await h.raw(`objects/${o.id}/function-team/pto/lead`, { leadUserId: l3.id, expectedVersion: 7 })).status, 409);
-    assert.equal(await state(), before2);
+    const stale = await h.raw(path, { leadUserId: kuznetsov.id, expectedAssignmentId: a.id, expectedVersion: 1 });
+    assert.equal(stale.status, 409, JSON.stringify(stale.data));
+    assert.equal(await state(), before, 'lead assignments, handovers and audit_logs are all unchanged');
+    // right assignment, wrong version is also 409
+    assert.equal((await h.raw(path, { leadUserId: kuznetsov.id, expectedAssignmentId: b.id, expectedVersion: 2 })).status, 409);
+    assert.equal(await state(), before);
+    // D: a fresh caller naming B / version 1 succeeds
+    const rd = await h.req(path, { leadUserId: kuznetsov.id, expectedAssignmentId: b.id, expectedVersion: 1 });
+    assert.equal(rd.previousLead.id, b.id); assert.equal(rd.lead.leadUserId, kuznetsov.id); assert.ok(rd.handover);
   } finally { await h.app.close(); }
 });
 

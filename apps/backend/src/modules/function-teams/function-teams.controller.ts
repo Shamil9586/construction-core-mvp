@@ -10,7 +10,7 @@ import * as V from '../../validation';
 // session and route, assigned_by from the authenticated actor).
 const reason = V.text.optional();
 const orgMemberDto = z.object({ memberUserId: V.uuid, managerUserId: V.uuid, reason, expectedVersion: V.version.optional() }).strict();
-const leadDto = z.object({ leadUserId: V.uuid, reason, note: V.text.optional(), expectedVersion: V.version.optional() }).strict();
+const leadDto = z.object({ leadUserId: V.uuid, reason, note: V.text.optional(), expectedAssignmentId: V.uuid.optional(), expectedVersion: V.version.optional() }).strict();
 const memberDto = z.object({ memberUserId: V.uuid }).strict();
 const endMemberDto = z.object({ reason, expectedVersion: V.version.optional() }).strict();
 const list = <T extends z.ZodTypeAny>(t: T) => z.array(t).max(100).default([]);

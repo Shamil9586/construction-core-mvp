@@ -52,6 +52,11 @@ async function makeObject(h: any, name: string) {
   const work = await h.req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: pm.id, name: 'Работа ' + name, unit: 'м²', plannedQuantity: 100, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '20000' });
   return { o, work };
 }
+/** Replace the current object lead, naming the exact assignment being replaced (PBX3A-R01). */
+async function replaceLead(h: any, objectId: string, body: any, expected = 201) {
+  const cur = (await h.req(`objects/${objectId}/function-team/pto`)).current.lead;
+  return h.raw(`objects/${objectId}/function-team/pto/lead`, { ...body, expectedAssignmentId: cur.assignmentId, expectedVersion: cur.version }).then((r: any) => { assert.equal(r.status, expected, JSON.stringify(r.data)); return r.data; });
+}
 const names = (team: any) => team.current.members.map((m: any) => m.name).sort();
 
 /* ===================================================================== *
@@ -87,8 +92,8 @@ test('PBX-3A acceptance: Kuznetsov leaves; lead replacement alone keeps members;
     await h.login(DEPUTY);
     const memberRowsBefore = async () => (await import('../apps/backend/src/db')).rows((await import('../apps/backend/src/db')).pool, "SELECT id,object_id,member_user_id,version,started_at,ended_at FROM object_function_member_assignments WHERE function_code='PTO' ORDER BY id");
     const before = await memberRowsBefore();
-    const l3 = await h.req(`objects/${o3.id}/function-team/pto/lead`, { leadUserId: smirnov.id, reason: 'Увольнение Кузнецова' });
-    const l4 = await h.req(`objects/${o4.id}/function-team/pto/lead`, { leadUserId: ivanov.id, reason: 'Увольнение Кузнецова' });
+    const l3 = await replaceLead(h, o3.id, { leadUserId: smirnov.id, reason: 'Увольнение Кузнецова' });
+    const l4 = await replaceLead(h, o4.id, { leadUserId: ivanov.id, reason: 'Увольнение Кузнецова' });
     assert.equal(l3.previousLead.leadUserId, kuznetsov.id);
     assert.ok(l3.handover && l4.handover, 'lead replacement creates a handover record');
     const after = await memberRowsBefore();
@@ -280,7 +285,7 @@ test('PBX-3A head rules: head adds only from OWN org team, may remove inherited 
     await h.login(DEPUTY);
     const ov = await h.req('function-teams/pto/overview');
     assert.equal(ov.heads.find((x: any) => x.userId === other.id).orgMembers.length, 2);
-    assert.equal((await h.raw(`objects/${o.id}/function-team/pto/lead`, { leadUserId: other.id })).status, 201);
+    await replaceLead(h, o.id, { leadUserId: other.id });
     // Head of another object cannot remove members from Object 1; the replaced head loses all authority there
     await h.as(head);
     assert.equal((await h.raw(`objects/${o.id}/function-team/pto/members/${own.id}/end`, {})).status, 403, 'replaced head has no authority on Object 1 any more');
@@ -327,7 +332,7 @@ test('PBX-3A handover: incoming acknowledges; outgoing/others cannot; Deputy/Adm
     const { o } = await makeObject(h, 'Передача');
     await h.login(DEPUTY);
     await h.req(`objects/${o.id}/function-team/pto/lead`, { leadUserId: head1.id });
-    const r1 = await h.req(`objects/${o.id}/function-team/pto/lead`, { leadUserId: head2.id, reason: 'Ротация' });
+    const r1 = await replaceLead(h, o.id, { leadUserId: head2.id, reason: 'Ротация' });
     // effective immediately, handover still OPEN
     const t = await h.req(`objects/${o.id}/function-team/pto`);
     assert.equal(t.current.lead.userId, head2.id);
@@ -343,7 +348,7 @@ test('PBX-3A handover: incoming acknowledges; outgoing/others cannot; Deputy/Adm
     assert.equal((await h.raw(`function-handovers/${r1.handover.id}/acknowledge`, { version: ack.version })).status, 400, 'already done');
     // outgoing user inactive -> administrative completion
     await h.login(DEPUTY);
-    const r2 = await h.req(`objects/${o.id}/function-team/pto/lead`, { leadUserId: head3.id });
+    const r2 = await replaceLead(h, o.id, { leadUserId: head3.id });
     await (await import('../apps/backend/src/db')).pool.query('UPDATE users SET is_active=false WHERE id=$1', [head2.id]);
     assert.equal((await h.raw(`function-handovers/${r2.handover.id}/admin-complete`, { version: r2.handover.version })).status, 400, 'reason mandatory');
     assert.equal((await h.raw(`function-handovers/${r2.handover.id}/admin-complete`, { version: r2.handover.version, reason: '   ' })).status, 400, 'blank reason refused');

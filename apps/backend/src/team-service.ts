@@ -1,4 +1,4 @@
-import { Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { Injectable, ForbiddenException, NotFoundException, ConflictException } from '@nestjs/common';
 import { pool, one, rows, insert, transaction } from './db';
 import { Actor, requirePermission, checkVersion, scoped, audit, ensure, ensurePtoObjectScope, isCurrentPtoLead } from './security';
 import { Permission as P } from '../../../packages/domain';
@@ -93,12 +93,17 @@ export class ObjectTeamService {
         await audit(c, a, ENTITY[T_ORG], current.id, 'END', current, ended);
         return ended;
     }
-    private async leadChange(c: any, a: Actor, users: Map<string, any>, objectId: string, leadUserId: string, reason: string | null, expectedVersion?: number) {
+    private async leadChange(c: any, a: Actor, users: Map<string, any>, objectId: string, leadUserId: string, reason: string | null, expected?: { assignmentId: string; version: number }) {
         requireActiveRole(users, leadUserId, 'PTO_HEAD');
         const current = await one(c, `SELECT * FROM ${T_LEAD} WHERE tenant_id=$1 AND object_id=$2 AND function_code=$3 AND ended_at IS NULL FOR UPDATE`, [a.tenantId, objectId, FN]);
         if (current) {
-            if (expectedVersion !== undefined)
-                checkVersion(current, expectedVersion);
+            // PBX3A-R01: identity AND version. Every active row starts at version 1, so the version alone cannot
+            // tell "the assignment I read" from "the one that replaced it"; the assignment id can.
+            if (expected) {
+                if (expected.assignmentId !== current.id)
+                    throw new ConflictException('Назначение начальника объекта уже изменено другим пользователем. Обновите страницу.');
+                checkVersion(current, expected.version);
+            }
             ensure(current.leadUserId !== leadUserId, 'Этот начальник ПТО уже назначен на объект');
             const ended = await endRow(c, a, T_LEAD, current.id, reason ?? 'REPLACED');
             await audit(c, a, ENTITY[T_LEAD], current.id, 'END', current, ended);
@@ -149,12 +154,16 @@ export class ObjectTeamService {
         });
     }
     /** Assign/replace the current PTO_HEAD of one object. Existing object members stay untouched. */
-    async assignObjectLead(a: Actor, objectId: string, d: { leadUserId: string; reason?: string; note?: string; expectedVersion?: number }) {
+    async assignObjectLead(a: Actor, objectId: string, d: { leadUserId: string; reason?: string; note?: string; expectedAssignmentId?: string; expectedVersion?: number }) {
         requirePermission(a, P.OBJECT_FUNCTION_LEAD_ASSIGN);
         return transaction(async (c) => {
             await scoped(c, 'objects', objectId, a);
             const users = await lockTeamScope(c, a, [objectId], [d.leadUserId]);
-            const r = await this.leadChange(c, a, users, objectId, d.leadUserId, d.reason ?? null, d.expectedVersion);
+            // Initial assignment (no current lead) needs no precondition; replacing one must name the exact
+            // assignment being replaced (id + version) — checked before any write.
+            const existing = await one(c, `SELECT id FROM ${T_LEAD} WHERE tenant_id=$1 AND object_id=$2 AND function_code=$3 AND ended_at IS NULL`, [a.tenantId, objectId, FN]);
+            ensure(!existing || (d.expectedAssignmentId !== undefined && d.expectedVersion !== undefined), 'Для замены начальника укажите текущее назначение (expectedAssignmentId и expectedVersion)');
+            const r = await this.leadChange(c, a, users, objectId, d.leadUserId, d.reason ?? null, d.expectedAssignmentId !== undefined && d.expectedVersion !== undefined ? { assignmentId: d.expectedAssignmentId, version: d.expectedVersion } : undefined);
             let handover = null;
             if (r.previous)
                 handover = await this.createHandover(c, a, objectId, r.previous.leadUserId, d.leadUserId, d.reason ?? 'Замена начальника ПТО на объекте', d.note);
