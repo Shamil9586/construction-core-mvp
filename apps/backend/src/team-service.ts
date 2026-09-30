@@ -154,7 +154,7 @@ export class ObjectTeamService {
         return transaction(async (c) => {
             await scoped(c, 'objects', objectId, a);
             const users = await lockTeamScope(c, a, [objectId], [d.leadUserId]);
-            const r = await this.leadChange(c, a, users, objectId, d.leadUserId, d.reason ?? null);
+            const r = await this.leadChange(c, a, users, objectId, d.leadUserId, d.reason ?? null, d.expectedVersion);
             let handover = null;
             if (r.previous)
                 handover = await this.createHandover(c, a, objectId, r.previous.leadUserId, d.leadUserId, d.reason ?? 'Замена начальника ПТО на объекте', d.note);
@@ -173,8 +173,18 @@ export class ObjectTeamService {
         dup(cmd.leadChanges.map(x => x.objectId), 'Объект указан в назначении начальника более одного раза');
         dup(cmd.memberEnds.map(x => `${x.objectId}:${x.memberUserId}`), 'Дублирующееся снятие сотрудника с объекта');
         dup(cmd.memberAdds.map(x => `${x.objectId}:${x.memberUserId}`), 'Дублирующееся назначение сотрудника на объект');
-        const total = cmd.orgTransfers.length + cmd.orgEnds.length + cmd.leadChanges.length + cmd.memberEnds.length + cmd.memberAdds.length;
+        const total = cmd.orgTransfers.length + cmd.orgEnds.length + cmd.leadChanges.length + cmd.memberEnds.length + cmd.memberAdds.length + cmd.handovers.length;
         ensure(total > 0, 'Команда перераспределения пуста');
+        // PBX3A-R02: replacing engineers on an object (ends AND adds for the same object) requires explicit
+        // handover coverage in the same command — checked on the payload alone, before any mutation.
+        for (const objectId of new Set(cmd.memberEnds.map(x => x.objectId))) {
+            const ends = cmd.memberEnds.filter(x => x.objectId === objectId).map(x => x.memberUserId);
+            const adds = cmd.memberAdds.filter(x => x.objectId === objectId).map(x => x.memberUserId);
+            if (!adds.length)
+                continue;
+            const hs = cmd.handovers.filter(h => h.objectId === objectId);
+            ensure(ends.every(u => hs.some(h => h.outgoingUserId === u && adds.includes(h.incomingUserId))) && adds.every(u => hs.some(h => h.incomingUserId === u && ends.includes(h.outgoingUserId))), 'Замена инженеров на объекте требует передачи дел: укажите передачу для каждого снятого и каждого добавленного инженера');
+        }
         return transaction(async (c) => {
             const objectIds = [...cmd.leadChanges.map(x => x.objectId), ...cmd.memberEnds.map(x => x.objectId), ...cmd.memberAdds.map(x => x.objectId), ...cmd.handovers.map(x => x.objectId)];
             const userIds = [...cmd.orgTransfers.flatMap(x => [x.memberUserId, x.toManagerUserId]), ...cmd.orgEnds.map(x => x.memberUserId), ...cmd.leadChanges.map(x => x.leadUserId), ...cmd.memberEnds.map(x => x.memberUserId), ...cmd.memberAdds.map(x => x.memberUserId), ...cmd.handovers.flatMap(x => [x.outgoingUserId, x.incomingUserId])];

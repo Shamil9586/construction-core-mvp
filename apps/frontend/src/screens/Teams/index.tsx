@@ -8,6 +8,7 @@ import {
   buildRedistributeCommand,
   canSubmitRedistribution,
   describeOp,
+  replacementHandoverGaps,
   type RedistributeOp,
 } from '../../view-models/teams';
 import type { RedistributeCommand } from '../../data/functionTeamsApi';
@@ -136,6 +137,13 @@ function RedistributePanel({ overview, busy, onCancel, onSubmit }: { overview: T
             </li>
           ))}
         </ol>
+      ) : null}
+      {replacementHandoverGaps(ops).length > 0 ? (
+        <div className={[styles.banner, styles.bannerWarning].join(' ')} role="alert">
+          <span className={typeClass('body')}>
+            Замена инженеров на объекте требует передачи дел: добавьте шаг «Зафиксировать передачу дел» для каждого снятого и каждого добавленного инженера ({replacementHandoverGaps(ops).map(objectNameOf).join(', ')}).
+          </span>
+        </div>
       ) : null}
       <div className={styles.field}>
         <label htmlFor="redistribute-reason" className={typeClass('label')}>Причина перераспределения</label>

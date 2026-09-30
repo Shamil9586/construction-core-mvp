@@ -41,3 +41,15 @@ test('PBX-3A: the Deputy\'s queued steps become ONE atomic command (Akhmetov/Orl
   assert.equal(canSubmitRedistribution('r', ops), true);
   assert.equal(describeOp(ops[2], (id) => id, (id) => id), '«o3»: снять akh');
 });
+
+test('PBX3A-R02 (UI): replacement without handover coverage is blocked before submit; add-only / handover-only pass', async () => {
+  const { replacementHandoverGaps } = await import('../apps/frontend/src/view-models/teams');
+  const swap: RedistributeOp[] = [{ kind: 'memberEnd', objectId: 'o', memberUserId: 'a' }, { kind: 'memberAdd', objectId: 'o', memberUserId: 'b' }];
+  assert.deepEqual(replacementHandoverGaps(swap), ['o']);
+  assert.equal(canSubmitRedistribution('r', swap), false);
+  const covered: RedistributeOp[] = [...swap, { kind: 'handover', objectId: 'o', outgoingUserId: 'a', incomingUserId: 'b' }];
+  assert.equal(canSubmitRedistribution('r', covered), true);
+  assert.equal(canSubmitRedistribution('r', [swap[1]]), true, 'addition-only');
+  assert.equal(canSubmitRedistribution('r', [swap[0]]), true, 'removal-only');
+  assert.equal(canSubmitRedistribution('r', [covered[2]]), true, 'handover-only');
+});

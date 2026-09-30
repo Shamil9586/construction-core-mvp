@@ -39,8 +39,27 @@ export function buildRedistributeCommand(reason: string, ops: readonly Redistrib
   return command;
 }
 
+/**
+ * PBX3A-R02 — objects where the queued steps replace engineers (both a removal and an addition) but the
+ * handover steps do not cover every removed and every added engineer. Mirrors the backend rule so the
+ * Deputy is blocked before submitting; the backend remains the enforcer.
+ */
+export function replacementHandoverGaps(ops: readonly RedistributeOp[]): string[] {
+  const gaps: string[] = [];
+  const objectIds = new Set(ops.filter((o) => o.kind === 'memberEnd').map((o) => (o as { objectId: string }).objectId));
+  for (const objectId of objectIds) {
+    const ends = ops.flatMap((o) => (o.kind === 'memberEnd' && o.objectId === objectId ? [o.memberUserId] : []));
+    const adds = ops.flatMap((o) => (o.kind === 'memberAdd' && o.objectId === objectId ? [o.memberUserId] : []));
+    if (adds.length === 0) continue;
+    const hs = ops.flatMap((o) => (o.kind === 'handover' && o.objectId === objectId ? [o] : []));
+    const covered = ends.every((u) => hs.some((h) => h.outgoingUserId === u && adds.includes(h.incomingUserId))) && adds.every((u) => hs.some((h) => h.incomingUserId === u && ends.includes(h.outgoingUserId)));
+    if (!covered) gaps.push(objectId);
+  }
+  return gaps;
+}
+
 export function canSubmitRedistribution(reason: string, ops: readonly RedistributeOp[]): boolean {
-  return reason.trim().length > 0 && ops.length > 0;
+  return reason.trim().length > 0 && ops.length > 0 && replacementHandoverGaps(ops).length === 0;
 }
 
 /** Human description of one queued operation; `name`/`objectName` resolve ids the caller already holds. */
