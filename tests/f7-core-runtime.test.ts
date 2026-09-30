@@ -151,11 +151,14 @@ test('FINAL-R05: CURRENT_MOCK_SIGN_IN_ROLES offers DEPUTY_DIRECTOR for a NEW sig
   for (const role of CURRENT_MOCK_SIGN_IN_ROLES) {
     assert.ok((INTERNAL_CORE_ROLES as readonly string[]).includes(role), `${role} is not an internal Core role at all`);
   }
-  // Exactly INTERNAL_CORE_ROLES minus TECHNICAL_DIRECTOR — no other role was
-  // dropped or added by the narrower list.
+  // PBX-2 corrective: DEPARTMENT_HEAD is legacy-only too and is not offered either.
+  assert.equal((CURRENT_MOCK_SIGN_IN_ROLES as readonly string[]).includes('DEPARTMENT_HEAD'), false);
+  for (const head of ['PTO_HEAD', 'CONSTRUCTION_CONTROL_HEAD', 'SDO_HEAD']) assert.equal((CURRENT_MOCK_SIGN_IN_ROLES as readonly string[]).includes(head), true);
+  // Exactly INTERNAL_CORE_ROLES minus the two legacy-only roles — no other role
+  // was dropped or added by the narrower list.
   assert.deepEqual(
     [...CURRENT_MOCK_SIGN_IN_ROLES].sort(),
-    INTERNAL_CORE_ROLES.filter((role) => role !== 'TECHNICAL_DIRECTOR').slice().sort(),
+    INTERNAL_CORE_ROLES.filter((role) => role !== 'TECHNICAL_DIRECTOR' && role !== 'DEPARTMENT_HEAD').slice().sort(),
   );
 });
 

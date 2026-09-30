@@ -19,7 +19,7 @@ export async function seed() {
         // reason, so every existing name keeps its original role unchanged and
         // this array only needs its own new tenth entry.
         for (let j = 0; j < roles.length; j++)
-            users.push(await insert(c, 'users', t, { bitrixUserId: String(j + 1), name: ['Александр Волков', 'Дмитрий Орлов', 'Михаил Соколов', 'Елена Крылова', 'Ольга Морозова', 'Андрей Зайцев', 'Ирина Белова', 'Администратор', 'Представитель подрядчика', 'Виктор Соловьёв'][j], role: roles[j], contractorId: roles[j] === 'CONTRACTOR_VIEWER' ? contractors[0].id : null }));
+            users.push(await insert(c, 'users', t, { bitrixUserId: String(j + 1), name: ['Александр Волков', 'Дмитрий Орлов', 'Михаил Соколов', 'Елена Крылова', 'Ольга Морозова', 'Андрей Зайцев', 'Ирина Белова', 'Администратор', 'Представитель подрядчика', 'Виктор Соловьёв', 'Николай Громов', 'Татьяна Лебедева', 'Роман Фролов'][j], role: roles[j], contractorId: roles[j] === 'CONTRACTOR_VIEWER' ? contractors[0].id : null }));
         for (let j = 0; j < 4; j++)
             users.push(await insert(c, 'users', t, { bitrixUserId: String(20 + j), name: ['Сергей Павлов', 'Тимур Алексеев', 'Максим Кузнецов', 'Артём Смирнов'][j], role: 'PROJECT_MANAGER' }));
         const pm = users.filter(u => u.role === 'PROJECT_MANAGER'), admin = users.find(u => u.role === 'ADMIN'), pto = users.find(u => u.role === 'PTO'), sk = users.find(u => u.role === 'CONSTRUCTION_CONTROL'), sdoUser = users.find(u => u.role === 'SDO');

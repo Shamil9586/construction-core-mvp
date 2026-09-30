@@ -81,6 +81,24 @@ test('PBX-2 /admin/users: list, add, role change, deactivate/reactivate, invaria
    assert.equal((await api('PATCH','/admin/users/'+cv.id,adminToken,{role:'PTO'})).status,400);
    assert.equal((await api('PATCH','/admin/users/'+cv.id,adminToken,{isActive:false})).status,400);
   });
+  await t.test('department-head roles: PTO_HEAD / CONSTRUCTION_CONTROL_HEAD / SDO_HEAD are assignable; DEPARTMENT_HEAD is legacy-only',async()=>{
+   for(const [id,role] of [['33','PTO_HEAD'],['34','CONSTRUCTION_CONTROL_HEAD'],['35','SDO_HEAD']]){
+    portal[id]={ID:id,NAME:'Имя'+id,LAST_NAME:'Фам'+id,ACTIVE:true,WORK_POSITION:'Рабочий',UF_DEPARTMENT:[1]};
+    const r=await api('POST','/admin/users',adminToken,{bitrixUserId:id,role});assert.equal(r.status,201,role);assert.equal(r.data.role,role);
+    assert.equal((await audits(r.data.id))[0].new_value.role,role);
+   }
+   assert.equal((await api('POST','/admin/users',adminToken,{bitrixUserId:'31',role:'DEPARTMENT_HEAD'})).status,400);
+   const u=await mk('36','Ктото','PTO');
+   for(const role of ['PTO_HEAD','CONSTRUCTION_CONTROL_HEAD','SDO_HEAD']){const r=await api('PATCH','/admin/users/'+u.id,adminToken,{role});assert.equal(r.status,200,role);assert.equal(r.data.role,role);}
+   assert.equal((await api('PATCH','/admin/users/'+u.id,adminToken,{role:'DEPARTMENT_HEAD'})).status,400);
+   assert.equal((await one(pool,'SELECT role FROM users WHERE id=$1',[u.id])).role,'SDO_HEAD');
+   // an existing legacy DEPARTMENT_HEAD stays readable, is not converted, and can be moved to a current role
+   const dh=await mk('37','Легаси ДН','DEPARTMENT_HEAD');
+   const listed=(await api('GET','/admin/users',adminToken)).data.users.find((x:any)=>x.id===dh.id);assert.equal(listed.role,'DEPARTMENT_HEAD');
+   assert.equal((await api('PATCH','/admin/users/'+dh.id,adminToken,{isActive:false})).status,200);
+   assert.equal((await one(pool,'SELECT role FROM users WHERE id=$1',[dh.id])).role,'DEPARTMENT_HEAD','deactivation keeps the legacy role');
+   assert.equal((await api('PATCH','/admin/users/'+dh.id,adminToken,{isActive:true,role:'PTO_HEAD'})).status,200);
+  });
   await t.test('strict validation: no foreign fields, empty patch refused',async()=>{
    for(const body of [{}, {role:'PTO',tenantId:tenantA.id},{bitrixUserId:'1'},{name:'x'},{version:1},{isActive:'yes'}])assert.equal((await api('PATCH','/admin/users/'+pto.id,adminToken,body)).status,400,JSON.stringify(body));
    assert.equal((await api('PATCH','/admin/users/not-a-uuid',adminToken,{role:'PTO'})).status,400);
@@ -92,7 +110,7 @@ test('PBX-2 /admin/users: list, add, role change, deactivate/reactivate, invaria
    const a=await audits(pto.id);const last=a[a.length-1];assert.equal(last.action,'ROLE_CHANGE');assert.equal(last.old_value.role,'PTO');assert.equal(last.new_value.role,'PROJECT_MANAGER');
    assert.equal(bitrixCalls.length,bx,'a role change never consults Bitrix');
    // employee 32 is ACTIVE=false with a director title in Bitrix: adding it gives exactly the selected role, nothing derived
-   const add=await api('POST','/admin/users',adminToken,{bitrixUserId:'32',role:'DEPARTMENT_HEAD'});assert.equal(add.status,201);assert.equal(add.data.role,'DEPARTMENT_HEAD');
+   const add=await api('POST','/admin/users',adminToken,{bitrixUserId:'32',role:'SDO_HEAD'});assert.equal(add.status,201);assert.equal(add.data.role,'SDO_HEAD');
    portal['31'].WORK_POSITION='Рабочий';portal['31'].UF_DEPARTMENT=[9];portal['32'].ACTIVE=true;
    const list=await api('GET','/admin/users',adminToken);assert.equal(list.data.users.find((u:any)=>u.bitrixUserId==='31').role,'DEPUTY_DIRECTOR');
    assert.equal(list.data.users.find((u:any)=>u.bitrixUserId==='32').isActive,true);

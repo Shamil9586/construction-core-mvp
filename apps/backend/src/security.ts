@@ -33,7 +33,7 @@ export async function audit(c: any, a: Actor, entityType: string, entityId: stri
     // F12.3 (LOCKED DECISION 1): DEPUTY_DIRECTOR gets the same oversight
     // notifications the technical-director managerial role already received —
     // TECHNICAL_DIRECTOR itself stays for any still-active legacy-assigned user.
-    const users = (await c.query("SELECT id FROM users WHERE tenant_id=$1 AND is_active=true AND role IN ('PTO','TECHNICAL_DIRECTOR','DEPUTY_DIRECTOR','GENERAL_DIRECTOR','CONSTRUCTION_CONTROL','SDO','PROJECT_MANAGER')", [a.tenantId])).rows;
+    const users = (await c.query("SELECT id FROM users WHERE tenant_id=$1 AND is_active=true AND role IN ('PTO','PTO_HEAD','TECHNICAL_DIRECTOR','DEPUTY_DIRECTOR','GENERAL_DIRECTOR','CONSTRUCTION_CONTROL','CONSTRUCTION_CONTROL_HEAD','SDO','SDO_HEAD','PROJECT_MANAGER')", [a.tenantId])).rows;
     for (const user of users)
         await c.query('INSERT INTO notifications(tenant_id,user_id,event_id,title,dedupe_key) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING', [a.tenantId, user.id, event.id, eventType, `${event.id}:${user.id}`]);
 } }

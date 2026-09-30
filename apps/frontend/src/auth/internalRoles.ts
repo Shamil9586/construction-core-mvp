@@ -26,9 +26,14 @@ export const INTERNAL_CORE_ROLES = [
   'TECHNICAL_DIRECTOR',
   'PROJECT_MANAGER',
   'CONSTRUCTION_CONTROL',
+  // PBX-2 corrective: current department-head roles.
+  'CONSTRUCTION_CONTROL_HEAD',
   'PTO',
+  'PTO_HEAD',
   'SDO',
+  'SDO_HEAD',
   'ADMIN',
+  // Legacy-compatible: an existing session may carry it; never a new choice.
   'DEPARTMENT_HEAD',
   // F12.3 (LOCKED DECISION 1): the canonical current managerial role.
   'DEPUTY_DIRECTOR',
@@ -59,8 +64,10 @@ export const EXTERNAL_PARTICIPANT_ROLE = 'CONTRACTOR_VIEWER' satisfies Role;
  * legacy split, kept for the one other place Core offers a role as a new
  * choice rather than reading one an existing user already has.
  */
+export const LEGACY_ONLY_ROLES: readonly InternalCoreRole[] = ['TECHNICAL_DIRECTOR', 'DEPARTMENT_HEAD'];
+
 export const CURRENT_MOCK_SIGN_IN_ROLES: readonly InternalCoreRole[] = INTERNAL_CORE_ROLES.filter(
-  (role) => role !== 'TECHNICAL_DIRECTOR',
+  (role) => !LEGACY_ONLY_ROLES.includes(role),
 );
 
 /** The same Russian wording the legacy entry shows for these roles (main.tsx `roleNames`). */
@@ -69,8 +76,12 @@ export const INTERNAL_ROLE_LABELS: Record<InternalCoreRole, string> = {
   TECHNICAL_DIRECTOR: 'Технический директор',
   PROJECT_MANAGER: 'Руководитель проекта',
   CONSTRUCTION_CONTROL: 'Строительный контроль',
-  PTO: 'ПТО',
-  SDO: 'СДО',
+  CONSTRUCTION_CONTROL_HEAD: 'Начальник СК',
+  // Role labels only — the ПТО / СДО departments and workspaces keep their names.
+  PTO: 'Инженер ПТО',
+  PTO_HEAD: 'Начальник ПТО',
+  SDO: 'Инженер-сметчик',
+  SDO_HEAD: 'Начальник СДО',
   ADMIN: 'Администратор',
   DEPARTMENT_HEAD: 'Руководитель направления',
   DEPUTY_DIRECTOR: 'Заместитель директора',
@@ -103,7 +114,7 @@ export function classifyCoreRole(role: string): CoreRoleAccess {
  * snapshot never carries this data at all.
  */
 export function canAccessDocumentation(role: string): boolean {
-  return role !== 'SDO' && role !== 'CONTRACTOR_VIEWER';
+  return !isSdoRole(role) && role !== 'CONTRACTOR_VIEWER';
 }
 
 /**
@@ -119,7 +130,7 @@ export function canAccessDocumentation(role: string): boolean {
  * route renders.
  */
 export function canManageDocumentation(role: string): boolean {
-  return role === 'PTO' || role === 'ADMIN';
+  return isPtoRole(role) || role === 'ADMIN';
 }
 
 /**
@@ -134,15 +145,15 @@ export function canManageDocumentation(role: string): boolean {
  * all — never by this predicate.
  */
 export function canAccessSdoWorkspace(role: string): boolean {
-  return role === 'SDO' || role === 'ADMIN';
+  return isSdoRole(role) || role === 'ADMIN';
 }
 
 /**
  * PBX-2 — the roles the «Пользователи и доступ» screen offers as a TARGET, in
  * display order. Mirrors the backend's `INTERNAL_ASSIGNABLE_ROLES`
  * (packages/domain; a test pins the two together). Deliberately excludes
- * legacy `TECHNICAL_DIRECTOR` (an existing user keeps it and it stays readable,
- * but it is never a choice) and `CONTRACTOR_VIEWER` (external participant,
+ * legacy `TECHNICAL_DIRECTOR` and `DEPARTMENT_HEAD` (an existing user keeps them and they stay readable,
+ * but they are never a choice) and `CONTRACTOR_VIEWER` (external participant,
  * outside the internal Bitrix Core contour).
  */
 export const ADMIN_ASSIGNABLE_ROLES = [
@@ -150,9 +161,11 @@ export const ADMIN_ASSIGNABLE_ROLES = [
   'DEPUTY_DIRECTOR',
   'PROJECT_MANAGER',
   'CONSTRUCTION_CONTROL',
+  'CONSTRUCTION_CONTROL_HEAD',
   'PTO',
+  'PTO_HEAD',
   'SDO',
-  'DEPARTMENT_HEAD',
+  'SDO_HEAD',
   'ADMIN',
 ] as const satisfies readonly InternalCoreRole[];
 
@@ -164,6 +177,14 @@ export function adminRoleLabel(role: string): string {
   if (role === EXTERNAL_PARTICIPANT_ROLE) return 'Внешний участник';
   return 'Неизвестная роль';
 }
+
+/**
+ * The head roles carry the same operational bundle as their department's
+ * engineer role until object-responsibility exists (mirrors the backend's
+ * `isPtoRole` / `isSdoRole` in packages/domain).
+ */
+export const isPtoRole = (role: string): boolean => role === 'PTO' || role === 'PTO_HEAD';
+export const isSdoRole = (role: string): boolean => role === 'SDO' || role === 'SDO_HEAD';
 
 /** Only ADMIN administers users; the backend enforces ADMIN_USERS independently. */
 export function canAdministerUsers(role: string): boolean {

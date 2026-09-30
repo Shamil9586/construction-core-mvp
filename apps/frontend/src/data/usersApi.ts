@@ -1,6 +1,7 @@
 import type { UserSummary } from '../types/api';
 import { parseResponse } from '../http';
 import { readSessionToken } from '../auth/sessionToken';
+import { isPtoRole, isSdoRole } from '../auth/internalRoles';
 
 /**
  * F8.2.1-04 (Corrective Patch) — `GET /users` already exists and already
@@ -22,7 +23,7 @@ async function get<T>(path: string): Promise<T> {
 
 export async function listActivePtoUsers(): Promise<UserSummary[]> {
   const users = await get<UserSummary[]>('users');
-  return users.filter((user) => user.role === 'PTO');
+  return users.filter((user) => isPtoRole(user.role));
 }
 
 /**
@@ -33,5 +34,5 @@ export async function listActivePtoUsers(): Promise<UserSummary[]> {
  */
 export async function listActiveSdoUsers(): Promise<UserSummary[]> {
   const users = await get<UserSummary[]>('users');
-  return users.filter((user) => user.role === 'SDO');
+  return users.filter((user) => isSdoRole(user.role));
 }

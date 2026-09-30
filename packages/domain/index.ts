@@ -8,7 +8,7 @@ import Decimal from 'decimal.js';
 // stays for backward compatibility with existing stored/audited data — it is
 // no longer the intended role for new assignments (see `grants` below and
 // every UI/mock/seed call site that now offers DEPUTY_DIRECTOR instead).
-export const roles = ['GENERAL_DIRECTOR', 'TECHNICAL_DIRECTOR', 'PROJECT_MANAGER', 'CONSTRUCTION_CONTROL', 'PTO', 'SDO', 'DEPARTMENT_HEAD', 'ADMIN', 'CONTRACTOR_VIEWER', 'DEPUTY_DIRECTOR'] as const;
+export const roles = ['GENERAL_DIRECTOR', 'TECHNICAL_DIRECTOR', 'PROJECT_MANAGER', 'CONSTRUCTION_CONTROL', 'PTO', 'SDO', 'DEPARTMENT_HEAD', 'ADMIN', 'CONTRACTOR_VIEWER', 'DEPUTY_DIRECTOR', 'PTO_HEAD', 'CONSTRUCTION_CONTROL_HEAD', 'SDO_HEAD'] as const;
 export type Role = typeof roles[number];
 // F12.3 FINAL-R04 (LOCKED DECISION 1, clarified): `roles` above is the full
 // STORAGE/LEGACY-COMPATIBLE set — every value the DB CHECK constraint
@@ -25,12 +25,23 @@ export type Role = typeof roles[number];
 // as an *existing* (possibly legacy) seeded user, which is exactly the
 // "existing sessions/users continue to authenticate" case, not a new
 // assignment.
-export const CURRENT_ASSIGNABLE_ROLES = ['GENERAL_DIRECTOR', 'PROJECT_MANAGER', 'CONSTRUCTION_CONTROL', 'PTO', 'SDO', 'DEPARTMENT_HEAD', 'ADMIN', 'CONTRACTOR_VIEWER', 'DEPUTY_DIRECTOR'] as const;
+// PBX-2 corrective: DEPARTMENT_HEAD is now legacy-only too (replaced by the
+// three *_HEAD roles) and is excluded here; CONTRACTOR_VIEWER stays because the
+// general POST /users still serves the separate external-participant path.
+export const CURRENT_ASSIGNABLE_ROLES = ['GENERAL_DIRECTOR', 'PROJECT_MANAGER', 'CONSTRUCTION_CONTROL', 'CONSTRUCTION_CONTROL_HEAD', 'PTO', 'PTO_HEAD', 'SDO', 'SDO_HEAD', 'ADMIN', 'CONTRACTOR_VIEWER', 'DEPUTY_DIRECTOR'] as const;
 // PBX-2: roles the internal Users & Access administration may assign or change
 // to. Narrower than CURRENT_ASSIGNABLE_ROLES: CONTRACTOR_VIEWER is the
 // external-participant role (outside the internal Bitrix Core contour) and
 // TECHNICAL_DIRECTOR is legacy-only; neither is a target of this screen.
-export const INTERNAL_ASSIGNABLE_ROLES = ['GENERAL_DIRECTOR', 'DEPUTY_DIRECTOR', 'PROJECT_MANAGER', 'CONSTRUCTION_CONTROL', 'PTO', 'SDO', 'DEPARTMENT_HEAD', 'ADMIN'] as const;
+export const INTERNAL_ASSIGNABLE_ROLES = ['GENERAL_DIRECTOR', 'DEPUTY_DIRECTOR', 'PROJECT_MANAGER', 'CONSTRUCTION_CONTROL', 'CONSTRUCTION_CONTROL_HEAD', 'PTO', 'PTO_HEAD', 'SDO', 'SDO_HEAD', 'ADMIN'] as const;
+// Legacy-compatible stored roles: valid for existing rows/sessions, never a new assignment.
+export const LEGACY_ONLY_ROLES = ['TECHNICAL_DIRECTOR', 'DEPARTMENT_HEAD'] as const;
+// Department-head roles carry the SAME operational bundle as the engineer role of
+// their department until the object-responsibility phase adds head-specific
+// authority. These predicates are the one place that equivalence is decided.
+export const isPtoRole = (role: string) => role === 'PTO' || role === 'PTO_HEAD';
+export const isSdoRole = (role: string) => role === 'SDO' || role === 'SDO_HEAD';
+export const isConstructionControlRole = (role: string) => role === 'CONSTRUCTION_CONTROL' || role === 'CONSTRUCTION_CONTROL_HEAD';
 export enum Permission {
     OBJECT_VIEW = 'OBJECT_VIEW',
     OBJECT_CREATE = 'OBJECT_CREATE',
@@ -95,7 +106,10 @@ const view = [Permission.OBJECT_VIEW, Permission.WORK_VIEW, Permission.PTO_VIEW,
 // ISSUE_CREATE/VERIFY. A managerial role oversees those departments; it does not
 // perform their operational mutations merely because they report to it
 // (segregation of duties, explicitly required by the locked decision).
-const grants: Record<Role, Permission[]> = { ADMIN: Object.values(Permission), GENERAL_DIRECTOR: view, TECHNICAL_DIRECTOR: [...view, Permission.OBJECT_CREATE, Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE, Permission.EXECUTION_UNIT_MANAGE], DEPUTY_DIRECTOR: [...view, Permission.OBJECT_CREATE, Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE, Permission.EXECUTION_UNIT_MANAGE], DEPARTMENT_HEAD: view, PROJECT_MANAGER: [...view, Permission.OBJECT_CREATE, Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE, Permission.EXECUTION_UNIT_MANAGE, Permission.WORK_UPDATE_PROGRESS, Permission.INSPECTION_REQUEST, Permission.ISSUE_RESOLVE], CONSTRUCTION_CONTROL: [...view, Permission.INSPECTION_ACCEPT, Permission.INSPECTION_REJECT, Permission.ISSUE_CREATE, Permission.ISSUE_VERIFY], PTO: [...view, Permission.PTO_EDIT, Permission.PTO_TRANSFER_SDO, Permission.DOCUMENTATION_MANAGE], SDO: [...view, Permission.SDO_EDIT, Permission.SDO_CLOSE, Permission.FINANCE_EDIT, Permission.SDO_CASE_MANAGE], CONTRACTOR_VIEWER: [Permission.OBJECT_VIEW, Permission.WORK_VIEW] };
+const constructionControlGrants = [...view, Permission.INSPECTION_ACCEPT, Permission.INSPECTION_REJECT, Permission.ISSUE_CREATE, Permission.ISSUE_VERIFY];
+const ptoGrants = [...view, Permission.PTO_EDIT, Permission.PTO_TRANSFER_SDO, Permission.DOCUMENTATION_MANAGE];
+const sdoGrants = [...view, Permission.SDO_EDIT, Permission.SDO_CLOSE, Permission.FINANCE_EDIT, Permission.SDO_CASE_MANAGE];
+const grants: Record<Role, Permission[]> = { ADMIN: Object.values(Permission), GENERAL_DIRECTOR: view, TECHNICAL_DIRECTOR: [...view, Permission.OBJECT_CREATE, Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE, Permission.EXECUTION_UNIT_MANAGE], DEPUTY_DIRECTOR: [...view, Permission.OBJECT_CREATE, Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE, Permission.EXECUTION_UNIT_MANAGE], DEPARTMENT_HEAD: view, PROJECT_MANAGER: [...view, Permission.OBJECT_CREATE, Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE, Permission.EXECUTION_UNIT_MANAGE, Permission.WORK_UPDATE_PROGRESS, Permission.INSPECTION_REQUEST, Permission.ISSUE_RESOLVE], CONSTRUCTION_CONTROL: constructionControlGrants, CONSTRUCTION_CONTROL_HEAD: constructionControlGrants, PTO: ptoGrants, PTO_HEAD: ptoGrants, SDO: sdoGrants, SDO_HEAD: sdoGrants, CONTRACTOR_VIEWER: [Permission.OBJECT_VIEW, Permission.WORK_VIEW] };
 export const hasPermission = (role: Role, p: Permission) => grants[role]?.includes(p) ?? false;
 // F8.2 Architecture Contract: "SDO: No F8.2 access" and no contractor portal
 // — the one place that decides who may see Executive Documentation data at
@@ -104,7 +118,7 @@ export const hasPermission = (role: Role, p: Permission) => grants[role]?.includ
 // so the two cannot independently drift on who this excludes (the same
 // discipline resolveInternalScAccepted() already enforces for F8.1).
 export function canAccessDocumentation(role: Role): boolean {
-    return role !== 'SDO' && role !== 'CONTRACTOR_VIEWER';
+    return !isSdoRole(role) && role !== 'CONTRACTOR_VIEWER';
 }
 // F8.2.1 Decision 5, extended by the F8.2.1-01 corrective patch — PTO drives
 // DRAFT through PRESENTED, and a presented package the customer returns can
@@ -219,7 +233,7 @@ export function resolveDocumentationAttention(packageStatuses: string[]): Docume
 // only. Every other internal role gets read-only SDO state elsewhere
 // (Work Card), never this predicate.
 export function canAccessSdoWorkspace(role: Role): boolean {
-    return role === 'SDO' || role === 'ADMIN';
+    return isSdoRole(role) || role === 'ADMIN';
 }
 // F8.3 SDO status workflow — the one allow-list, mirroring
 // isDocumentationStatusTransitionAllowed's own discipline: ON_RECONCILIATION

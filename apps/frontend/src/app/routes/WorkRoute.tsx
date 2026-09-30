@@ -7,7 +7,7 @@ import { useRefetchSnapshot, useSnapshot } from '../../data/SnapshotContext';
 import * as executionUnitsApi from '../../data/executionUnitsApi';
 import * as documentationApi from '../../data/documentationApi';
 import { useCoreRuntime } from '../CoreRuntimeContext';
-import { canAccessDocumentation, canManageDocumentation } from '../../auth/internalRoles';
+import { canAccessDocumentation, canManageDocumentation, isPtoRole } from '../../auth/internalRoles';
 import { useActivePtoUsers } from '../useActivePtoUsers';
 import { AppSidebar } from '../AppSidebar';
 import { ROUTE_PATHS, objectPath, packagePath } from '../routePaths';
@@ -93,7 +93,7 @@ export function WorkRoute() {
       ? {
           // F8.2.1-04 — PTO defaults to itself; ADMIN picks an active PTO
           // user instead (see CreatePackageButton, W01/DocumentationSection.tsx).
-          responsible: session.user.role === 'PTO' ? { mode: 'self', userId: session.user.id } : { mode: 'pick', ptoUsers },
+          responsible: isPtoRole(session.user.role) ? { mode: 'self', userId: session.user.id } : { mode: 'pick', ptoUsers },
           onCreatePackage: async (responsibleUserId) => {
             const pkg = await documentationApi.createDocumentationPackage(work.id, responsibleUserId);
             refetch();

@@ -1,5 +1,5 @@
 import type { AdminCoreUser, BitrixEmployee } from '../data/adminUsersApi';
-import { ADMIN_ASSIGNABLE_ROLES, adminRoleLabel } from '../auth/internalRoles';
+import { ADMIN_ASSIGNABLE_ROLES, LEGACY_ONLY_ROLES, adminRoleLabel } from '../auth/internalRoles';
 
 /**
  * PBX-2 — one row per person on the «Пользователи и доступ» screen.
@@ -31,7 +31,7 @@ export interface AdminUserRow {
     id: string;
     role: string;
     roleLabel: string;
-    /** TECHNICAL_DIRECTOR: readable, never offered as a target. */
+    /** TECHNICAL_DIRECTOR / DEPARTMENT_HEAD: readable, never offered as a target. */
     legacyRole: boolean;
     /** CONTRACTOR_VIEWER: outside this internal screen — shown, not administrable. */
     external: boolean;
@@ -56,7 +56,7 @@ export function buildAdminUserRows(
     id: user.id,
     role: user.role,
     roleLabel: adminRoleLabel(user.role),
-    legacyRole: user.role === 'TECHNICAL_DIRECTOR',
+    legacyRole: (LEGACY_ONLY_ROLES as readonly string[]).includes(user.role),
     external: user.role === 'CONTRACTOR_VIEWER',
     isActive: user.isActive,
   });

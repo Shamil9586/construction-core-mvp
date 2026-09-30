@@ -5,7 +5,7 @@ import { buildP01ViewModel } from '../../view-models/p01';
 import { useRefetchSnapshot, useSnapshot } from '../../data/SnapshotContext';
 import * as documentationApi from '../../data/documentationApi';
 import { useCoreRuntime } from '../CoreRuntimeContext';
-import { canAccessDocumentation, canManageDocumentation } from '../../auth/internalRoles';
+import { canAccessDocumentation, canManageDocumentation, isPtoRole } from '../../auth/internalRoles';
 import { useActivePtoUsers } from '../useActivePtoUsers';
 import { AppSidebar } from '../AppSidebar';
 import { packagePath } from '../routePaths';
@@ -83,7 +83,7 @@ export function PtoRoute() {
           // F8.2.1-04 — PTO is itself an active PTO user and defaults to
           // itself; ADMIN is not, so it picks one from `ptoUsers` instead
           // (see CreatePackageButton, screens/P01/index.tsx).
-          responsible: session.user.role === 'PTO' ? { mode: 'self', userId: session.user.id } : { mode: 'pick', ptoUsers },
+          responsible: isPtoRole(session.user.role) ? { mode: 'self', userId: session.user.id } : { mode: 'pick', ptoUsers },
           onCreatePackage: async (objectWorkId, responsibleUserId) => {
             const pkg = await documentationApi.createDocumentationPackage(objectWorkId, responsibleUserId);
             refetch();

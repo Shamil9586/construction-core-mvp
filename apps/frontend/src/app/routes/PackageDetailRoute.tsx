@@ -5,7 +5,7 @@ import { buildPackageDetailViewModel } from '../../view-models/documentationPack
 import { useRefetchSnapshot, useSnapshot } from '../../data/SnapshotContext';
 import * as documentationApi from '../../data/documentationApi';
 import { useCoreRuntime } from '../CoreRuntimeContext';
-import { canAccessDocumentation, canManageDocumentation } from '../../auth/internalRoles';
+import { canAccessDocumentation, canManageDocumentation, isPtoRole } from '../../auth/internalRoles';
 import { AppSidebar } from '../AppSidebar';
 import { ROUTE_PATHS, objectPath, workPath } from '../routePaths';
 import { RouteError, RouteForbidden, RouteLoading, RouteNotFound } from '../RouteStatus';
@@ -99,7 +99,7 @@ export function PackageDetailRoute() {
           // role reaching this branch (ADMIN), so PackageDetail renders these
           // two controls read-only instead of offering a control the backend
           // would 403.
-          ...(session.user.role === 'PTO'
+          ...(isPtoRole(session.user.role)
             ? {
                 onRegisterCustomerAcceptance: async (acceptedDate: string, reference: string | undefined, comment: string | undefined) => {
                   await documentationApi.registerDocumentationCustomerAcceptance(pkg.id, pkg.version, acceptedDate, reference, comment);

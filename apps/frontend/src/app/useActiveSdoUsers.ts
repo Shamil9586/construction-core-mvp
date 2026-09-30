@@ -1,3 +1,4 @@
+import { isSdoRole } from '../auth/internalRoles';
 import { useEffect, useState } from 'react';
 import type { UserSummary } from '../types/api';
 import { listActiveSdoUsers } from '../data/usersApi';
@@ -16,7 +17,7 @@ export function useActiveSdoUsers(role: string | undefined): UserSummary[] {
   const [users, setUsers] = useState<UserSummary[]>([]);
 
   useEffect(() => {
-    if (role !== 'SDO' && role !== 'ADMIN') {
+    if (!(role && isSdoRole(role)) && role !== 'ADMIN') {
       setUsers([]);
       return;
     }

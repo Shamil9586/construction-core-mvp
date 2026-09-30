@@ -46,7 +46,7 @@ async function openAttachment(attachmentId: string) {
         message.error(e.message ?? 'Не удалось открыть файл');
     }
 }
-const roleNames: any = { GENERAL_DIRECTOR: 'Генеральный директор', TECHNICAL_DIRECTOR: 'Технический директор', PROJECT_MANAGER: 'Руководитель проекта', CONSTRUCTION_CONTROL: 'Строительный контроль', PTO: 'ПТО', SDO: 'СДО', ADMIN: 'Администратор', DEPARTMENT_HEAD: 'Руководитель направления', CONTRACTOR_VIEWER: 'Субподрядчик', DEPUTY_DIRECTOR: 'Заместитель директора' };
+const roleNames: any = { GENERAL_DIRECTOR: 'Генеральный директор', TECHNICAL_DIRECTOR: 'Технический директор', PROJECT_MANAGER: 'Руководитель проекта', CONSTRUCTION_CONTROL: 'Строительный контроль', CONSTRUCTION_CONTROL_HEAD: 'Начальник СК', PTO: 'Инженер ПТО', PTO_HEAD: 'Начальник ПТО', SDO: 'Инженер-сметчик', SDO_HEAD: 'Начальник СДО', ADMIN: 'Администратор', DEPARTMENT_HEAD: 'Руководитель направления', CONTRACTOR_VIEWER: 'Субподрядчик', DEPUTY_DIRECTOR: 'Заместитель директора' };
 // F12.3 FINAL-R04: `roleNames` above stays full (legacy TECHNICAL_DIRECTOR
 // label lookups for an existing user/session must keep working). This is
 // the narrower set offered wherever the UI lets someone *choose* a role for
@@ -57,6 +57,8 @@ const roleNames: any = { GENERAL_DIRECTOR: 'Генеральный директ�
 // replacement.
 const currentAssignableRoleNames: any = { ...roleNames };
 delete currentAssignableRoleNames.TECHNICAL_DIRECTOR;
+// PBX-2 corrective: DEPARTMENT_HEAD is legacy-only as well (replaced by the *_HEAD roles).
+delete currentAssignableRoleNames.DEPARTMENT_HEAD;
 const money = (v: any) => v == null ? '—' : new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 1 }).format(Number(v) / 1000000) + ' млн ₽';
 const pct = (v: any) => v == null ? '—' : Number(v).toFixed(0) + '%';
 const date = (v: any) => v ? new Date(v).toLocaleDateString('ru-RU') : '—';
@@ -124,7 +126,9 @@ function App() {
         throw e;
     } }
     async function upload(file: File) { const base64 = await new Promise<string>((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(String(r.result).split(',')[1]); r.onerror = reject; r.readAsDataURL(file); }); return api('attachments', { fileName: file.name, mimeType: file.type, base64 }); }
-    const can = (...roles: string[]) => actor && ['ADMIN', ...roles].includes(actor.role);
+    // A department head carries the same operational bundle as its department's engineer role.
+    const headOf: Record<string, string[]> = { PTO: ['PTO_HEAD'], SDO: ['SDO_HEAD'], CONSTRUCTION_CONTROL: ['CONSTRUCTION_CONTROL_HEAD'] };
+    const can = (...roles: string[]) => actor && ['ADMIN', ...roles, ...roles.flatMap(r => headOf[r] ?? [])].includes(actor.role);
     const opts = (arr: any[], label = 'name') => (arr ?? []).map(x => ({ value: x.id, label: label==='name' && x.objectId ? `${d.objects.find(o=>o.id===x.objectId)?.name ?? ''} — ${x.name}` : x[label] }));
     const newObject = () => setForm({ title: 'Новый объект', fields: [{ name: 'externalCode', label: 'УКО' }, { name: 'name', label: 'Название' }, { name: 'address', label: 'Адрес' }, { name: 'organizationName', label: 'Организация', value: 'ООО СЗ «Гор-Строй»' }, { name: 'projectManagerId', label: 'Руководитель проекта', options: opts(users.data?.filter(u => u.role === 'PROJECT_MANAGER')) }, { name: 'contractorId', label: 'Субподрядчик', options: opts(d.contractors) }, { name: 'startDate', label: 'Начало', type: 'date', value: today() }, { name: 'plannedFinishDate', label: 'Срок сдачи', type: 'date' }, { name: 'contractValue', label: 'Стоимость, ₽', type: 'number' }], onSave: async (v) => { const { contractorId, ...b } = v; const o = await mutate('objects', { ...b, contractorIds: [contractorId] }); setObjectTab('production'); nav('/objects/' + o.id); } });
     const newWork = (objectId?: string) => setForm({ title: 'Добавить работу', fields: [{ name: 'objectId', label: 'Объект', options: opts(d.objects), value: objectId }, { name: 'workTypeId', label: 'Вид работ', options: opts(dictionary.data?.workTypes) }, { name: 'name', label: 'Название работы', value: 'Армирование фундамента' }, { name: 'contractorId', label: 'Субподрядчик', options: opts(d.contractors) }, { name: 'responsibleUserId', label: 'Ответственный РП', options: opts(users.data?.filter(u => u.role === 'PROJECT_MANAGER')) }, { name: 'unit', label: 'Единица', value: 'т' }, { name: 'plannedQuantity', label: 'Плановый объём', type: 'number', value: '20' }, { name: 'plannedStartDate', label: 'Начало', type: 'date', value: today() }, { name: 'plannedFinishDate', label: 'Окончание', type: 'date' }, { name: 'estimatedCost', label: 'Ориентировочная стоимость, ₽', type: 'number' }], onSave: v => mutate('works', v) });

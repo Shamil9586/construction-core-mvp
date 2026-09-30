@@ -29,6 +29,7 @@ function makeState(): State {
       { id: 'c-admin', name: 'Админов Админ', role: 'ADMIN', bitrixUserId: '1', isActive: true, version: 1 },
       { id: 'c-td', name: 'Никитин Пётр', role: 'TECHNICAL_DIRECTOR', bitrixUserId: '2', isActive: true, version: 1 },
       { id: 'c-off', name: 'Зайцев Андрей', role: 'SDO', bitrixUserId: '3', isActive: false, version: 1 },
+      { id: 'c-dh', name: 'Громов Николай', role: 'DEPARTMENT_HEAD', bitrixUserId: '6', isActive: true, version: 1 },
     ],
     employees: [
       emp('1', 'Админов', 'Админ', { WORK_POSITION: 'Системный администратор', UF_DEPARTMENT: [5] }),
@@ -36,6 +37,7 @@ function makeState(): State {
       emp('3', 'Зайцев', 'Андрей', { UF_DEPARTMENT: [6] }),
       emp('4', 'Петрова', 'Ирина', { WORK_POSITION: 'Генеральный директор', UF_DEPARTMENT: [5] }),
       emp('5', 'Уволенный', 'Сергей', { ACTIVE: false, WORK_POSITION: 'Директор', UF_DEPARTMENT: [6] }),
+      emp('6', 'Громов', 'Николай', { WORK_POSITION: 'Начальник отдела', UF_DEPARTMENT: [6] }),
     ],
     directoryError: false,
     departmentsError: false,
@@ -102,6 +104,34 @@ test.describe('access', () => {
   });
 });
 
+test.describe('department-head sessions mirror their department role in the shell', () => {
+  const head = (role: string) => ({ id: 'u-h', tenantId: 't-1', name: 'Начальник', role });
+  for (const [role, visible, hidden, roleLabel] of [
+    ['PTO_HEAD', 'ПТО', 'СДО', 'Начальник ПТО'],
+    ['SDO_HEAD', 'СДО', 'ПТО', 'Начальник СДО'],
+  ] as const) {
+    test(`${role}: sees the «${visible}» workspace entry, not «${hidden}», never the administration entry`, async ({ page }) => {
+      const state = makeState();
+      await setup(page, state, head(role));
+      await page.goto('/app.html/company');
+      await expect(sidebar(page).getByText('Портфель')).toBeVisible();
+      await expect(sidebar(page).getByRole('button', { name: visible, exact: true })).toBeVisible();
+      await expect(sidebar(page).getByRole('button', { name: hidden, exact: true })).toHaveCount(0);
+      await expect(sidebar(page).getByText('Пользователи и доступ')).toHaveCount(0);
+      await expect(sidebar(page).getByText(roleLabel)).toBeVisible();
+      await page.goto('/app.html/admin/users');
+      await expect(page.getByText('доступен только администратору')).toBeVisible();
+    });
+  }
+  test('CONSTRUCTION_CONTROL_HEAD and legacy DEPARTMENT_HEAD see neither ПТО, СДО nor the administration entry', async ({ page }) => {
+    await setup(page, makeState(), head('CONSTRUCTION_CONTROL_HEAD'));
+    await page.goto('/app.html/company');
+    await expect(sidebar(page).getByText('Портфель')).toBeVisible();
+    for (const name of ['ПТО', 'СДО', 'Пользователи и доступ']) await expect(sidebar(page).getByRole('button', { name, exact: true })).toHaveCount(0);
+    await expect(sidebar(page).getByText('Начальник СК')).toBeVisible();
+  });
+});
+
 test.describe('employee list', () => {
   test('shows Bitrix employees with Core status, role, position and department as context; no raw enum names', async ({ page }) => {
     await setup(page, makeState());
@@ -115,7 +145,9 @@ test.describe('employee list', () => {
     // a director title in Bitrix grants nothing: the employee is simply not in Core
     await expect(rowOf(page, 'Петрова Ирина')).toContainText('Не добавлен в Core');
     await expect(rowOf(page, 'Петрова Ирина')).toContainText('Генеральный директор');
-    for (const raw of ['TECHNICAL_DIRECTOR', 'DEPUTY_DIRECTOR', 'GENERAL_DIRECTOR', 'ADMIN_USERS']) await expect(page.locator('main')).not.toContainText(raw);
+    for (const raw of ['TECHNICAL_DIRECTOR', 'DEPARTMENT_HEAD', 'DEPUTY_DIRECTOR', 'GENERAL_DIRECTOR', 'PTO_HEAD', 'SDO_HEAD', 'CONSTRUCTION_CONTROL', 'ADMIN_USERS']) await expect(page.locator('main')).not.toContainText(raw);
+    // the Core role of an existing SDO user reads as a role label, not as the department name
+    await expect(rowOf(page, 'Зайцев Андрей')).toContainText('Инженер-сметчик');
   });
 
   test('Bitrix-inactive employee carries a visible warning and is not silently changed', async ({ page }) => {
@@ -183,13 +215,46 @@ test.describe('mutations', () => {
     await expect(select).toHaveValue('');
     await expect(page.getByRole('button', { name: 'Добавить', exact: true })).toBeDisabled();
     const options = await select.locator('option').evaluateAll((os) => os.map((o) => (o as HTMLOptionElement).value));
-    expect(options).toEqual(['', 'GENERAL_DIRECTOR', 'DEPUTY_DIRECTOR', 'PROJECT_MANAGER', 'CONSTRUCTION_CONTROL', 'PTO', 'SDO', 'DEPARTMENT_HEAD', 'ADMIN']);
+    expect(options).toEqual(['', 'GENERAL_DIRECTOR', 'DEPUTY_DIRECTOR', 'PROJECT_MANAGER', 'CONSTRUCTION_CONTROL', 'CONSTRUCTION_CONTROL_HEAD', 'PTO', 'PTO_HEAD', 'SDO', 'SDO_HEAD', 'ADMIN']);
+    const labels = await select.locator('option').evaluateAll((os) => os.map((o) => o.textContent));
+    expect(labels).toEqual(['Выберите роль', 'Генеральный директор', 'Заместитель директора', 'Руководитель проекта', 'Строительный контроль', 'Начальник СК', 'Инженер ПТО', 'Начальник ПТО', 'Инженер-сметчик', 'Начальник СДО', 'Администратор']);
     await select.selectOption('DEPUTY_DIRECTOR');
     await page.getByRole('button', { name: 'Добавить', exact: true }).click();
     await expect(page.getByRole('status').filter({ hasText: 'добавлен в Core с ролью «Заместитель директора»' })).toBeVisible();
     await expect(rowOf(page, 'Петрова Ирина')).toContainText('Активен в Core');
     await expect(rowOf(page, 'Петрова Ирина')).toContainText('Заместитель директора');
     expect(state.calls.find((c) => c.method === 'POST')!.body).toEqual({ bitrixUserId: '4', role: 'DEPUTY_DIRECTOR' });
+  });
+
+  test('the department-head roles can be assigned, and are shown with their Russian labels', async ({ page }) => {
+    const state = makeState();
+    await setup(page, state);
+    await page.goto('/app.html/admin/users');
+    for (const [role, label] of [['PTO_HEAD', 'Начальник ПТО'], ['CONSTRUCTION_CONTROL_HEAD', 'Начальник СК'], ['SDO_HEAD', 'Начальник СДО']] as const) {
+      await page.getByRole('button', { name: /Изменить роль: Зайцев Андрей|Включить доступ: Зайцев Андрей/ }).first().click();
+      const select = page.getByLabel(/Роль в Core|Другая роль/);
+      await select.selectOption(role);
+      await page.getByRole('button', { name: /^(Сохранить роль|Включить доступ)$/ }).click();
+      await expect(rowOf(page, 'Зайцев Андрей')).toContainText(label);
+      expect(state.calls.filter((c) => c.method === 'PATCH').pop()!.body.role).toBe(role);
+    }
+  });
+
+  test('legacy DEPARTMENT_HEAD is visible as «Руководитель направления» with a legacy marker and is never selectable', async ({ page }) => {
+    const state = makeState();
+    await setup(page, state);
+    await page.goto('/app.html/admin/users');
+    await expect(rowOf(page, 'Громов Николай')).toContainText('Руководитель направления');
+    await expect(rowOf(page, 'Громов Николай')).toContainText('устаревшая роль');
+    await page.getByRole('button', { name: 'Изменить роль: Громов Николай' }).click();
+    const select = page.getByLabel('Роль в Core');
+    await expect(select.locator('option[value="DEPARTMENT_HEAD"]')).toHaveCount(0);
+    await expect(select.locator('option', { hasText: 'Руководитель направления' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Сохранить роль' })).toBeDisabled();
+    await select.selectOption('PTO_HEAD');
+    await page.getByRole('button', { name: 'Сохранить роль' }).click();
+    await expect(rowOf(page, 'Громов Николай')).toContainText('Начальник ПТО');
+    await expect(rowOf(page, 'Громов Николай')).not.toContainText('устаревшая роль');
   });
 
   test('role change; legacy TECHNICAL_DIRECTOR is visible but never selectable', async ({ page }) => {
