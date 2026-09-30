@@ -11,5 +11,5 @@ export class AuditController {
     @Req()
     // F12.3 (LOCKED DECISION 1): DEPUTY_DIRECTOR gets the same audit
     // visibility the technical-director managerial role already had.
-    r: any) { const a = await authenticate(r); ensure(['ADMIN', 'GENERAL_DIRECTOR', 'TECHNICAL_DIRECTOR', 'DEPUTY_DIRECTOR'].includes(a.role), 'Аудит доступен руководителям'); return rows(pool, 'SELECT l.*,u.name AS author FROM audit_logs l JOIN users u ON u.id=l.user_id AND u.tenant_id=l.tenant_id WHERE l.tenant_id=$1 ORDER BY l.created_at DESC LIMIT 500', [a.tenantId]); }
+    r: any) { const a = await authenticate(r); ensure(['ADMIN', 'GENERAL_DIRECTOR', 'DEPUTY_DIRECTOR'].includes(a.role), 'Аудит доступен руководителям'); return rows(pool, 'SELECT l.*,u.name AS author FROM audit_logs l JOIN users u ON u.id=l.user_id AND u.tenant_id=l.tenant_id WHERE l.tenant_id=$1 ORDER BY l.created_at DESC LIMIT 500', [a.tenantId]); }
 }

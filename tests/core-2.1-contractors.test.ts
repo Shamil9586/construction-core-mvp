@@ -100,7 +100,7 @@ test('F12.2: removeContractor retired — assignment/RBAC intact, retired route 
         // infrastructure 404 ("Cannot POST ..."), never a business rejection —
         // for every role that used to hold OBJECT_MANAGE_CONTRACTORS.
         // ==================================================================
-        for (const role of ['PROJECT_MANAGER', 'ADMIN', 'TECHNICAL_DIRECTOR']) {
+        for (const role of ['PROJECT_MANAGER', 'ADMIN', 'DEPUTY_DIRECTOR']) {
             await login(role);
             const retired = await req(`objects/${o.id}/contractors/${target.id}/remove`, { relationId: relation.id, version: relation.version }, 404);
             assert.match(retired.message, /^Cannot POST \//, `role ${role}: retired route must be reported as absent/unreachable, not as a product-specific rejection`);
@@ -223,8 +223,8 @@ test('F12.2: removeContractor retired — assignment/RBAC intact, retired route 
         const otherPm = users.find((u: any) => u.role === 'PROJECT_MANAGER' && u.id !== pm.id);
         await req(`objects/${o.id}/edit`, { projectManagerId: otherPm.id, version: bothDates.version }, 403);
 
-        // TECHNICAL_DIRECTOR can reassign it
-        await login('TECHNICAL_DIRECTOR');
+        // DEPUTY_DIRECTOR can reassign it
+        await login('DEPUTY_DIRECTOR');
         const reassignedPm = await req(`objects/${o.id}/edit`, { projectManagerId: otherPm.id, version: bothDates.version });
         assert.equal(reassignedPm.projectManagerId, otherPm.id);
         assert.equal(reassignedPm.name, bothDates.name, 'omitted fields preserved on a privileged partial edit too');

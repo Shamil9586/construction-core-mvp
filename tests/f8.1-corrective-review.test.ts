@@ -71,7 +71,7 @@ test('F8.1-02: 500 planned / 100 portioned+accepted is PARTIAL, not COMPLETE; fu
     const pm = await login('PROJECT_MANAGER');
     const dict = await req('dictionaries');
     const contractors = await req('contractors');
-    await login('TECHNICAL_DIRECTOR');
+    await login('DEPUTY_DIRECTOR');
     const o = await asDeputy(() => req('objects', { externalCode: 'F81-COV-' + Date.now(), name: 'F8.1-02 coverage', address: 'Тест, 1', organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] }));
     await login('PROJECT_MANAGER');
     const work = await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: pm.id, name: 'Штукатурка (покрытие)', unit: 'м²', plannedQuantity: 500, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '100000' });
@@ -118,7 +118,7 @@ test('F8.1-02: zero portions on an execution unit is NONE, never COMPLETE', asyn
     const pm = await login('PROJECT_MANAGER');
     const dict = await req('dictionaries');
     const contractors = await req('contractors');
-    await login('TECHNICAL_DIRECTOR');
+    await login('DEPUTY_DIRECTOR');
     const o = await asDeputy(() => req('objects', { externalCode: 'F81-EMPTY-' + Date.now(), name: 'F8.1-02 empty unit', address: 'Тест, 1', organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] }));
     await login('PROJECT_MANAGER');
     const work = await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: pm.id, name: 'Работа без участков', unit: 'м²', plannedQuantity: 200, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '50000' });
@@ -146,7 +146,7 @@ test('F8.1-03: GET .../transition and the read model blockers agree, for a parti
     const pm = await login('PROJECT_MANAGER');
     const dict = await req('dictionaries');
     const contractors = await req('contractors');
-    await login('TECHNICAL_DIRECTOR');
+    await login('DEPUTY_DIRECTOR');
     const o = await asDeputy(() => req('objects', { externalCode: 'F81-TRANS-' + Date.now(), name: 'F8.1-03 transition agreement', address: 'Тест, 1', organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] }));
     await login('PROJECT_MANAGER');
     const predecessor = await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: pm.id, name: 'Предшествующая', unit: 'м²', plannedQuantity: 500, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '100000' });
@@ -211,7 +211,7 @@ test('F8.1-04: a work with no execution units keeps the legacy progress() endpoi
     const pm = await login('PROJECT_MANAGER');
     const dict = await req('dictionaries');
     const contractors = await req('contractors');
-    await login('TECHNICAL_DIRECTOR');
+    await login('DEPUTY_DIRECTOR');
     const o = await asDeputy(() => req('objects', { externalCode: 'F81-LEGACY-' + Date.now(), name: 'F8.1-04 legacy work', address: 'Тест, 1', organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] }));
     await login('PROJECT_MANAGER');
     const work = await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: pm.id, name: 'Обычная работа (без участков)', unit: 'м²', plannedQuantity: 200, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '50000' });
@@ -234,7 +234,7 @@ test('F8.1-04: a work with an execution unit refuses the legacy progress() endpo
     const pm = await login('PROJECT_MANAGER');
     const dict = await req('dictionaries');
     const contractors = await req('contractors');
-    await login('TECHNICAL_DIRECTOR');
+    await login('DEPUTY_DIRECTOR');
     const o = await asDeputy(() => req('objects', { externalCode: 'F81-DUAL-' + Date.now(), name: 'F8.1-04 dual source', address: 'Тест, 1', organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] }));
     await login('PROJECT_MANAGER');
     const work = await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: pm.id, name: 'Работа с единицей исполнения', unit: 'м²', plannedQuantity: 400, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '80000' });

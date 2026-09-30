@@ -12,7 +12,7 @@ export const objectContractorDto = z.object({ contractorId: uuid }).strict();
 // is optional — an omitted field is left unchanged by editObject(), not cleared.
 // At least one editable field besides version is required (a version-only body is
 // a no-op edit, rejected rather than silently accepted). projectManagerId's mere
-// presence (any value, changed or not) requires TECHNICAL_DIRECTOR/ADMIN; see
+// presence (any value, changed or not) requires DEPUTY_DIRECTOR/ADMIN; see
 // editObject() in service.ts.
 export const objectEditDto = z.object({ name: text.optional(), address: text.optional(), customerName: text.optional(), startDate: date.optional(), plannedFinishDate: date.optional(), projectManagerId: uuid.optional(), version }).strict().refine(d => Object.keys(d).length > 1, 'Нужно изменить хотя бы одно поле');
 export const workDto = z.object({ objectId: uuid, workTypeId: uuid, contractorId: uuid, responsibleUserId: uuid, name: text, unit: text, plannedQuantity: qty.refine(v => Number(v) > 0), plannedStartDate: date, plannedFinishDate: date, estimatedCost: money }).strict();

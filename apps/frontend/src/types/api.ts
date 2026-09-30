@@ -39,7 +39,6 @@ type Known<T extends string> = T | (string & {});
 
 export type Role =
   | 'GENERAL_DIRECTOR'
-  | 'TECHNICAL_DIRECTOR'
   | 'PROJECT_MANAGER'
   | 'CONSTRUCTION_CONTROL'
   | 'CONSTRUCTION_CONTROL_HEAD'
@@ -47,11 +46,9 @@ export type Role =
   | 'PTO_HEAD'
   | 'SDO'
   | 'SDO_HEAD'
-  | 'DEPARTMENT_HEAD'
   | 'ADMIN'
   | 'CONTRACTOR_VIEWER'
-  // F12.3 (LOCKED DECISION 1): the canonical current managerial role —
-  // TECHNICAL_DIRECTOR stays above for legacy-assigned users/historical data.
+  // The single current managerial role.
   | 'DEPUTY_DIRECTOR';
 
 /**

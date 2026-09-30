@@ -30,10 +30,7 @@ export async function objectAccess(c: any, a: Actor, objectId: string, write = f
     throw new ForbiddenException('Нет доступа к объекту'); await ensurePtoObjectScope(c, a, objectId); return o; }
 export async function audit(c: any, a: Actor, entityType: string, entityId: string, action: string, oldValue: any, newValue: any, eventType?: string) { await insert(c, 'audit_logs', a.tenantId, { userId: a.id, entityType, entityId, action, oldValue: oldValue ? JSON.stringify(oldValue) : null, newValue: JSON.stringify(newValue) }); if (eventType) {
     const event = await insert(c, 'domain_events', a.tenantId, { eventType, entityId, payload: JSON.stringify({ actorId: a.id, entityType, entityId }) });
-    // F12.3 (LOCKED DECISION 1): DEPUTY_DIRECTOR gets the same oversight
-    // notifications the technical-director managerial role already received —
-    // TECHNICAL_DIRECTOR itself stays for any still-active legacy-assigned user.
-    const users = (await c.query("SELECT id FROM users WHERE tenant_id=$1 AND is_active=true AND role IN ('PTO','PTO_HEAD','TECHNICAL_DIRECTOR','DEPUTY_DIRECTOR','GENERAL_DIRECTOR','CONSTRUCTION_CONTROL','CONSTRUCTION_CONTROL_HEAD','SDO','SDO_HEAD','PROJECT_MANAGER')", [a.tenantId])).rows;
+    const users = (await c.query("SELECT id FROM users WHERE tenant_id=$1 AND is_active=true AND role IN ('PTO','PTO_HEAD','DEPUTY_DIRECTOR','GENERAL_DIRECTOR','CONSTRUCTION_CONTROL','CONSTRUCTION_CONTROL_HEAD','SDO','SDO_HEAD','PROJECT_MANAGER')", [a.tenantId])).rows;
     for (const user of users)
         await c.query('INSERT INTO notifications(tenant_id,user_id,event_id,title,dedupe_key) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING', [a.tenantId, user.id, event.id, eventType, `${event.id}:${user.id}`]);
 } }

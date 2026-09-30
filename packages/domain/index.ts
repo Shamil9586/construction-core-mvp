@@ -1,41 +1,18 @@
 import Decimal from 'decimal.js';
-// F12.3 (LOCKED DECISION 1): DEPUTY_DIRECTOR ("Заместитель директора") is the
-// canonical current managerial role — one person over both the construction
-// contour (RP/SK) and the technical contour (PTO/SDO). Appended at the end,
-// never inserted between existing entries: scripts/seed.ts pairs this array
-// with its own fixed-position name list purely by index, so any reordering
-// would silently relabel every role after the insertion point. TECHNICAL_DIRECTOR
-// stays for backward compatibility with existing stored/audited data — it is
-// no longer the intended role for new assignments (see `grants` below and
-// every UI/mock/seed call site that now offers DEPUTY_DIRECTOR instead).
-export const roles = ['GENERAL_DIRECTOR', 'TECHNICAL_DIRECTOR', 'PROJECT_MANAGER', 'CONSTRUCTION_CONTROL', 'PTO', 'SDO', 'DEPARTMENT_HEAD', 'ADMIN', 'CONTRACTOR_VIEWER', 'DEPUTY_DIRECTOR', 'PTO_HEAD', 'CONSTRUCTION_CONTROL_HEAD', 'SDO_HEAD'] as const;
+// ROLE-CLEANUP (ROLE-CLEANUP-D01 / DR-R06): DEPUTY_DIRECTOR ("Заместитель директора")
+// is the single current managerial role over the construction and technical
+// contours. The former TECHNICAL_DIRECTOR and DEPARTMENT_HEAD roles no longer
+// exist in the role model or in storage (migration 017 converted stored rows).
+// Current department heads are the explicit *_HEAD roles only.
+export const roles = ['GENERAL_DIRECTOR', 'DEPUTY_DIRECTOR', 'PROJECT_MANAGER', 'CONSTRUCTION_CONTROL', 'CONSTRUCTION_CONTROL_HEAD', 'PTO', 'PTO_HEAD', 'SDO', 'SDO_HEAD', 'ADMIN', 'CONTRACTOR_VIEWER'] as const;
 export type Role = typeof roles[number];
-// F12.3 FINAL-R04 (LOCKED DECISION 1, clarified): `roles` above is the full
-// STORAGE/LEGACY-COMPATIBLE set — every value the DB CHECK constraint
-// accepts and every value an existing row/session may already carry.
-// CURRENT_ASSIGNABLE_ROLES is the strictly narrower set a *new* user may be
-// created with: the same list minus TECHNICAL_DIRECTOR, which remains valid
-// only for rows/sessions that already exist. POST /users (users.controller.ts)
-// validates against this list, not `roles` — an ADMIN can no longer create a
-// new TECHNICAL_DIRECTOR user through the normal assignment path, while an
-// existing TECHNICAL_DIRECTOR row keeps authenticating and keeps its
-// existing grants unchanged (`grants` below is keyed by the full `Role`
-// type and is not narrowed by this list). auth/mock intentionally keeps
-// validating against the full `roles` list, not this one — it authenticates
-// as an *existing* (possibly legacy) seeded user, which is exactly the
-// "existing sessions/users continue to authenticate" case, not a new
-// assignment.
-// PBX-2 corrective: DEPARTMENT_HEAD is now legacy-only too (replaced by the
-// three *_HEAD roles) and is excluded here; CONTRACTOR_VIEWER stays because the
-// general POST /users still serves the separate external-participant path.
-export const CURRENT_ASSIGNABLE_ROLES = ['GENERAL_DIRECTOR', 'PROJECT_MANAGER', 'CONSTRUCTION_CONTROL', 'CONSTRUCTION_CONTROL_HEAD', 'PTO', 'PTO_HEAD', 'SDO', 'SDO_HEAD', 'ADMIN', 'CONTRACTOR_VIEWER', 'DEPUTY_DIRECTOR'] as const;
+// Roles a new user may be created with through POST /users. CONTRACTOR_VIEWER
+// stays because the general POST /users still serves the external-participant path.
+export const CURRENT_ASSIGNABLE_ROLES = roles;
 // PBX-2: roles the internal Users & Access administration may assign or change
-// to. Narrower than CURRENT_ASSIGNABLE_ROLES: CONTRACTOR_VIEWER is the
-// external-participant role (outside the internal Bitrix Core contour) and
-// TECHNICAL_DIRECTOR is legacy-only; neither is a target of this screen.
+// to. CONTRACTOR_VIEWER is the external-participant role (outside the internal
+// Bitrix Core contour) and is not a target of this screen.
 export const INTERNAL_ASSIGNABLE_ROLES = ['GENERAL_DIRECTOR', 'DEPUTY_DIRECTOR', 'PROJECT_MANAGER', 'CONSTRUCTION_CONTROL', 'CONSTRUCTION_CONTROL_HEAD', 'PTO', 'PTO_HEAD', 'SDO', 'SDO_HEAD', 'ADMIN'] as const;
-// Legacy-compatible stored roles: valid for existing rows/sessions, never a new assignment.
-export const LEGACY_ONLY_ROLES = ['TECHNICAL_DIRECTOR', 'DEPARTMENT_HEAD'] as const;
 // Department-head roles carry the SAME operational bundle as the engineer role of
 // their department until the object-responsibility phase adds head-specific
 // authority. These predicates are the one place that equivalence is decided.
@@ -121,8 +98,7 @@ export enum Permission {
     PTO_TEAM_READ = 'PTO_TEAM_READ'
 }
 const view = [Permission.OBJECT_VIEW, Permission.WORK_VIEW, Permission.PTO_VIEW, Permission.SDO_VIEW, Permission.FINANCE_VIEW];
-// F12.3 (LOCKED DECISION 1): DEPUTY_DIRECTOR gets exactly the current
-// TECHNICAL_DIRECTOR managerial grant — company/object/work visibility (`view`)
+// DEPUTY_DIRECTOR managerial grant — company/object/work visibility (`view`)
 // plus the same object/work management bundle — never PTO's DOCUMENTATION_MANAGE,
 // SDO's SDO_CASE_MANAGE, or Construction Control's INSPECTION_ACCEPT/REJECT and
 // ISSUE_CREATE/VERIFY. A managerial role oversees those departments; it does not
@@ -132,10 +108,10 @@ const constructionControlGrants = [...view, Permission.INSPECTION_ACCEPT, Permis
 const ptoGrants = [...view, Permission.PTO_EDIT, Permission.PTO_TRANSFER_SDO, Permission.DOCUMENTATION_MANAGE];
 const sdoGrants = [...view, Permission.SDO_EDIT, Permission.SDO_CLOSE, Permission.FINANCE_EDIT, Permission.SDO_CASE_MANAGE];
 const teamRead = [Permission.PTO_TEAM_READ];
-const grants: Record<Role, Permission[]> = { ADMIN: Object.values(Permission), GENERAL_DIRECTOR: [...view, ...teamRead], TECHNICAL_DIRECTOR: [...view, Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE, Permission.EXECUTION_UNIT_MANAGE], DEPUTY_DIRECTOR: [...view, Permission.OBJECT_CREATE, Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE, Permission.EXECUTION_UNIT_MANAGE, Permission.FUNCTION_TEAM_MANAGE, Permission.OBJECT_FUNCTION_LEAD_ASSIGN, ...teamRead], DEPARTMENT_HEAD: view, PROJECT_MANAGER: [...view, Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE, Permission.EXECUTION_UNIT_MANAGE, Permission.WORK_UPDATE_PROGRESS, Permission.INSPECTION_REQUEST, Permission.ISSUE_RESOLVE], CONSTRUCTION_CONTROL: constructionControlGrants, CONSTRUCTION_CONTROL_HEAD: constructionControlGrants, PTO: [...ptoGrants, ...teamRead], PTO_HEAD: [...ptoGrants, Permission.PTO_OBJECT_TEAM_MANAGE, ...teamRead], SDO: sdoGrants, SDO_HEAD: sdoGrants, CONTRACTOR_VIEWER: [Permission.OBJECT_VIEW, Permission.WORK_VIEW] };
+const grants: Record<Role, Permission[]> = { ADMIN: Object.values(Permission), GENERAL_DIRECTOR: [...view, ...teamRead], DEPUTY_DIRECTOR: [...view, Permission.OBJECT_CREATE, Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE, Permission.EXECUTION_UNIT_MANAGE, Permission.FUNCTION_TEAM_MANAGE, Permission.OBJECT_FUNCTION_LEAD_ASSIGN, ...teamRead], PROJECT_MANAGER: [...view, Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE, Permission.EXECUTION_UNIT_MANAGE, Permission.WORK_UPDATE_PROGRESS, Permission.INSPECTION_REQUEST, Permission.ISSUE_RESOLVE], CONSTRUCTION_CONTROL: constructionControlGrants, CONSTRUCTION_CONTROL_HEAD: constructionControlGrants, PTO: [...ptoGrants, ...teamRead], PTO_HEAD: [...ptoGrants, Permission.PTO_OBJECT_TEAM_MANAGE, ...teamRead], SDO: sdoGrants, SDO_HEAD: sdoGrants, CONTRACTOR_VIEWER: [Permission.OBJECT_VIEW, Permission.WORK_VIEW] };
 // OBJ-1 (OBJ1-D01): creating an object == appointing its РП, a managerial act of the
 // Deputy Director (ADMIN = system override). PROJECT_MANAGER never self-assigns;
-// legacy TECHNICAL_DIRECTOR and read-only GENERAL_DIRECTOR are not current authority.
+// read-only GENERAL_DIRECTOR is not current authority.
 // OBJECT_CREATE is therefore granted to exactly these roles (ADMIN via Object.values).
 export const OBJECT_CREATE_ROLES = ['DEPUTY_DIRECTOR', 'ADMIN'] as const;
 export const canCreateObject = (role: string | null | undefined): boolean => (OBJECT_CREATE_ROLES as readonly string[]).includes(role ?? '');
@@ -538,7 +514,7 @@ export class PotentialClosingService {
     } return { physical: physical.toFixed(2), closed: closed.toFixed(2), potential: Decimal.max(0, physical.minus(closed)).toFixed(2), buckets: Object.fromEntries(Object.entries(buckets).map(([k, v]) => [k, v.toFixed(2)])) }; }
 }
 export class EscalationService {
-    recipient(days: number, risk = defaultRisk) { return days >= risk.escalateDirectorDays ? 'GENERAL_DIRECTOR' : days >= risk.escalateTechnicalDays ? 'TECHNICAL_DIRECTOR' : 'PROJECT_MANAGER'; }
+    recipient(days: number, risk = defaultRisk) { return days >= risk.escalateDirectorDays ? 'GENERAL_DIRECTOR' : days >= risk.escalateTechnicalDays ? 'DEPUTY_DIRECTOR' : 'PROJECT_MANAGER'; }
 }
 export class ContractorPerformanceService {
     calculate(works: any[]) { return { works: works.length, delayed: works.filter(w => w.delayDays > 0).length, actualProgress: works.length ? works.reduce((s, w) => s + (w.actualProgress ?? 0), 0) / works.length : null }; }

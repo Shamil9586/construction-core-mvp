@@ -75,7 +75,7 @@ test('Core 2.1: restricted Object Edit form', async ({ page }, info) => {
   await page.getByRole('tab', { name: 'Обзор', exact: true }).click();
   await page.getByRole('button', { name: 'Редактировать объект', exact: true }).click();
   const dialog = page.getByRole('dialog');
-  // ADMIN passes the same can('TECHNICAL_DIRECTOR') check, so the РП field is present here.
+  // ADMIN passes the same can('DEPUTY_DIRECTOR') check, so the РП field is present here.
   await expect(dialog.getByLabel('Руководитель проекта', { exact: true })).toBeVisible();
   await dialog.getByLabel('Название', { exact: true }).fill(newName);
   await dialog.getByLabel('Адрес', { exact: true }).fill('Новый адрес, 1');

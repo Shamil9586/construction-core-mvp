@@ -11,7 +11,7 @@ test('F8.3: canAccessSdoWorkspace — SDO and ADMIN only', async () => {
   const { canAccessSdoWorkspace } = await import('../packages/domain');
   assert.equal(canAccessSdoWorkspace('SDO'), true);
   assert.equal(canAccessSdoWorkspace('ADMIN'), true);
-  for (const role of ['GENERAL_DIRECTOR', 'TECHNICAL_DIRECTOR', 'PROJECT_MANAGER', 'CONSTRUCTION_CONTROL', 'PTO', 'DEPARTMENT_HEAD', 'CONTRACTOR_VIEWER'] as const) {
+  for (const role of ['GENERAL_DIRECTOR', 'DEPUTY_DIRECTOR', 'PROJECT_MANAGER', 'CONSTRUCTION_CONTROL', 'PTO', 'CONTRACTOR_VIEWER'] as const) {
     assert.equal(canAccessSdoWorkspace(role), false, role);
   }
 });

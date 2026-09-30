@@ -1,5 +1,8 @@
 # Core 2.1 — Architecture Plan (только план, implementation не выполнялся)
 
+> **Историческая справка (pre ROLE-CLEANUP).** Упоминания `TECHNICAL_DIRECTOR` / `DEPARTMENT_HEAD` ниже описывают прошлое состояние и не являются текущей моделью ролей: обе роли удалены, единственная управленческая роль — `DEPUTY_DIRECTOR` (миграция 017).
+
+
 Источники: `docs/core-2.0-regression-map.md`, `docs/domain-parity-core-erp.md`,
 `docs/decision-log-core-2.0.md`. Scope зафиксирован владельцем продукта после
 review этого документа (2026-09-18):

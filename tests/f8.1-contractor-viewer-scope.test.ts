@@ -49,7 +49,7 @@ test('F8.1: CONTRACTOR_VIEWER snapshot omits the new execution-unit/portion coll
     const pm = await login('PROJECT_MANAGER');
     const dict = await req('dictionaries');
     const contractors = await req('contractors');
-    await login('TECHNICAL_DIRECTOR');
+    await login('DEPUTY_DIRECTOR');
     const o = await asDeputy(() => req('objects', { externalCode: 'F81-CV-' + Date.now(), name: 'F8.1 CONTRACTOR_VIEWER scope', address: 'Тест, 1', organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] }));
     await login('PROJECT_MANAGER');
     const work = await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: pm.id, name: 'Работа для проверки видимости', unit: 'м²', plannedQuantity: 100, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '10000' });

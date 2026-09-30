@@ -19,13 +19,7 @@ export class UsersController {
     @Req()
     r: any,
     @Body()
-    // F12.3 FINAL-R04: validated against CURRENT_ASSIGNABLE_ROLES, not the
-    // full (legacy-inclusive) `roles` list — an ADMIN can create a new
-    // DEPUTY_DIRECTOR but no longer a new TECHNICAL_DIRECTOR through this,
-    // the normal current-assignment path. An existing TECHNICAL_DIRECTOR row
-    // is untouched by this change (created before this pass, or restored by
-    // no path this endpoint controls) and keeps authenticating/keeps its
-    // grants exactly as before.
+    // Validated against the current role enum (ROLE-CLEANUP: removed roles are rejected).
     b: any) { const a = await authenticate(r); requirePermission(a, P.ADMIN_USERS); const d = z.object({ bitrixUserId: z.string().regex(/^\d+$/), name: V.text, role: z.enum(CURRENT_ASSIGNABLE_ROLES), contractorId: V.uuid.optional() }).strict().parse(b); if (process.env.AUTH_MODE === 'bitrix') {
         const found = await new RealBitrixAdapter().installedCall(a.tenantId, 'user.get', { filter: { ID: d.bitrixUserId } });
         ensure(Array.isArray(found) && found.some(x => String(x.ID) === d.bitrixUserId), 'Пользователь Bitrix не найден');

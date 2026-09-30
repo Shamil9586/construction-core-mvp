@@ -65,7 +65,7 @@ test('F8.2 HTTP: full round trip — PTO creates a package, links portions, crea
     const pm = await login('PROJECT_MANAGER');
     const dict = await req('dictionaries');
     const contractors = await req('contractors');
-    await login('TECHNICAL_DIRECTOR');
+    await login('DEPUTY_DIRECTOR');
     const o = await asDeputy(() => req('objects', { externalCode: 'F82-HTTP-' + Date.now(), name: 'F8.2 HTTP round trip', address: 'Тест, 1', organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] }));
     await login('PROJECT_MANAGER');
     const work = await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: pm.id, name: 'Работа под ИД', unit: 'м²', plannedQuantity: 500, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '100000' });
@@ -130,7 +130,7 @@ test('F8.2 HTTP: SDO has no F8.2 access at all — snapshot omits it, the dedica
     const pm = await login('PROJECT_MANAGER');
     const dict = await req('dictionaries');
     const contractors = await req('contractors');
-    await login('TECHNICAL_DIRECTOR');
+    await login('DEPUTY_DIRECTOR');
     const o = await asDeputy(() => req('objects', { externalCode: 'F82-SDO-' + Date.now(), name: 'F8.2 SDO exclusion', address: 'Тест, 1', organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] }));
     await login('PROJECT_MANAGER');
     const work = await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: pm.id, name: 'Работа', unit: 'м²', plannedQuantity: 100, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '20000' });
@@ -165,7 +165,7 @@ test('F8.2 HTTP: an invalid document type is rejected by the DTO, before it ever
     const pm = await login('PROJECT_MANAGER');
     const dict = await req('dictionaries');
     const contractors = await req('contractors');
-    await login('TECHNICAL_DIRECTOR');
+    await login('DEPUTY_DIRECTOR');
     const o = await asDeputy(() => req('objects', { externalCode: 'F82-TYPE-' + Date.now(), name: 'F8.2 invalid type', address: 'Тест, 1', organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] }));
     await login('PROJECT_MANAGER');
     const work = await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: pm.id, name: 'Работа', unit: 'м²', plannedQuantity: 100, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '20000' });

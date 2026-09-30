@@ -1,5 +1,5 @@
 import { pool, transaction, insert, one } from '../apps/backend/src/db';
-import { roles } from '../packages/domain';
+import type { Role } from '../packages/domain';
 import { randomUUID } from 'node:crypto';
 // All names and construction scenarios below are synthetic demo fixtures.
 export async function seed() {
@@ -14,12 +14,22 @@ export async function seed() {
         for (const name of ['Монолит Профи', 'Град-Отделка', 'СтройИнженер', 'ФасадГрупп', 'Кровля Сервис', 'Основа', 'Окна Проект', 'БлагоСтрой'])
             contractors.push(await insert(c, 'contractors', t, { name: 'ООО «' + name + '»' }));
         const users = [];
-        // F12.3: names is paired with `roles` (packages/domain) purely by index —
-        // DEPUTY_DIRECTOR was appended at the end of `roles` for exactly this
-        // reason, so every existing name keeps its original role unchanged and
-        // this array only needs its own new tenth entry.
-        for (let j = 0; j < roles.length; j++)
-            users.push(await insert(c, 'users', t, { bitrixUserId: String(j + 1), name: ['Александр Волков', 'Дмитрий Орлов', 'Михаил Соколов', 'Елена Крылова', 'Ольга Морозова', 'Андрей Зайцев', 'Ирина Белова', 'Администратор', 'Представитель подрядчика', 'Виктор Соловьёв', 'Николай Громов', 'Татьяна Лебедева', 'Роман Фролов'][j], role: roles[j], contractorId: roles[j] === 'CONTRACTOR_VIEWER' ? contractors[0].id : null }));
+        // Explicit fixtures: role, name and bitrix id are stated together, never paired by array position.
+        const userFixtures: { role: Role; name: string; bitrixUserId: string }[] = [
+            { role: 'GENERAL_DIRECTOR', name: 'Александр Волков', bitrixUserId: '1' },
+            { role: 'PROJECT_MANAGER', name: 'Михаил Соколов', bitrixUserId: '3' },
+            { role: 'CONSTRUCTION_CONTROL', name: 'Елена Крылова', bitrixUserId: '4' },
+            { role: 'PTO', name: 'Ольга Морозова', bitrixUserId: '5' },
+            { role: 'SDO', name: 'Андрей Зайцев', bitrixUserId: '6' },
+            { role: 'ADMIN', name: 'Администратор', bitrixUserId: '8' },
+            { role: 'CONTRACTOR_VIEWER', name: 'Представитель подрядчика', bitrixUserId: '9' },
+            { role: 'DEPUTY_DIRECTOR', name: 'Виктор Соловьёв', bitrixUserId: '10' },
+            { role: 'PTO_HEAD', name: 'Николай Громов', bitrixUserId: '11' },
+            { role: 'CONSTRUCTION_CONTROL_HEAD', name: 'Татьяна Лебедева', bitrixUserId: '12' },
+            { role: 'SDO_HEAD', name: 'Роман Фролов', bitrixUserId: '13' },
+        ];
+        for (const f of userFixtures)
+            users.push(await insert(c, 'users', t, { ...f, contractorId: f.role === 'CONTRACTOR_VIEWER' ? contractors[0].id : null }));
         for (let j = 0; j < 4; j++)
             users.push(await insert(c, 'users', t, { bitrixUserId: String(20 + j), name: ['Сергей Павлов', 'Тимур Алексеев', 'Максим Кузнецов', 'Артём Смирнов'][j], role: 'PROJECT_MANAGER' }));
         const pm = users.filter(u => u.role === 'PROJECT_MANAGER'), admin = users.find(u => u.role === 'ADMIN'), pto = users.find(u => u.role === 'PTO'), sk = users.find(u => u.role === 'CONSTRUCTION_CONTROL'), sdoUser = users.find(u => u.role === 'SDO');

@@ -83,7 +83,7 @@ export function SignInMethod({ onSignedIn }: SignInMethodProps) {
 /**
  * The test sign-in. Offers the internal roles only (Architecture Decision 3):
  * the options come from `CURRENT_MOCK_SIGN_IN_ROLES` (F12.3 FINAL-R05) — a
- * NEW sign-in never offers legacy `TECHNICAL_DIRECTOR` or `CONTRACTOR_VIEWER`
+ * NEW sign-in never offers `CONTRACTOR_VIEWER`
  * — and `signInWithMockKey` re-checks the role before any request is sent.
  */
 function MockSignInForm({ onSignedIn }: SignInMethodProps) {

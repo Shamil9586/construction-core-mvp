@@ -17,9 +17,10 @@ test('OBJ-1: role matrix (domain)', async () => {
     assert.equal(hasPermission(role as any, Permission.OBJECT_CREATE), allowed.has(role), role + ' OBJECT_CREATE');
     assert.equal(canCreateObject(role), allowed.has(role), role + ' canCreateObject');
   }
-  // Unrelated PM/TD object authority is NOT broadened or narrowed beyond OBJECT_CREATE.
+  // Unrelated PM/Deputy object authority is NOT broadened or narrowed beyond OBJECT_CREATE.
   assert.ok(hasPermission('PROJECT_MANAGER', Permission.OBJECT_EDIT));
-  assert.ok(hasPermission('TECHNICAL_DIRECTOR', Permission.OBJECT_EDIT));
+  assert.ok(hasPermission('DEPUTY_DIRECTOR', Permission.OBJECT_EDIT));
+  for (const removed of ['TECHNICAL_DIRECTOR', 'DEPARTMENT_HEAD', 'CONSTRUCTION_DIRECTOR', 'DoC']) { assert.equal(canCreateObject(removed), false, removed); assert.equal(hasPermission(removed as any, Permission.OBJECT_CREATE), false, removed); }
   assert.equal(canCreateObject(undefined), false);
 });
 
@@ -53,7 +54,7 @@ test('OBJ-1: authority, RP validation, optional contractors, duplicate code, ten
 
   const pm = await login('PROJECT_MANAGER');
   try {
-    const deputy = await login('DEPUTY_DIRECTOR'), admin = await login('ADMIN'), td = await login('TECHNICAL_DIRECTOR'), gd = await login('GENERAL_DIRECTOR');
+    const deputy = await login('DEPUTY_DIRECTOR'), admin = await login('ADMIN'), gd = await login('GENERAL_DIRECTOR');
     const tenant = (await one(pool, "SELECT id FROM tenants WHERE portal='demo.local'")).id;
     const contractors = await rows(pool, 'SELECT id FROM contractors WHERE tenant_id=$1', [tenant]);
     assert.ok(contractors.length >= 1);
@@ -67,7 +68,7 @@ test('OBJ-1: authority, RP validation, optional contractors, duplicate code, ten
     const ok = await call(deputy.token, 'POST', 'objects', body());
     assert.equal(ok.status, 201, JSON.stringify(ok.data));
     assert.equal((await call(admin.token, 'POST', 'objects', body())).status, 201, 'ADMIN override');
-    for (const [label, who] of [['PROJECT_MANAGER', pm], ['GENERAL_DIRECTOR', gd], ['TECHNICAL_DIRECTOR (legacy)', td]] as const) {
+    for (const [label, who] of [['PROJECT_MANAGER', pm], ['GENERAL_DIRECTOR', gd]] as const) {
       const n = (await one(pool, 'SELECT count(*)::int AS n FROM objects WHERE tenant_id=$1', [tenant])).n;
       assert.equal((await call(who.token, 'POST', 'objects', body())).status, 403, label + ' must not create');
       assert.equal((await one(pool, 'SELECT count(*)::int AS n FROM objects WHERE tenant_id=$1', [tenant])).n, n, label + ' created nothing');
@@ -77,6 +78,12 @@ test('OBJ-1: authority, RP validation, optional contractors, duplicate code, ten
     assert.equal((await call(pm.token, 'POST', 'objects', body({ projectManagerId: pm.user.id }))).status, 403);
     assert.equal((await call(deputy.token, 'GET', 'object-create-options')).status, 200);
     assert.equal((await call(admin.token, 'GET', 'object-create-options')).status, 200);
+
+    // removed role strings cannot even authenticate, so they can never create an object
+    for (const removed of ['TECHNICAL_DIRECTOR', 'DEPARTMENT_HEAD', 'CONSTRUCTION_DIRECTOR', 'DoC']) {
+      const r = await fetch(base + '/auth/mock', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ role: removed, key: 'obj1-key' }) });
+      assert.ok(r.status >= 400 && r.status < 500, removed + ' rejected by auth/mock');
+    }
 
     // audit CREATE intact
     const audited = await one(pool, "SELECT count(*)::int AS n FROM audit_logs WHERE entity_type='Object' AND entity_id=$1 AND action='CREATE'", [ok.data.id]);

@@ -118,11 +118,6 @@ function ActionPanel({
           Роль в Core назначается только вручную; должность и подразделение в Bitrix24 на неё не влияют.
         </p>
       ) : null}
-      {mode === 'role' && row.core?.legacyRole ? (
-        <p className={typeClass('body')}>
-          Текущая роль «{row.core.roleLabel}» — устаревшая. Её нельзя назначить повторно; выберите актуальную роль.
-        </p>
-      ) : null}
       {needsRole || mode === 'reactivate' ? (
         <div className={styles.field}>
           <label htmlFor={selectId} className={typeClass('label')}>
@@ -279,9 +274,6 @@ export function AdminUsersScreen(props: AdminUsersScreenProps) {
                     {row.core ? (
                       <>
                         <span className={typeClass('body')}>{row.core.roleLabel}</span>
-                        {row.core.legacyRole ? (
-                          <div className={[typeClass('label'), styles.secondary].join(' ')}>устаревшая роль</div>
-                        ) : null}
                       </>
                     ) : (
                       <span className={[typeClass('body'), styles.secondary].join(' ')}>—</span>

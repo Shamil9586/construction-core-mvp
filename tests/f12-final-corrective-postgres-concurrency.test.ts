@@ -99,8 +99,7 @@ async function makeObjectAndWork(req: any, login: any, code: string) {
   const dict = (await req('dictionaries', undefined, pmToken, 200)).data;
   const contractors = (await req('contractors', undefined, pmToken, 200)).data;
   const pm = (await req('me', undefined, pmToken, 200)).data;
-  const tdToken = await login('TECHNICAL_DIRECTOR');
-  const deputyToken = await login('DEPUTY_DIRECTOR'); // OBJ-1: object creation is Deputy/Admin authority; tdToken still drives the rest
+  const deputyToken = await login('DEPUTY_DIRECTOR'); // OBJ-1: object creation is Deputy/Admin authority
   const o = (await req('objects', { externalCode: code, name: code, address: 'Тест, 1', organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] }, deputyToken, 201)).data;
   const work = (await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: pm.id, name: code, unit: 'м²', plannedQuantity: 500, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '100000' }, pmToken, 201)).data;
   return { pmToken, dict, contractors, o, work, tenantId: pm.tenantId };

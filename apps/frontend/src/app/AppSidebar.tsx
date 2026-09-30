@@ -62,8 +62,8 @@ export function AppSidebar() {
   // F8.2.1 Corrective Patch (F8.2.1-02) — the PTO Workspace is PTO's own
   // working area (and ADMIN's, per existing administration convention), not
   // a general internal destination: "ПТО" is shown only to a *confirmed*
-  // `canManageDocumentation` role. Every other internal role (RP, SC, TD,
-  // DoC, CEO) sees documentation status through W01 instead, never through
+  // `canManageDocumentation` role. Every other internal role (RP, SC, Deputy Director,
+  // CEO) sees documentation status through W01 instead, never through
   // this nav item — that visibility is untouched, see WorkRoute.tsx's own
   // `documentationVisible`. No session at all (the mock/demo runtime) still
   // shows it, unchanged from F8.2, since an absent session is not evidence

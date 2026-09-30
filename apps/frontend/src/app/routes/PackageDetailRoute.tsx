@@ -19,7 +19,7 @@ import { RouteError, RouteForbidden, RouteLoading, RouteNotFound } from '../Rout
  * F8.2.1 Corrective Patch (F8.2.1-02) — package management is part of the
  * PTO Workspace (`canManageDocumentation`, the same gate `PtoRoute.tsx`
  * uses), not a general internal destination: a role that can read
- * documentation but not manage it (RP, SC, TD, DoC, CEO) gets the same
+ * documentation but not manage it (RP, SC, Deputy Director, CEO) gets the same
  * "this is PTO's workspace" message `PtoRoute.tsx` shows, never the
  * package's read-only detail — the package may well exist, but this route
  * belongs to PTO, not to every role with documentation access. A role

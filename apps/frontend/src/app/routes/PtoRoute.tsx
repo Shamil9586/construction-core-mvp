@@ -23,7 +23,7 @@ import { RouteError, RouteForbidden, RouteLoading } from '../RouteStatus';
  * role with documentation access: the route itself is gated on
  * `canManageDocumentation`, the same predicate that already gated its own
  * actions. A role that can read documentation but not manage it (RP, SC,
- * TD, DoC, CEO) gets an explicit "this is PTO's workspace" message naming
+ * Deputy Director, CEO) gets an explicit "this is PTO's workspace" message naming
  * W01 as the right place instead — never the read-only table this route
  * showed before this patch. A role excluded from documentation entirely
  * (SDO) gets the original "no access" message. No session at all (the

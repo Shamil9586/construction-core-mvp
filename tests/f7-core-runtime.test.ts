@@ -133,33 +133,29 @@ test('role classification: internal / external / unrecognised — an unknown rol
 });
 
 /* --------------------------------------------------------------------- *
- * F12.3 FINAL-R05 — current mock sign-in offers DEPUTY_DIRECTOR, never   *
- * legacy TECHNICAL_DIRECTOR, while an existing TECHNICAL_DIRECTOR        *
- * session must keep classifying as Internal                              *
+ * ROLE-CLEANUP — removed roles are not internal Core roles; the mock     *
+ * sign-in offers DEPUTY_DIRECTOR and the explicit head roles only        *
  * --------------------------------------------------------------------- */
 
-test('FINAL-R05: an existing TECHNICAL_DIRECTOR session still classifies as Internal and keeps its legacy access — INTERNAL_CORE_ROLES must not lose it', () => {
-  assert.equal(isInternalCoreRole('TECHNICAL_DIRECTOR'), true);
-  assert.deepEqual(classifyCoreRole('TECHNICAL_DIRECTOR'), { kind: 'Internal', role: 'TECHNICAL_DIRECTOR' });
-  assert.equal((INTERNAL_CORE_ROLES as readonly string[]).includes('TECHNICAL_DIRECTOR'), true);
+test('ROLE-CLEANUP: removed roles never classify as Internal', () => {
+  for (const removed of ['TECHNICAL_DIRECTOR', 'DEPARTMENT_HEAD', 'CONSTRUCTION_DIRECTOR', 'DoC']) {
+    assert.equal(isInternalCoreRole(removed), false, removed);
+    assert.deepEqual(classifyCoreRole(removed), { kind: 'Unrecognized' }, removed);
+    assert.equal((INTERNAL_CORE_ROLES as readonly string[]).includes(removed), false, removed);
+  }
 });
 
-test('FINAL-R05: CURRENT_MOCK_SIGN_IN_ROLES offers DEPUTY_DIRECTOR for a NEW sign-in, never legacy TECHNICAL_DIRECTOR or the external CONTRACTOR_VIEWER role, and offers nothing INTERNAL_CORE_ROLES itself does not', () => {
+test('ROLE-CLEANUP: CURRENT_MOCK_SIGN_IN_ROLES offers DEPUTY_DIRECTOR for a NEW sign-in, never a removed role or the external CONTRACTOR_VIEWER role, and offers nothing INTERNAL_CORE_ROLES itself does not', () => {
   assert.equal((CURRENT_MOCK_SIGN_IN_ROLES as readonly string[]).includes('DEPUTY_DIRECTOR'), true);
   assert.equal((CURRENT_MOCK_SIGN_IN_ROLES as readonly string[]).includes('TECHNICAL_DIRECTOR'), false);
   assert.equal((CURRENT_MOCK_SIGN_IN_ROLES as readonly string[]).includes('CONTRACTOR_VIEWER'), false);
   for (const role of CURRENT_MOCK_SIGN_IN_ROLES) {
     assert.ok((INTERNAL_CORE_ROLES as readonly string[]).includes(role), `${role} is not an internal Core role at all`);
   }
-  // PBX-2 corrective: DEPARTMENT_HEAD is legacy-only too and is not offered either.
+  // DEPARTMENT_HEAD was removed as well and is not offered either.
   assert.equal((CURRENT_MOCK_SIGN_IN_ROLES as readonly string[]).includes('DEPARTMENT_HEAD'), false);
   for (const head of ['PTO_HEAD', 'CONSTRUCTION_CONTROL_HEAD', 'SDO_HEAD']) assert.equal((CURRENT_MOCK_SIGN_IN_ROLES as readonly string[]).includes(head), true);
-  // Exactly INTERNAL_CORE_ROLES minus the two legacy-only roles — no other role
-  // was dropped or added by the narrower list.
-  assert.deepEqual(
-    [...CURRENT_MOCK_SIGN_IN_ROLES].sort(),
-    INTERNAL_CORE_ROLES.filter((role) => role !== 'TECHNICAL_DIRECTOR' && role !== 'DEPARTMENT_HEAD').slice().sort(),
-  );
+  assert.deepEqual([...CURRENT_MOCK_SIGN_IN_ROLES].sort(), [...INTERNAL_CORE_ROLES].sort());
 });
 
 test('canManageDocumentation: agrees with the backend\'s own DOCUMENTATION_MANAGE grant for every domain role, so the frontend action-gating can never quietly drift from what the backend actually enforces', () => {

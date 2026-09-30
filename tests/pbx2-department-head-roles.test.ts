@@ -1,13 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { roles, CURRENT_ASSIGNABLE_ROLES, INTERNAL_ASSIGNABLE_ROLES, LEGACY_ONLY_ROLES, Permission, hasPermission, canAccessDocumentation, canAccessSdoWorkspace, isPtoRole, isSdoRole, isConstructionControlRole } from '../packages/domain';
+import { roles, CURRENT_ASSIGNABLE_ROLES, INTERNAL_ASSIGNABLE_ROLES, Permission, hasPermission, canAccessDocumentation, canAccessSdoWorkspace, isPtoRole, isSdoRole, isConstructionControlRole } from '../packages/domain';
 import { canAccessDocumentation as feCanAccessDocumentation, canAccessSdoWorkspace as feCanAccessSdo, canManageDocumentation, INTERNAL_CORE_ROLES, CURRENT_MOCK_SIGN_IN_ROLES, isInternalCoreRole } from '../apps/frontend/src/auth/internalRoles';
 
 /**
  * PBX-2 corrective — Начальник ПТО / Начальник СК / Начальник СДО.
  * Storage set, current-vs-legacy lists, grant parity with the engineer role of
- * the same department, and DEPARTMENT_HEAD's unchanged legacy grants.
+ * the same department, and the removed-role (TECHNICAL_DIRECTOR / DEPARTMENT_HEAD) rejection.
  * The three head roles carry the SAME operational bundle as PTO / CONSTRUCTION_CONTROL /
  * SDO (no cross-department authority, no ADMIN_USERS) until object responsibility exists.
  */
@@ -15,14 +15,13 @@ import { canAccessDocumentation as feCanAccessDocumentation, canAccessSdoWorkspa
 const allPermissions = Object.values(Permission);
 const grantsOf = (role: any) => allPermissions.filter((p) => hasPermission(role, p)).sort();
 
-test('role sets: storage set, current assignable, PBX-2 internal targets, legacy-only', () => {
-  assert.deepEqual([...roles].sort(), ['ADMIN', 'CONSTRUCTION_CONTROL', 'CONSTRUCTION_CONTROL_HEAD', 'CONTRACTOR_VIEWER', 'DEPARTMENT_HEAD', 'DEPUTY_DIRECTOR', 'GENERAL_DIRECTOR', 'PROJECT_MANAGER', 'PTO', 'PTO_HEAD', 'SDO', 'SDO_HEAD', 'TECHNICAL_DIRECTOR']);
+test('role sets: storage set, current assignable, PBX-2 internal targets; removed roles absent', () => {
+  assert.deepEqual([...roles].sort(), ['ADMIN', 'CONSTRUCTION_CONTROL', 'CONSTRUCTION_CONTROL_HEAD', 'CONTRACTOR_VIEWER', 'DEPUTY_DIRECTOR', 'GENERAL_DIRECTOR', 'PROJECT_MANAGER', 'PTO', 'PTO_HEAD', 'SDO', 'SDO_HEAD']);
   assert.deepEqual([...INTERNAL_ASSIGNABLE_ROLES], ['GENERAL_DIRECTOR', 'DEPUTY_DIRECTOR', 'PROJECT_MANAGER', 'CONSTRUCTION_CONTROL', 'CONSTRUCTION_CONTROL_HEAD', 'PTO', 'PTO_HEAD', 'SDO', 'SDO_HEAD', 'ADMIN']);
   assert.deepEqual([...CURRENT_ASSIGNABLE_ROLES].sort(), [...INTERNAL_ASSIGNABLE_ROLES, 'CONTRACTOR_VIEWER'].sort());
-  assert.deepEqual([...LEGACY_ONLY_ROLES].sort(), ['DEPARTMENT_HEAD', 'TECHNICAL_DIRECTOR']);
-  for (const r of [...INTERNAL_ASSIGNABLE_ROLES, ...CURRENT_ASSIGNABLE_ROLES, ...LEGACY_ONLY_ROLES]) assert.ok((roles as readonly string[]).includes(r), r);
-  // every stored role is either current-assignable or legacy-only; nothing is orphaned
-  for (const r of roles) assert.ok((CURRENT_ASSIGNABLE_ROLES as readonly string[]).includes(r) || (LEGACY_ONLY_ROLES as readonly string[]).includes(r), r);
+  for (const r of [...INTERNAL_ASSIGNABLE_ROLES, ...CURRENT_ASSIGNABLE_ROLES]) assert.ok((roles as readonly string[]).includes(r), r);
+  // ROLE-CLEANUP: removed roles exist in no list, and no alias (CONSTRUCTION_DIRECTOR / DoC) was added
+  for (const removed of ['TECHNICAL_DIRECTOR', 'DEPARTMENT_HEAD', 'CONSTRUCTION_DIRECTOR', 'DoC']) for (const list of [roles, CURRENT_ASSIGNABLE_ROLES, INTERNAL_ASSIGNABLE_ROLES, INTERNAL_CORE_ROLES, CURRENT_MOCK_SIGN_IN_ROLES] as readonly (readonly string[])[]) assert.equal(list.includes(removed), false, removed);
 });
 
 test('grant parity: each head role has EXACTLY the bundle of its department engineer role (PTO_HEAD adds only PBX-3A PTO_OBJECT_TEAM_MANAGE)', () => {
@@ -43,16 +42,10 @@ test('no cross-department authority: heads get no ADMIN_USERS and none of anothe
   for (const p of [Permission.PTO_EDIT, Permission.DOCUMENTATION_MANAGE, Permission.SDO_EDIT, Permission.SDO_CLOSE, Permission.SDO_CASE_MANAGE, Permission.INSPECTION_ACCEPT, Permission.ISSUE_VERIFY]) assert.equal(hasPermission('DEPUTY_DIRECTOR', p), false, p);
 });
 
-test('DEPARTMENT_HEAD keeps its previous grants exactly (read-only view bundle); TECHNICAL_DIRECTOR untouched', () => {
-  // GENERAL_DIRECTOR additionally holds PBX-3A's read-only PTO_TEAM_READ oversight; DEPARTMENT_HEAD does not.
-  assert.deepEqual(grantsOf('DEPARTMENT_HEAD'), grantsOf('GENERAL_DIRECTOR').filter((p) => p !== Permission.PTO_TEAM_READ));
-  assert.equal(hasPermission('DEPARTMENT_HEAD', Permission.OBJECT_VIEW), true);
-  for (const p of [Permission.OBJECT_CREATE, Permission.PTO_EDIT, Permission.SDO_EDIT, Permission.INSPECTION_ACCEPT, Permission.ADMIN_USERS, Permission.DOCUMENTATION_MANAGE]) assert.equal(hasPermission('DEPARTMENT_HEAD', p), false, p);
-  // OBJ-1: current object-create authority is DEPUTY_DIRECTOR / ADMIN; legacy TECHNICAL_DIRECTOR no longer holds it.
-  assert.equal(hasPermission('TECHNICAL_DIRECTOR', Permission.OBJECT_CREATE), false);
+test('object-create authority is DEPUTY_DIRECTOR / ADMIN only; removed roles hold no grant', () => {
   for (const role of ['DEPUTY_DIRECTOR', 'ADMIN'] as const) assert.ok(hasPermission(role, Permission.OBJECT_CREATE), role);
-  assert.ok(hasPermission('TECHNICAL_DIRECTOR', Permission.OBJECT_EDIT), 'TD keeps its other managerial grants');
-  assert.equal(hasPermission('TECHNICAL_DIRECTOR', Permission.PTO_EDIT), false);
+  for (const role of ['GENERAL_DIRECTOR', 'PROJECT_MANAGER', 'PTO_HEAD', 'SDO_HEAD', 'CONSTRUCTION_CONTROL_HEAD'] as const) assert.equal(hasPermission(role, Permission.OBJECT_CREATE), false, role);
+  for (const removed of ['TECHNICAL_DIRECTOR', 'DEPARTMENT_HEAD']) assert.deepEqual(grantsOf(removed), [], removed);
 });
 
 test('documentation / SDO workspace predicates: heads mirror the engineer role, backend and frontend agree for every role', () => {
@@ -61,7 +54,7 @@ test('documentation / SDO workspace predicates: heads mirror the engineer role, 
   assert.equal(canAccessDocumentation('SDO'), false);
   assert.equal(canAccessDocumentation('CONSTRUCTION_CONTROL_HEAD'), true);
   assert.equal(canAccessSdoWorkspace('SDO_HEAD'), true);
-  for (const r of ['PTO_HEAD', 'PTO', 'CONSTRUCTION_CONTROL_HEAD', 'DEPARTMENT_HEAD', 'DEPUTY_DIRECTOR']) assert.equal(canAccessSdoWorkspace(r as any), false, r);
+  for (const r of ['PTO_HEAD', 'PTO', 'CONSTRUCTION_CONTROL_HEAD', 'DEPUTY_DIRECTOR']) assert.equal(canAccessSdoWorkspace(r as any), false, r);
   for (const role of roles) {
     assert.equal(feCanAccessDocumentation(role), canAccessDocumentation(role), 'documentation ' + role);
     assert.equal(feCanAccessSdo(role), canAccessSdoWorkspace(role), 'sdo workspace ' + role);
@@ -72,8 +65,9 @@ test('documentation / SDO workspace predicates: heads mirror the engineer role, 
   assert.ok(isConstructionControlRole('CONSTRUCTION_CONTROL_HEAD') && !isConstructionControlRole('PTO'));
 });
 
-test('frontend classification: heads are internal, legacy roles still recognised, mock sign-in offers neither legacy role', () => {
-  for (const r of ['PTO_HEAD', 'CONSTRUCTION_CONTROL_HEAD', 'SDO_HEAD', 'TECHNICAL_DIRECTOR', 'DEPARTMENT_HEAD']) assert.equal(isInternalCoreRole(r), true, r);
+test('frontend classification: heads are internal, removed roles are not recognised, mock sign-in offers only current internal roles', () => {
+  for (const r of ['PTO_HEAD', 'CONSTRUCTION_CONTROL_HEAD', 'SDO_HEAD']) assert.equal(isInternalCoreRole(r), true, r);
+  for (const r of ['TECHNICAL_DIRECTOR', 'DEPARTMENT_HEAD']) assert.equal(isInternalCoreRole(r), false, r);
   assert.equal(isInternalCoreRole('CONTRACTOR_VIEWER'), false);
   for (const r of roles) assert.equal((INTERNAL_CORE_ROLES as readonly string[]).includes(r), r !== 'CONTRACTOR_VIEWER', r);
   assert.deepEqual([...CURRENT_MOCK_SIGN_IN_ROLES].sort(), [...INTERNAL_ASSIGNABLE_ROLES].sort());
@@ -120,7 +114,7 @@ test('HTTP (mock auth): heads behave like their department role; legacy POST /us
     return d.token as string;
   };
   try {
-    for (const r of ['ADMIN', 'DEPUTY_DIRECTOR', 'PROJECT_MANAGER', 'TECHNICAL_DIRECTOR', 'PTO', 'PTO_HEAD', 'SDO', 'SDO_HEAD', 'CONSTRUCTION_CONTROL', 'CONSTRUCTION_CONTROL_HEAD', 'DEPARTMENT_HEAD']) await login(r);
+    for (const r of ['ADMIN', 'DEPUTY_DIRECTOR', 'PROJECT_MANAGER', 'PTO', 'PTO_HEAD', 'SDO', 'SDO_HEAD', 'CONSTRUCTION_CONTROL', 'CONSTRUCTION_CONTROL_HEAD']) await login(r);
     for (const r of ['PTO_HEAD', 'SDO_HEAD', 'CONSTRUCTION_CONTROL_HEAD']) assert.equal(users[r].role, r);
 
     const dict = (await call('GET', 'dictionaries', tokens.PROJECT_MANAGER)).data;
@@ -166,8 +160,7 @@ test('HTTP (mock auth): heads behave like their department role; legacy POST /us
     }
     // an operational route the base role lacks is refused identically for the head (validation runs after the permission check there)
     const objectBody = { externalCode: 'X-' + Date.now(), name: 'n', address: 'a', organizationName: 'o', projectManagerId: users.PROJECT_MANAGER.id, startDate: dt(-1), plannedFinishDate: dt(5), contractValue: '1', contractorIds: [contractors[0].id] };
-    // OBJ-1: legacy TECHNICAL_DIRECTOR and PROJECT_MANAGER are not current object-create actors either.
-    assert.equal((await call('POST', 'objects', tokens.TECHNICAL_DIRECTOR, objectBody)).status, 403);
+    // OBJ-1: PROJECT_MANAGER is not a current object-create actor either.
     assert.equal((await call('POST', 'objects', tokens.PROJECT_MANAGER, objectBody)).status, 403);
     assert.equal((await call('POST', 'objects', tokens.CONSTRUCTION_CONTROL, objectBody)).status, 403);
     assert.equal((await call('POST', 'objects', tokens.CONSTRUCTION_CONTROL_HEAD, objectBody)).status, 403);
@@ -180,17 +173,17 @@ test('HTTP (mock auth): heads behave like their department role; legacy POST /us
     assert.equal(await upload('SDO_HEAD'), await upload('SDO'));
     assert.notEqual(await upload('SDO_HEAD'), 201);
     // --- heads hold no administrator authority ---
-    for (const role of ['PTO_HEAD', 'SDO_HEAD', 'CONSTRUCTION_CONTROL_HEAD', 'DEPARTMENT_HEAD']) {
+    for (const role of ['PTO_HEAD', 'SDO_HEAD', 'CONSTRUCTION_CONTROL_HEAD']) {
       assert.equal((await call('GET', 'admin/users', tokens[role])).status, 403, role);
       assert.equal((await call('POST', 'users', tokens[role], { bitrixUserId: '901', name: 'X', role: 'PTO' })).status, 403, role);
     }
-    // --- existing DEPARTMENT_HEAD keeps authenticating with its previous (view-only) grants ---
-    assert.equal((await call('GET', 'me', tokens.DEPARTMENT_HEAD)).data.role, 'DEPARTMENT_HEAD');
-    assert.equal((await call('GET', 'snapshot', tokens.DEPARTMENT_HEAD)).status, 200);
-    assert.equal((await call('POST', 'objects', tokens.DEPARTMENT_HEAD, objectBody)).status, 403);
-    assert.equal((await call('POST', 'documentation-packages', tokens.DEPARTMENT_HEAD, { objectWorkId: workA.id, responsibleUserId: users.PTO.id })).status, 403);
+    // --- removed roles cannot authenticate at all ---
+    for (const removed of ['TECHNICAL_DIRECTOR', 'DEPARTMENT_HEAD']) {
+      const r = await fetch(base + '/auth/mock', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ role: removed, key: 'pbx2-heads-key' }) });
+      assert.ok(r.status >= 400 && r.status < 500, removed + ' rejected by auth/mock: ' + r.status);
+    }
 
-    // --- general POST /users: current heads yes; legacy roles no; external path untouched ---
+    // --- general POST /users: current heads yes; removed roles no; external path untouched ---
     let n = 910;
     const add = (role: string, extra: any = {}) => call('POST', 'users', tokens.ADMIN, { bitrixUserId: String(n++), name: 'Тест ' + role, role, ...extra });
     for (const role of ['PTO_HEAD', 'CONSTRUCTION_CONTROL_HEAD', 'SDO_HEAD']) assert.equal((await add(role)).status, 201, role);

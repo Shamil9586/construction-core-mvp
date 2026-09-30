@@ -23,7 +23,6 @@ import type { Role } from '../types/api';
  */
 export const INTERNAL_CORE_ROLES = [
   'GENERAL_DIRECTOR',
-  'TECHNICAL_DIRECTOR',
   'PROJECT_MANAGER',
   'CONSTRUCTION_CONTROL',
   // PBX-2 corrective: current department-head roles.
@@ -33,9 +32,7 @@ export const INTERNAL_CORE_ROLES = [
   'SDO',
   'SDO_HEAD',
   'ADMIN',
-  // Legacy-compatible: an existing session may carry it; never a new choice.
-  'DEPARTMENT_HEAD',
-  // F12.3 (LOCKED DECISION 1): the canonical current managerial role.
+  // The single current managerial role.
   'DEPUTY_DIRECTOR',
 ] as const satisfies readonly Role[];
 
@@ -44,36 +41,12 @@ export type InternalCoreRole = (typeof INTERNAL_CORE_ROLES)[number];
 /** The one external-participant role the backend defines today. */
 export const EXTERNAL_PARTICIPANT_ROLE = 'CONTRACTOR_VIEWER' satisfies Role;
 
-/**
- * F12.3 FINAL-R05: the roles Core's test sign-in offers for a NEW mock
- * session, distinct from `INTERNAL_CORE_ROLES` above.
- *
- * `INTERNAL_CORE_ROLES` answers two different questions at once: which roles
- * an EXISTING session may carry (it must keep legacy `TECHNICAL_DIRECTOR` for
- * that — sessions already authenticated with it must keep working), and
- * which roles a NEW sign-in should offer. `DEPUTY_DIRECTOR` is the canonical
- * CURRENT managerial role (LOCKED DECISION 1); `TECHNICAL_DIRECTOR` is
- * legacy-only and must not be presented as a normal current choice, so a new
- * mock sign-in needs the narrower list below instead. `CONTRACTOR_VIEWER` is
- * already excluded by construction — `INTERNAL_CORE_ROLES` is itself an
- * explicit allowlist that never contains it (see the test pinning this) — so
- * filtering out `TECHNICAL_DIRECTOR` alone is sufficient here.
- *
- * The backend's own `POST /users` draws the same distinction with
- * `CURRENT_ASSIGNABLE_ROLES` (packages/domain); this is that same current/
- * legacy split, kept for the one other place Core offers a role as a new
- * choice rather than reading one an existing user already has.
- */
-export const LEGACY_ONLY_ROLES: readonly InternalCoreRole[] = ['TECHNICAL_DIRECTOR', 'DEPARTMENT_HEAD'];
-
-export const CURRENT_MOCK_SIGN_IN_ROLES: readonly InternalCoreRole[] = INTERNAL_CORE_ROLES.filter(
-  (role) => !LEGACY_ONLY_ROLES.includes(role),
-);
+/** Roles Core's test sign-in offers for a NEW mock session (internal roles only). */
+export const CURRENT_MOCK_SIGN_IN_ROLES: readonly InternalCoreRole[] = INTERNAL_CORE_ROLES;
 
 /** The same Russian wording the legacy entry shows for these roles (main.tsx `roleNames`). */
 export const INTERNAL_ROLE_LABELS: Record<InternalCoreRole, string> = {
   GENERAL_DIRECTOR: 'Генеральный директор',
-  TECHNICAL_DIRECTOR: 'Технический директор',
   PROJECT_MANAGER: 'Руководитель проекта',
   CONSTRUCTION_CONTROL: 'Строительный контроль',
   CONSTRUCTION_CONTROL_HEAD: 'Начальник СК',
@@ -83,7 +56,6 @@ export const INTERNAL_ROLE_LABELS: Record<InternalCoreRole, string> = {
   SDO: 'Инженер-сметчик',
   SDO_HEAD: 'Начальник СДО',
   ADMIN: 'Администратор',
-  DEPARTMENT_HEAD: 'Руководитель направления',
   DEPUTY_DIRECTOR: 'Заместитель директора',
 };
 
@@ -152,8 +124,7 @@ export function canAccessSdoWorkspace(role: string): boolean {
  * PBX-2 — the roles the «Пользователи и доступ» screen offers as a TARGET, in
  * display order. Mirrors the backend's `INTERNAL_ASSIGNABLE_ROLES`
  * (packages/domain; a test pins the two together). Deliberately excludes
- * legacy `TECHNICAL_DIRECTOR` and `DEPARTMENT_HEAD` (an existing user keeps them and they stay readable,
- * but they are never a choice) and `CONTRACTOR_VIEWER` (external participant,
+ * `CONTRACTOR_VIEWER` (external participant,
  * outside the internal Bitrix Core contour).
  */
 export const ADMIN_ASSIGNABLE_ROLES = [
@@ -205,8 +176,8 @@ export const canViewObjectPtoTeam = (role: string): boolean => canViewTeamsOverv
 
 /**
  * OBJ-1 — «Добавить объект»: creating an object appoints its РП, a managerial act of the
- * Deputy Director (ADMIN = system override). PROJECT_MANAGER, GENERAL_DIRECTOR and legacy
- * TECHNICAL_DIRECTOR never get the control. Based on the confirmed Core role only — never
+ * Deputy Director (ADMIN = system override). PROJECT_MANAGER and GENERAL_DIRECTOR
+ * never get the control. Based on the confirmed Core role only — never
  * on Bitrix position/department. The backend (OBJECT_CREATE + role rule) enforces it independently.
  */
 export const canCreateObject = (role: string): boolean => role === 'DEPUTY_DIRECTOR' || role === 'ADMIN';

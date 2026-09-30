@@ -374,7 +374,7 @@ test('F8.3 HTTP (1): an upcoming package is visible to SDO before it is ready �
     const pm = await login('PROJECT_MANAGER');
     const dict = await req('dictionaries');
     const contractors = await req('contractors');
-    await login('TECHNICAL_DIRECTOR');
+    await login('DEPUTY_DIRECTOR');
     const o = await asDeputy(() => req('objects', { externalCode: 'F83-UP-' + Date.now(), name: 'F8.3 очередь СДО', address: 'Тест, 1', organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] }));
     await login('PROJECT_MANAGER');
     const work = await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: pm.id, name: 'Работа', unit: 'м²', plannedQuantity: 100, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '20000' });
@@ -414,7 +414,7 @@ test('F8.3 HTTP (3): readiness is false when the Customer SC quantity confirmati
     const pm = await login('PROJECT_MANAGER');
     const dict = await req('dictionaries');
     const contractors = await req('contractors');
-    await login('TECHNICAL_DIRECTOR');
+    await login('DEPUTY_DIRECTOR');
     const o = await asDeputy(() => req('objects', { externalCode: 'F83-READY-A-' + Date.now(), name: 'F8.3 готовность (а)', address: 'Тест, 1', organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] }));
     await login('PROJECT_MANAGER');
     const work = await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: pm.id, name: 'Работа', unit: 'м²', plannedQuantity: 200, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '20000' });
@@ -634,7 +634,7 @@ test('F8.3-R02b (1): customer-acceptance is refused when a Documentation Documen
     const pm = await login('PROJECT_MANAGER');
     const dict = await req('dictionaries');
     const contractors = await req('contractors');
-    await login('TECHNICAL_DIRECTOR');
+    await login('DEPUTY_DIRECTOR');
     const o = await asDeputy(() => req('objects', { externalCode: 'F83-R02B-NOVER-' + Date.now(), name: 'F8.3 документ без версии', address: 'Тест, 1', organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] }));
     await login('PROJECT_MANAGER');
     const work = await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: pm.id, name: 'Работа', unit: 'м²', plannedQuantity: 100, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '20000' });
@@ -659,7 +659,7 @@ test('F8.3-R02b (2): customer-acceptance is refused when the Package has zero Do
     const pm = await login('PROJECT_MANAGER');
     const dict = await req('dictionaries');
     const contractors = await req('contractors');
-    await login('TECHNICAL_DIRECTOR');
+    await login('DEPUTY_DIRECTOR');
     const o = await asDeputy(() => req('objects', { externalCode: 'F83-R02B-NODOC-' + Date.now(), name: 'F8.3 пакет без документов', address: 'Тест, 1', organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] }));
     await login('PROJECT_MANAGER');
     const work = await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: pm.id, name: 'Работа', unit: 'м²', plannedQuantity: 100, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '20000' });
@@ -951,7 +951,7 @@ test('F8.3 HTTP: customer-acceptance is refused before PRESENTED (still an ordin
     const pm = await login('PROJECT_MANAGER');
     const dict = await req('dictionaries');
     const contractors = await req('contractors');
-    await login('TECHNICAL_DIRECTOR');
+    await login('DEPUTY_DIRECTOR');
     const o = await asDeputy(() => req('objects', { externalCode: 'F83-ACCEPT-EARLY-' + Date.now(), name: 'F8.3 раннее согласие', address: 'Тест, 1', organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] }));
     await login('PROJECT_MANAGER');
     const work = await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: pm.id, name: 'Работа', unit: 'м²', plannedQuantity: 100, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '20000' });
@@ -970,7 +970,7 @@ test('F8.3 HTTP (6): non-PTO cannot register customer documentation acceptance',
     // F8.3-R01 corrective: ADMIN is included here too — DOCUMENTATION_MANAGE
     // alone (which ADMIN holds as part of its blanket superuser grant) is not
     // enough; the accepted contract reserves this specific action to PTO.
-    for (const role of ['PROJECT_MANAGER', 'CONSTRUCTION_CONTROL', 'SDO', 'TECHNICAL_DIRECTOR', 'ADMIN']) {
+    for (const role of ['PROJECT_MANAGER', 'CONSTRUCTION_CONTROL', 'SDO', 'DEPUTY_DIRECTOR', 'ADMIN']) {
       await login(role);
       await req(`documentation-packages/${pkg.id}/customer-acceptance`, { version: pkg.version, acceptedDate: dt(0) }, 403);
     }
@@ -1795,7 +1795,7 @@ test('F8.3 HTTP (24): every SDO Case mutation requires SDO_CASE_MANAGE — PTO, 
   const { app, req, login } = await harness();
   try {
     const { sdoCase } = await setUpHandedOffCase(req, login, 'F83-PERM-' + Date.now(), 'F8.3 права на мутации');
-    for (const role of ['PTO', 'PROJECT_MANAGER', 'TECHNICAL_DIRECTOR', 'CONSTRUCTION_CONTROL']) {
+    for (const role of ['PTO', 'PROJECT_MANAGER', 'DEPUTY_DIRECTOR', 'CONSTRUCTION_CONTROL']) {
       await login(role);
       await req(`sdo-closing-cases/${sdoCase.id}/status`, { version: sdoCase.version, status: 'VERIFICATION_PASSED' }, 403);
       await req(`sdo-closing-cases/${sdoCase.id}/amount`, { version: sdoCase.version, amount: '1.00' }, 403);
@@ -1810,7 +1810,7 @@ test('F8.3 HTTP (25): Management/RP/PTO see SDO Case state read-only outside /sd
   const { app, req, login } = await harness();
   try {
     const { sdoCase } = await setUpHandedOffCase(req, login, 'F83-READONLY-' + Date.now(), 'F8.3 доступ на чтение');
-    for (const role of ['GENERAL_DIRECTOR', 'TECHNICAL_DIRECTOR', 'PROJECT_MANAGER', 'PTO', 'CONSTRUCTION_CONTROL', 'DEPARTMENT_HEAD']) {
+    for (const role of ['GENERAL_DIRECTOR', 'DEPUTY_DIRECTOR', 'PROJECT_MANAGER', 'PTO', 'CONSTRUCTION_CONTROL']) {
       await login(role);
       const snapshot = await req('snapshot');
       assert.ok((snapshot.sdoClosingCases ?? []).some((c: any) => c.id === sdoCase.id), role + ' must read SDO Case state');

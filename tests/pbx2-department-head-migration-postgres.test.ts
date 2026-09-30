@@ -8,8 +8,8 @@ import path from 'node:path';
  * PBX-2 corrective — migration 015 (infra/015_department_head_roles.sql),
  * NATIVE PostgreSQL only (never PGlite): the users.role CHECK constraint is
  * widened to accept PTO_HEAD / CONSTRUCTION_CONTROL_HEAD / SDO_HEAD while every
- * previously valid value (incl. legacy TECHNICAL_DIRECTOR and DEPARTMENT_HEAD)
- * stays valid and no existing row is touched.
+ * previously valid value (incl. TECHNICAL_DIRECTOR and DEPARTMENT_HEAD, removed
+ * later by migration 017) stays valid at version 15 and no existing row is touched.
  *
  * Each test uses its own freshly created database. Path A runs the real
  * scripts/migrate.ts runner (1 -> latest, then a re-run that must be a no-op).
@@ -54,7 +54,7 @@ test('migration 015 exists as the next version after 014', () => {
   assert.deepEqual(versions, versions.map((_, i) => i + 1), 'no gaps or duplicates in the chain');
 });
 
-test('Path A (fresh native DB): full chain 1 -> latest, re-run is a no-op, CHECK accepts all 13 roles and rejects an unknown one', async () => {
+test('Path A (fresh native DB): full chain 1 -> latest, re-run is a no-op, CHECK accepts exactly the 11 current roles and rejects removed/unknown ones', async () => {
   const name = 'pbx2_heads_fresh';
   const url = await createDb(name);
   process.env.DATABASE_URL = url;
@@ -74,12 +74,15 @@ test('Path A (fresh native DB): full chain 1 -> latest, re-run is a no-op, CHECK
 
     const checks = (await client.query("SELECT conname, pg_get_constraintdef(oid) def FROM pg_constraint WHERE conrelid='users'::regclass AND contype='c' AND pg_get_constraintdef(oid) LIKE '%role%'")).rows;
     assert.equal(checks.length, 1, 'exactly one role CHECK remains: ' + JSON.stringify(checks));
-    for (const role of [...OLD_ROLES, ...NEW_ROLES]) assert.match(checks[0].def, new RegExp(`'${role}'`), role);
+    const CURRENT = [...OLD_ROLES, ...NEW_ROLES].filter((r) => r !== 'TECHNICAL_DIRECTOR' && r !== 'DEPARTMENT_HEAD');
+    for (const role of CURRENT) assert.match(checks[0].def, new RegExp(`'${role}'`), role);
+    for (const role of ['TECHNICAL_DIRECTOR', 'DEPARTMENT_HEAD']) assert.doesNotMatch(checks[0].def, new RegExp(`'${role}'`), role + ' removed by 017');
 
     const t = await tenant(client);
     let n = 0;
-    for (const role of [...OLD_ROLES, ...NEW_ROLES]) { await addUser(client, t, ++n, role); }
-    assert.equal((await client.query('SELECT count(*)::int n FROM users')).rows[0].n, 13);
+    for (const role of CURRENT) { await addUser(client, t, ++n, role); }
+    assert.equal((await client.query('SELECT count(*)::int n FROM users')).rows[0].n, 11);
+    for (const role of ['TECHNICAL_DIRECTOR', 'DEPARTMENT_HEAD']) assert.equal(await rejected(client, () => addUser(client, t, ++n, role)), '23514', role);
     assert.equal(await rejected(client, () => addUser(client, t, ++n, 'BOGUS_ROLE')), '23514');
     assert.equal(await rejected(client, () => addUser(client, t, ++n, 'pto_head')), '23514', 'role match is exact');
     assert.equal(await rejected(client, () => client.query("UPDATE users SET role='NOT_A_ROLE' WHERE bitrix_user_id='1'")), '23514');

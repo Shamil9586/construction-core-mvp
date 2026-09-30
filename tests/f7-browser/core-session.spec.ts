@@ -65,8 +65,7 @@ const sessionToken = (page: Page) => page.evaluate(() => window.sessionStorage.g
 
 const INTERNAL = { id: 'u-gd', tenantId: 't-1', name: 'Александр Волков', role: 'GENERAL_DIRECTOR' };
 const EXTERNAL = { id: 'u-cv', tenantId: 't-1', name: 'Представитель подрядчика', role: 'CONTRACTOR_VIEWER' };
-// F12.3 FINAL-R05: an existing legacy session — never offered by a NEW sign-in.
-const LEGACY_TECHNICAL_DIRECTOR = { id: 'u-td', tenantId: 't-1', name: 'Пётр Никитин', role: 'TECHNICAL_DIRECTOR' };
+const DEPUTY = { id: 'u-dd', tenantId: 't-1', name: 'Пётр Никитин', role: 'DEPUTY_DIRECTOR' };
 
 /**
  * The intercepted "server" data deliberately differs from the demo fixtures
@@ -89,10 +88,7 @@ const main = (page: Page) => page.locator('main');
 const sidebar = (page: Page) => page.locator('aside');
 const h1 = (page: Page, name: string) => page.getByRole('heading', { level: 1, name });
 
-// F12.3 FINAL-R05: what a NEW mock sign-in offers — DEPUTY_DIRECTOR is the
-// canonical current managerial role; legacy TECHNICAL_DIRECTOR (still a valid
-// role for an EXISTING session, see the "existing session" tests below) is
-// deliberately not one of these choices.
+// What a NEW mock sign-in offers — DEPUTY_DIRECTOR is the single current managerial role.
 const CURRENT_MOCK_SIGN_IN_ROLE_VALUES = [
   'GENERAL_DIRECTOR',
   'PROJECT_MANAGER',
@@ -123,7 +119,7 @@ test.describe('no session in the tab', () => {
     expect(calls.map((call) => call.path)).toEqual(['/api/health']);
   });
 
-  test('the test sign-in offers the current internal roles only — never CONTRACTOR_VIEWER («Субподрядчик») and never legacy TECHNICAL_DIRECTOR («Технический директор»)', async ({ page }) => {
+  test('the test sign-in offers the current internal roles only — never CONTRACTOR_VIEWER («Субподрядчик») and never the removed TECHNICAL_DIRECTOR («Технический директор»)', async ({ page }) => {
     await mockApi(page, { 'GET /api/health': health('mock') });
     await page.goto('/app.html');
 
@@ -132,10 +128,8 @@ test.describe('no session in the tab', () => {
     const values = await select.locator('option').evaluateAll((options) =>
       options.map((option) => (option as HTMLOptionElement).value),
     );
-    // F12.3 FINAL-R05: DEPUTY_DIRECTOR is the canonical current managerial
-    // role a NEW sign-in offers; TECHNICAL_DIRECTOR is legacy-only and must
-    // not be one of these choices even though it stays a valid role for an
-    // EXISTING session (see the "existing session" tests below).
+    // ROLE-CLEANUP: DEPUTY_DIRECTOR is the single current managerial role;
+    // TECHNICAL_DIRECTOR / DEPARTMENT_HEAD no longer exist.
     expect(values).toEqual(CURRENT_MOCK_SIGN_IN_ROLE_VALUES);
     expect(values).toContain('DEPUTY_DIRECTOR');
     expect(values).not.toContain('TECHNICAL_DIRECTOR');
@@ -285,19 +279,19 @@ test.describe('existing session', () => {
     await expect(page.getByText(/демо-данные|F5 ·/)).toHaveCount(0);
   });
 
-  test('FINAL-R05: an existing legacy TECHNICAL_DIRECTOR session still classifies as Internal and loads normally, even though a NEW sign-in never offers that role', async ({ page }) => {
-    await seedSessionOnce(page, 'legacy-td-token');
+  test('an existing DEPUTY_DIRECTOR session classifies as Internal and loads normally', async ({ page }) => {
+    await seedSessionOnce(page, 'deputy-token');
     const calls = await mockApi(page, {
-      'GET /api/me': ok(LEGACY_TECHNICAL_DIRECTOR),
+      'GET /api/me': ok(DEPUTY),
       'GET /api/snapshot': ok(SERVER_SNAPSHOT),
     });
     await page.goto('/app.html/company');
 
     await expect(h1(page, 'Портфель объектов')).toBeVisible();
-    expect(calls.find((call) => call.path === '/api/me')?.authorization).toBe('Bearer legacy-td-token');
+    expect(calls.find((call) => call.path === '/api/me')?.authorization).toBe('Bearer deputy-token');
     await expect(h1(page, 'Внутреннее приложение недоступно')).toHaveCount(0);
     await expect(sidebar(page).getByText('Пётр Никитин', { exact: true })).toBeVisible();
-    await expect(sidebar(page).getByText('Технический директор', { exact: true })).toBeVisible();
+    await expect(sidebar(page).getByText('Заместитель директора', { exact: true })).toBeVisible();
   });
 
   test('expired/invalid session (/api/me 401): explicit expired state, dead token removed, no data request', async ({ page }) => {
@@ -351,6 +345,16 @@ test.describe('existing session', () => {
     await expect(h1(page, 'Вы вышли из системы')).toBeVisible();
     expect(calls.find((call) => call.path === '/api/auth/logout')?.authorization).toBe('Bearer external-token');
     expect(await sessionToken(page)).toBeNull();
+  });
+
+  test('ROLE-CLEANUP: removed TECHNICAL_DIRECTOR / DEPARTMENT_HEAD are unrecognised roles — never treated as internal', async ({ page }) => {
+    for (const role of ['TECHNICAL_DIRECTOR', 'DEPARTMENT_HEAD']) {
+      await seedSessionOnce(page, 'removed-token');
+      await mockApi(page, { 'GET /api/me': ok({ ...INTERNAL, role }) });
+      await page.goto('/app.html/company');
+      await expect(h1(page, 'Внутреннее приложение недоступно')).toBeVisible();
+      await expect(h1(page, 'Портфель объектов')).toHaveCount(0);
+    }
   });
 
   test('a role Core does not recognise is unavailable too — an unknown role is never treated as internal', async ({ page }) => {

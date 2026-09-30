@@ -47,11 +47,9 @@ export class ProductionService {
     async assignContractor(a: Actor, objectId: string, contractorId: string) { requirePermission(a, P.OBJECT_MANAGE_CONTRACTORS); return transaction(async (c) => { await objectAccess(c, a, objectId, true); await scoped(c, 'contractors', contractorId, a); if (await one(c, 'SELECT id FROM object_contractors_active WHERE tenant_id=$1 AND object_id=$2 AND contractor_id=$3', [a.tenantId, objectId, contractorId]))
         throw new ConflictException('Подрядчик уже назначен на объект'); const row = await insert(c, 'object_contractors', a.tenantId, { objectId, contractorId }); await audit(c, a, 'ObjectContractor', row.id, 'ASSIGN', null, row); return row; }); }
     async editObject(a: Actor, id: string, d: any) { requirePermission(a, P.OBJECT_EDIT); return transaction(async (c) => { const o = await scoped(c, 'objects', id, a, true); await objectAccess(c, a, id, true); checkVersion(o, d.version); if ('projectManagerId' in d) {
-        // F12.3 (LOCKED DECISION 1): DEPUTY_DIRECTOR holds the same PM-reassignment
-        // authority the technical-director managerial role already had —
-        // TECHNICAL_DIRECTOR itself stays for legacy-assigned users.
-        if (!['TECHNICAL_DIRECTOR', 'DEPUTY_DIRECTOR', 'ADMIN'].includes(a.role))
-            throw new ForbiddenException('Только технический директор, заместитель директора или администратор может переназначить РП');
+        // DEPUTY_DIRECTOR (or ADMIN) holds PM-reassignment authority.
+        if (!['DEPUTY_DIRECTOR', 'ADMIN'].includes(a.role))
+            throw new ForbiddenException('Только заместитель директора или администратор может переназначить РП');
         if (d.projectManagerId !== o.projectManagerId) {
             const pm = await scoped(c, 'users', d.projectManagerId, a);
             ensure(pm.role === 'PROJECT_MANAGER' && pm.isActive, 'Назначьте активного РП');
@@ -337,7 +335,7 @@ export class ProductionService {
     // (BR-01/BR-02/BR-03: a package may exist before completion, and neither
     // physical readiness nor quantity confirmation is this model's concern).
     // No eventType is passed to audit() below for any F8.2 method — that
-    // fan-out notifies PTO/TECHNICAL_DIRECTOR/GENERAL_DIRECTOR/
+    // fan-out notifies PTO/DEPUTY_DIRECTOR/GENERAL_DIRECTOR/
     // CONSTRUCTION_CONTROL/SDO/PROJECT_MANAGER indiscriminately
     // (security.ts's audit()), and SDO must not be notified about
     // documentation it has no access to at all.

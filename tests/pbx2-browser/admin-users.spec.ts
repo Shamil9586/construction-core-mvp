@@ -27,9 +27,9 @@ function makeState(): State {
   return {
     core: [
       { id: 'c-admin', name: 'Админов Админ', role: 'ADMIN', bitrixUserId: '1', isActive: true, version: 1 },
-      { id: 'c-td', name: 'Никитин Пётр', role: 'TECHNICAL_DIRECTOR', bitrixUserId: '2', isActive: true, version: 1 },
+      { id: 'c-td', name: 'Никитин Пётр', role: 'DEPUTY_DIRECTOR', bitrixUserId: '2', isActive: true, version: 1 },
       { id: 'c-off', name: 'Зайцев Андрей', role: 'SDO', bitrixUserId: '3', isActive: false, version: 1 },
-      { id: 'c-dh', name: 'Громов Николай', role: 'DEPARTMENT_HEAD', bitrixUserId: '6', isActive: true, version: 1 },
+      { id: 'c-dh', name: 'Громов Николай', role: 'PTO_HEAD', bitrixUserId: '6', isActive: true, version: 1 },
     ],
     employees: [
       emp('1', 'Админов', 'Админ', { WORK_POSITION: 'Системный администратор', UF_DEPARTMENT: [5] }),
@@ -123,7 +123,7 @@ test.describe('department-head sessions mirror their department role in the shel
       await expect(page.getByText('доступен только администратору')).toBeVisible();
     });
   }
-  test('CONSTRUCTION_CONTROL_HEAD and legacy DEPARTMENT_HEAD see neither ПТО, СДО nor the administration entry', async ({ page }) => {
+  test('CONSTRUCTION_CONTROL_HEAD sees neither ПТО, СДО nor the administration entry', async ({ page }) => {
     await setup(page, makeState(), head('CONSTRUCTION_CONTROL_HEAD'));
     await page.goto('/app.html/company');
     await expect(sidebar(page).getByText('Портфель')).toBeVisible();
@@ -240,40 +240,21 @@ test.describe('mutations', () => {
     }
   });
 
-  test('legacy DEPARTMENT_HEAD is visible as «Руководитель направления» with a legacy marker and is never selectable', async ({ page }) => {
+  test('role change; removed TECHNICAL_DIRECTOR / DEPARTMENT_HEAD are never selectable or labelled', async ({ page }) => {
     const state = makeState();
     await setup(page, state);
     await page.goto('/app.html/admin/users');
-    await expect(rowOf(page, 'Громов Николай')).toContainText('Руководитель направления');
-    await expect(rowOf(page, 'Громов Николай')).toContainText('устаревшая роль');
-    await page.getByRole('button', { name: 'Изменить роль: Громов Николай' }).click();
-    const select = page.getByLabel('Роль в Core');
-    await expect(select.locator('option[value="DEPARTMENT_HEAD"]')).toHaveCount(0);
-    await expect(select.locator('option', { hasText: 'Руководитель направления' })).toHaveCount(0);
-    await expect(page.getByRole('button', { name: 'Сохранить роль' })).toBeDisabled();
-    await select.selectOption('PTO_HEAD');
-    await page.getByRole('button', { name: 'Сохранить роль' }).click();
+    await expect(rowOf(page, 'Никитин Пётр')).toContainText('Заместитель директора');
     await expect(rowOf(page, 'Громов Николай')).toContainText('Начальник ПТО');
-    await expect(rowOf(page, 'Громов Николай')).not.toContainText('устаревшая роль');
-  });
-
-  test('role change; legacy TECHNICAL_DIRECTOR is visible but never selectable', async ({ page }) => {
-    const state = makeState();
-    await setup(page, state);
-    await page.goto('/app.html/admin/users');
-    await expect(rowOf(page, 'Никитин Пётр')).toContainText('Технический директор');
-    await expect(rowOf(page, 'Никитин Пётр')).toContainText('устаревшая роль');
     await page.getByRole('button', { name: 'Изменить роль: Никитин Пётр' }).click();
     const select = page.getByLabel('Роль в Core');
-    await expect(select.locator('option[value="TECHNICAL_DIRECTOR"]')).toHaveCount(0);
-    await expect(select.locator('option[value="CONTRACTOR_VIEWER"]')).toHaveCount(0);
-    await expect(select.locator('option', { hasText: 'Технический директор' })).toHaveCount(0);
+    for (const removed of ['TECHNICAL_DIRECTOR', 'DEPARTMENT_HEAD', 'CONTRACTOR_VIEWER']) await expect(select.locator(`option[value="${removed}"]`)).toHaveCount(0);
+    for (const label of ['Технический директор', 'Руководитель направления']) await expect(select.locator('option', { hasText: label })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Сохранить роль' })).toBeDisabled();
-    await select.selectOption('DEPUTY_DIRECTOR');
+    await select.selectOption('PROJECT_MANAGER');
     await page.getByRole('button', { name: 'Сохранить роль' }).click();
-    await expect(rowOf(page, 'Никитин Пётр')).toContainText('Заместитель директора');
-    await expect(rowOf(page, 'Никитин Пётр')).not.toContainText('устаревшая роль');
-    expect(state.calls.find((c) => c.method === 'PATCH')!.body).toEqual({ role: 'DEPUTY_DIRECTOR' });
+    await expect(rowOf(page, 'Никитин Пётр')).toContainText('Руководитель проекта');
+    expect(state.calls.find((c) => c.method === 'PATCH')!.body).toEqual({ role: 'PROJECT_MANAGER' });
   });
 
   test('deactivate then reactivate restores the same role; both explain the session consequence', async ({ page }) => {
