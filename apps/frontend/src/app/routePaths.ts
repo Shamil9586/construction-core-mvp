@@ -23,6 +23,10 @@ export const ROUTE_PATHS = {
   sdoCase: '/sdo/case/:caseId',
   /** PBX-2 — Администрирование → Пользователи и доступ (ADMIN only). */
   adminUsers: '/admin/users',
+  /** PBX-3A — «Команды и объекты» (Deputy/Admin; General Director read-only). */
+  teams: '/teams',
+  /** PBX-3A — «Моя команда ПТО» (PTO_HEAD manages, PTO reads). */
+  myTeam: '/my-team',
 } as const;
 
 export function objectPath(objectId: string): string {

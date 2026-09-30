@@ -40,6 +40,11 @@ export const LEGACY_ONLY_ROLES = ['TECHNICAL_DIRECTOR', 'DEPARTMENT_HEAD'] as co
 // their department until the object-responsibility phase adds head-specific
 // authority. These predicates are the one place that equivalence is decided.
 export const isPtoRole = (role: string) => role === 'PTO' || role === 'PTO_HEAD';
+// PBX-3A: generic function codes for the object-team foundation. Only PTO has
+// write operations in this slice; the rest are reserved.
+export const FUNCTION_CODES = ['PTO', 'CONSTRUCTION_CONTROL', 'SDO', 'PROJECT_MANAGEMENT'] as const;
+export type FunctionCode = typeof FUNCTION_CODES[number];
+export const PTO_FUNCTION_CODE: FunctionCode = 'PTO';
 export const isSdoRole = (role: string) => role === 'SDO' || role === 'SDO_HEAD';
 export const isConstructionControlRole = (role: string) => role === 'CONSTRUCTION_CONTROL' || role === 'CONSTRUCTION_CONTROL_HEAD';
 export enum Permission {
@@ -96,7 +101,24 @@ export enum Permission {
     // NOT accounting") — the same reasoning DOCUMENTATION_MANAGE already
     // applied against reusing PTO_EDIT. PTO does not hold this permission
     // ("PTO does NOT assign work inside the SDO department").
-    SDO_CASE_MANAGE = 'SDO_CASE_MANAGE'
+    SDO_CASE_MANAGE = 'SDO_CASE_MANAGE',
+    // PBX-3A — object responsibility & team foundation. Deliberately narrow,
+    // and NOT part of the ordinary PTO operational bundle: a managerial role
+    // (DEPUTY_DIRECTOR) manages teams without gaining PTO_EDIT /
+    // DOCUMENTATION_MANAGE (PBX3-D08).
+    // FUNCTION_TEAM_MANAGE: organizational team membership + redistribution +
+    // administrative handover completion (DEPUTY_DIRECTOR, ADMIN).
+    FUNCTION_TEAM_MANAGE = 'FUNCTION_TEAM_MANAGE',
+    // OBJECT_FUNCTION_LEAD_ASSIGN: assign/replace the functional lead on an
+    // object (DEPUTY_DIRECTOR, ADMIN).
+    OBJECT_FUNCTION_LEAD_ASSIGN = 'OBJECT_FUNCTION_LEAD_ASSIGN',
+    // PTO_OBJECT_TEAM_MANAGE: add/remove PTO engineers on an object. Held by
+    // PTO_HEAD (and ADMIN), but the service ALSO requires the actor to be the
+    // CURRENT PTO lead of that specific object.
+    PTO_OBJECT_TEAM_MANAGE = 'PTO_OBJECT_TEAM_MANAGE',
+    // PTO_TEAM_READ: read PTO team/assignment/handover data. Oversight
+    // (GENERAL_DIRECTOR) is read-only.
+    PTO_TEAM_READ = 'PTO_TEAM_READ'
 }
 const view = [Permission.OBJECT_VIEW, Permission.WORK_VIEW, Permission.PTO_VIEW, Permission.SDO_VIEW, Permission.FINANCE_VIEW];
 // F12.3 (LOCKED DECISION 1): DEPUTY_DIRECTOR gets exactly the current
@@ -109,7 +131,8 @@ const view = [Permission.OBJECT_VIEW, Permission.WORK_VIEW, Permission.PTO_VIEW,
 const constructionControlGrants = [...view, Permission.INSPECTION_ACCEPT, Permission.INSPECTION_REJECT, Permission.ISSUE_CREATE, Permission.ISSUE_VERIFY];
 const ptoGrants = [...view, Permission.PTO_EDIT, Permission.PTO_TRANSFER_SDO, Permission.DOCUMENTATION_MANAGE];
 const sdoGrants = [...view, Permission.SDO_EDIT, Permission.SDO_CLOSE, Permission.FINANCE_EDIT, Permission.SDO_CASE_MANAGE];
-const grants: Record<Role, Permission[]> = { ADMIN: Object.values(Permission), GENERAL_DIRECTOR: view, TECHNICAL_DIRECTOR: [...view, Permission.OBJECT_CREATE, Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE, Permission.EXECUTION_UNIT_MANAGE], DEPUTY_DIRECTOR: [...view, Permission.OBJECT_CREATE, Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE, Permission.EXECUTION_UNIT_MANAGE], DEPARTMENT_HEAD: view, PROJECT_MANAGER: [...view, Permission.OBJECT_CREATE, Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE, Permission.EXECUTION_UNIT_MANAGE, Permission.WORK_UPDATE_PROGRESS, Permission.INSPECTION_REQUEST, Permission.ISSUE_RESOLVE], CONSTRUCTION_CONTROL: constructionControlGrants, CONSTRUCTION_CONTROL_HEAD: constructionControlGrants, PTO: ptoGrants, PTO_HEAD: ptoGrants, SDO: sdoGrants, SDO_HEAD: sdoGrants, CONTRACTOR_VIEWER: [Permission.OBJECT_VIEW, Permission.WORK_VIEW] };
+const teamRead = [Permission.PTO_TEAM_READ];
+const grants: Record<Role, Permission[]> = { ADMIN: Object.values(Permission), GENERAL_DIRECTOR: [...view, ...teamRead], TECHNICAL_DIRECTOR: [...view, Permission.OBJECT_CREATE, Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE, Permission.EXECUTION_UNIT_MANAGE], DEPUTY_DIRECTOR: [...view, Permission.OBJECT_CREATE, Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE, Permission.EXECUTION_UNIT_MANAGE, Permission.FUNCTION_TEAM_MANAGE, Permission.OBJECT_FUNCTION_LEAD_ASSIGN, ...teamRead], DEPARTMENT_HEAD: view, PROJECT_MANAGER: [...view, Permission.OBJECT_CREATE, Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE, Permission.EXECUTION_UNIT_MANAGE, Permission.WORK_UPDATE_PROGRESS, Permission.INSPECTION_REQUEST, Permission.ISSUE_RESOLVE], CONSTRUCTION_CONTROL: constructionControlGrants, CONSTRUCTION_CONTROL_HEAD: constructionControlGrants, PTO: [...ptoGrants, ...teamRead], PTO_HEAD: [...ptoGrants, Permission.PTO_OBJECT_TEAM_MANAGE, ...teamRead], SDO: sdoGrants, SDO_HEAD: sdoGrants, CONTRACTOR_VIEWER: [Permission.OBJECT_VIEW, Permission.WORK_VIEW] };
 export const hasPermission = (role: Role, p: Permission) => grants[role]?.includes(p) ?? false;
 // F8.2 Architecture Contract: "SDO: No F8.2 access" and no contractor portal
 // — the one place that decides who may see Executive Documentation data at

@@ -97,3 +97,7 @@
   flex-direction: column;
   gap: var(--cc-p-space-4);
 }
+
+.teamList { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: var(--cc-p-space-4); }
+.historyToggle { align-self: flex-start; margin-top: var(--cc-p-space-8); border: 0; background: none; padding: var(--cc-p-space-4); color: inherit; font: inherit; text-decoration: underline; cursor: pointer; }
+.historyToggle:focus-visible { outline: var(--cc-focus-ring-width) solid var(--cc-focus-ring); outline-offset: var(--cc-focus-ring-offset); }

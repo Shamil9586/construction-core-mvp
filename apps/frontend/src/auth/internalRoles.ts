@@ -190,3 +190,15 @@ export const isSdoRole = (role: string): boolean => role === 'SDO' || role === '
 export function canAdministerUsers(role: string): boolean {
   return role === 'ADMIN';
 }
+
+/**
+ * PBX-3A — «Команды и объекты»: leadership sees the PTO teams (GENERAL_DIRECTOR
+ * read-only); only DEPUTY_DIRECTOR and ADMIN may redistribute. The backend
+ * (FUNCTION_TEAM_MANAGE / OBJECT_FUNCTION_LEAD_ASSIGN) enforces both independently.
+ */
+export const canViewTeamsOverview = (role: string): boolean => role === 'DEPUTY_DIRECTOR' || role === 'GENERAL_DIRECTOR' || role === 'ADMIN';
+export const canRedistributeTeams = (role: string): boolean => role === 'DEPUTY_DIRECTOR' || role === 'ADMIN';
+/** «Моя команда ПТО» — PTO_HEAD manages, PTO reads its own objects. */
+export const canViewMyPtoTeam = (role: string): boolean => role === 'PTO_HEAD' || role === 'PTO';
+/** May read the PTO block on an object screen (backend: PTO_TEAM_READ). */
+export const canViewObjectPtoTeam = (role: string): boolean => canViewTeamsOverview(role) || canViewMyPtoTeam(role);

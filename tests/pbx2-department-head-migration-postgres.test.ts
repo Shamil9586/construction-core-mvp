@@ -49,7 +49,7 @@ const rejected = async (c: Client, fn: () => Promise<unknown>) => { try { await 
 test('migration 015 exists as the next version after 014', () => {
   const files = migrationFiles();
   assert.ok(files.includes('015_department_head_roles.sql'));
-  assert.equal(Number(files[files.length - 1].split('_')[0]), 15);
+  assert.equal(files.indexOf('015_department_head_roles.sql'), files.indexOf(files.find((f) => f.startsWith('014_'))!) + 1, '015 directly follows 014');
   const versions = files.map((f) => Number(f.split('_')[0]));
   assert.deepEqual(versions, versions.map((_, i) => i + 1), 'no gaps or duplicates in the chain');
 });
@@ -66,8 +66,8 @@ test('Path A (fresh native DB): full chain 1 -> latest, re-run is a no-op, CHECK
   try {
     await migrate();
     const first = (await client.query('SELECT version, applied_at FROM schema_migrations ORDER BY version')).rows;
-    assert.deepEqual(first.map((r) => r.version), migrationFiles().map((f) => Number(f.split('_')[0])), 'every migration 1..15 recorded');
-    assert.equal(first[first.length - 1].version, 15);
+    assert.deepEqual(first.map((r) => r.version), migrationFiles().map((f) => Number(f.split('_')[0])), 'every migration 1..latest recorded');
+    assert.equal(first[first.length - 1].version, Number(migrationFiles().at(-1)!.split('_')[0]));
     await migrate();
     const second = (await client.query('SELECT version, applied_at FROM schema_migrations ORDER BY version')).rows;
     assert.deepEqual(second, first, 're-running the runner changes nothing (applied versions skipped)');

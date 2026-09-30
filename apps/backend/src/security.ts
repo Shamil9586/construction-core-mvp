@@ -1,7 +1,7 @@
 import { ForbiddenException, UnauthorizedException, ConflictException, NotFoundException, BadRequestException } from '@nestjs/common';
 import { createHash, randomBytes, timingSafeEqual, createCipheriv, createDecipheriv } from 'node:crypto';
 import { pool, one, insert } from './db';
-import { hasPermission, Permission, Role } from '../../../packages/domain';
+import { hasPermission, isPtoRole, Permission, Role } from '../../../packages/domain';
 export type Actor = {
     id: string;
     tenantId: string;
@@ -27,7 +27,7 @@ export async function scoped(c: any, table: string, id: string, a: Actor, lock =
     throw new NotFoundException('Запись не найдена'); return row; }
 export async function objectAccess(c: any, a: Actor, objectId: string, write = false) { const o = await scoped(c, 'objects', objectId, a); if (a.role === 'PROJECT_MANAGER' && o.projectManagerId !== a.id)
     throw new ForbiddenException('Объект закреплён за другим РП'); if (a.role === 'CONTRACTOR_VIEWER' && (!a.contractorId || !(await one(c, 'SELECT id FROM object_contractors_active WHERE tenant_id=$1 AND object_id=$2 AND contractor_id=$3', [a.tenantId, objectId, a.contractorId]))))
-    throw new ForbiddenException('Нет доступа к объекту'); return o; }
+    throw new ForbiddenException('Нет доступа к объекту'); await ensurePtoObjectScope(c, a, objectId); return o; }
 export async function audit(c: any, a: Actor, entityType: string, entityId: string, action: string, oldValue: any, newValue: any, eventType?: string) { await insert(c, 'audit_logs', a.tenantId, { userId: a.id, entityType, entityId, action, oldValue: oldValue ? JSON.stringify(oldValue) : null, newValue: JSON.stringify(newValue) }); if (eventType) {
     const event = await insert(c, 'domain_events', a.tenantId, { eventType, entityId, payload: JSON.stringify({ actorId: a.id, entityType, entityId }) });
     // F12.3 (LOCKED DECISION 1): DEPUTY_DIRECTOR gets the same oversight
@@ -145,4 +145,34 @@ export async function completeIdempotentCommand(c: any, a: Actor, operation: str
     if (!idempotencyKey)
         return;
     await c.query('UPDATE idempotent_commands SET response=$4 WHERE tenant_id=$1 AND operation=$2 AND idempotency_key=$3', [a.tenantId, operation, idempotencyKey, JSON.stringify(response)]);
+}
+
+// PBX-3A (PBX3-D08): object scope for PTO operational authority. PTO_HEAD works
+// only on objects it CURRENTLY leads; PTO only on objects where it is CURRENTLY
+// an active object member. Nothing is inferred from the organizational team or
+// from Bitrix data — only the current object assignment rows count. ADMIN keeps
+// its system override, and every other role is untouched here (DEPUTY_DIRECTOR /
+// GENERAL_DIRECTOR never had PTO operational permissions, so they gain none).
+export async function isCurrentPtoLead(c: any, tenantId: string, objectId: string, userId: string): Promise<boolean> {
+    return !!(await one(c, "SELECT 1 FROM object_function_lead_assignments WHERE tenant_id=$1 AND object_id=$2 AND function_code='PTO' AND lead_user_id=$3 AND ended_at IS NULL", [tenantId, objectId, userId]));
+}
+export async function isCurrentPtoMember(c: any, tenantId: string, objectId: string, userId: string): Promise<boolean> {
+    return !!(await one(c, "SELECT 1 FROM object_function_member_assignments WHERE tenant_id=$1 AND object_id=$2 AND function_code='PTO' AND member_user_id=$3 AND ended_at IS NULL", [tenantId, objectId, userId]));
+}
+export async function ensurePtoObjectScope(c: any, a: Actor, objectId: string) {
+    if (!isPtoRole(a.role))
+        return;
+    const allowed = a.role === 'PTO_HEAD' ? await isCurrentPtoLead(c, a.tenantId, objectId, a.id) : await isCurrentPtoMember(c, a.tenantId, objectId, a.id);
+    if (!allowed)
+        throw new ForbiddenException(a.role === 'PTO_HEAD' ? 'Вы не являетесь текущим начальником ПТО этого объекта' : 'Вы не назначены на ПТО этого объекта');
+}
+// PBX-3A (PBX3-D08): a PTO responsible selected for an object's documentation
+// package must be active AND currently on that object's PTO team — a current
+// PTO object member, or the current PTO_HEAD of that object. Applies to every
+// actor including ADMIN; a member removed from the object can never receive
+// new responsibility there, while historical attribution is never rewritten.
+export async function ensurePtoResponsibleOnObject(c: any, a: Actor, objectId: string, responsible: any) {
+    ensure(isPtoRole(responsible.role) && responsible.isActive, 'Назначьте активного сотрудника ПТО');
+    const onTeam = responsible.role === 'PTO_HEAD' ? await isCurrentPtoLead(c, a.tenantId, objectId, responsible.id) : await isCurrentPtoMember(c, a.tenantId, objectId, responsible.id);
+    ensure(onTeam, 'Ответственный должен входить в текущую команду ПТО этого объекта');
 }

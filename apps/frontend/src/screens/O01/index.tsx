@@ -11,6 +11,7 @@ import {
   workSummaryColumns,
 } from '../../design-system';
 import type { O01ViewModel } from '../../view-models/o01';
+import { PtoTeamSection, type PtoTeamLoad } from './PtoTeamSection';
 import styles from './O01.module.css';
 
 /**
@@ -30,6 +31,8 @@ export interface O01Props {
   viewModel: O01ViewModel;
   sidebar: ReactNode;
   topbar?: ReactNode;
+  /** PBX-3A — present only for roles that may read the PTO team; absent means the block is not rendered. */
+  ptoTeam?: PtoTeamLoad;
   onNavigateHome: () => void;
   onSelectWork: (workId: string) => void;
   className?: string;
@@ -44,6 +47,7 @@ export function ObjectOverview({
   viewModel,
   sidebar,
   topbar,
+  ptoTeam,
   onNavigateHome,
   onSelectWork,
   className,
@@ -116,6 +120,8 @@ export function ObjectOverview({
           </div>
         </div>
       </section>
+
+      {ptoTeam ? <PtoTeamSection load={ptoTeam} /> : null}
 
       <section className={styles.section}>
         <DataTable

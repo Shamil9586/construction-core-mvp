@@ -25,8 +25,8 @@ test('role sets: storage set, current assignable, PBX-2 internal targets, legacy
   for (const r of roles) assert.ok((CURRENT_ASSIGNABLE_ROLES as readonly string[]).includes(r) || (LEGACY_ONLY_ROLES as readonly string[]).includes(r), r);
 });
 
-test('grant parity: each head role has EXACTLY the bundle of its department engineer role', () => {
-  assert.deepEqual(grantsOf('PTO_HEAD'), grantsOf('PTO'));
+test('grant parity: each head role has EXACTLY the bundle of its department engineer role (PTO_HEAD adds only PBX-3A PTO_OBJECT_TEAM_MANAGE)', () => {
+  assert.deepEqual(grantsOf('PTO_HEAD'), [...grantsOf('PTO'), Permission.PTO_OBJECT_TEAM_MANAGE].sort());
   assert.deepEqual(grantsOf('SDO_HEAD'), grantsOf('SDO'));
   assert.deepEqual(grantsOf('CONSTRUCTION_CONTROL_HEAD'), grantsOf('CONSTRUCTION_CONTROL'));
 });
@@ -44,7 +44,8 @@ test('no cross-department authority: heads get no ADMIN_USERS and none of anothe
 });
 
 test('DEPARTMENT_HEAD keeps its previous grants exactly (read-only view bundle); TECHNICAL_DIRECTOR untouched', () => {
-  assert.deepEqual(grantsOf('DEPARTMENT_HEAD'), grantsOf('GENERAL_DIRECTOR'));
+  // GENERAL_DIRECTOR additionally holds PBX-3A's read-only PTO_TEAM_READ oversight; DEPARTMENT_HEAD does not.
+  assert.deepEqual(grantsOf('DEPARTMENT_HEAD'), grantsOf('GENERAL_DIRECTOR').filter((p) => p !== Permission.PTO_TEAM_READ));
   assert.equal(hasPermission('DEPARTMENT_HEAD', Permission.OBJECT_VIEW), true);
   for (const p of [Permission.OBJECT_CREATE, Permission.PTO_EDIT, Permission.SDO_EDIT, Permission.INSPECTION_ACCEPT, Permission.ADMIN_USERS, Permission.DOCUMENTATION_MANAGE]) assert.equal(hasPermission('DEPARTMENT_HEAD', p), false, p);
   assert.ok(hasPermission('TECHNICAL_DIRECTOR', Permission.OBJECT_CREATE));
@@ -122,6 +123,8 @@ test('HTTP (mock auth): heads behave like their department role; legacy POST /us
     const dict = (await call('GET', 'dictionaries', tokens.PROJECT_MANAGER)).data;
     const contractors = (await call('GET', 'contractors', tokens.PROJECT_MANAGER)).data;
     const object = (await call('POST', 'objects', tokens.TECHNICAL_DIRECTOR, { externalCode: 'HEADS-' + Date.now(), name: 'Head roles', address: 'Тест, 1', organizationName: 'ООО СЗ «Гор-Строй»', projectManagerId: users.PROJECT_MANAGER.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] })).data;
+    // PBX-3A: PTO / PTO_HEAD operate only on objects they are assigned to (seeded head leads, seeded engineer is a member).
+    await (await import('./helpers/pbx3-fixtures')).assignPtoToObject(object.id);
     const mkWork = async (name: string) => (await call('POST', 'works', tokens.PROJECT_MANAGER, { objectId: object.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: users.PROJECT_MANAGER.id, name, unit: 'м²', plannedQuantity: 100, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '20000' })).data;
     const workA = await mkWork('Работа A'), workB = await mkWork('Работа B');
 

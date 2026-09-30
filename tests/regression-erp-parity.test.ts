@@ -29,7 +29,7 @@ test('Regression net ERP -> Core: object self-assignment, work/dependency guards
     const address = app.getHttpServer().address();
     const base = `http://127.0.0.1:${address.port}`;
     let token = '';
-    async function req(path: string, body?: any, expected = body === undefined ? 200 : 201) { const r = await fetch(base + '/' + path, { method: body === undefined ? 'GET' : 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: body === undefined ? undefined : JSON.stringify(body) }); const data: any = await r.json(); assert.equal(r.status, expected, path + ': ' + JSON.stringify(data)); return data; }
+    async function req(path: string, body?: any, expected = body === undefined ? 200 : 201) { const r = await fetch(base + '/' + path, { method: body === undefined ? 'GET' : 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: body === undefined ? undefined : JSON.stringify(body) }); const data: any = await r.json(); if (path === 'objects' && body !== undefined && r.status === 201) await (await import('./helpers/pbx3-fixtures')).assignPtoToObject(data.id); assert.equal(r.status, expected, path + ': ' + JSON.stringify(data)); return data; }
     async function login(role: string) { const d = await req('auth/mock', { role, key: 'regression-erp-parity-key' }); token = d.token; return d.user; }
     const dt = (delta: number) => new Date(Date.now() + delta * 86400000).toISOString().slice(0, 10);
     try {

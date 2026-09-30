@@ -36,6 +36,8 @@ test('F8.2: Documentation Package / Document / Version / status history — crea
   const pm = await actorWithRole('PROJECT_MANAGER');
   const sk = await actorWithRole('CONSTRUCTION_CONTROL');
   const work = await one(pool, 'SELECT * FROM works WHERE tenant_id=$1 LIMIT 1', [tenant.id]);
+  // PBX-3A: PTO operates only on objects it is assigned to.
+  await (await import('./helpers/pbx3-fixtures')).assignPtoToObject(work.objectId);
 
   // --- permission: DOCUMENTATION_MANAGE, not just any logged-in role ---
   await assert.rejects(

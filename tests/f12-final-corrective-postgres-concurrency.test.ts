@@ -53,6 +53,7 @@ async function harness(key: string) {
   async function req(path: string, body: any, token: string, expected: number | number[]) {
     const r = await fetch(base + '/' + path, { method: body === undefined ? 'GET' : 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: body === undefined ? undefined : JSON.stringify(body) });
     const data: any = await r.json();
+    if (path === 'objects' && body !== undefined && r.status === 201) await (await import('./helpers/pbx3-fixtures')).assignPtoToObject(data.id); // PBX-3A: PTO works only on assigned objects
     const allowed = Array.isArray(expected) ? expected : [expected];
     assert.ok(allowed.includes(r.status), `${path}: expected status in [${allowed.join(', ')}], got ${r.status}: ${JSON.stringify(data)}`);
     return { status: r.status, data };

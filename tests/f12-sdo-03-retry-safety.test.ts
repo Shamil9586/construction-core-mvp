@@ -45,6 +45,7 @@ test('F12-SDO-03: handoff/return/status-change are already retry-safe via Packag
   async function req(path: string, body?: any, expected = body === undefined ? 200 : 201) {
     const r = await fetch(base + '/' + path, { method: body === undefined ? 'GET' : 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: body === undefined ? undefined : JSON.stringify(body) });
     const data: any = await r.json();
+    if (path === 'objects' && body !== undefined && r.status === 201) await (await import('./helpers/pbx3-fixtures')).assignPtoToObject(data.id); // PBX-3A: PTO works only on assigned objects
     assert.equal(r.status, expected, path + ': ' + JSON.stringify(data));
     return data;
   }

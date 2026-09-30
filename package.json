@@ -19,6 +19,7 @@
     "test:f8.1-browser": "playwright test --config playwright.f8.1.config.ts",
     "test:f8.2-browser": "playwright test --config playwright.f8.2.config.ts",
     "test:pbx2-browser": "playwright test --config playwright.pbx2.config.ts",
+    "test:pbx3a-browser": "playwright test --config playwright.pbx3a.config.ts",
     "test:f7-prod": "playwright test --config playwright.f7-prod.config.ts"
   },
   "dependencies": {
