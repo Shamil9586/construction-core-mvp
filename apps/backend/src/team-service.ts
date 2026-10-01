@@ -2,6 +2,7 @@ import { Injectable, ForbiddenException, NotFoundException, ConflictException } 
 import { pool, one, rows, insert, transaction } from './db';
 import { Actor, requirePermission, checkVersion, scoped, audit, ensure, ensurePtoObjectScope, isCurrentPtoLead } from './security';
 import { Permission as P } from '../../../packages/domain';
+import { createLeadAssignedIntent } from './bitrix-notification-outbox';
 
 /**
  * PBX-3A — Object Responsibility, Team Redistribution & Handover Foundation (PTO vertical).
@@ -170,6 +171,8 @@ export class ObjectTeamService {
         // Deliberately NO statement touching object_function_member_assignments here (PBX3-D01).
         const row = await insert(c, T_LEAD, a.tenantId, { objectId, functionCode: FN, leadUserId, assignedBy: a.id });
         await audit(c, a, ENTITY[T_LEAD], row.id, current ? 'REPLACE' : 'ASSIGN', current ?? null, row);
+        // PBX-5A: the ONLY notification trigger. Same transaction as the new assignment; no Bitrix I/O here.
+        await createLeadAssignedIntent(c, a.tenantId, row);
         return { previous: current ?? null, current: row };
     }
     private async memberAdd(c: any, a: Actor, users: Map<string, any>, objectId: string, memberUserId: string) {
