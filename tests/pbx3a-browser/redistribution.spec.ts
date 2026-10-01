@@ -81,6 +81,17 @@ test('Deputy redistributes Kuznetsov\'s team in the UI; lead swap keeps members,
   await page.getByRole('button', { name: 'Перераспределить', exact: true }).click();
   await pick('Действие', 'Перевести инженера в команду начальника'); await pick('Инженер', 'Ахметов Ахмет'); await pick('Начальник ПТО', 'Иванов Олег'); await addStep();
   await pick('Действие', 'Перевести инженера в команду начальника'); await pick('Инженер', 'Орлов Олег'); await pick('Начальник ПТО', smirnov.name); await addStep();
+  // PBX3A-LIVE-UI-01: object-scoped pickers — memberEnd lists only members of the selected object; memberAdd excludes them
+  await pick('Действие', 'Снять инженера с объекта');
+  await expect(page.getByLabel('Инженер', { exact: true }).locator('option:not([value=""])')).toHaveCount(0);
+  await pick('Объект', 'Объект-3');
+  const endOptions = await page.getByLabel('Инженер', { exact: true }).locator('option:not([value=""])').allTextContents();
+  expect(endOptions).toContain('Ахметов Ахмет');
+  expect(endOptions).not.toContain('Орлов Олег');
+  await pick('Действие', 'Добавить инженера на объект'); await pick('Объект', 'Объект-3');
+  const addOptions = await page.getByLabel('Инженер', { exact: true }).locator('option:not([value=""])').allTextContents();
+  expect(addOptions).not.toContain('Ахметов Ахмет');
+  expect(addOptions).toContain('Орлов Олег');
   await pick('Действие', 'Снять инженера с объекта'); await pick('Объект', 'Объект-3'); await pick('Инженер', 'Ахметов Ахмет'); await addStep();
   await pick('Действие', 'Добавить инженера на объект'); await pick('Объект', 'Объект-4'); await pick('Инженер', 'Ахметов Ахмет'); await addStep();
   await pick('Действие', 'Снять инженера с объекта'); await pick('Объект', 'Объект-4'); await pick('Инженер', 'Орлов Олег'); await addStep();

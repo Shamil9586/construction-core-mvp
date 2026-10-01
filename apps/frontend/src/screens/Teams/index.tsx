@@ -8,6 +8,7 @@ import {
   buildRedistributeCommand,
   canSubmitRedistribution,
   describeOp,
+  objectMemberOptions,
   replacementHandoverGaps,
   type RedistributeOp,
 } from '../../view-models/teams';
@@ -113,8 +114,8 @@ function RedistributePanel({ overview, busy, onCancel, onSubmit }: { overview: T
       </p>
       <div className={styles.opForm}>
         <Select label="Действие" value={kind} onChange={(v) => { setKind(v as OpKind); setF({ member: '', manager: '', object: '', outgoing: '', incoming: '' }); }} options={(Object.keys(OP_LABEL) as OpKind[]).map((k) => ({ value: k, label: OP_LABEL[k] }))} placeholder="Выберите действие" />
-        {needsObject ? <Select label="Объект" value={f.object} onChange={(v) => set({ object: v })} options={objects} placeholder="Выберите объект" /> : null}
-        {needsMember ? <Select label="Инженер" value={f.member} onChange={(v) => set({ member: v })} options={kind === 'memberAdd' || kind === 'orgTransfer' ? activeEngineers : engineers} placeholder="Выберите инженера" /> : null}
+        {needsObject ? <Select label="Объект" value={f.object} onChange={(v) => set({ object: v, member: '' })} options={objects} placeholder="Выберите объект" /> : null}
+        {needsMember ? <Select label="Инженер" value={f.member} onChange={(v) => set({ member: v })} options={kind === 'memberAdd' || kind === 'memberEnd' ? objectMemberOptions(overview, kind, f.object, ops) : kind === 'orgTransfer' ? activeEngineers : engineers} placeholder="Выберите инженера" /> : null}
         {needsManager ? <Select label="Начальник ПТО" value={f.manager} onChange={(v) => set({ manager: v })} options={activeHeads} placeholder="Выберите начальника" /> : null}
         {kind === 'handover' ? (
           <>

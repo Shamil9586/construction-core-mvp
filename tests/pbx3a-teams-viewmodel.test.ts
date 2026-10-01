@@ -53,3 +53,55 @@ test('PBX3A-R02 (UI): replacement without handover coverage is blocked before su
   assert.equal(canSubmitRedistribution('r', [swap[0]]), true, 'removal-only');
   assert.equal(canSubmitRedistribution('r', [covered[2]]), true, 'handover-only');
 });
+
+/* PBX3A-LIVE-UI-01 — object-scoped engineer pickers */
+import { objectMemberOptions } from '../apps/frontend/src/view-models/teams';
+
+const eng = (userId: string, name: string, isActive = true) => ({ userId, name, isActive, orgManagerUserId: null });
+const member = (userId: string, name: string, isActive = true) => ({ userId, name, isActive, assignmentId: 'a-' + userId, startedAt: '2026-01-01', version: 1, orgManagerUserId: null, orgManagerName: null, inherited: false });
+const overview = {
+  engineers: [eng('A', 'Ахматов'), eng('B', 'Бардакова'), eng('C', 'Сидоров'), eng('X', 'Неактивный', false)],
+  objects: [
+    { objectId: 'o1', name: 'Объект 1', lead: null, members: [member('A', 'Ахматов'), member('X', 'Неактивный', false)] },
+    { objectId: 'o2', name: 'Объект 2', lead: null, members: [member('B', 'Бардакова')] },
+  ],
+};
+const values = (o: { value: string }[]) => o.map((x) => x.value).sort();
+
+test('PBX3A-LIVE-UI-01 A: memberEnd offers only current members of the selected object', () => {
+  const opts = objectMemberOptions(overview, 'memberEnd', 'o1');
+  assert.ok(values(opts).includes('A'));
+  assert.ok(!values(opts).includes('B'));
+  assert.ok(!values(opts).includes('C'));
+});
+
+test('PBX3A-LIVE-UI-01 B/C: memberAdd offers active non-members only; an engineer on another object stays eligible', () => {
+  const opts = objectMemberOptions(overview, 'memberAdd', 'o1');
+  assert.ok(!values(opts).includes('A'), 'already a member');
+  assert.ok(values(opts).includes('B'), 'B works on o2 but is not on o1');
+  assert.ok(values(opts).includes('C'));
+  assert.ok(!values(opts).includes('X'), 'inactive engineers cannot be added');
+});
+
+test('PBX3A-LIVE-UI-01 D: no object selected (or unknown object) → empty, never the tenant list', () => {
+  for (const kind of ['memberEnd', 'memberAdd'] as const) {
+    assert.deepEqual(objectMemberOptions(overview, kind, ''), []);
+    assert.deepEqual(objectMemberOptions(overview, kind, 'nope'), []);
+  }
+});
+
+test('PBX3A-LIVE-UI-01 E: an inactive current member stays selectable for memberEnd, labelled «(недоступен)»', () => {
+  const x = objectMemberOptions(overview, 'memberEnd', 'o1').find((o) => o.value === 'X');
+  assert.equal(x?.label, 'Неактивный (недоступен)');
+});
+
+test('PBX3A-LIVE-UI-01: queued steps for the same object adjust the effective picker; other objects are unaffected', () => {
+  const ended: RedistributeOp[] = [{ kind: 'memberEnd', objectId: 'o1', memberUserId: 'A' }];
+  assert.ok(!values(objectMemberOptions(overview, 'memberEnd', 'o1', ended)).includes('A'), 'already queued for removal');
+  assert.ok(!values(objectMemberOptions(overview, 'memberAdd', 'o1', ended)).includes('A'), 'no remove+add of the same person in one command');
+  const added: RedistributeOp[] = [{ kind: 'memberAdd', objectId: 'o1', memberUserId: 'C' }];
+  assert.ok(!values(objectMemberOptions(overview, 'memberAdd', 'o1', added)).includes('C'), 'already queued for addition');
+  assert.ok(values(objectMemberOptions(overview, 'memberEnd', 'o1', added)).includes('C'));
+  assert.ok(values(objectMemberOptions(overview, 'memberAdd', 'o2', added)).includes('C'), 'queued step on o1 does not affect o2');
+  assert.ok(values(objectMemberOptions(overview, 'memberEnd', 'o2', ended)).includes('B'));
+});

@@ -1,4 +1,4 @@
-import type { HandoverStatus, UnresolvedKind, RedistributeCommand } from '../data/functionTeamsApi';
+import type { HandoverStatus, UnresolvedKind, RedistributeCommand, TeamsOverview } from '../data/functionTeamsApi';
 
 /**
  * PBX-3A view-model helpers for «Команды и объекты» / «Моя команда ПТО»: Russian labels and the
@@ -72,4 +72,35 @@ export function describeOp(op: RedistributeOp, name: (userId: string) => string,
     case 'memberAdd': return `«${objectName(op.objectId)}»: добавить ${name(op.memberUserId)}`;
     case 'handover': return `«${objectName(op.objectId)}»: передача дел ${name(op.outgoingUserId)} → ${name(op.incomingUserId)}`;
   }
+}
+
+export interface PickerOption { value: string; label: string }
+
+/**
+ * Engineer picker for the object-scoped steps «Снять инженера с объекта» (memberEnd) and
+ * «Добавить инженера на объект» (memberAdd). It is derived from the SELECTED object's current
+ * PTO members, adjusted by the steps already queued for that same object:
+ *  - memberEnd: effective members (a current member stays selectable even when inactive, labelled «(недоступен)»);
+ *  - memberAdd: active PTO engineers who are not effective members (nor queued for removal in this command).
+ * No object selected → empty list (never the whole tenant). The backend stays authoritative.
+ */
+export function objectMemberOptions(
+  overview: Pick<TeamsOverview, 'engineers' | 'objects'>,
+  kind: 'memberEnd' | 'memberAdd',
+  objectId: string,
+  queued: readonly RedistributeOp[] = [],
+): PickerOption[] {
+  const object = objectId ? overview.objects.find((o) => o.objectId === objectId) : undefined;
+  if (!object) return [];
+  const effective = new Map<string, { name: string; isActive: boolean }>(object.members.map((m) => [m.userId, { name: m.name, isActive: m.isActive }]));
+  const endedNow = new Set<string>();
+  for (const op of queued) {
+    if (op.kind === 'memberEnd' && op.objectId === objectId) { effective.delete(op.memberUserId); endedNow.add(op.memberUserId); }
+    if (op.kind === 'memberAdd' && op.objectId === objectId) {
+      const e = overview.engineers.find((x) => x.userId === op.memberUserId);
+      effective.set(op.memberUserId, { name: e?.name ?? op.memberUserId, isActive: e?.isActive ?? true });
+    }
+  }
+  if (kind === 'memberEnd') return [...effective].map(([value, m]) => ({ value, label: m.isActive ? m.name : `${m.name} (недоступен)` }));
+  return overview.engineers.filter((e) => e.isActive && !effective.has(e.userId) && !endedNow.has(e.userId)).map((e) => ({ value: e.userId, label: e.name }));
 }
