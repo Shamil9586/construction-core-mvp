@@ -7,7 +7,6 @@ import { canAdministerUsers, adminRoleLabel, type AdminAssignableRole } from '..
 import {
   addCoreUser,
   listAdminUsers,
-  listBitrixDepartments,
   listBitrixEmployees,
   updateCoreUser,
   type AdminCoreUser,
@@ -35,7 +34,6 @@ function AdminUsersContainer() {
   const [directory, setDirectory] = useState<DirectoryLoad>({ status: 'Loading' });
   const [coreUsers, setCoreUsers] = useState<AdminCoreUser[]>([]);
   const [employees, setEmployees] = useState<BitrixEmployee[] | null>(null);
-  const [departments, setDepartments] = useState<Map<string, string> | null>(null);
   const [notice, setNotice] = useState<AdminUsersNotice | null>(null);
   const [busy, setBusy] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
@@ -56,17 +54,10 @@ function AdminUsersContainer() {
     );
     // A directory failure is shown as an error and never as an empty employee list.
     listBitrixEmployees().then(
-      async (result) => {
-        let names: Map<string, string> | null = null;
-        try {
-          names = new Map((await listBitrixDepartments()).map((d) => [d.ID, d.NAME ?? `Подразделение № ${d.ID}`]));
-        } catch {
-          names = null; // department scope may be missing on the portal: context only, degrade to numbers
-        }
+      (result) => {
         if (cancelled) return;
         setEmployees(result.employees);
-        setDepartments(names);
-        setDirectory({ status: 'Loaded', truncated: result.truncated, departmentsAvailable: names !== null });
+        setDirectory({ status: 'Loaded', truncated: result.truncated });
       },
       (error: unknown) => {
         if (cancelled) return;
@@ -79,7 +70,7 @@ function AdminUsersContainer() {
     };
   }, [reloadKey]);
 
-  const rows = useMemo(() => buildAdminUserRows(employees, coreUsers, departments), [employees, coreUsers, departments]);
+  const rows = useMemo(() => buildAdminUserRows(employees, coreUsers), [employees, coreUsers]);
 
   const mutate = useCallback(async (run: () => Promise<AdminCoreUser>, success: (user: AdminCoreUser) => string) => {
     setBusy(true);

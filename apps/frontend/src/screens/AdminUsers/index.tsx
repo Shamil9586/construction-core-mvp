@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AppShell, Button, DataTable, PageHeader, StatusBadge, typeClass } from '../../design-system';
 import type { DataTableColumn } from '../../design-system';
 import type { AdminAssignableRole } from '../../auth/internalRoles';
@@ -44,7 +44,7 @@ export type AdminUsersLoad =
 export type DirectoryLoad =
   | { status: 'Loading' }
   | { status: 'Error'; message: string }
-  | { status: 'Loaded'; truncated: boolean; departmentsAvailable: boolean };
+  | { status: 'Loaded'; truncated: boolean };
 
 export interface AdminUsersNotice {
   kind: 'success' | 'error';
@@ -72,26 +72,20 @@ export interface AdminUsersScreenProps {
 const COLUMNS: Record<RegistryTab, DataTableColumn[]> = {
   core: [
     { key: 'employee', header: 'Сотрудник', width: 'fill' },
-    { key: 'position', header: 'Должность', width: 190 },
-    { key: 'departments', header: 'Подразделение', width: 190 },
-    { key: 'role', header: 'Роль в Core', width: 170 },
-    { key: 'status', header: 'Статус', width: 170 },
-    { key: 'actions', header: 'Действия', width: 250, align: 'end' },
+    { key: 'role', header: 'Роль в Core', width: 220 },
+    { key: 'status', header: 'Статус', width: 200 },
+    { key: 'actions', header: 'Действия', width: 120, align: 'end' },
   ],
   notInCore: [
     { key: 'employee', header: 'Сотрудник', width: 'fill' },
-    { key: 'position', header: 'Должность', width: 200 },
-    { key: 'departments', header: 'Подразделение', width: 200 },
-    { key: 'bitrix', header: 'Статус Bitrix24', width: 180 },
-    { key: 'actions', header: 'Действие', width: 200, align: 'end' },
+    { key: 'bitrix', header: 'Статус Bitrix24', width: 220 },
+    { key: 'actions', header: 'Действия', width: 120, align: 'end' },
   ],
   inactive: [
     { key: 'employee', header: 'Сотрудник', width: 'fill' },
-    { key: 'position', header: 'Должность', width: 180 },
-    { key: 'departments', header: 'Подразделение', width: 180 },
-    { key: 'core', header: 'Состояние Core', width: 190 },
-    { key: 'bitrix', header: 'Статус Bitrix24', width: 170 },
-    { key: 'actions', header: 'Действия', width: 250, align: 'end' },
+    { key: 'core', header: 'Состояние Core', width: 240 },
+    { key: 'bitrix', header: 'Статус Bitrix24', width: 200 },
+    { key: 'actions', header: 'Действия', width: 120, align: 'end' },
   ],
 };
 const PAGE_SIZE = 50;
@@ -210,6 +204,67 @@ function ActionPanel({
   );
 }
 
+interface MenuAction { key: string; label: string; onSelect: () => void }
+
+/**
+ * Compact ⋯ menu (one per row). The list is positioned `fixed` from the trigger so the table viewport's own scrolling
+ * never clips it; Escape, an outside click, scrolling and resizing close it. A row with no valid action gets no menu at all.
+ */
+function RowMenu({ name, actions, disabled }: { name: string; actions: MenuAction[]; disabled: boolean }) {
+  const [at, setAt] = useState<{ top: number; right: number } | null>(null);
+  const root = useRef<HTMLDivElement>(null);
+  const first = useRef<HTMLButtonElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const open = at !== null;
+  useEffect(() => {
+    if (!open) return;
+    first.current?.focus({ preventScroll: true });
+    const close = () => setAt(null);
+    const away = (e: MouseEvent) => { if (root.current && !root.current.contains(e.target as Node)) close(); };
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') { close(); trigger.current?.focus(); } };
+    document.addEventListener('mousedown', away);
+    document.addEventListener('keydown', esc);
+    window.addEventListener('resize', close);
+    const onScroll = (e: Event) => { if (!(root.current && e.target instanceof Node && root.current.contains(e.target))) close(); };
+    // Scroll events are dispatched a frame late: the scroll that brought the trigger into view must not close the list it just opened.
+    const armScroll = window.setTimeout(() => window.addEventListener('scroll', onScroll, true), 150);
+    return () => { document.removeEventListener('mousedown', away); document.removeEventListener('keydown', esc); window.removeEventListener('resize', close); window.clearTimeout(armScroll); window.removeEventListener('scroll', onScroll, true); };
+  }, [open]);
+  if (actions.length === 0) return null;
+  return (
+    <div className={styles.menuRoot} ref={root}>
+      <button
+        ref={trigger}
+        type="button"
+        className={styles.menuButton}
+        aria-label={`Действия: ${name}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        disabled={disabled}
+        onClick={(e) => {
+          if (open) { setAt(null); return; }
+          const r = e.currentTarget.getBoundingClientRect();
+          // Open below the trigger; flip above when the list (≈ 44px per item) would run off the bottom of the viewport.
+          const height = actions.length * 44 + 10;
+          const below = r.bottom + 4;
+          setAt({ top: below + height > window.innerHeight ? Math.max(8, r.top - height - 4) : below, right: Math.max(8, window.innerWidth - r.right) });
+        }}
+      >
+        ⋯
+      </button>
+      {at ? (
+        <div className={styles.menu} role="menu" aria-label={`Действия: ${name}`} style={{ top: at.top, right: at.right }}>
+          {actions.map((a, i) => (
+            <button key={a.key} ref={i === 0 ? first : undefined} type="button" role="menuitem" className={styles.menuItem} onClick={() => { setAt(null); a.onSelect(); }}>
+              {a.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 const coreStateText = (row: AdminUserRow) => (row.core ? 'Есть в Core' : 'Нет в Core');
 
 export function AdminUsersScreen(props: AdminUsersScreenProps) {
@@ -254,26 +309,20 @@ export function AdminUsersScreen(props: AdminUsersScreenProps) {
     ? 'Список сотрудников Bitrix24 недоступен'
     : searching && rows.some((r) => rowInTab(r, query.tab)) ? NO_RESULTS_TEXT : EMPTY_TEXT[query.tab];
 
+  /** Existing actions only (same semantics and authorization); their availability rules are unchanged. */
   const actionsFor = (row: AdminUserRow) => {
-    const label = row.displayName;
+    const list: MenuAction[] = [];
     if (!row.core) {
       // Not in Core: the existing safe add workflow, offered only for an employee ACTIVE in Bitrix24.
-      return row.bitrixInactive ? <span className={[typeClass('label'), styles.secondary].join(' ')}>—</span> : (
-        <Button variant="Secondary" disabled={busy} aria-label={`Добавить в Core: ${label}`} onClick={() => open(row, 'add')}>Добавить в Core</Button>
-      );
+      if (!row.bitrixInactive) list.push({ key: 'add', label: 'Добавить в Core', onSelect: () => open(row, 'add') });
+    } else if (!row.core.external) {
+      list.push({ key: 'role', label: 'Изменить роль', onSelect: () => open(row, 'role') });
+      list.push(row.core.isActive
+        ? { key: 'off', label: 'Отключить доступ', onSelect: () => open(row, 'deactivate') }
+        : { key: 'on', label: 'Включить доступ', onSelect: () => open(row, 'reactivate') });
     }
-    if (row.core.external) return <span className={[typeClass('label'), styles.secondary].join(' ')}>Внешний участник — вне этого раздела</span>;
-    return row.core.isActive ? (
-      <>
-        <Button variant="Secondary" disabled={busy} aria-label={`Изменить роль: ${label}`} onClick={() => open(row, 'role')}>Изменить роль</Button>
-        <Button variant="Secondary" disabled={busy} aria-label={`Отключить доступ: ${label}`} onClick={() => open(row, 'deactivate')}>Отключить доступ</Button>
-      </>
-    ) : (
-      <>
-        <Button variant="Secondary" disabled={busy} aria-label={`Включить доступ: ${label}`} onClick={() => open(row, 'reactivate')}>Включить доступ</Button>
-        <Button variant="Secondary" disabled={busy} aria-label={`Изменить роль: ${label}`} onClick={() => open(row, 'role')}>Изменить роль</Button>
-      </>
-    );
+    if (row.core?.external) return <span className={[typeClass('label'), styles.secondary].join(' ')}>Внешний участник</span>;
+    return <RowMenu name={row.displayName} actions={list} disabled={busy} />;
   };
 
   const identity = (row: AdminUserRow) => (
@@ -285,8 +334,6 @@ export function AdminUsersScreen(props: AdminUsersScreenProps) {
       {row.missingInDirectory ? <div className={styles.rowBadge}><StatusBadge variant="Attention">Не найден в Bitrix24</StatusBadge></div> : null}
     </>
   );
-  const muted = (text: string | null) => <span className={[typeClass('body'), styles.secondary].join(' ')}>{text ?? '—'}</span>;
-  const dept = (row: AdminUserRow) => (row.departments.length > 0 ? row.departments.join(', ') : null);
   const bitrixBadge = (row: AdminUserRow) => {
     const state = bitrixStateOf(row);
     return <StatusBadge variant={state === 'active' ? 'OnTrack' : state === 'inactive' ? 'Attention' : 'Neutral'}>{BITRIX_STATE_LABEL[state]}</StatusBadge>;
@@ -300,27 +347,17 @@ export function AdminUsersScreen(props: AdminUsersScreenProps) {
   );
 
   const cells = (row: AdminUserRow): ReactNode[] => {
-    const common = [<td key="e" className={styles.cell}>{identity(row)}</td>, <td key="p" className={styles.cell}>{muted(row.position)}</td>, <td key="d" className={styles.cell}>{muted(dept(row))}</td>];
-    const actions = <td key="a" className={[styles.cell, styles.alignEnd].join(' ')}><div className={styles.rowActions}>{actionsFor(row)}</div></td>;
-    if (query.tab === 'core') return [...common, <td key="r" className={styles.cell}><span className={typeClass('body')}>{row.core?.roleLabel}</span></td>, <td key="s" className={styles.cell}>{coreBadge(row)}</td>, actions];
-    if (query.tab === 'notInCore') return [...common, <td key="b" className={styles.cell}>{bitrixBadge(row)}</td>, actions];
-    return [...common, <td key="c" className={styles.cell}>{coreState(row)}</td>, <td key="b" className={styles.cell}>{bitrixBadge(row)}</td>, actions];
+    const who = <td key="e" className={styles.cell}>{identity(row)}</td>;
+    const actions = <td key="a" className={[styles.cell, styles.alignEnd].join(' ')}>{actionsFor(row)}</td>;
+    if (query.tab === 'core') return [who, <td key="r" className={styles.cell}><span className={typeClass('body')}>{row.core?.roleLabel}</span></td>, <td key="s" className={styles.cell}>{coreBadge(row)}</td>, actions];
+    if (query.tab === 'notInCore') return [who, <td key="b" className={styles.cell}>{bitrixBadge(row)}</td>, actions];
+    return [who, <td key="c" className={styles.cell}>{coreState(row)}</td>, <td key="b" className={styles.cell}>{bitrixBadge(row)}</td>, actions];
   };
 
   const panelFor = (row: AdminUserRow) =>
     panel?.key === row.key ? (
       <ActionPanel key={`${row.key}-${panel.mode}`} row={row} mode={panel.mode} busy={busy} onCancel={closePanel} onSubmit={(role) => submit(row, panel.mode, role)} />
     ) : null;
-
-  const filterSelect = (id: string, label: string, value: string, values: string[], onChange: (v: string) => void, disabled = false) => (
-    <div className={styles.field}>
-      <label htmlFor={id} className={typeClass('label')}>{label}</label>
-      <select id={id} className={styles.input} value={value} disabled={disabled || values.length === 0} onChange={(e) => onChange(e.target.value)}>
-        <option value="">Все</option>
-        {values.map((v) => <option key={v} value={v}>{v}</option>)}
-      </select>
-    </div>
-  );
 
   return (
     <AppShell sidebar={sidebar}>
@@ -354,11 +391,6 @@ export function AdminUsersScreen(props: AdminUsersScreenProps) {
             <span className={typeClass('body')}>Bitrix24 вернул неполный список сотрудников — часть сотрудников не показана.</span>
           </div>
         ) : null}
-        {directory.status === 'Loaded' && !directory.departmentsAvailable ? (
-          <div className={[styles.banner, styles.bannerWarning].join(' ')} role="status">
-            <span className={typeClass('body')}>Названия подразделений недоступны — показаны их номера.</span>
-          </div>
-        ) : null}
       </div>
 
       {core.status === 'Error' ? null : (
@@ -370,7 +402,7 @@ export function AdminUsersScreen(props: AdminUsersScreenProps) {
                 id="registry-search"
                 type="search"
                 className={styles.input}
-                placeholder="Поиск по ФИО, должности, подразделению или e-mail"
+                placeholder="Поиск по ФИО или e-mail"
                 value={query.search}
                 onChange={(e) => patch({ search: e.target.value })}
                 autoComplete="off"
@@ -391,9 +423,13 @@ export function AdminUsersScreen(props: AdminUsersScreenProps) {
               ))}
             </div>
             <div className={styles.filters}>
-              {filterSelect('filter-department', 'Подразделение', query.department, options.departments, (v) => patch({ department: v }))}
-              {filterSelect('filter-role', 'Роль в Core', query.role, options.roles, (v) => patch({ role: v }), query.tab === 'notInCore')}
-              {filterSelect('filter-position', 'Должность', query.position, options.positions, (v) => patch({ position: v }))}
+              <div className={styles.field}>
+                <label htmlFor="filter-role" className={typeClass('label')}>Роль в Core</label>
+                <select id="filter-role" className={styles.input} value={query.role} disabled={options.roles.length === 0} onChange={(e) => patch({ role: e.target.value })}>
+                  <option value="">Все</option>
+                  {options.roles.map((v) => <option key={v} value={v}>{v}</option>)}
+                </select>
+              </div>
               <div className={styles.field}>
                 <label htmlFor="registry-sort" className={typeClass('label')}>Сортировка</label>
                 <select id="registry-sort" className={styles.input} value={query.sort} onChange={(e) => patch({ sort: e.target.value as RegistrySort })}>
@@ -411,14 +447,12 @@ export function AdminUsersScreen(props: AdminUsersScreenProps) {
                   {page.map((row) => (
                     <li key={row.key} className={styles.card}>
                       {identity(row)}
-                      {row.position ? <div className={typeClass('body')}>{row.position}</div> : null}
-                      {dept(row) ? muted(dept(row)) : null}
                       <div className={styles.cardStates}>
                         {query.tab === 'core' ? <><span className={typeClass('body')}>{row.core?.roleLabel}</span>{coreBadge(row)}</> : null}
                         {query.tab === 'notInCore' ? bitrixBadge(row) : null}
                         {query.tab === 'inactive' ? <>{coreState(row)}{bitrixBadge(row)}</> : null}
                       </div>
-                      <div className={styles.rowActions}>{actionsFor(row)}</div>
+                      <div className={styles.cardActions}>{actionsFor(row)}</div>
                       {panelFor(row)}
                     </li>
                   ))}

@@ -29,11 +29,6 @@ export interface BitrixEmployee {
   UF_DEPARTMENT: number[];
 }
 
-export interface BitrixDepartment {
-  ID: string;
-  NAME: string | null;
-}
-
 export interface EmployeeDirectory {
   employees: BitrixEmployee[];
   truncated: boolean;
@@ -60,11 +55,6 @@ export async function listAdminUsers(): Promise<AdminCoreUser[]> {
 export async function listBitrixEmployees(): Promise<EmployeeDirectory> {
   const result = await request<{ users: BitrixEmployee[]; truncated?: boolean }>('GET', 'bitrix/directory/users');
   return { employees: result.users, truncated: result.truncated === true };
-}
-
-export async function listBitrixDepartments(): Promise<BitrixDepartment[]> {
-  const result = await request<{ departments: BitrixDepartment[] }>('GET', 'bitrix/directory/departments');
-  return result.departments;
 }
 
 /** The name is read from Bitrix by the server; the client sends only identity and the chosen role. */

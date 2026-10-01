@@ -8,8 +8,8 @@ import {
 
 const emp = (ID: string, LAST_NAME: string, NAME: string, extra: any = {}) => ({ ID, NAME, LAST_NAME, ACTIVE: true, WORK_POSITION: null, UF_DEPARTMENT: [], ...extra });
 const core = (bitrixUserId: string, name: string, role: string, extra: any = {}) => ({ id: 'c' + bitrixUserId, name, role, bitrixUserId, isActive: true, version: 1, ...extra });
-const depts = new Map([['5', 'Дирекция'], ['6', 'Производство']]);
 
+// The directory still carries WORK_POSITION / UF_DEPARTMENT (global contract); the registry must ignore them completely.
 const rows = buildAdminUserRows(
   [
     emp('1', 'Админов', 'Админ', { WORK_POSITION: 'Системный администратор', UF_DEPARTMENT: [5] }),
@@ -25,59 +25,65 @@ const rows = buildAdminUserRows(
     core('5', 'Беляев Олег', 'PTO', { isActive: false }), // Core record disabled AND Bitrix-inactive: independent facts
     core('9', 'Только Core', 'SDO'),                       // not in the directory at all
   ],
-  depts,
 );
 const q = (extra: Partial<RegistryQuery>): RegistryQuery => ({ ...DEFAULT_QUERY, ...extra });
 const names = (r: typeof rows) => r.map((x) => x.displayName);
 
-test('tabs: «В Core» = has a Core record; «Не добавлены» = active in Bitrix24, no record; «Неактивны» = ACTIVE=false in Bitrix24 (overlaps «В Core»)', () => {
+test('registry rows carry no Bitrix position / department at all', () => {
+  for (const r of rows) {
+    assert.ok(!('position' in r) && !('departments' in r), r.displayName);
+    assert.ok(!JSON.stringify(r).match(/Системный администратор|Начальник отдела|Дирекция|Производство|Генеральный директор/), r.displayName);
+  }
+  assert.deepEqual(Object.keys(DEFAULT_QUERY).sort(), ['role', 'search', 'sort', 'tab']);
+});
+
+test('tabs keep their semantics: «В Core» = Core record; «Не добавлены» = active in Bitrix24, no record; «Неактивны» = ACTIVE=false (overlaps «В Core»)', () => {
   assert.deepEqual(names(applyRegistry(rows, q({ tab: 'core' }))), ['Админов Админ', 'Беляев Олег', 'Громов Николай', 'Только Core']);
   assert.deepEqual(names(applyRegistry(rows, q({ tab: 'notInCore' }))), ['Ёлкина Дарья', 'Петрова Ирина']);
   assert.deepEqual(names(applyRegistry(rows, q({ tab: 'inactive' }))), ['Беляев Олег', 'Уволенный Сергей']);
   assert.deepEqual(tabCounts(rows), { core: 4, notInCore: 2, inactive: 2 });
   const by = Object.fromEntries(rows.map((r) => [r.bitrixUserId, r]));
-  assert.equal(rowInTab(by['5']!, 'core') && rowInTab(by['5']!, 'inactive'), true, 'overlap is intentional and visible in both');
+  assert.equal(rowInTab(by['5']!, 'core') && rowInTab(by['5']!, 'inactive'), true);
   assert.equal(by['5']!.core!.isActive, false);
   assert.equal(bitrixStateOf(by['5']!), 'inactive');
-  // Bitrix inactivity is never inferred from the Core flag: a disabled Core user active in Bitrix is NOT in the inactive tab
-  const t = buildAdminUserRows([emp('1', 'А', 'Б')], [core('1', 'А Б', 'PTO', { isActive: false })], null);
-  assert.equal(rowInTab(t[0]!, 'inactive'), false);
-  assert.equal(bitrixStateOf(t[0]!), 'active');
-  // a Core user missing from the directory is not "inactive in Bitrix24"; with no directory at all nothing is invented
+  const t = buildAdminUserRows([emp('1', 'А', 'Б')], [core('1', 'А Б', 'PTO', { isActive: false })]);
+  assert.equal(rowInTab(t[0]!, 'inactive'), false, 'Bitrix inactivity is never inferred from the Core flag');
   assert.equal(bitrixStateOf(by['9']!), 'unknown');
-  assert.deepEqual(tabCounts(buildAdminUserRows(null, [core('1', 'А', 'PTO')], null)), { core: 1, notInCore: 0, inactive: 0 });
+  assert.deepEqual(tabCounts(buildAdminUserRows(null, [core('1', 'А', 'PTO')])), { core: 1, notInCore: 0, inactive: 0 });
 });
 
-test('search: name, e-mail, position, department; case-insensitive, partial, ё≡е, multi-token', () => {
+test('search matches ONLY name and Core-held e-mail (case-insensitive, partial, ё≡е, multi-token) — never position or department', () => {
   const hit = (text: string, tab: RegistryQuery['tab'] = 'core') => names(applyRegistry(rows, q({ tab, search: text })));
   assert.deepEqual(hit('ГРОМ'), ['Громов Николай']);
+  assert.deepEqual(hit('  николай   гром '), ['Громов Николай']);
   assert.deepEqual(hit('admin@EXAMPLE'), ['Админов Админ']);
-  assert.deepEqual(hit('системн'), ['Админов Админ']);
-  assert.deepEqual(hit('производ'), ['Беляев Олег', 'Громов Николай']);
   assert.deepEqual(hit('елкина', 'notInCore'), ['Ёлкина Дарья']);
   assert.deepEqual(hit('ёлкина', 'notInCore'), ['Ёлкина Дарья']);
-  assert.deepEqual(hit('  николай   гром '), ['Громов Николай']);
+  // position / department words no longer match anything
+  for (const word of ['системн', 'начальник отдела', 'инженер пто', 'дирекц', 'производ', 'генеральный']) assert.deepEqual(hit(word), [], word);
   assert.deepEqual(hit('несуществует'), []);
   assert.equal(matchesSearch(rows[0]!, ''), true);
   assert.deepEqual(hit('громов', 'notInCore'), [], 'search stays inside the selected tab');
 });
 
-test('filters are derived from the tab data; role filter does not exist for «Не добавлены»', () => {
-  assert.deepEqual(registryOptions(rows, 'core'), { departments: ['Дирекция', 'Производство'], roles: ['Администратор', 'Инженер ПТО', 'Начальник ПТО', 'Инженер-сметчик'].sort((a, b) => a.localeCompare(b, 'ru')), positions: ['Инженер ПТО', 'Начальник отдела', 'Системный администратор'] });
-  assert.deepEqual(registryOptions(rows, 'notInCore').roles, []);
-  assert.deepEqual(names(applyRegistry(rows, q({ department: 'Производство' }))), ['Беляев Олег', 'Громов Николай']);
+test('the only filter is the Core role; it does not exist for «Не добавлены»; options come from the tab data', () => {
+  assert.deepEqual(registryOptions(rows, 'core'), { roles: ['Администратор', 'Инженер ПТО', 'Начальник ПТО', 'Инженер-сметчик'].sort((a, b) => a.localeCompare(b, 'ru')) });
+  assert.deepEqual(registryOptions(rows, 'notInCore'), { roles: [] });
+  assert.deepEqual(registryOptions(rows, 'inactive'), { roles: ['Инженер ПТО'] }, 'inactive tab: only rows that have a Core record contribute');
   assert.deepEqual(names(applyRegistry(rows, q({ role: 'Начальник ПТО' }))), ['Громов Николай']);
-  assert.deepEqual(names(applyRegistry(rows, q({ position: 'Инженер ПТО' }))), ['Беляев Олег']);
-  assert.deepEqual(names(applyRegistry(rows, q({ department: 'Производство', search: 'о', role: 'Инженер ПТО' }))), ['Беляев Олег']);
+  assert.deepEqual(names(applyRegistry(rows, q({ tab: 'inactive', role: 'Инженер ПТО' }))), ['Беляев Олег']);
+  assert.deepEqual(names(applyRegistry(rows, q({ role: 'Инженер ПТО', search: 'олег' }))), ['Беляев Олег']);
 });
 
-test('sorting: А–Я, Я–А, подразделение, должность, роль — stable, empty values last', () => {
+test('sorting: ФИО А–Я (default), Я–А, and Core role where it exists — no department / position sort', () => {
+  assert.equal(DEFAULT_QUERY.sort, 'name-asc');
   assert.deepEqual(names(applyRegistry(rows, q({ sort: 'name-desc' }))), ['Только Core', 'Громов Николай', 'Беляев Олег', 'Админов Админ']);
-  assert.deepEqual(names(applyRegistry(rows, q({ sort: 'position' }))), ['Беляев Олег', 'Громов Николай', 'Админов Админ', 'Только Core']);
-  assert.deepEqual(names(applyRegistry(rows, q({ sort: 'department' }))), ['Админов Админ', 'Беляев Олег', 'Громов Николай', 'Только Core']);
   assert.equal(names(applyRegistry(rows, q({ sort: 'role' })))[0], 'Админов Админ');
+  assert.equal(names(applyRegistry(rows, q({ tab: 'inactive', sort: 'role' })))[0], 'Беляев Олег', 'rows without a Core role sort last');
   assert.deepEqual(names(applyRegistry(rows, q({ sort: 'name-asc' }))), names(applyRegistry([...rows].reverse(), q({ sort: 'name-asc' }))), 'input order never matters');
-  assert.ok(!sortOptionsFor('notInCore').includes('role')); assert.ok(sortOptionsFor('core').includes('role'));
+  assert.deepEqual(sortOptionsFor('core'), ['name-asc', 'name-desc', 'role']);
+  assert.deepEqual(sortOptionsFor('inactive'), ['name-asc', 'name-desc', 'role']);
+  assert.deepEqual(sortOptionsFor('notInCore'), ['name-asc', 'name-desc']);
 });
 
 test('authorization: Users & Access stays ADMIN-only — Deputy Director has no ADMIN_USERS', () => {

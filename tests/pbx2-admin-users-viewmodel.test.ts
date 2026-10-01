@@ -44,23 +44,22 @@ test('PBX-2 role labels are the locked Russian labels for every role, never a ra
 
 test('PBX-2 rows: statuses, Bitrix context never yields a role', () => {
   const employees = [emp('1', { WORK_POSITION: 'Генеральный директор', UF_DEPARTMENT: [5] }), emp('2'), emp('3'), emp('4', { ACTIVE: false }), emp('5')];
-  const rows = buildAdminUserRows(employees, [core('2', 'PTO'), core('3', 'SDO', false), core('5', 'DEPUTY_DIRECTOR')], new Map([['5', 'Дирекция']]));
+  const rows = buildAdminUserRows(employees, [core('2', 'PTO'), core('3', 'SDO', false), core('5', 'DEPUTY_DIRECTOR')]);
   const by = Object.fromEntries(rows.map((r) => [r.bitrixUserId, r]));
   assert.equal(by['1'].status, 'NotInCore');
   assert.equal(by['1'].core, null, 'a director title never creates a Core role');
-  assert.deepEqual(by['1'].departments, ['Дирекция']);
+  assert.ok(!('position' in by['1']) && !('departments' in by['1']), 'Bitrix position/department are not part of the Core registry rows');
   assert.equal(by['2'].status, 'Active');
   assert.equal(by['3'].status, 'Disabled');
   assert.equal(by['4'].bitrixInactive, true);
   assert.equal(by['5'].core!.roleLabel, 'Заместитель директора');
-  assert.deepEqual(buildAdminUserRows([emp('9', { UF_DEPARTMENT: [7] })], [], null)[0].departments, ['Подразделение № 7']);
 });
 
 test('PBX-2 rows: directory unavailable keeps Core users and does not flag them missing; loaded directory flags orphans', () => {
-  const unavailable = buildAdminUserRows(null, [core('1', 'PTO')], null);
+  const unavailable = buildAdminUserRows(null, [core('1', 'PTO')]);
   assert.equal(unavailable.length, 1);
   assert.equal(unavailable[0].missingInDirectory, false);
-  const loaded = buildAdminUserRows([], [core('1', 'PTO')], null);
+  const loaded = buildAdminUserRows([], [core('1', 'PTO')]);
   assert.equal(loaded[0].missingInDirectory, true);
   assert.equal(loaded[0].status, 'Active');
 });

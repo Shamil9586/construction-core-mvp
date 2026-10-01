@@ -84,6 +84,11 @@ async function setup(page: Page, state: State, actor = ADMIN) {
 const openTab = (page: Page, name: string) => page.getByRole('tab', { name: new RegExp('^' + name) }).click();
 // The open action panel (its «Роль в Core» select is distinct from the registry filter of the same name).
 const panelOf = (page: Page) => page.getByRole('group', { name: /^Действие:/ });
+// ⋯ menu: every row action lives behind one compact «Действия: <ФИО>» trigger.
+const act = async (page: Page, who: string, item: string | RegExp) => {
+  await page.getByRole('button', { name: `Действия: ${who}` }).click();
+  await page.getByRole('menuitem', { name: item }).click();
+};
 const rowOf = (page: Page, name: string) => page.locator('tr', { hasText: name }).first();
 const sidebar = (page: Page) => page.locator('aside');
 
@@ -153,15 +158,16 @@ test.describe('employee list', () => {
     await page.goto('/app.html/admin/users');
     await expect(rowOf(page, 'Админов Админ')).toContainText('Активен в Core');
     await expect(rowOf(page, 'Админов Админ')).toContainText('Администратор');
-    await expect(rowOf(page, 'Админов Админ')).toContainText('Системный администратор');
-    await expect(rowOf(page, 'Админов Админ')).toContainText('Дирекция');
+    // Bitrix position / department are not part of this Core registry
+    await expect(page.locator('main')).not.toContainText('Системный администратор');
+    await expect(page.locator('main')).not.toContainText('Дирекция');
     await expect(rowOf(page, 'Админов Админ')).toContainText('ID Bitrix24: 1');
     await expect(rowOf(page, 'Зайцев Андрей')).toContainText('Доступ отключён');
     // a director title in Bitrix grants nothing: the employee is simply not in Core (own tab)
     await expect(rowOf(page, 'Петрова Ирина')).toHaveCount(0);
     await openTab(page, 'Не добавлены в Core');
     await expect(rowOf(page, 'Петрова Ирина')).toContainText('Активен в Bitrix24');
-    await expect(rowOf(page, 'Петрова Ирина')).toContainText('Генеральный директор');
+    await expect(page.locator('main')).not.toContainText('Генеральный директор');
     for (const raw of ['TECHNICAL_DIRECTOR', 'DEPARTMENT_HEAD', 'DEPUTY_DIRECTOR', 'GENERAL_DIRECTOR', 'PTO_HEAD', 'SDO_HEAD', 'CONSTRUCTION_CONTROL', 'ADMIN_USERS']) await expect(page.locator('main')).not.toContainText(raw);
     // the Core role of an existing SDO user reads as a role label, not as the department name
     await openTab(page, 'В Core');
@@ -211,13 +217,21 @@ test.describe('employee list', () => {
     await expect(page.getByRole('alert')).toHaveCount(0);
   });
 
-  test('a failed department read degrades to numbers with a notice instead of failing the screen', async ({ page }) => {
+  test('the registry never reads Bitrix departments and renders no position / department; Bitrix directory contract unchanged', async ({ page }) => {
     const state = makeState();
-    state.departmentsError = true;
+    state.departmentsError = true; // would have produced a notice before: now it cannot matter
     await setup(page, state);
     await page.goto('/app.html/admin/users');
-    await expect(page.getByText('Названия подразделений недоступны')).toBeVisible();
-    await expect(rowOf(page, 'Админов Админ')).toContainText('Подразделение № 5');
+    await expect(rowOf(page, 'Админов Админ')).toBeVisible();
+    await expect(page.getByText('Названия подразделений недоступны')).toHaveCount(0);
+    await expect(page.getByRole('alert')).toHaveCount(0);
+    expect(state.calls.filter((c) => c.path.includes('/bitrix/directory/departments'))).toEqual([]);
+    expect(state.calls.filter((c) => c.path.includes('/bitrix/')).map((c) => c.path)).toEqual(['/api/bitrix/directory/users']);
+    for (const tab of ['В Core', 'Не добавлены в Core', 'Неактивны в Bitrix24']) {
+      await openTab(page, tab);
+      const text = await page.locator('main').innerText();
+      for (const stale of ['Системный администратор', 'Технический директор', 'Начальник отдела', 'Дирекция', 'Производство', 'Подразделение', 'Должность']) expect(text, `${tab}: ${stale}`).not.toContain(stale);
+    }
   });
 
   test('a failed Core read is shown as an error, never as an empty table', async ({ page }) => {
@@ -236,7 +250,7 @@ test.describe('mutations', () => {
     await setup(page, state);
     await page.goto('/app.html/admin/users');
     await openTab(page, 'Не добавлены в Core');
-    await page.getByRole('button', { name: 'Добавить в Core: Петрова Ирина' }).click();
+    await act(page, 'Петрова Ирина', 'Добавить в Core');
     const select = panelOf(page).getByLabel('Роль в Core');
     await expect(select).toHaveValue('');
     await expect(page.getByRole('button', { name: 'Добавить', exact: true })).toBeDisabled();
@@ -258,7 +272,7 @@ test.describe('mutations', () => {
     await setup(page, state);
     await page.goto('/app.html/admin/users');
     for (const [role, label] of [['PTO_HEAD', 'Начальник ПТО'], ['CONSTRUCTION_CONTROL_HEAD', 'Начальник СК'], ['SDO_HEAD', 'Начальник СДО']] as const) {
-      await page.getByRole('button', { name: /Изменить роль: Зайцев Андрей|Включить доступ: Зайцев Андрей/ }).first().click();
+      await act(page, 'Зайцев Андрей', 'Изменить роль');
       const select = panelOf(page).getByLabel(/Роль в Core|Другая роль/);
       await select.selectOption(role);
       await page.getByRole('button', { name: /^(Сохранить роль|Включить доступ)$/ }).click();
@@ -273,7 +287,7 @@ test.describe('mutations', () => {
     await page.goto('/app.html/admin/users');
     await expect(rowOf(page, 'Никитин Пётр')).toContainText('Заместитель директора');
     await expect(rowOf(page, 'Громов Николай')).toContainText('Начальник ПТО');
-    await page.getByRole('button', { name: 'Изменить роль: Никитин Пётр' }).click();
+    await act(page, 'Никитин Пётр', 'Изменить роль');
     const select = panelOf(page).getByLabel('Роль в Core');
     for (const removed of ['TECHNICAL_DIRECTOR', 'DEPARTMENT_HEAD', 'CONTRACTOR_VIEWER']) await expect(select.locator(`option[value="${removed}"]`)).toHaveCount(0);
     for (const label of ['Технический директор', 'Руководитель направления']) await expect(select.locator('option', { hasText: label })).toHaveCount(0);
@@ -289,20 +303,20 @@ test.describe('mutations', () => {
     await setup(page, state);
     await page.goto('/app.html/admin/users');
     await openTab(page, 'Не добавлены в Core');
-    await page.getByRole('button', { name: 'Добавить в Core: Петрова Ирина' }).click();
+    await act(page, 'Петрова Ирина', 'Добавить в Core');
     await panelOf(page).getByLabel('Роль в Core').selectOption('PTO');
     await page.getByRole('button', { name: 'Добавить', exact: true }).click();
     await openTab(page, 'В Core');
     await expect(rowOf(page, 'Петрова Ирина')).toContainText('Активен в Core');
 
-    await page.getByRole('button', { name: 'Отключить доступ: Петрова Ирина' }).click();
+    await act(page, 'Петрова Ирина', 'Отключить доступ');
     await expect(page.getByText('все активные сессии сотрудника завершены')).toBeVisible();
     await expect(page.getByText('Учётная запись в Bitrix24 не изменяется')).toBeVisible();
     await page.getByRole('button', { name: 'Отключить доступ', exact: true }).click();
     await expect(rowOf(page, 'Петрова Ирина')).toContainText('Доступ отключён');
     expect(state.calls.filter((c) => c.method === 'PATCH').pop()!.body).toEqual({ isActive: false });
 
-    await page.getByRole('button', { name: 'Включить доступ: Петрова Ирина' }).click();
+    await act(page, 'Петрова Ирина', 'Включить доступ');
     await expect(page.getByText('потребуется новый вход через Bitrix24')).toBeVisible();
     await page.getByRole('button', { name: 'Включить доступ', exact: true }).click();
     await expect(rowOf(page, 'Петрова Ирина')).toContainText('Активен в Core');
@@ -314,7 +328,7 @@ test.describe('mutations', () => {
     const state = makeState();
     await setup(page, state);
     await page.goto('/app.html/admin/users');
-    await page.getByRole('button', { name: 'Включить доступ: Зайцев Андрей' }).click();
+    await act(page, 'Зайцев Андрей', 'Включить доступ');
     await panelOf(page).getByLabel('Другая роль (необязательно)').selectOption('PROJECT_MANAGER');
     await page.getByRole('button', { name: 'Включить доступ', exact: true }).click();
     await expect(rowOf(page, 'Зайцев Андрей')).toContainText('Руководитель проекта');
@@ -326,7 +340,7 @@ test.describe('mutations', () => {
     state.mutationError = 'Нельзя оставить организацию без активного администратора';
     await setup(page, state);
     await page.goto('/app.html/admin/users');
-    await page.getByRole('button', { name: 'Отключить доступ: Админов Админ' }).click();
+    await act(page, 'Админов Админ', 'Отключить доступ');
     await page.getByRole('button', { name: 'Отключить доступ', exact: true }).click();
     await expect(page.getByRole('alert').filter({ hasText: 'без активного администратора' })).toBeVisible();
     await expect(rowOf(page, 'Админов Админ')).toContainText('Активен в Core');
@@ -334,7 +348,7 @@ test.describe('mutations', () => {
   });
 });
 
-test.describe('registry: tabs, search, filters, sorting', () => {
+test.describe('registry: tabs, search, role filter, sorting, ⋯ menu', () => {
   function rich(): State {
     const state = makeState();
     state.core[0] = { ...state.core[0], email: 'admin@example.org' } as any;
@@ -346,136 +360,164 @@ test.describe('registry: tabs, search, filters, sorting', () => {
     );
     return state;
   }
-  const search = (page: Page) => page.getByPlaceholder('Поиск по ФИО, должности, подразделению или e-mail');
+  const search = (page: Page) => page.getByPlaceholder('Поиск по ФИО или e-mail', { exact: true });
   const names = async (page: Page) => (await page.locator('main tbody tr td:first-child').allInnerTexts()).map((t) => t.split('\n')[0]!.trim());
   const open = async (page: Page, state: State) => { await setup(page, state); await page.goto('/app.html/admin/users'); await expect(search(page)).toBeVisible(); };
 
-  test('tabs with counts; default view is «В Core» sorted А–Я', async ({ page }) => {
+  test('Core-centric layout: exact columns per tab, no Должность / Подразделение anywhere, exact search placeholder', async ({ page }) => {
+    await open(page, rich());
+    await expect(search(page)).toHaveAttribute('placeholder', 'Поиск по ФИО или e-mail');
+    // header text is upper-cased by the table's CSS; compare case-insensitively
+    const headers = async () => (await page.locator('main thead th').allInnerTexts()).map((t) => t.trim().toLowerCase());
+    expect(await headers()).toEqual(['сотрудник', 'роль в core', 'статус', 'действия']);
+    await openTab(page, 'Не добавлены в Core');
+    expect(await headers()).toEqual(['сотрудник', 'статус bitrix24', 'действия']);
+    await openTab(page, 'Неактивны в Bitrix24');
+    expect(await headers()).toEqual(['сотрудник', 'состояние core', 'статус bitrix24', 'действия']);
+    for (const label of ['Подразделение', 'Должность']) {
+      await expect(page.getByLabel(label, { exact: true })).toHaveCount(0);       // no filter
+      await expect(page.locator('main').getByText(label, { exact: true })).toHaveCount(0); // no column / label
+    }
+    await expect(page.locator('#registry-sort option', { hasText: /Подразделение|Должность/ })).toHaveCount(0);
+  });
+
+  test('tabs with counts keep their semantics; inactive Core users show both states', async ({ page }) => {
     await open(page, rich());
     await expect(page.getByRole('tab', { name: 'В Core (5)' })).toHaveAttribute('aria-selected', 'true');
     await expect(page.getByRole('tab', { name: 'Не добавлены в Core (2)' })).toBeVisible();
     await expect(page.getByRole('tab', { name: 'Неактивны в Bitrix24 (2)' })).toBeVisible();
     expect(await names(page)).toEqual(['Админов Админ', 'Беляев Олег', 'Громов Николай', 'Зайцев Андрей', 'Никитин Пётр']);
-    // active Bitrix employees without Core account
     await openTab(page, 'Не добавлены в Core');
-    expect(await names(page)).toEqual(['Ёлкина Дарья', 'Петрова Ирина']); // Russian collation: Ё sorts right after Е
-    await expect(rowOf(page, 'Петрова Ирина').getByRole('button', { name: 'Добавить в Core: Петрова Ирина' })).toBeVisible();
-    // inactive in Bitrix24: one with, one without a Core record — both states stay visible
+    expect(await names(page)).toEqual(['Ёлкина Дарья', 'Петрова Ирина']); // Russian collation: Ё right after Е
     await openTab(page, 'Неактивны в Bitrix24');
     await expect(rowOf(page, 'Беляев Олег')).toContainText('Есть в Core');
-    await expect(rowOf(page, 'Беляев Олег')).toContainText('Инженер ПТО');
     await expect(rowOf(page, 'Беляев Олег')).toContainText('Неактивен в Bitrix24');
     await expect(rowOf(page, 'Уволенный Сергей')).toContainText('Нет в Core');
-    await expect(rowOf(page, 'Уволенный Сергей').getByRole('button')).toHaveCount(0); // no add / destructive action for an inactive Bitrix user without a Core record
-    // the Core user that is inactive in Bitrix is also visible in «В Core» with the mismatch badge
+    await expect(rowOf(page, 'Уволенный Сергей').getByRole('button')).toHaveCount(0); // no menu: no valid action
     await openTab(page, 'В Core');
     await expect(rowOf(page, 'Беляев Олег')).toContainText('Сотрудник неактивен в Bitrix24');
   });
 
-  test('search: name, e-mail, position, department; case-insensitive, partial, ё≡е, within the selected tab', async ({ page }) => {
+  test('search: ФИО and Core-held e-mail only (case-insensitive, partial, ё≡е); position and department no longer match', async ({ page }) => {
     await open(page, rich());
     const check = async (text: string, expected: string[]) => { await search(page).fill(text); expect(await names(page), text).toEqual(expected); };
-    await check('гром', ['Громов Николай']);                      // name, partial, case-insensitive
-    await check('ЗАЙЦЕВ андр', ['Зайцев Андрей']);                // several tokens
-    await check('nikitin@corp', ['Никитин Пётр']);                // e-mail
+    await check('гром', ['Громов Николай']);
+    await check('ЗАЙЦЕВ андр', ['Зайцев Андрей']);
+    await check('nikitin@corp', ['Никитин Пётр']);
     await check('NIKITIN@CORP.EXAMPLE', ['Никитин Пётр']);
-    await check('системный', ['Админов Админ']);                  // position
-    await check('дирекц', ['Админов Админ', 'Никитин Пётр']);     // department
-    await check('никитин пет', ['Никитин Пётр']);                 // ё typed as е is not required, partial ok
-    await check('никитин пеТр', ['Никитин Пётр']);
+    await search(page).fill('системный'); await expect(page.getByText('Сотрудники не найдены')).toBeVisible();
+    await search(page).fill('дирекц'); await expect(page.getByText('Сотрудники не найдены')).toBeVisible();
+    await search(page).fill('технический'); await expect(page.getByText('Сотрудники не найдены')).toBeVisible();
     await check('', ['Админов Админ', 'Беляев Олег', 'Громов Николай', 'Зайцев Андрей', 'Никитин Пётр']);
-    // search stays inside the tab and survives a tab change
-    await search(page).fill('елкина'); await expect(page.getByText('Сотрудники не найдены')).toBeVisible();
+    await search(page).fill('елкина');
     await openTab(page, 'Не добавлены в Core');
     await expect(search(page)).toHaveValue('елкина');
     expect(await names(page)).toEqual(['Ёлкина Дарья']);
+    await search(page).fill('генеральный'); await expect(page.getByText('Сотрудники не найдены')).toBeVisible(); // Bitrix position of Петрова: not searchable
   });
 
-  test('filters (department / Core role / position) come from the data; reset; role filter is off for «Не добавлены»', async ({ page }) => {
+  test('the Core-role filter is the only filter; off for «Не добавлены»; reset; sorting А–Я / Я–А / роль; combination', async ({ page }) => {
     await open(page, rich());
-    await page.getByLabel('Подразделение', { exact: true }).selectOption('Производство');
-    expect(await names(page)).toEqual(['Беляев Олег', 'Громов Николай', 'Зайцев Андрей']);
-    await page.getByLabel('Роль в Core', { exact: true }).selectOption('Начальник ПТО');
+    const role = page.getByLabel('Роль в Core', { exact: true });
+    const sort = page.getByLabel('Сортировка');
+    await role.selectOption('Начальник ПТО');
     expect(await names(page)).toEqual(['Громов Николай']);
     await page.getByRole('button', { name: 'Сбросить фильтры' }).click();
     expect(await names(page)).toHaveLength(5);
     await expect(page.getByRole('button', { name: 'Сбросить фильтры' })).toHaveCount(0);
-    await page.getByLabel('Должность', { exact: true }).selectOption('Инженер ПТО');
-    expect(await names(page)).toEqual(['Беляев Олег']);
-    const roleOptions = await page.getByLabel('Роль в Core', { exact: true }).locator('option').allInnerTexts();
-    expect(roleOptions).toEqual(expect.arrayContaining(['Все', 'Администратор', 'Начальник ПТО', 'Инженер ПТО', 'Заместитель директора', 'Инженер-сметчик']));
-    await openTab(page, 'Не добавлены в Core');
-    await expect(page.getByLabel('Роль в Core', { exact: true })).toBeDisabled();
-    await expect(page.getByLabel('Должность', { exact: true })).toHaveValue(''); // a tab starts with clean filters
-  });
-
-  test('sorting А–Я / Я–А / подразделение / должность / роль, with search + filter + sort combined', async ({ page }) => {
-    await open(page, rich());
-    const sort = page.getByLabel('Сортировка');
+    expect(await role.locator('option').allInnerTexts()).toEqual(expect.arrayContaining(['Все', 'Администратор', 'Начальник ПТО', 'Инженер ПТО', 'Заместитель директора', 'Инженер-сметчик']));
     await sort.selectOption({ label: 'ФИО: Я–А' });
     expect(await names(page)).toEqual(['Никитин Пётр', 'Зайцев Андрей', 'Громов Николай', 'Беляев Олег', 'Админов Админ']);
     await sort.selectOption({ label: 'ФИО: А–Я' });
     expect((await names(page))[0]).toBe('Админов Админ');
-    await sort.selectOption({ label: 'Должность' });
-    expect(await names(page)).toEqual(['Беляев Олег', 'Громов Николай', 'Админов Админ', 'Никитин Пётр', 'Зайцев Андрей']); // empty position last
-    await sort.selectOption({ label: 'Подразделение' });
-    expect(await names(page)).toEqual(['Админов Админ', 'Никитин Пётр', 'Беляев Олег', 'Громов Николай', 'Зайцев Андрей']);
     await sort.selectOption({ label: 'Роль в Core' });
-    const byRole = await names(page);
-    expect(byRole[0]).toBe('Админов Админ'); expect(byRole[1]).toBe('Никитин Пётр'); expect(byRole[4]).toBe('Громов Николай');
-    // combination: search + filter + sort
+    const byRole = await names(page); expect(byRole[0]).toBe('Админов Админ'); expect(byRole[1]).toBe('Никитин Пётр'); expect(byRole[4]).toBe('Громов Николай');
+    expect(await sort.locator('option').allInnerTexts()).toEqual(['ФИО: А–Я', 'ФИО: Я–А', 'Роль в Core']);
+    // search + role filter + sort combined
     await sort.selectOption({ label: 'ФИО: Я–А' });
-    await page.getByLabel('Подразделение', { exact: true }).selectOption('Производство');
-    await search(page).fill('ев');
-    expect(await names(page)).toEqual(['Зайцев Андрей', 'Беляев Олег']);
-    // a tab where Core role does not exist offers no role sort
+    await role.selectOption('Инженер ПТО');
+    await search(page).fill('олег');
+    expect(await names(page)).toEqual(['Беляев Олег']);
     await openTab(page, 'Не добавлены в Core');
-    await expect(sort.locator('option', { hasText: 'Роль в Core' })).toHaveCount(0);
+    await expect(role).toBeDisabled();
+    expect(await sort.locator('option').allInnerTexts()).toEqual(['ФИО: А–Я', 'ФИО: Я–А']);
+    await openTab(page, 'Неактивны в Bitrix24');
+    await expect(role).toBeEnabled(); // rows that have a Core record can be filtered by role
+    await role.selectOption('Инженер ПТО');
+    expect(await names(page)).toEqual(['Беляев Олег']);
   });
 
-  test('empty states: no results vs. empty tab, each explained', async ({ page }) => {
+  test('empty states are explained', async ({ page }) => {
     const state = rich();
+    state.core = []; state.employees = state.employees.filter((e) => e.ACTIVE === false);
     await open(page, state);
+    await expect(page.getByText('В Core пока нет пользователей')).toBeVisible();
+    await openTab(page, 'Не добавлены в Core');
+    await expect(page.getByText('Все активные сотрудники Bitrix24 уже добавлены в Core')).toBeVisible();
+    await openTab(page, 'Неактивны в Bitrix24');
     await search(page).fill('несуществующий');
     await expect(page.getByText('Сотрудники не найдены')).toBeVisible();
     await search(page).fill('');
-    state.core = state.core.filter((c) => c.id !== 'c-bel'); // nothing else changes; tabs below are recomputed on reload
-    await page.reload();
-    await openTab(page, 'Неактивны в Bitrix24');
     await expect(rowOf(page, 'Беляев Олег')).toContainText('Нет в Core');
   });
 
-  test('no UUIDs or raw enum names anywhere; existing actions still offered to ADMIN only where supported', async ({ page }) => {
+  test('⋯ menu: no persistent action buttons; items per state; Escape and outside click close it; no menu without a valid action', async ({ page }) => {
     await open(page, rich());
+    for (const label of ['Изменить роль', 'Отключить доступ', 'Включить доступ', 'Добавить в Core']) await expect(page.getByRole('button', { name: new RegExp('^' + label) })).toHaveCount(0);
+    const menu = (who: string) => page.getByRole('menu', { name: `Действия: ${who}` });
+    const items = async (who: string) => { await page.getByRole('button', { name: `Действия: ${who}` }).click(); const t = await menu(who).getByRole('menuitem').allInnerTexts(); return t; };
+    expect(await items('Никитин Пётр')).toEqual(['Изменить роль', 'Отключить доступ']);   // active Core user
+    await page.keyboard.press('Escape'); await expect(menu('Никитин Пётр')).toHaveCount(0);
+    expect(await items('Зайцев Андрей')).toEqual(['Изменить роль', 'Включить доступ']);  // disabled Core user
+    await page.mouse.click(5, 5); await expect(menu('Зайцев Андрей')).toHaveCount(0);   // outside click
+    await expect(page.getByRole('button', { name: 'Действия: Беляев Олег' })).toBeVisible();
+    await openTab(page, 'Не добавлены в Core');
+    expect(await items('Петрова Ирина')).toEqual(['Добавить в Core']);                 // active Bitrix-only employee
+    await page.keyboard.press('Escape');
+    await openTab(page, 'Неактивны в Bitrix24');
+    await expect(page.getByRole('button', { name: 'Действия: Уволенный Сергей' })).toHaveCount(0); // inactive, not in Core: nothing valid
+    // the menu is not clipped by the table viewport and every trigger is a real 44px target
+    const box = await page.getByRole('button', { name: 'Действия: Беляев Олег' }).boundingBox();
+    expect(box!.width).toBeGreaterThanOrEqual(44); expect(box!.height).toBeGreaterThanOrEqual(44);
+  });
+
+  test('no UUIDs or raw enum names anywhere; existing actions still work through the menu', async ({ page }) => {
+    const state = rich();
+    await open(page, state);
     for (const tab of ['В Core', 'Не добавлены в Core', 'Неактивны в Bitrix24']) {
       await openTab(page, tab);
       const text = await page.locator('main').innerText();
       expect(text).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}/);
       expect(text).not.toMatch(/\b(PTO_HEAD|SDO_HEAD|DEPUTY_DIRECTOR|GENERAL_DIRECTOR|CONSTRUCTION_CONTROL|PROJECT_MANAGER|ADMIN_USERS|NotInCore|isActive)\b/);
     }
-    await openTab(page, 'Неактивны в Bitrix24');
-    // an inactive-in-Bitrix user that still has a Core record keeps the existing, supported access actions (no auto-changes)
-    await expect(page.getByRole('button', { name: 'Отключить доступ: Беляев Олег' })).toBeVisible();
+    await openTab(page, 'В Core');
+    await act(page, 'Никитин Пётр', 'Отключить доступ');
+    await page.getByRole('button', { name: 'Отключить доступ', exact: true }).click();
+    await expect(rowOf(page, 'Никитин Пётр')).toContainText('Доступ отключён');
+    expect(state.calls.filter((c) => c.method === 'PATCH').pop()!.body).toEqual({ isActive: false });
   });
 
-  test('responsive: no page-level horizontal overflow; narrow width collapses to compact cards and keeps search/filters/actions usable', async ({ page }) => {
+  test('responsive: no page-level horizontal overflow; narrow width shows compact cards with search, filter, menu and panel usable', async ({ page }) => {
     await open(page, rich());
     const overflow = () => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     for (const w of [1280, 1024, 768]) { await page.setViewportSize({ width: w, height: 900 }); expect(await overflow(), String(w)).toBeLessThanOrEqual(0); }
     for (const w of [390, 320]) {
       await page.setViewportSize({ width: w, height: 800 });
-      await expect(page.getByRole('list', { name: 'Сотрудники' })).toBeVisible();
+      const list = page.getByRole('list', { name: 'Сотрудники' });
+      await expect(list).toBeVisible();
       await expect(page.locator('main table')).toHaveCount(0);
       expect(await overflow(), String(w)).toBeLessThanOrEqual(0);
+      await expect(page.locator('main')).not.toContainText('Системный администратор');
       await search(page).fill('никитин');
-      await expect(page.getByRole('list', { name: 'Сотрудники' }).getByRole('listitem')).toHaveCount(1);
-      await page.getByRole('button', { name: 'Изменить роль: Никитин Пётр' }).click();
+      await expect(list.getByRole('listitem')).toHaveCount(1);
+      await act(page, 'Никитин Пётр', 'Изменить роль');
       await expect(panelOf(page).getByLabel('Роль в Core')).toBeVisible();
       expect(await overflow(), `${w} panel`).toBeLessThanOrEqual(0);
-      await search(page).fill('');
       await page.getByRole('button', { name: 'Отмена' }).click();
+      await search(page).fill('');
     }
     await openTab(page, 'Не добавлены в Core');
-    await expect(page.getByRole('button', { name: 'Добавить в Core: Петрова Ирина' })).toBeVisible();
+    await act(page, 'Петрова Ирина', 'Добавить в Core');
+    await expect(panelOf(page).getByLabel('Роль в Core')).toBeVisible();
   });
 });
