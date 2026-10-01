@@ -14,7 +14,7 @@ import { RealBitrixAdapter } from '../../bitrix';
 
 // Explicit column list: session hashes, contractor scope and anything else on
 // the row never reach the admin UI.
-const ADMIN_USER_COLUMNS = 'id,name,role,bitrix_user_id,is_active,created_at,updated_at,version';
+const ADMIN_USER_COLUMNS = 'id,name,role,bitrix_user_id,email,is_active,created_at,updated_at,version';
 
 const roleSchema = z.enum(INTERNAL_ASSIGNABLE_ROLES);
 
@@ -38,7 +38,9 @@ async function assertNotAssigned(c: any, tenantId: string, bitrixUserId: string)
         throw new ConflictException(existing.isActive ? 'Сотрудник уже добавлен в Core' : 'Сотрудник уже добавлен в Core, доступ отключён. Включите доступ.');
 }
 
-const view = (u: any) => ({ id: u.id, name: u.name, role: u.role, bitrixUserId: u.bitrixUserId, isActive: u.isActive, createdAt: u.createdAt, updatedAt: u.updatedAt, version: u.version });
+// email is the Core-held address (users.email, may be null) — shown only on this ADMIN-only screen and used for registry search.
+// The Bitrix directory is never asked for EMAIL (accepted PBX-1 data-minimisation contract).
+const view = (u: any) => ({ id: u.id, name: u.name, role: u.role, bitrixUserId: u.bitrixUserId, email: u.email ?? null, isActive: u.isActive, createdAt: u.createdAt, updatedAt: u.updatedAt, version: u.version });
 
 // Serialises every access mutation inside one tenant. FOR NO KEY UPDATE on the
 // tenant row is exclusive against itself (a second administrator mutation

@@ -32,7 +32,7 @@ test('PBX-2 /admin/users: list, add, role change, deactivate/reactivate, invaria
    const r=await api('GET','/admin/users',adminToken);assert.equal(r.status,200);
    const byB=Object.fromEntries(r.data.users.map((u:any)=>[u.bitrixUserId,u]));
    assert.equal(byB['42'].isActive,false);assert.equal(byB['43'].role,'DEPUTY_DIRECTOR');assert.equal(byB['7'].role,'ADMIN');
-   const allowed=['id','name','role','bitrixUserId','isActive','createdAt','updatedAt','version'];
+   const allowed=['id','name','role','bitrixUserId','email','isActive','createdAt','updatedAt','version']; // email: Core-held address for the registry search (ADMIN-only endpoint)
    for(const u of r.data.users)assert.deepEqual(Object.keys(u).sort(),[...allowed].sort());
    assert.ok(!JSON.stringify(r.data).match(/token|hash|secret|contractor/i));
    const legacy=await api('GET','/users',adminToken);assert.ok(Array.isArray(legacy.data));assert.ok(!legacy.data.some((u:any)=>u.bitrixUserId==='42'));

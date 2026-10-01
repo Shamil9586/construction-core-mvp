@@ -13,6 +13,8 @@ export interface AdminCoreUser {
   name: string;
   role: string;
   bitrixUserId: string;
+  /** Core-held address (may be absent). The Bitrix directory deliberately never supplies e-mail. */
+  email?: string | null;
   isActive: boolean;
   version: number;
 }
