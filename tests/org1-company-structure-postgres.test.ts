@@ -44,9 +44,10 @@ const client = async () => { const c = new Client({ connectionString: dbUrl() })
 const codeOf = async (p: Promise<unknown>) => { try { await p; return null; } catch (e: any) { return e.code ?? e.status ?? e.message; } };
 const active = async (member: string, fn: string) => (await ctx.db.pool.query("SELECT * FROM functional_team_memberships WHERE member_user_id=$1 AND function_code=$2 AND ended_at IS NULL", [member, fn])).rows;
 
-test('A no ORG-1 migration: chain still ends at 017, and the existing table already admits every function code', async () => {
+test('A no ORG-1 migration: ORG-1 adds none (017 stays the last pre-PBX-5A file), and the existing table already admits every function code', async () => {
   const files = (await import('node:fs')).readdirSync('infra').filter((f) => /^\d+_.*\.sql$/.test(f)).sort();
-  assert.equal(files[files.length - 1], '017_remove_legacy_director_roles.sql');
+  assert.equal(files[16], '017_remove_legacy_director_roles.sql');
+  assert.deepEqual(files.slice(17), ['018_bitrix_notification_outbox.sql']);
   const c = await client();
   try {
     for (const fn of ['PTO', 'CONSTRUCTION_CONTROL', 'SDO', 'PROJECT_MANAGEMENT']) {
