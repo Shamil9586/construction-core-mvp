@@ -481,6 +481,56 @@ test.describe('registry: tabs, search, role filter, sorting, ⋯ menu', () => {
     expect(box!.width).toBeGreaterThanOrEqual(44); expect(box!.height).toBeGreaterThanOrEqual(44);
   });
 
+  test('ADMIN-CORE-R01: at most one ⋯ menu is open — keyboard, mouse, toggle and action selection', async ({ page }) => {
+    await open(page, rich());
+    const menus = page.getByRole('menu');
+    const trigger = (who: string) => page.getByRole('button', { name: `Действия: ${who}` });
+    const focusedLabel = () => page.evaluate(() => document.activeElement?.getAttribute('aria-label') ?? document.activeElement?.textContent ?? '');
+
+    // The exact reviewed sequence: focus first ⋯, Enter, Tab through its menu to another row's ⋯, Enter.
+    await trigger('Админов Админ').focus();
+    await page.keyboard.press('Enter');
+    await expect(menus).toHaveCount(1);
+    await expect(page.getByRole('menu', { name: 'Действия: Админов Админ' })).toBeVisible();
+    for (let i = 0; i < 6 && (await focusedLabel()) !== 'Действия: Беляев Олег'; i++) await page.keyboard.press('Tab');
+    expect(await focusedLabel()).toBe('Действия: Беляев Олег');
+    await page.keyboard.press('Enter');
+    await expect(menus).toHaveCount(1);
+    await expect(page.getByRole('menu', { name: 'Действия: Беляев Олег' })).toBeVisible();
+    await expect(page.getByRole('menu', { name: 'Действия: Админов Админ' })).toHaveCount(0);
+    await expect(trigger('Админов Админ')).toHaveAttribute('aria-expanded', 'false');
+    await expect(trigger('Беляев Олег')).toHaveAttribute('aria-expanded', 'true');
+
+    // Keyboard again, going back to the first row: still exactly one.
+    await trigger('Админов Админ').focus();
+    await page.keyboard.press('Enter');
+    await expect(menus).toHaveCount(1);
+    await expect(page.getByRole('menu', { name: 'Действия: Админов Админ' })).toBeVisible();
+
+    // Toggle: activating the open trigger closes its menu; Escape closes the open one.
+    await page.keyboard.press('Escape');
+    await expect(menus).toHaveCount(0);
+    await trigger('Громов Николай').click();
+    await trigger('Громов Николай').click();
+    await expect(menus).toHaveCount(0);
+
+    // Mouse A → B.
+    await trigger('Никитин Пётр').click();
+    await expect(menus).toHaveCount(1);
+    await trigger('Зайцев Андрей').click();
+    await expect(menus).toHaveCount(1);
+    await expect(page.getByRole('menu', { name: 'Действия: Зайцев Андрей' })).toBeVisible();
+
+    // Selecting an action closes the menu and opens the existing workflow; changing tab/search also leaves no menu behind.
+    await page.getByRole('menuitem', { name: 'Включить доступ' }).click();
+    await expect(menus).toHaveCount(0);
+    await expect(panelOf(page).getByLabel('Другая роль (необязательно)')).toBeVisible();
+    await trigger('Никитин Пётр').click();
+    await expect(menus).toHaveCount(1);
+    await search(page).fill('никитин');
+    await expect(menus).toHaveCount(0);
+  });
+
   test('no UUIDs or raw enum names anywhere; existing actions still work through the menu', async ({ page }) => {
     const state = rich();
     await open(page, state);

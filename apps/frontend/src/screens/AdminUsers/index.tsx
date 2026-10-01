@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AppShell, Button, DataTable, PageHeader, StatusBadge, typeClass } from '../../design-system';
 import type { DataTableColumn } from '../../design-system';
 import type { AdminAssignableRole } from '../../auth/internalRoles';
@@ -210,26 +210,27 @@ interface MenuAction { key: string; label: string; onSelect: () => void }
  * Compact ⋯ menu (one per row). The list is positioned `fixed` from the trigger so the table viewport's own scrolling
  * never clips it; Escape, an outside click, scrolling and resizing close it. A row with no valid action gets no menu at all.
  */
-function RowMenu({ name, actions, disabled }: { name: string; actions: MenuAction[]; disabled: boolean }) {
+function RowMenu({ name, actions, disabled, open, onOpen, onClose }: { name: string; actions: MenuAction[]; disabled: boolean; open: boolean; onOpen: () => void; onClose: () => void }) {
+  // Whether a menu is open is owned by the screen (one `menuFor` row key), so opening another row's menu — by mouse, touch or
+  // keyboard alike — closes this one: at most one menu can exist at a time. Only the on-screen position is local.
   const [at, setAt] = useState<{ top: number; right: number } | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const first = useRef<HTMLButtonElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
-  const open = at !== null;
+  const shown = open && at !== null;
   useEffect(() => {
-    if (!open) return;
+    if (!shown) return;
     first.current?.focus({ preventScroll: true });
-    const close = () => setAt(null);
-    const away = (e: MouseEvent) => { if (root.current && !root.current.contains(e.target as Node)) close(); };
-    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') { close(); trigger.current?.focus(); } };
+    const away = (e: MouseEvent) => { if (root.current && !root.current.contains(e.target as Node)) onClose(); };
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') { onClose(); trigger.current?.focus(); } };
     document.addEventListener('mousedown', away);
     document.addEventListener('keydown', esc);
-    window.addEventListener('resize', close);
-    const onScroll = (e: Event) => { if (!(root.current && e.target instanceof Node && root.current.contains(e.target))) close(); };
+    window.addEventListener('resize', onClose);
+    const onScroll = (e: Event) => { if (!(root.current && e.target instanceof Node && root.current.contains(e.target))) onClose(); };
     // Scroll events are dispatched a frame late: the scroll that brought the trigger into view must not close the list it just opened.
     const armScroll = window.setTimeout(() => window.addEventListener('scroll', onScroll, true), 150);
-    return () => { document.removeEventListener('mousedown', away); document.removeEventListener('keydown', esc); window.removeEventListener('resize', close); window.clearTimeout(armScroll); window.removeEventListener('scroll', onScroll, true); };
-  }, [open]);
+    return () => { document.removeEventListener('mousedown', away); document.removeEventListener('keydown', esc); window.removeEventListener('resize', onClose); window.clearTimeout(armScroll); window.removeEventListener('scroll', onScroll, true); };
+  }, [shown, onClose]);
   if (actions.length === 0) return null;
   return (
     <div className={styles.menuRoot} ref={root}>
@@ -239,23 +240,24 @@ function RowMenu({ name, actions, disabled }: { name: string; actions: MenuActio
         className={styles.menuButton}
         aria-label={`Действия: ${name}`}
         aria-haspopup="menu"
-        aria-expanded={open}
+        aria-expanded={shown}
         disabled={disabled}
         onClick={(e) => {
-          if (open) { setAt(null); return; }
+          if (shown) { onClose(); return; }
           const r = e.currentTarget.getBoundingClientRect();
           // Open below the trigger; flip above when the list (≈ 44px per item) would run off the bottom of the viewport.
           const height = actions.length * 44 + 10;
           const below = r.bottom + 4;
           setAt({ top: below + height > window.innerHeight ? Math.max(8, r.top - height - 4) : below, right: Math.max(8, window.innerWidth - r.right) });
+          onOpen();
         }}
       >
         ⋯
       </button>
-      {at ? (
+      {shown && at ? (
         <div className={styles.menu} role="menu" aria-label={`Действия: ${name}`} style={{ top: at.top, right: at.right }}>
           {actions.map((a, i) => (
-            <button key={a.key} ref={i === 0 ? first : undefined} type="button" role="menuitem" className={styles.menuItem} onClick={() => { setAt(null); a.onSelect(); }}>
+            <button key={a.key} ref={i === 0 ? first : undefined} type="button" role="menuitem" className={styles.menuItem} onClick={() => { onClose(); a.onSelect(); }}>
               {a.label}
             </button>
           ))}
@@ -270,11 +272,14 @@ const coreStateText = (row: AdminUserRow) => (row.core ? 'Есть в Core' : '�
 export function AdminUsersScreen(props: AdminUsersScreenProps) {
   const { sidebar, rows, core, directory, notice, busy } = props;
   const [panel, setPanel] = useState<Panel | null>(null);
+  // The single open ⋯ menu (row key) — never more than one, whatever the input method.
+  const [menuFor, setMenuFor] = useState<string | null>(null);
+  const closeMenu = useCallback(() => setMenuFor(null), []);
   const [query, setQuery] = useState<RegistryQuery>(DEFAULT_QUERY);
   const [shown, setShown] = useState(PAGE_SIZE);
   const narrow = useNarrow();
 
-  const patch = (change: Partial<RegistryQuery>) => { setQuery((q) => ({ ...q, ...change })); setShown(PAGE_SIZE); };
+  const patch = (change: Partial<RegistryQuery>) => { setMenuFor(null); setQuery((q) => ({ ...q, ...change })); setShown(PAGE_SIZE); };
   const closePanel = () => setPanel(null);
   const submit = async (row: AdminUserRow, mode: PanelMode, role: AdminAssignableRole | null) => {
     let ok = false;
@@ -295,6 +300,7 @@ export function AdminUsersScreen(props: AdminUsersScreenProps) {
 
   const selectTab = (tab: RegistryTab) => {
     closePanel();
+    setMenuFor(null);
     // Filter values belong to a tab (its own departments / roles / positions); search text carries over.
     setQuery((q) => ({ ...q, tab, ...EMPTY_FILTERS, sort: sortOptionsFor(tab).includes(q.sort) ? q.sort : 'name-asc' }));
     setShown(PAGE_SIZE);
@@ -322,7 +328,7 @@ export function AdminUsersScreen(props: AdminUsersScreenProps) {
         : { key: 'on', label: 'Включить доступ', onSelect: () => open(row, 'reactivate') });
     }
     if (row.core?.external) return <span className={[typeClass('label'), styles.secondary].join(' ')}>Внешний участник</span>;
-    return <RowMenu name={row.displayName} actions={list} disabled={busy} />;
+    return <RowMenu name={row.displayName} actions={list} disabled={busy} open={menuFor === row.key} onOpen={() => setMenuFor(row.key)} onClose={closeMenu} />;
   };
 
   const identity = (row: AdminUserRow) => (
