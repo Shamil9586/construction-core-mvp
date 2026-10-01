@@ -157,10 +157,10 @@ export function ObjectOverview({
 
       {viewModel.blockedWorks.length > 0 ? (
         <section className={styles.section}>
+          <h2 className={[styles.sectionTitle, typeClass('heading-card')].join(' ')}>
+            Блокировки в производстве
+          </h2>
           <div className={styles.blockersCard}>
-            <h2 className={[styles.detailLabel, typeClass('label')].join(' ')}>
-              Блокировки в производстве
-            </h2>
             <ul className={styles.blockedWorkList}>
               {viewModel.blockedWorks.map((blocked) => (
                 <li key={blocked.workId} className={styles.blockedWorkItem}>

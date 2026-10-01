@@ -213,7 +213,7 @@ export function WorkCard({
 
       <h2 className={[styles.groupTitle, typeClass('heading-card')].join(' ')}>Подтверждение</h2>
       <section className={styles.sectionTight}>
-        <div className={styles.card}>
+        <div className={[styles.card, styles.cardConfirmation].join(' ')}>
           <ConfirmationBlock confirmation={viewModel.confirmation} />
           <span className={[styles.confirmationLabel, typeClass('label')].join(' ')}>
             Факт РП, подтверждение внутреннего СК и СК заказчика — отдельные величины; прежние значения не перезаписываются.

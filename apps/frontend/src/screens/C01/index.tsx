@@ -112,7 +112,9 @@ export function CompanyControlCenter({
           <ul className={styles.attentionList}>
             {viewModel.attention.map((item) => (
               <li key={item.objectId} className={styles.attentionRow}>
-                <StatusBadge variant={item.status.variant}>{item.status.label}</StatusBadge>
+                <StatusBadge variant={item.status.variant} className={styles.attentionBadge}>
+                  {item.status.label}
+                </StatusBadge>
                 <div className={styles.attentionBody}>
                   <span className={typeClass('body-strong')}>{item.objectName}</span>
                   <span className={[styles.attentionMessage, typeClass('label')].join(' ')}>

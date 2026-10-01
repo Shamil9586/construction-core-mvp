@@ -2,7 +2,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: var(--cc-card-gap);
-  margin-top: var(--cc-p-space-32);
+  margin-top: var(--cc-p-space-24);
 }
 
 .section:first-child {
@@ -38,7 +38,7 @@
   background: var(--cc-background-surface);
   border: var(--cc-border-width) solid var(--cc-border-default);
   border-radius: var(--cc-card-radius);
-  padding: var(--cc-card-padding);
+  padding: var(--cc-kpi-card-padding);
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
@@ -117,4 +117,11 @@
     flex: 1 1 100%;
     min-width: 0;
   }
+}
+
+/* Same section-title treatment as C01's attention queue: heading above the card. */
+.sectionTitle {
+  flex: 1 0 100%;
+  color: var(--cc-text-primary);
+  margin: 0 0 calc(var(--cc-p-space-12) - var(--cc-card-gap));
 }

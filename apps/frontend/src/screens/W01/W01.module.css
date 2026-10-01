@@ -2,7 +2,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: var(--cc-card-gap);
-  margin-top: var(--cc-p-space-32);
+  margin-top: var(--cc-p-space-24);
 }
 
 .section:first-child {
@@ -15,7 +15,7 @@
   background: var(--cc-background-surface);
   border: var(--cc-border-width) solid var(--cc-border-default);
   border-radius: var(--cc-card-radius);
-  padding: var(--cc-card-padding);
+  padding: var(--cc-kpi-card-padding);
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
@@ -69,7 +69,7 @@
 
 .groupTitle {
   color: var(--cc-text-primary);
-  margin: var(--cc-p-space-32) 0 0;
+  margin: var(--cc-p-space-24) 0 0;
 }
 
 .sectionTight {
@@ -77,6 +77,12 @@
   flex-wrap: wrap;
   gap: var(--cc-card-gap);
   margin-top: var(--cc-p-space-12);
+}
+
+/* Confirmation is the second step of the chain, not a peer of the production
+   figures: it holds its own column width instead of stretching across the row. */
+.cardConfirmation {
+  flex: 0 1 var(--cc-layout-span-8);
 }
 
 .blockerList li {

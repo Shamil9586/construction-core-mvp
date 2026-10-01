@@ -1,5 +1,5 @@
 .section {
-  margin-top: var(--cc-p-space-32);
+  margin-top: var(--cc-p-space-24);
 }
 
 .section:first-child {
@@ -8,7 +8,7 @@
 
 .sectionTitle {
   color: var(--cc-text-primary);
-  margin: 0 0 var(--cc-p-space-16);
+  margin: 0 0 var(--cc-p-space-12);
 }
 
 /* Same surface recipe as Data / Table's own root — a card holding a stack of
@@ -64,6 +64,13 @@
   gap: var(--cc-p-space-4);
   flex: 1 1 auto;
   min-width: 0;
+}
+
+/* One badge column: names and reasons start at the same x on every row,
+   whatever the badge text is. */
+.attentionBadge {
+  flex: 0 0 132px;
+  box-sizing: border-box;
 }
 
 .attentionMessage {
