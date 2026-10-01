@@ -9,11 +9,23 @@ export class MockBitrixAdapter implements BitrixUserProvider, OrganizationProvid
     async createTask(_t: string, userId: string, title: string) { return { mock: true, userId, title }; }
     async upload(_t: string, _f: string, name: string) { return { mock: true, name }; }
 }
+/**
+ * PBX-5A: structured Bitrix REST failure. Still a BadRequestException with the historical message, so existing
+ * callers keep their contract; retry classification reads `code` / `httpStatus` / `operatingResetAt` (never the
+ * localized error_description, which is not retained at all).
+ */
+export class BitrixRestError extends BadRequestException {
+    constructor(readonly code: string, readonly httpStatus: number | null, readonly operatingResetAt: number | null = null) { super('Bitrix REST request failed: ' + code); }
+}
 export class RealBitrixAdapter implements BitrixUserProvider, OrganizationProvider, NotificationProvider, TaskProvider, FileStorageProvider {
     constructor(readonly portal = process.env.BITRIX_PORTAL ?? '') { if (!/^[a-z0-9-]+\.bitrix24\.(ru|com|eu|de|kz|by|pl)$/i.test(portal))
         throw new Error('Configure exact cloud portal allowlist'); }
-    async call(method: string, token: string, params: any = {}) { const response = await fetch(`https://${this.portal}/rest/${method}.json`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...params, auth: token }), redirect: 'error', signal: AbortSignal.timeout(15000) }); const body: any = await response.json(); if (!response.ok || body.error)
-        throw new BadRequestException('Bitrix REST request failed: ' + (body.error ?? response.status)); return body.result; }
+    async call(method: string, token: string, params: any = {}) { const response = await fetch(`https://${this.portal}/rest/${method}.json`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...params, auth: token }), redirect: 'error', signal: AbortSignal.timeout(15000) }); let body: any = null; try {
+        body = await response.json();
+    }
+    catch {
+        body = null;
+    } if (body === null || typeof body !== 'object') { if (response.ok) throw new BitrixRestError('ERROR_UNEXPECTED_ANSWER', response.status); throw new BitrixRestError('HTTP_' + response.status, response.status); } if (!response.ok || body.error) { const reset = Number(body.time?.operating_reset_at); throw new BitrixRestError(typeof body.error === 'string' && body.error ? body.error : 'HTTP_' + response.status, response.status, Number.isFinite(reset) && reset > 0 ? reset : null); } return body.result; }
     currentUser(token: string) { return this.call('user.current', token); }
     departments(token: string) { return this.call('department.get', token); }
     notify(token: string, userId: string, message: string) { return this.call('im.notify.system.add', token, { USER_ID: userId, MESSAGE: message }); }
@@ -24,7 +36,7 @@ export class RealBitrixAdapter implements BitrixUserProvider, OrganizationProvid
         return await this.call(method, decrypt(row.encryptedAccessToken), params);
     }
     catch (e: any) {
-        if (!String(e.message).includes('expired_token'))
+        if (!(e instanceof BitrixRestError) || e.code !== 'expired_token')
             throw e;
         row = await transaction(async (c) => { const current = await one(c, 'SELECT * FROM bitrix_installations WHERE tenant_id=$1 FOR UPDATE', [tenantId]); if (current.version !== row.version)
             return current; const r = await fetch('https://oauth.bitrix.info/oauth/token/', { method: 'POST', body: new URLSearchParams({ grant_type: 'refresh_token', client_id: process.env.BITRIX_CLIENT_ID!, client_secret: process.env.BITRIX_CLIENT_SECRET!, refresh_token: decrypt(current.encryptedRefreshToken) }), redirect: 'error', signal: AbortSignal.timeout(15000) }); const t: any = await r.json(); if (!r.ok || !t.access_token || !t.refresh_token || !Number.isFinite(Number(t.expires_in)) || Number(t.expires_in)<=0 || t.member_id !== current.memberId)
