@@ -6,10 +6,12 @@ holds the rules, UX specifications and handoff notes that govern them.
 
 ## Scope and context limiter
 
-`Construction-Core-Parallel-Design-Context.md` was named as the scope limiter but **is not present in the
-repository** (searched by name across the tree). F13.1 therefore used, as the effective limiter:
-the F13.1 task brief + `apps/frontend/src/design-system/README.md` + `.claude/ui-skills-governance.md`.
-**Action for a human:** add/confirm the context document and re-check these files against it.
+The authoritative scope limiter is `docs/design/Construction-Core-Parallel-Design-Context.md` (added in F13.1.1).
+F13.1 was written before it was in the repository, using the task brief, `apps/frontend/src/design-system/README.md` and
+`.claude/ui-skills-governance.md`; F13.1.1 re-checked these files against it. Where this folder and the context document disagree, the context document wins.
+
+Role labels: where a management role label is needed in UI, it is `DEPUTY_DIRECTOR` / «Заместитель директора».
+`TECHNICAL_DIRECTOR`, `DEPARTMENT_HEAD` and a separate Director of Construction are being retired by backend ROLE-CLEANUP and must not appear in Design material.
 
 Anything that would need backend, domain, API, auth, permissions, roles, schema, migrations, seed, Render or
 deployment changes is written only as **"Design proposal requiring architecture review"** (DPAR) and is not implemented.

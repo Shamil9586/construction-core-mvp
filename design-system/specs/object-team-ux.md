@@ -23,7 +23,11 @@ Scope: how O01 (read-only) and a future team view present people attached to an 
 - Each change is logged as new history entry (who, when, what).
 - Only the current object's team is shown; no cross-object team lists on O01.
 
+## Applies to every lead role
+The principle holds for any lead on an object — РП, СК, СДО, начальник ПТО. Example: when a начальник ПТО leaves, the new one may keep the existing
+engineers, replace some of them, or take the object over with the current team. The UI offers these as explicit choices and never defaults to clearing the team.
+
 ## Out of scope / DPAR
-- **DPAR T1:** a persisted object-team/assignment model with periods and responsibilities (the current API exposes only `projectManagerId` and a `responsibleUserId` per work).
+- **DPAR T1:** the parallel backend stream reports **PBX-3A Object Team Foundation** and **OBJ-1 Object onboarding** as implemented, but they are not on this frontend baseline. T1 must be reconciled against what PBX-3A actually provides before any team UI is built; do not assume its shape. Original proposal: a persisted object-team/assignment model with periods and responsibilities (the current API exposes only `projectManagerId` and a `responsibleUserId` per work).
 - **DPAR T2:** which roles may view/edit team assignments (permissions review).
 Until approved, the UI may show only data already in the API and must not imply a team model exists.

@@ -49,4 +49,4 @@ Existing breakpoint: `max-width: 639px` (sidebar becomes overlay). Recommendatio
 | G4 | Immutable history/audit read model for fact and confirmations |
 | T1 | Object team/assignment model with periods and responsibilities |
 | T2 | Permissions for team view/edit |
-| X1 | Provide `Construction-Core-Parallel-Design-Context.md` (missing in repo) |
+| X1 | ~~Missing context document~~ — resolved in F13.1.1: `docs/design/Construction-Core-Parallel-Design-Context.md` |

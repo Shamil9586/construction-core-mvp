@@ -11,7 +11,7 @@ delayed or blocked — with entry to Work Cards.
 | «Физическая готовность СМР» (one display figure + ProgressBar) | ИД workflow: packages, statuses, signatures |
 | Schedule: plan-to-date vs fact (two separate figures) | Financial details: closing, payments, KS forms |
 | Works table (name, performer, plan, fact, СМР %, status) | Blending readiness with documentation or money |
-| Production reasons: named blockers per work | Team administration (see `object-team-ux.md`; read-only display only) |
+| Production reasons: named blockers per work. Reason categories named by the context: material delays, decisions not issued, mobilisation problems, production blockers — each shown only when backed by confirmed data | Team administration (see `object-team-ux.md`; read-only display only) |
 
 Readiness is factual СМР execution; it is not reduced when ИД/СДО/closing is incomplete, nor raised by them.
 
@@ -24,7 +24,7 @@ Works `DataTable` → «Блокировки в производстве» (only
 
 | State | Trigger | Presentation |
 |---|---|---|
-| **On schedule** | Confirmed schedule reading says on track *(requires G1)* | Neutral-to-positive badge «По графику» next to plan/fact; no extra emphasis |
+| **On schedule** | Confirmed schedule reading says on track *(requires G1)* | Neutral-to-positive badge «По графику» (exact wording per context) next to plan/fact; no extra emphasis |
 | **Delayed** | Confirmed delay reading *(requires G1)* or work-level delayed | Amber badge «Есть отставание» with the plan/fact figures visible; delayed works get `tone=Attention` |
 | **Production blocked** | ≥1 work has named `blockers` | «Блокировки в производстве» card listing each work and its reasons verbatim; works table row badge «Заблокировано». Blocked is **never** inferred from RED/colour |
 | **No schedule data** (current default) | No confirmed per-object status | Plan and fact shown; badge replaced by stated absence «Нет данных» |
