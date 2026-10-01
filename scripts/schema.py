@@ -1,3 +1,4 @@
+# Generator of the HISTORICAL infra/001_initial.sql only. Later migrations (e.g. 017: risk_settings.escalate_technical_days -> escalate_deputy_days) are authoritative for the current schema.
 from pathlib import Path
 base=Path(__file__).resolve().parents[1]
 tables={

@@ -1,9 +1,6 @@
 import Decimal from 'decimal.js';
-// ROLE-CLEANUP (ROLE-CLEANUP-D01 / DR-R06): DEPUTY_DIRECTOR ("Заместитель директора")
-// is the single current managerial role over the construction and technical
-// contours. The former TECHNICAL_DIRECTOR and DEPARTMENT_HEAD roles no longer
-// exist in the role model or in storage (migration 017 converted stored rows).
-// Current department heads are the explicit *_HEAD roles only.
+// Current internal roles. DEPUTY_DIRECTOR («Заместитель директора») is the single
+// managerial role; department heads are the explicit *_HEAD roles.
 export const roles = ['GENERAL_DIRECTOR', 'DEPUTY_DIRECTOR', 'PROJECT_MANAGER', 'CONSTRUCTION_CONTROL', 'CONSTRUCTION_CONTROL_HEAD', 'PTO', 'PTO_HEAD', 'SDO', 'SDO_HEAD', 'ADMIN', 'CONTRACTOR_VIEWER'] as const;
 export type Role = typeof roles[number];
 // Roles a new user may be created with through POST /users. CONTRACTOR_VIEWER
@@ -430,7 +427,7 @@ export class SdoClosingAllocationService {
         return sum.eq(totalAmount) ? { allowed: true, reason: null } : { allowed: false, reason: 'Сумма распределения по участкам не совпадает с итоговой суммой закрытия' };
     }
 }
-export const defaultRisk = { yellowVariance: -5, redVariance: -15, staleDays: 7, ptoDays: 5, sdoDays: 10, escalateTechnicalDays: 3, escalateDirectorDays: 7 };
+export const defaultRisk = { yellowVariance: -5, redVariance: -15, staleDays: 7, ptoDays: 5, sdoDays: 10, escalateDeputyDays: 3, escalateDirectorDays: 7 };
 export class ProgressCalculationService {
     calculate(actual: any, planned: any) { return new Decimal(planned).gt(0) ? Decimal.min(100, Decimal.max(0, new Decimal(actual).div(planned).mul(100))).toNumber() : null; }
     // Core 2.0 decision log, п.3: явный сигнал "факт превышает план", отдельный от
@@ -514,7 +511,7 @@ export class PotentialClosingService {
     } return { physical: physical.toFixed(2), closed: closed.toFixed(2), potential: Decimal.max(0, physical.minus(closed)).toFixed(2), buckets: Object.fromEntries(Object.entries(buckets).map(([k, v]) => [k, v.toFixed(2)])) }; }
 }
 export class EscalationService {
-    recipient(days: number, risk = defaultRisk) { return days >= risk.escalateDirectorDays ? 'GENERAL_DIRECTOR' : days >= risk.escalateTechnicalDays ? 'DEPUTY_DIRECTOR' : 'PROJECT_MANAGER'; }
+    recipient(days: number, risk = defaultRisk) { return days >= risk.escalateDirectorDays ? 'GENERAL_DIRECTOR' : days >= risk.escalateDeputyDays ? 'DEPUTY_DIRECTOR' : 'PROJECT_MANAGER'; }
 }
 export class ContractorPerformanceService {
     calculate(works: any[]) { return { works: works.length, delayed: works.filter(w => w.delayDays > 0).length, actualProgress: works.length ? works.reduce((s, w) => s + (w.actualProgress ?? 0), 0) / works.length : null }; }

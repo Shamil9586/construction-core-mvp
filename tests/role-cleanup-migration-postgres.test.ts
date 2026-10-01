@@ -40,6 +40,7 @@ async function applyThrough(client: Client, maxVersion: number) {
 const tenant = async (c: Client, portal: string) => (await c.query("INSERT INTO tenants(portal,member_id,name) VALUES($1,$2,'T') RETURNING id", [portal, portal])).rows[0].id as string;
 const addUser = async (c: Client, tenantId: string, n: number, role: string, active = true) =>
   (await c.query('INSERT INTO users(tenant_id,bitrix_user_id,name,role,is_active) VALUES($1,$2,$3,$4,$5) RETURNING *', [tenantId, String(n), 'U' + n, role, active])).rows[0];
+const riskColumns = async (c: Client) => (await c.query("SELECT column_name FROM information_schema.columns WHERE table_name='risk_settings'")).rows.map((r) => r.column_name as string);
 const rejected = async (fn: () => Promise<unknown>) => { try { await fn(); } catch (e: any) { return e.code as string; } return null; };
 
 test('migration 017 is the next version after 016', () => {
@@ -74,6 +75,9 @@ test('017: removed-role rows (both in one tenant, several per role) convert to D
       const cols = (await client.query("SELECT column_name FROM information_schema.columns WHERE table_name='sessions'")).rows.map((r) => r.column_name);
       throw new Error('sessions columns: ' + cols.join(','));
     });
+    await client.query('INSERT INTO risk_settings(tenant_id,escalate_technical_days,escalate_director_days) VALUES($1,5,11),($2,6,12)', [t1, t2]);
+    const preCols = await riskColumns(client);
+    assert.ok(preCols.includes('escalate_technical_days') && !preCols.includes('escalate_deputy_days'), 'pre-017 historical column name');
     const auditPayload = { role: 'TECHNICAL_DIRECTOR' };
     await client.query("INSERT INTO audit_logs(tenant_id,user_id,entity_type,entity_id,action,old_value,new_value) VALUES($1,$2,'User',$2,'ASSIGN',NULL,$3)", [t1, td1.id, JSON.stringify(auditPayload)]);
     const auditBefore = (await client.query('SELECT * FROM audit_logs ORDER BY id')).rows;
@@ -96,6 +100,13 @@ test('017: removed-role rows (both in one tenant, several per role) convert to D
     // session row still points at the same user id, which now reads DEPUTY_DIRECTOR
     const viaSession = (await client.query('SELECT u.role FROM sessions s JOIN users u ON u.id=s.user_id AND u.tenant_id=s.tenant_id WHERE s.token_hash=$1', [token])).rows[0];
     assert.equal(viaSession.role, 'DEPUTY_DIRECTOR');
+
+    // risk_settings: column renamed, per-tenant values preserved
+    const postCols = await riskColumns(client);
+    assert.ok(postCols.includes('escalate_deputy_days'));
+    assert.equal(postCols.includes('escalate_technical_days'), false);
+    assert.deepEqual((await client.query('SELECT tenant_id, escalate_deputy_days d, escalate_director_days g FROM risk_settings ORDER BY d')).rows, [{ tenant_id: t1, d: 5, g: 11 }, { tenant_id: t2, d: 6, g: 12 }]);
+    assert.equal(await rejected(() => client.query('UPDATE risk_settings SET escalate_deputy_days=20 WHERE tenant_id=$1', [t1])), '23514', 'director > deputy CHECK still enforced after rename');
 
     // CHECK: exactly the current set
     const checks = (await client.query("SELECT pg_get_constraintdef(oid) def FROM pg_constraint WHERE conrelid='users'::regclass AND contype='c' AND pg_get_constraintdef(oid) LIKE '%role%'")).rows;
@@ -155,6 +166,10 @@ test('017 via the real runner on a fresh database: full chain applies and re-run
     await migrate();
     await migrate();
     assert.equal((await client.query('SELECT max(version)::int v FROM schema_migrations')).rows[0].v, 17);
+    const cols = await riskColumns(client);
+    assert.ok(cols.includes('escalate_deputy_days'));
+    assert.equal(cols.includes('escalate_technical_days'), false);
+    assert.equal((await client.query("SELECT count(*)::int n FROM pg_constraint WHERE conrelid='users'::regclass AND contype='c' AND pg_get_constraintdef(oid) LIKE '%TECHNICAL_DIRECTOR%'")).rows[0].n, 0);
   } finally {
     await client.end();
     await pool.end();

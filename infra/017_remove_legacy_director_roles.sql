@@ -8,6 +8,7 @@
 -- 2. Convert stored rows in place (id, tenant_id, bitrix_user_id, contractor_id,
 --    is_active and every FK reference are preserved; sessions store user_id only).
 -- 3. Add the narrowed CHECK.
+-- 4. Rename risk_settings.escalate_technical_days -> escalate_deputy_days.
 -- audit_logs / domain_events / other immutable history payloads are NOT rewritten.
 -- Safe for zero, one or many removed-role rows; re-running finds nothing to convert.
 DO $$
@@ -29,3 +30,8 @@ UPDATE users
    SET role = 'DEPUTY_DIRECTOR', version = version + 1, updated_at = now()
  WHERE role IN ('TECHNICAL_DIRECTOR', 'DEPARTMENT_HEAD');
 ALTER TABLE users ADD CONSTRAINT users_role_check CHECK(role IN ('GENERAL_DIRECTOR','DEPUTY_DIRECTOR','PROJECT_MANAGER','CONSTRUCTION_CONTROL','CONSTRUCTION_CONTROL_HEAD','PTO','PTO_HEAD','SDO','SDO_HEAD','ADMIN','CONTRACTOR_VIEWER'));
+
+-- The escalation tier that used to be addressed to the removed technical-director
+-- role is now addressed to DEPUTY_DIRECTOR. Rename the column (values preserved for
+-- every tenant; the escalate_director_days > escalate_*_days CHECK follows the rename).
+ALTER TABLE risk_settings RENAME COLUMN escalate_technical_days TO escalate_deputy_days;

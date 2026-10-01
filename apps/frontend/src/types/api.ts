@@ -743,7 +743,7 @@ export interface RiskSettings extends Versioned {
   staleDays: number;
   ptoDays: number;
   sdoDays: number;
-  escalateTechnicalDays: number;
+  escalateDeputyDays: number;
   escalateDirectorDays: number;
 }
 
