@@ -181,3 +181,14 @@ export const canViewObjectPtoTeam = (role: string): boolean => canViewTeamsOverv
  * on Bitrix position/department. The backend (OBJECT_CREATE + role rule) enforces it independently.
  */
 export const canCreateObject = (role: string): boolean => role === 'DEPUTY_DIRECTOR' || role === 'ADMIN';
+
+/**
+ * ORG-1 — «Структура компании». GENERAL_DIRECTOR / DEPUTY_DIRECTOR / ADMIN read the whole company; the three
+ * functional heads open the SAME route but the backend narrows them to their own functional team.
+ * Ordinary engineers and PROJECT_MANAGER have no such screen. Only DEPUTY_DIRECTOR and ADMIN mutate
+ * (GENERAL_DIRECTOR is read-only). Confirmed Core role only — never Bitrix position/department. The backend
+ * (ORG_STRUCTURE_READ / FUNCTION_TEAM_MANAGE + its own scoping) enforces all of it independently.
+ */
+export const canViewCompanyStructure = (role: string): boolean =>
+  role === 'GENERAL_DIRECTOR' || role === 'DEPUTY_DIRECTOR' || role === 'ADMIN' || role === 'PTO_HEAD' || role === 'CONSTRUCTION_CONTROL_HEAD' || role === 'SDO_HEAD';
+export const canManageCompanyStructure = (role: string): boolean => role === 'DEPUTY_DIRECTOR' || role === 'ADMIN';

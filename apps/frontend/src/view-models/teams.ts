@@ -25,12 +25,27 @@ export type RedistributeOp =
   | { kind: 'memberAdd'; objectId: string; memberUserId: string }
   | { kind: 'handover'; objectId: string; outgoingUserId: string; incomingUserId: string };
 
+/** The (assignment id, version) the screen read for an employee's CURRENT organizational membership, if any. */
+export type OrgExpectationLookup = (memberUserId: string) => { assignmentId: string; version: number } | null | undefined;
+
+/** Reads every current org membership off the overview the Deputy is looking at (ORG-1: transfer/end must name the row they saw). */
+export function orgExpectationLookup(overview: Pick<TeamsOverview, 'heads'>): OrgExpectationLookup {
+  const byMember = new Map<string, { assignmentId: string; version: number }>();
+  for (const head of overview.heads) for (const m of head.orgMembers) byMember.set(m.userId, { assignmentId: m.assignmentId, version: m.version });
+  return (id) => byMember.get(id) ?? null;
+}
+
 /** Every operation the Deputy queued goes into ONE command — the backend applies it all-or-nothing. */
-export function buildRedistributeCommand(reason: string, ops: readonly RedistributeOp[]): RedistributeCommand {
+export function buildRedistributeCommand(reason: string, ops: readonly RedistributeOp[], expectation: OrgExpectationLookup = () => null): RedistributeCommand {
   const command: RedistributeCommand = { reason: reason.trim(), orgTransfers: [], orgEnds: [], leadChanges: [], memberEnds: [], memberAdds: [], handovers: [] };
   for (const op of ops) {
-    if (op.kind === 'orgTransfer') command.orgTransfers.push({ memberUserId: op.memberUserId, toManagerUserId: op.toManagerUserId });
-    else if (op.kind === 'orgEnd') command.orgEnds.push({ memberUserId: op.memberUserId });
+    if (op.kind === 'orgTransfer') {
+      const e = expectation(op.memberUserId);
+      command.orgTransfers.push({ memberUserId: op.memberUserId, toManagerUserId: op.toManagerUserId, ...(e ? { expectedAssignmentId: e.assignmentId, expectedVersion: e.version } : {}) });
+    } else if (op.kind === 'orgEnd') {
+      const e = expectation(op.memberUserId);
+      command.orgEnds.push({ memberUserId: op.memberUserId, ...(e ? { expectedAssignmentId: e.assignmentId, expectedVersion: e.version } : {}) });
+    }
     else if (op.kind === 'lead') command.leadChanges.push({ objectId: op.objectId, leadUserId: op.leadUserId });
     else if (op.kind === 'memberEnd') command.memberEnds.push({ objectId: op.objectId, memberUserId: op.memberUserId });
     else if (op.kind === 'memberAdd') command.memberAdds.push({ objectId: op.objectId, memberUserId: op.memberUserId });

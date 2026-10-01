@@ -28,9 +28,11 @@ type Scope = { kind: 'FULL' } | { kind: 'OWN_TEAM'; fn: OrgFunctionCode };
 @Injectable()
 export class OrgStructureService {
     private scope(a: Actor): Scope {
-        requirePermission(a, P.ORG_STRUCTURE_READ);
-        if (FULL_READ_ROLES.includes(a.role))
+        if (FULL_READ_ROLES.includes(a.role)) {
+            requirePermission(a, P.ORG_STRUCTURE_READ);
             return { kind: 'FULL' };
+        }
+        // Functional heads hold no company-wide permission: the exact role maps to exactly one function and one team.
         const fn = HEAD_FUNCTION[a.role];
         if (fn)
             return { kind: 'OWN_TEAM', fn };

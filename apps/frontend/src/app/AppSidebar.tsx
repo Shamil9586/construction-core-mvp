@@ -3,7 +3,7 @@ import { Sidebar, typeClass, type NavItem } from '../design-system';
 import { ROUTE_PATHS } from './routePaths';
 import { RuntimeFooter } from './RuntimeFooter';
 import { useCoreRuntime } from './CoreRuntimeContext';
-import { canManageDocumentation, canAccessSdoWorkspace, canAdministerUsers, canViewTeamsOverview, canViewMyPtoTeam } from '../auth/internalRoles';
+import { canManageDocumentation, canAccessSdoWorkspace, canAdministerUsers, canViewTeamsOverview, canViewMyPtoTeam, canViewCompanyStructure } from '../auth/internalRoles';
 
 /**
  * The routing adapter `Sidebar`'s own doc comment asks for: "a screen — or a
@@ -33,6 +33,8 @@ const NAV_ITEMS: NavItem[] = [
   // PBX-3A: team management for leadership; own team for PTO / PTO_HEAD. Confirmed sessions only.
   { key: 'teams', label: 'Команды и объекты' },
   { key: 'my-team', label: 'Моя команда ПТО' },
+  // ORG-1: organizational structure; confirmed sessions only (full for leadership, own team for functional heads).
+  { key: 'company-structure', label: 'Структура компании' },
   // PBX-2: shown to a confirmed ADMIN session only (never in the session-less mock runtime).
   { key: 'admin-users', label: 'Пользователи и доступ' },
 ];
@@ -57,7 +59,9 @@ export function AppSidebar() {
               ? 'teams'
               : location.pathname === ROUTE_PATHS.myTeam
                 ? 'my-team'
-                : '';
+                : location.pathname === ROUTE_PATHS.companyStructure
+                  ? 'company-structure'
+                  : '';
 
   // F8.2.1 Corrective Patch (F8.2.1-02) — the PTO Workspace is PTO's own
   // working area (and ADMIN's, per existing administration convention), not
@@ -79,9 +83,10 @@ export function AppSidebar() {
           (item.key !== 'sdo' || canAccessSdoWorkspace(session.user.role)) &&
           (item.key !== 'admin-users' || canAdministerUsers(session.user.role)) &&
           (item.key !== 'teams' || canViewTeamsOverview(session.user.role)) &&
-          (item.key !== 'my-team' || canViewMyPtoTeam(session.user.role)),
+          (item.key !== 'my-team' || canViewMyPtoTeam(session.user.role)) &&
+          (item.key !== 'company-structure' || canViewCompanyStructure(session.user.role)),
       )
-    : NAV_ITEMS.filter((item) => item.key !== 'admin-users' && item.key !== 'teams' && item.key !== 'my-team');
+    : NAV_ITEMS.filter((item) => item.key !== 'admin-users' && item.key !== 'teams' && item.key !== 'my-team' && item.key !== 'company-structure');
 
   return (
     <Sidebar
@@ -96,6 +101,7 @@ export function AppSidebar() {
         if (key === 'admin-users') navigate(ROUTE_PATHS.adminUsers);
         if (key === 'teams') navigate(ROUTE_PATHS.teams);
         if (key === 'my-team') navigate(ROUTE_PATHS.myTeam);
+        if (key === 'company-structure') navigate(ROUTE_PATHS.companyStructure);
       }}
       footer={<RuntimeFooter />}
     />

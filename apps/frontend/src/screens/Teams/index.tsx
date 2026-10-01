@@ -9,6 +9,7 @@ import {
   canSubmitRedistribution,
   describeOp,
   objectMemberOptions,
+  orgExpectationLookup,
   replacementHandoverGaps,
   type RedistributeOp,
 } from '../../view-models/teams';
@@ -151,7 +152,7 @@ function RedistributePanel({ overview, busy, onCancel, onSubmit }: { overview: T
         <input id="redistribute-reason" className={styles.input} value={reason} onChange={(e) => setReason(e.target.value)} disabled={busy} />
       </div>
       <div className={styles.actions}>
-        <Button loading={busy} disabled={busy || !canSubmitRedistribution(reason, ops)} onClick={() => { void onSubmit(buildRedistributeCommand(reason, ops)).then((ok) => { if (ok) onCancel(); }); }}>
+        <Button loading={busy} disabled={busy || !canSubmitRedistribution(reason, ops)} onClick={() => { void onSubmit(buildRedistributeCommand(reason, ops, orgExpectationLookup(overview))).then((ok) => { if (ok) onCancel(); }); }}>
           Применить перераспределение
         </Button>
         <Button variant="Secondary" disabled={busy} onClick={onCancel}>Отмена</Button>

@@ -10,6 +10,7 @@ import { SdoRoute } from './routes/SdoRoute';
 import { SdoCaseDetailRoute } from './routes/SdoCaseDetailRoute';
 import { AdminUsersRoute } from './routes/AdminUsersRoute';
 import { TeamsRoute, MyTeamRoute } from './routes/TeamsRoute';
+import { CompanyStructureRoute } from './routes/CompanyStructureRoute';
 import { RouteNotFound } from './RouteStatus';
 
 /**
@@ -64,6 +65,7 @@ export function AppRoutes() {
       <Route path={ROUTE_PATHS.adminUsers} element={<AdminUsersRoute />} />
       <Route path={ROUTE_PATHS.teams} element={<TeamsRoute />} />
       <Route path={ROUTE_PATHS.myTeam} element={<MyTeamRoute />} />
+      <Route path={ROUTE_PATHS.companyStructure} element={<CompanyStructureRoute />} />
       <Route path="*" element={<RouteNotFound label="Страница не найдена" />} />
     </Routes>
   );

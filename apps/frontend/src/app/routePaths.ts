@@ -27,6 +27,8 @@ export const ROUTE_PATHS = {
   teams: '/teams',
   /** PBX-3A — «Моя команда ПТО» (PTO_HEAD manages, PTO reads). */
   myTeam: '/my-team',
+  /** ORG-1 — «Структура компании» (GD/Deputy/Admin full; functional heads own team only). */
+  companyStructure: '/company-structure',
 } as const;
 
 export function objectPath(objectId: string): string {

@@ -104,8 +104,9 @@ export interface ObjectPtoTeam {
 }
 export interface RedistributeCommand {
   reason: string;
-  orgTransfers: { memberUserId: string; toManagerUserId: string }[];
-  orgEnds: { memberUserId: string }[];
+  /** ORG-1: a transfer/end of an EXISTING membership names the exact row read (id + version). */
+  orgTransfers: { memberUserId: string; toManagerUserId: string; expectedAssignmentId?: string; expectedVersion?: number }[];
+  orgEnds: { memberUserId: string; expectedAssignmentId?: string; expectedVersion?: number }[];
   leadChanges: { objectId: string; leadUserId: string }[];
   memberEnds: { objectId: string; memberUserId: string }[];
   memberAdds: { objectId: string; memberUserId: string }[];
