@@ -92,7 +92,12 @@ export enum Permission {
     PTO_OBJECT_TEAM_MANAGE = 'PTO_OBJECT_TEAM_MANAGE',
     // PTO_TEAM_READ: read PTO team/assignment/handover data. Oversight
     // (GENERAL_DIRECTOR) is read-only.
-    PTO_TEAM_READ = 'PTO_TEAM_READ'
+    PTO_TEAM_READ = 'PTO_TEAM_READ',
+    // ORG-1 — «Структура компании» read. GENERAL_DIRECTOR / DEPUTY_DIRECTOR / ADMIN read the whole company;
+    // the three functional heads hold it but the service narrows them to THEIR OWN functional team only.
+    // Ordinary engineers and PROJECT_MANAGER do not hold it. Mutations stay on FUNCTION_TEAM_MANAGE
+    // (DEPUTY_DIRECTOR, ADMIN) — GENERAL_DIRECTOR is read-only. This is NOT an operational PTO/SDO/SC grant.
+    ORG_STRUCTURE_READ = 'ORG_STRUCTURE_READ'
 }
 const view = [Permission.OBJECT_VIEW, Permission.WORK_VIEW, Permission.PTO_VIEW, Permission.SDO_VIEW, Permission.FINANCE_VIEW];
 // DEPUTY_DIRECTOR managerial grant — company/object/work visibility (`view`)
@@ -105,7 +110,8 @@ const constructionControlGrants = [...view, Permission.INSPECTION_ACCEPT, Permis
 const ptoGrants = [...view, Permission.PTO_EDIT, Permission.PTO_TRANSFER_SDO, Permission.DOCUMENTATION_MANAGE];
 const sdoGrants = [...view, Permission.SDO_EDIT, Permission.SDO_CLOSE, Permission.FINANCE_EDIT, Permission.SDO_CASE_MANAGE];
 const teamRead = [Permission.PTO_TEAM_READ];
-const grants: Record<Role, Permission[]> = { ADMIN: Object.values(Permission), GENERAL_DIRECTOR: [...view, ...teamRead], DEPUTY_DIRECTOR: [...view, Permission.OBJECT_CREATE, Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE, Permission.EXECUTION_UNIT_MANAGE, Permission.FUNCTION_TEAM_MANAGE, Permission.OBJECT_FUNCTION_LEAD_ASSIGN, ...teamRead], PROJECT_MANAGER: [...view, Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE, Permission.EXECUTION_UNIT_MANAGE, Permission.WORK_UPDATE_PROGRESS, Permission.INSPECTION_REQUEST, Permission.ISSUE_RESOLVE], CONSTRUCTION_CONTROL: constructionControlGrants, CONSTRUCTION_CONTROL_HEAD: constructionControlGrants, PTO: [...ptoGrants, ...teamRead], PTO_HEAD: [...ptoGrants, Permission.PTO_OBJECT_TEAM_MANAGE, ...teamRead], SDO: sdoGrants, SDO_HEAD: sdoGrants, CONTRACTOR_VIEWER: [Permission.OBJECT_VIEW, Permission.WORK_VIEW] };
+const orgRead = [Permission.ORG_STRUCTURE_READ];
+const grants: Record<Role, Permission[]> = { ADMIN: Object.values(Permission), GENERAL_DIRECTOR: [...view, ...teamRead, ...orgRead], DEPUTY_DIRECTOR: [...view, Permission.OBJECT_CREATE, Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE, Permission.EXECUTION_UNIT_MANAGE, Permission.FUNCTION_TEAM_MANAGE, Permission.OBJECT_FUNCTION_LEAD_ASSIGN, ...teamRead, ...orgRead], PROJECT_MANAGER: [...view, Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE, Permission.EXECUTION_UNIT_MANAGE, Permission.WORK_UPDATE_PROGRESS, Permission.INSPECTION_REQUEST, Permission.ISSUE_RESOLVE], CONSTRUCTION_CONTROL: constructionControlGrants, CONSTRUCTION_CONTROL_HEAD: [...constructionControlGrants, ...orgRead], PTO: [...ptoGrants, ...teamRead], PTO_HEAD: [...ptoGrants, Permission.PTO_OBJECT_TEAM_MANAGE, ...teamRead, ...orgRead], SDO: sdoGrants, SDO_HEAD: [...sdoGrants, ...orgRead], CONTRACTOR_VIEWER: [Permission.OBJECT_VIEW, Permission.WORK_VIEW] };
 // OBJ-1 (OBJ1-D01): creating an object == appointing its РП, a managerial act of the
 // Deputy Director (ADMIN = system override). PROJECT_MANAGER never self-assigns;
 // read-only GENERAL_DIRECTOR is not current authority.

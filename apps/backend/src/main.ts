@@ -29,12 +29,13 @@ import { AuditModule } from './modules/audit/audit.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { ImportsModule } from './modules/imports/imports.module';
 import { FunctionTeamsModule } from './modules/function-teams/function-teams.module';
+import { OrgStructureModule } from './modules/org-structure/org-structure.module';
 @Catch()
 class Errors implements ExceptionFilter {
     catch(error: any, host: ArgumentsHost) { const ctx = host.switchToHttp(), res = ctx.getResponse(), req = ctx.getRequest(); const status = error instanceof ZodError ? 400 : error instanceof HttpException ? error.getStatus() : ['23505', '23503', '23514', '22P02'].includes(error.code) ? 409 : 500; const message = error instanceof ZodError ? error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ') : status === 500 ? 'Внутренняя ошибка' : error instanceof HttpException ? error.message : 'Конфликт данных или нарушена связь'; if (status === 500)
         console.error(JSON.stringify({ level: 'error', requestId: req.requestId, errorType: error.constructor?.name, code: error.code })); res.status(status).json({ statusCode: status, message, requestId: req.requestId }); }
 }
-@Module({ imports: [HealthModule, AuthModule, BitrixModule, DashboardModule, ObjectsModule, WorksModule, InspectionsModule, ExecutionUnitsModule, DocumentationModule, AttachmentsModule, PtoModule, SdoModule, SdoClosingModule, FinancialModule, ContractorsModule, DictionariesModule, UsersModule, MaterialsModule, AuditModule, NotificationsModule, ImportsModule, FunctionTeamsModule] })
+@Module({ imports: [HealthModule, AuthModule, BitrixModule, DashboardModule, ObjectsModule, WorksModule, InspectionsModule, ExecutionUnitsModule, DocumentationModule, AttachmentsModule, PtoModule, SdoModule, SdoClosingModule, FinancialModule, ContractorsModule, DictionariesModule, UsersModule, MaterialsModule, AuditModule, NotificationsModule, ImportsModule, FunctionTeamsModule, OrgStructureModule] })
 class AppModule {
 }
 /**

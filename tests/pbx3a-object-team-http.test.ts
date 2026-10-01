@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { makeUser, tokenFor } from './helpers/pbx3-fixtures';
+import { makeUser, tokenFor, orgExpectation } from './helpers/pbx3-fixtures';
 
 /**
  * PBX-3A — Object Responsibility & Team Redistribution (PTO vertical), HTTP level over the real
@@ -120,7 +120,7 @@ test('PBX-3A acceptance: Kuznetsov leaves; lead replacement alone keeps members;
     const endedLeadsBefore = JSON.stringify(await ended());
     const swap = await h.req('function-teams/pto/redistribute', {
       reason: 'Иванову нужен Ахметов вместо Орлова',
-      orgTransfers: [{ memberUserId: akhmetov.id, toManagerUserId: ivanov.id }, { memberUserId: orlov.id, toManagerUserId: smirnov.id }, { memberUserId: petrov.id, toManagerUserId: smirnov.id }, { memberUserId: sidorov.id, toManagerUserId: smirnov.id }],
+      orgTransfers: await Promise.all([[akhmetov, ivanov], [orlov, smirnov], [petrov, smirnov], [sidorov, smirnov]].map(async ([m, mg]) => ({ memberUserId: m.id, toManagerUserId: mg.id, ...(await orgExpectation(m.id)) }))),
       memberEnds: [{ objectId: o3.id, memberUserId: akhmetov.id }, { objectId: o4.id, memberUserId: orlov.id }],
       memberAdds: [{ objectId: o4.id, memberUserId: akhmetov.id }, { objectId: o3.id, memberUserId: orlov.id }],
       handovers: [{ objectId: o3.id, outgoingUserId: akhmetov.id, incomingUserId: orlov.id }, { objectId: o4.id, outgoingUserId: orlov.id, incomingUserId: akhmetov.id, note: 'Передать контекст по АОСР' }],
@@ -223,7 +223,8 @@ test('PBX-3A validation: exact roles, same tenant, active users, no self-managem
     const foreignHead = await insert(pool, 'users', other.id, { bitrixUserId: 'f2', name: 'Чужой нач', role: 'PTO_HEAD' });
     const { o } = await makeObject(h, 'Валидация');
     await h.login(DEPUTY);
-    const org = (m: string, mg: string) => h.raw('function-teams/pto/org-members', { memberUserId: m, managerUserId: mg });
+    const org = async (m: string, mg: string) => h.raw('function-teams/pto/org-members', { memberUserId: m, managerUserId: mg, ...(m === eng.id && alreadyAssigned ? await orgExpectation(m) : {}) });
+    let alreadyAssigned = false;
     assert.equal((await org(eng.id, eng.id)).status, 400, 'self-management');
     assert.equal((await org(eng.id, sdo.id)).status, 400, 'manager must be PTO_HEAD');
     assert.equal((await org(head.id, head2.id)).status, 400, 'a PTO_HEAD is not a PTO engineer member');
@@ -232,6 +233,7 @@ test('PBX-3A validation: exact roles, same tenant, active users, no self-managem
     assert.equal((await org(foreign.id, head.id)).status, 404, 'cross-tenant member');
     assert.equal((await org(eng.id, foreignHead.id)).status, 404, 'cross-tenant manager');
     await h.req('function-teams/pto/org-members', { memberUserId: eng.id, managerUserId: head.id });
+    alreadyAssigned = true;
     assert.equal((await org(eng.id, head.id)).status, 400, 'already in that team');
     const lead = (u: string) => h.raw(`objects/${o.id}/function-team/pto/lead`, { leadUserId: u });
     assert.equal((await lead(eng.id)).status, 400, 'lead must be PTO_HEAD, engineer refused');
@@ -312,7 +314,7 @@ test('PBX-3A redistribution is atomic: a failing later operation rolls back ever
     const before = await snap();
     const bad = await h.raw('function-teams/pto/redistribute', {
       reason: 'half-swap attempt',
-      orgTransfers: [{ memberUserId: e1.id, toManagerUserId: a2.id }],
+      orgTransfers: [{ memberUserId: e1.id, toManagerUserId: a2.id, ...(await orgExpectation(e1.id)) }],
       leadChanges: [{ objectId: o.id, leadUserId: a2.id }],
       memberAdds: [{ objectId: o.id, memberUserId: e2.id }, { objectId: o.id, memberUserId: '00000000-0000-4000-8000-000000000001' }], // unknown user -> 404 at the very end
     });
@@ -439,7 +441,7 @@ test('PBX-3A history is append-only and deactivation only surfaces unresolved as
     const ov = await h.req('function-teams/pto/overview');
     assert.ok(ov.unresolved.some((u: any) => u.kind === 'OBJECT_MEMBER_UNAVAILABLE' && u.userId === eng.id));
     assert.ok(ov.unresolved.some((u: any) => u.kind === 'ORG_MEMBER_UNAVAILABLE' && u.userId === eng.id));
-    await h.req('function-teams/pto/redistribute', { reason: 'уволен', orgEnds: [{ memberUserId: eng.id }], memberEnds: [{ objectId: o.id, memberUserId: eng.id }] });
+    await h.req('function-teams/pto/redistribute', { reason: 'уволен', orgEnds: [{ memberUserId: eng.id, ...(await orgExpectation(eng.id)) }], memberEnds: [{ objectId: o.id, memberUserId: eng.id }] });
     const ov2 = await h.req('function-teams/pto/overview');
     assert.equal(ov2.unresolved.filter((u: any) => u.userId === eng.id).length, 0);
     assert.equal((await pool.query('SELECT count(*)::int n FROM object_function_member_assignments WHERE member_user_id=$1', [eng.id])).rows[0].n, 2, 'both historical rows preserved');

@@ -1,7 +1,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { Client } from 'pg';
-import { makeUser } from './helpers/pbx3-fixtures';
+import { makeUser, orgExpectation } from './helpers/pbx3-fixtures';
 
 /**
  * PBX-3A — REAL PostgreSQL evidence (PGlite is single-connection and proves nothing about
@@ -159,22 +159,26 @@ test('B2 concurrent lead replacements on one object serialise: exactly one activ
   assert.deepEqual((await ctx.db.pool.query('SELECT * FROM object_function_member_assignments WHERE object_id=$1', [o])).rows, memberBefore, 'no cascade to members');
 });
 
-test('B3 concurrent organizational transfers of one member to different heads: exactly one active membership', async () => {
+test('B3 concurrent unconditional org assignments of one member to different heads: exactly one wins, no blind transfer (ORG-1)', async () => {
   const heads = await Promise.all([1, 2, 3, 4, 5, 6].map((i) => makeUser('B3 Нач. ' + i, 'PTO_HEAD')));
   const eng = await makeUser('B3 Инж.', 'PTO');
   const res = await Promise.allSettled(heads.map((h) => ctx.svc.assignOrgMember(ctx.deputy, { memberUserId: eng.id, managerUserId: h.id })));
-  assert.equal(res.filter((r) => r.status === 'rejected').length, 0);
+  // ORG-1: replacing an existing membership needs expectedAssignmentId+expectedVersion, so the five losers are refused (400)
+  // instead of silently replacing the winner.
+  assert.equal(res.filter((r) => r.status === 'fulfilled').length, 1);
+  for (const r of res) if (r.status === 'rejected') assert.equal((r.reason as any).status, 400);
   const rows = (await ctx.db.pool.query("SELECT * FROM functional_team_memberships WHERE member_user_id=$1", [eng.id])).rows;
   assert.equal(rows.filter((r: any) => r.ended_at === null).length, 1);
-  assert.equal(rows.length, 6);
+  assert.equal(rows.length, 1);
 });
 
 test('B4 two redistributions adding the same member to the same object: one wins, the loser leaves NO partial change', async () => {
   const o = ctx.objects[4];
   const h1 = await makeUser('B4 Нач. 1', 'PTO_HEAD'), h2 = await makeUser('B4 Нач. 2', 'PTO_HEAD'), eng = await makeUser('B4 Инж.', 'PTO'), other = await makeUser('B4 Инж. 2', 'PTO');
   await ctx.svc.assignOrgMember(ctx.deputy, { memberUserId: other.id, managerUserId: h1.id });
-  const a = ctx.svc.redistribute(ctx.deputy, cmd({ memberAdds: [{ objectId: o, memberUserId: eng.id }], orgTransfers: [{ memberUserId: other.id, toManagerUserId: h2.id }] }));
-  const b = ctx.svc.redistribute(ctx.deputy, cmd({ memberAdds: [{ objectId: o, memberUserId: eng.id }], orgTransfers: [{ memberUserId: other.id, toManagerUserId: h1.id }] }));
+  const exp = await orgExpectation(other.id);
+  const a = ctx.svc.redistribute(ctx.deputy, cmd({ memberAdds: [{ objectId: o, memberUserId: eng.id }], orgTransfers: [{ memberUserId: other.id, toManagerUserId: h2.id, ...exp }] }));
+  const b = ctx.svc.redistribute(ctx.deputy, cmd({ memberAdds: [{ objectId: o, memberUserId: eng.id }], orgTransfers: [{ memberUserId: other.id, toManagerUserId: h1.id, ...exp }] }));
   const [ra, rb] = await Promise.allSettled([a, b]);
   assert.equal([ra, rb].filter((r) => r.status === 'fulfilled').length, 1, 'exactly one redistribution succeeds');
   const rows = (await ctx.db.pool.query("SELECT * FROM object_function_member_assignments WHERE object_id=$1 AND member_user_id=$2", [o, eng.id])).rows;
@@ -198,7 +202,7 @@ test('B5 native backstop: an uncommitted foreign row that pre-checks cannot see 
     await rogue.query('BEGIN');
     await rogue.query("INSERT INTO object_function_member_assignments(tenant_id,object_id,function_code,member_user_id,assigned_by) VALUES($1,$2,'PTO',$3,$4)", [ctx.tenant.id, o, y.id, ctx.deputy.id]);
     let settled = false;
-    const p = ctx.svc.redistribute(ctx.deputy, cmd({ orgTransfers: [{ memberUserId: x.id, toManagerUserId: h2.id }], leadChanges: [{ objectId: o, leadUserId: h2.id }], memberAdds: [{ objectId: o, memberUserId: y.id }] })).then(() => { settled = true; return null; }, (e: any) => { settled = true; return e.code; });
+    const p = ctx.svc.redistribute(ctx.deputy, cmd({ orgTransfers: [{ memberUserId: x.id, toManagerUserId: h2.id, ...(await orgExpectation(x.id)) }], leadChanges: [{ objectId: o, leadUserId: h2.id }], memberAdds: [{ objectId: o, memberUserId: y.id }] })).then(() => { settled = true; return null; }, (e: any) => { settled = true; return e.code; });
     await sleep(500);
     assert.equal(settled, false, 'the redistribution has already applied its earlier steps and is blocked on the unique index');
     await rogue.query('COMMIT');
@@ -230,7 +234,7 @@ test('B7 head add/remove racing a Deputy swap: authorization is re-validated und
   await ctx.svc.assignObjectLead(ctx.deputy, o, { leadUserId: h1.id });
   // Fire both together; whatever the serial order, the invariants must hold.
   const headAdd = ctx.svc.addObjectMember(h1, o, { memberUserId: eng.id });
-  const swap = ctx.svc.redistribute(ctx.deputy, cmd({ orgTransfers: [{ memberUserId: eng.id, toManagerUserId: h2.id }], leadChanges: [{ objectId: o, leadUserId: h2.id }] }));
+  const swap = ctx.svc.redistribute(ctx.deputy, cmd({ orgTransfers: [{ memberUserId: eng.id, toManagerUserId: h2.id, ...(await orgExpectation(eng.id)) }], leadChanges: [{ objectId: o, leadUserId: h2.id }] }));
   const [a, b] = await Promise.allSettled([headAdd, swap]);
   assert.equal(b.status, 'fulfilled');
   const active = (await ctx.db.pool.query("SELECT count(*)::int n FROM object_function_member_assignments WHERE object_id=$1 AND member_user_id=$2 AND ended_at IS NULL", [o, eng.id])).rows[0].n;

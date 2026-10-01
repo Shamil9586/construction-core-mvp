@@ -9,15 +9,15 @@ import * as V from '../../validation';
 // tenantId/functionCode/assignedBy/etc. — those are fixed server-side (tenant + PTO from the
 // session and route, assigned_by from the authenticated actor).
 const reason = V.text.optional();
-const orgMemberDto = z.object({ memberUserId: V.uuid, managerUserId: V.uuid, reason, expectedVersion: V.version.optional() }).strict();
+const orgMemberDto = z.object({ memberUserId: V.uuid, managerUserId: V.uuid, reason, expectedAssignmentId: V.uuid.optional(), expectedVersion: V.version.optional() }).strict();
 const leadDto = z.object({ leadUserId: V.uuid, reason, note: V.text.optional(), expectedAssignmentId: V.uuid.optional(), expectedVersion: V.version.optional() }).strict();
 const memberDto = z.object({ memberUserId: V.uuid }).strict();
 const endMemberDto = z.object({ reason, expectedVersion: V.version.optional() }).strict();
 const list = <T extends z.ZodTypeAny>(t: T) => z.array(t).max(100).default([]);
 const redistributeDto = z.object({
     reason: V.text,
-    orgTransfers: list(z.object({ memberUserId: V.uuid, toManagerUserId: V.uuid }).strict()),
-    orgEnds: list(z.object({ memberUserId: V.uuid }).strict()),
+    orgTransfers: list(z.object({ memberUserId: V.uuid, toManagerUserId: V.uuid, expectedAssignmentId: V.uuid.optional(), expectedVersion: V.version.optional() }).strict()),
+    orgEnds: list(z.object({ memberUserId: V.uuid, expectedAssignmentId: V.uuid.optional(), expectedVersion: V.version.optional() }).strict()),
     leadChanges: list(z.object({ objectId: V.uuid, leadUserId: V.uuid }).strict()),
     memberEnds: list(z.object({ objectId: V.uuid, memberUserId: V.uuid }).strict()),
     memberAdds: list(z.object({ objectId: V.uuid, memberUserId: V.uuid }).strict()),

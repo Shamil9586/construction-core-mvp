@@ -30,22 +30,37 @@ import { Permission as P } from '../../../packages/domain';
 export const FN = 'PTO';
 const T_ORG = 'functional_team_memberships', T_LEAD = 'object_function_lead_assignments', T_MEM = 'object_function_member_assignments', T_HO = 'object_function_handovers';
 const OVERSIGHT_ROLES = ['DEPUTY_DIRECTOR', 'GENERAL_DIRECTOR', 'ADMIN'];
+
+/**
+ * ORG-1 — the four organizational functions and their EXACT role pair. functional_team_memberships is
+ * generic (infra/016 CHECK already admits all four codes), so no schema change is needed: only the role
+ * pair differs per function. Nothing here is inferred from Bitrix descriptive fields.
+ */
+export type OrgFunctionCode = 'PTO' | 'CONSTRUCTION_CONTROL' | 'SDO' | 'PROJECT_MANAGEMENT';
+export const ORG_FUNCTIONS: Record<OrgFunctionCode, { managerRole: string; memberRole: string; managerLabel: string; memberLabel: string }> = {
+    PTO: { managerRole: 'PTO_HEAD', memberRole: 'PTO', managerLabel: 'начальника ПТО', memberLabel: 'сотрудника ПТО' },
+    CONSTRUCTION_CONTROL: { managerRole: 'CONSTRUCTION_CONTROL_HEAD', memberRole: 'CONSTRUCTION_CONTROL', managerLabel: 'начальника СК', memberLabel: 'сотрудника СК' },
+    SDO: { managerRole: 'SDO_HEAD', memberRole: 'SDO', managerLabel: 'начальника СДО', memberLabel: 'сотрудника СДО' },
+    PROJECT_MANAGEMENT: { managerRole: 'DEPUTY_DIRECTOR', memberRole: 'PROJECT_MANAGER', managerLabel: 'заместителя директора', memberLabel: 'руководителя проекта' },
+};
+export const ORG_FUNCTION_CODES = Object.keys(ORG_FUNCTIONS) as OrgFunctionCode[];
+export type OrgExpectation = { assignmentId?: string; version?: number };
 const ENTITY = { [T_ORG]: 'FunctionalTeamMembership', [T_LEAD]: 'ObjectFunctionLead', [T_MEM]: 'ObjectFunctionMember', [T_HO]: 'ObjectFunctionHandover' } as Record<string, string>;
 
 export type RedistributeCommand = {
     reason: string;
-    orgTransfers: { memberUserId: string; toManagerUserId: string }[];
-    orgEnds: { memberUserId: string }[];
+    orgTransfers: { memberUserId: string; toManagerUserId: string; expectedAssignmentId?: string; expectedVersion?: number }[];
+    orgEnds: { memberUserId: string; expectedAssignmentId?: string; expectedVersion?: number }[];
     leadChanges: { objectId: string; leadUserId: string }[];
     memberEnds: { objectId: string; memberUserId: string }[];
     memberAdds: { objectId: string; memberUserId: string }[];
     handovers: { objectId: string; outgoingUserId: string; incomingUserId: string; note?: string }[];
 };
 
-async function lockTeamScope(c: any, a: Actor, objectIds: string[], userIds: string[]) {
+export async function lockTeamScope(c: any, a: Actor, objectIds: string[], userIds: string[], fn: string = FN) {
     const keys = [...new Set([...objectIds.map(id => `object:${id}`), ...userIds.map(id => `user:${id}`)])].sort();
     for (const k of keys)
-        await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [`pbx3:${a.tenantId}:${FN}:${k}`]);
+        await c.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))', [`pbx3:${a.tenantId}:${fn}:${k}`]);
     const ids = [...new Set(userIds)].sort();
     // Users are read FOR SHARE in a fixed order so a concurrent deactivation/role change
     // cannot slip between validation and the assignment insert.
@@ -54,10 +69,15 @@ async function lockTeamScope(c: any, a: Actor, objectIds: string[], userIds: str
 }
 function dup(list: string[], message: string) { ensure(new Set(list).size === list.length, message); }
 function requireUser(users: Map<string, any>, id: string) { const u = users.get(id); if (!u) throw new NotFoundException('Пользователь не найден'); return u; }
-function requireActiveRole(users: Map<string, any>, id: string, role: 'PTO' | 'PTO_HEAD') {
+function requireActiveRole(users: Map<string, any>, id: string, role: string, label: string = role === 'PTO_HEAD' ? 'начальника ПТО' : 'сотрудника ПТО') {
     const u = requireUser(users, id);
-    ensure(u.role === role && u.isActive, role === 'PTO_HEAD' ? `Назначьте активного начальника ПТО (${u.name})` : `Назначьте активного сотрудника ПТО (${u.name})`);
+    ensure(u.role === role && u.isActive, `Назначьте активного ${label} (${u.name})`);
     return u;
+}
+function requireReason(reason: string | null | undefined, what: string) {
+    const r = (reason ?? '').trim();
+    ensure(r.length > 0, `Укажите причину: ${what}`);
+    return r;
 }
 async function endRow(c: any, a: Actor, table: string, id: string, reason: string | null | undefined) {
     const n = await one(c, `UPDATE ${table} SET ended_at=clock_timestamp(),ended_by=$3,end_reason=$4,version=version+1 WHERE tenant_id=$1 AND id=$2 AND ended_at IS NULL RETURNING *`, [a.tenantId, id, a.id, reason ?? null]);
@@ -65,33 +85,72 @@ async function endRow(c: any, a: Actor, table: string, id: string, reason: strin
     return n;
 }
 
+function orgConflict() { return new ConflictException('Организационное назначение уже изменено другим пользователем. Обновите страницу.'); }
+/** ORG1-D08A: identity AND version of the exact membership row the client read. Both or neither (BadRequest). */
+function checkOrgExpectation(current: any, expected: OrgExpectation | undefined) {
+    ensure(!!expected && expected.assignmentId !== undefined && expected.version !== undefined, 'Для изменения текущего назначения укажите expectedAssignmentId и expectedVersion');
+    if (expected!.assignmentId !== current.id || expected!.version !== current.version)
+        throw orgConflict();
+}
+async function lockCurrentOrg(c: any, a: Actor, fn: string, memberUserId: string) {
+    return one(c, `SELECT * FROM ${T_ORG} WHERE tenant_id=$1 AND function_code=$2 AND member_user_id=$3 AND ended_at IS NULL FOR UPDATE`, [a.tenantId, fn, memberUserId]);
+}
+/**
+ * ORG-1 organizational assign / transfer. Existing active membership => expected id+version AND a business
+ * reason are mandatory (checked against the FOR UPDATE row, before any write). No current membership => initial
+ * assignment: no precondition, no reason; a client that still sent an expectation is stale (409).
+ */
+export async function orgTransferCore(c: any, a: Actor, fn: OrgFunctionCode | string, users: Map<string, any>, memberUserId: string, managerUserId: string, reason: string | null | undefined, expected?: OrgExpectation) {
+    const f = ORG_FUNCTIONS[fn as OrgFunctionCode];
+    ensure(!!f, 'Неизвестная функция');
+    ensure(memberUserId !== managerUserId, 'Сотрудник не может быть руководителем самому себе');
+    requireActiveRole(users, managerUserId, f.managerRole, f.managerLabel);
+    requireActiveRole(users, memberUserId, f.memberRole, f.memberLabel);
+    const current = await lockCurrentOrg(c, a, fn, memberUserId);
+    if (current) {
+        checkOrgExpectation(current, expected);
+        ensure(current.managerUserId !== managerUserId, 'Сотрудник уже входит в команду этого руководителя');
+        const why = requireReason(reason, 'перевод к другому руководителю');
+        const ended = await endRow(c, a, T_ORG, current.id, why);
+        await audit(c, a, ENTITY[T_ORG], current.id, 'END', current, ended);
+    }
+    else if (expected && (expected.assignmentId !== undefined || expected.version !== undefined))
+        throw orgConflict();
+    const row = await insert(c, T_ORG, a.tenantId, { functionCode: fn, managerUserId, memberUserId, assignedBy: a.id });
+    await audit(c, a, ENTITY[T_ORG], row.id, current ? 'TRANSFER' : 'ASSIGN', current ?? null, row);
+    return row;
+}
+/** Initial assignment only: refuses (409) when the employee already has an active membership. */
+export async function orgAssignCore(c: any, a: Actor, fn: string, users: Map<string, any>, memberUserId: string, managerUserId: string) {
+    const existing = await lockCurrentOrg(c, a, fn, memberUserId);
+    if (existing)
+        throw orgConflict();
+    return orgTransferCore(c, a, fn, users, memberUserId, managerUserId, null);
+}
+export async function orgEndCore(c: any, a: Actor, fn: string, memberUserId: string, reason: string | null | undefined, expected?: OrgExpectation) {
+    const current = await lockCurrentOrg(c, a, fn, memberUserId);
+    if (!current) {
+        if (expected && (expected.assignmentId !== undefined || expected.version !== undefined))
+            throw orgConflict();
+        ensure(false, 'Сотрудник не входит ни в одну команду этой функции');
+    }
+    checkOrgExpectation(current, expected);
+    const why = requireReason(reason, 'завершение организационного назначения');
+    const ended = await endRow(c, a, T_ORG, current.id, why);
+    await audit(c, a, ENTITY[T_ORG], current.id, 'END', current, ended);
+    return ended;
+}
+
 @Injectable()
 export class ObjectTeamService {
     // -----------------------------------------------------------------------
     // Atomic building blocks (all called inside a caller-owned transaction, after locks).
     // -----------------------------------------------------------------------
-    private async orgTransfer(c: any, a: Actor, users: Map<string, any>, memberUserId: string, managerUserId: string, reason: string | null, expectedVersion?: number) {
-        ensure(memberUserId !== managerUserId, 'Сотрудник не может быть руководителем самому себе');
-        requireActiveRole(users, managerUserId, 'PTO_HEAD');
-        requireActiveRole(users, memberUserId, 'PTO');
-        const current = await one(c, `SELECT * FROM ${T_ORG} WHERE tenant_id=$1 AND function_code=$2 AND member_user_id=$3 AND ended_at IS NULL FOR UPDATE`, [a.tenantId, FN, memberUserId]);
-        if (current) {
-            if (expectedVersion !== undefined)
-                checkVersion(current, expectedVersion);
-            ensure(current.managerUserId !== managerUserId, 'Сотрудник уже входит в команду этого начальника');
-            const ended = await endRow(c, a, T_ORG, current.id, reason ?? 'TRANSFER');
-            await audit(c, a, ENTITY[T_ORG], current.id, 'END', current, ended);
-        }
-        const row = await insert(c, T_ORG, a.tenantId, { functionCode: FN, managerUserId, memberUserId, assignedBy: a.id });
-        await audit(c, a, ENTITY[T_ORG], row.id, current ? 'TRANSFER' : 'ASSIGN', current ?? null, row);
-        return row;
+    private orgTransfer(c: any, a: Actor, users: Map<string, any>, memberUserId: string, managerUserId: string, reason: string | null, expected?: OrgExpectation) {
+        return orgTransferCore(c, a, FN, users, memberUserId, managerUserId, reason, expected);
     }
-    private async orgEnd(c: any, a: Actor, memberUserId: string, reason: string | null) {
-        const current = await one(c, `SELECT * FROM ${T_ORG} WHERE tenant_id=$1 AND function_code=$2 AND member_user_id=$3 AND ended_at IS NULL FOR UPDATE`, [a.tenantId, FN, memberUserId]);
-        ensure(!!current, 'Сотрудник не входит ни в одну команду ПТО');
-        const ended = await endRow(c, a, T_ORG, current.id, reason ?? 'ORG_END');
-        await audit(c, a, ENTITY[T_ORG], current.id, 'END', current, ended);
-        return ended;
+    private orgEnd(c: any, a: Actor, memberUserId: string, reason: string | null, expected?: OrgExpectation) {
+        return orgEndCore(c, a, FN, memberUserId, reason, expected);
     }
     private async leadChange(c: any, a: Actor, users: Map<string, any>, objectId: string, leadUserId: string, reason: string | null, expected?: { assignmentId: string; version: number }) {
         requireActiveRole(users, leadUserId, 'PTO_HEAD');
@@ -145,12 +204,12 @@ export class ObjectTeamService {
     // -----------------------------------------------------------------------
     // Deputy/Admin commands.
     // -----------------------------------------------------------------------
-    /** Assign or transfer a PTO engineer into an organizational PTO_HEAD team (close-old + create-new). */
-    async assignOrgMember(a: Actor, d: { memberUserId: string; managerUserId: string; reason?: string; expectedVersion?: number }) {
+    /** Assign or transfer a PTO engineer into an organizational PTO_HEAD team (close-old + create-new). Transfer needs expected id+version and a reason. */
+    async assignOrgMember(a: Actor, d: { memberUserId: string; managerUserId: string; reason?: string; expectedAssignmentId?: string; expectedVersion?: number }) {
         requirePermission(a, P.FUNCTION_TEAM_MANAGE);
         return transaction(async (c) => {
             const users = await lockTeamScope(c, a, [], [d.memberUserId, d.managerUserId]);
-            return this.orgTransfer(c, a, users, d.memberUserId, d.managerUserId, d.reason ?? null, d.expectedVersion);
+            return this.orgTransfer(c, a, users, d.memberUserId, d.managerUserId, d.reason ?? null, { assignmentId: d.expectedAssignmentId, version: d.expectedVersion });
         });
     }
     /** Assign/replace the current PTO_HEAD of one object. Existing object members stay untouched. */
@@ -206,9 +265,9 @@ export class ObjectTeamService {
             // Deterministic processing order (sorted) keeps overlapping commands from deadlocking on unique-index waits.
             const byKey = <T>(list: T[], key: (x: T) => string) => [...list].sort((x, y) => key(x).localeCompare(key(y)));
             for (const x of byKey(cmd.orgEnds, x => x.memberUserId))
-                result.orgEnds.push(await this.orgEnd(c, a, x.memberUserId, reason));
+                result.orgEnds.push(await this.orgEnd(c, a, x.memberUserId, reason, { assignmentId: x.expectedAssignmentId, version: x.expectedVersion }));
             for (const x of byKey(cmd.orgTransfers, x => x.memberUserId))
-                result.orgTransfers.push(await this.orgTransfer(c, a, users, x.memberUserId, x.toManagerUserId, reason));
+                result.orgTransfers.push(await this.orgTransfer(c, a, users, x.memberUserId, x.toManagerUserId, reason, { assignmentId: x.expectedAssignmentId, version: x.expectedVersion }));
             for (const x of byKey(cmd.leadChanges, x => x.objectId))
                 result.leadChanges.push(await this.leadChange(c, a, users, x.objectId, x.leadUserId, reason));
             for (const x of byKey(cmd.memberEnds, x => `${x.objectId}:${x.memberUserId}`))

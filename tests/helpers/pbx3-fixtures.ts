@@ -39,3 +39,10 @@ export async function assignPtoToObject(objectId: string, opts: { member?: any; 
   const hasMember = await one(pool, "SELECT 1 FROM object_function_member_assignments WHERE tenant_id=$1 AND object_id=$2 AND function_code='PTO' AND member_user_id=$3 AND ended_at IS NULL", [t, objectId, seededPto.id]);
   if (!hasMember) await svc.redistribute(deputy, { reason: 'test fixture', orgTransfers: [], orgEnds: [], leadChanges: [], memberEnds: [], memberAdds: [{ objectId, memberUserId: seededPto.id }], handovers: [] });
 }
+
+/** ORG-1: the exact (assignment id, version) a client has to name to change a member's current org membership. */
+export async function orgExpectation(memberUserId: string, fn = 'PTO') {
+  const { pool, one } = await import('../../apps/backend/src/db');
+  const r = await one(pool, 'SELECT id,version FROM functional_team_memberships WHERE tenant_id=$1 AND function_code=$2 AND member_user_id=$3 AND ended_at IS NULL', [await tenantId(), fn, memberUserId]);
+  return { expectedAssignmentId: r.id as string, expectedVersion: r.version as number };
+}
