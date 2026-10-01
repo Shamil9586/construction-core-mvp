@@ -2,21 +2,12 @@ import { parseResponse } from '../http';
 import { readSessionToken } from '../auth/sessionToken';
 
 /**
- * ORG-1 — «Структура компании» data source (`/org-structure*`). Visibility (full vs. own team) and every
+ * ORG-1 — «Структура компании» data source (organizational structure only: no object data) (`/org-structure*`). Visibility (full vs. own team) and every
  * mutation rule are enforced by the backend; this module only types and calls it. tenantId / assignedBy /
  * functionCode in a body are never sent: the tenant and actor come from the session, the function from the route.
  */
 export type OrgFunctionCode = 'PTO' | 'CONSTRUCTION_CONTROL' | 'SDO' | 'PROJECT_MANAGEMENT';
 
-export interface OrgObjectSummary {
-  objectId: string;
-  name: string;
-  relation: 'LEAD' | 'MEMBER' | 'PROJECT_MANAGER';
-  objectLeadUserId: string | null;
-  objectLeadName: string | null;
-  /** Valid, informational state: the employee's organizational manager is not the object's current lead. */
-  differentOrgTeam: boolean;
-}
 export interface OrgAssignmentRef { assignmentId: string; version: number }
 export interface OrgEmployee {
   userId: string;
@@ -28,7 +19,6 @@ export interface OrgEmployee {
   startedAt: string | null;
   /** Present only for a caller who may mutate (DEPUTY_DIRECTOR / ADMIN) and only for an assigned employee. */
   assignment: OrgAssignmentRef | null;
-  objects: OrgObjectSummary[];
 }
 export interface OrgManager {
   userId: string;
@@ -37,8 +27,6 @@ export interface OrgManager {
   role: string | null;
   roleMatches: boolean;
   orgMembers: OrgEmployee[];
-  ledObjects: OrgObjectSummary[];
-  objectCount: number;
 }
 export interface OrgUnresolved {
   kind: 'MANAGER_UNAVAILABLE' | 'MEMBER_UNAVAILABLE';
@@ -56,11 +44,11 @@ export interface OrgFunctionGroup {
   unassigned: OrgEmployee[];
   unresolved: OrgUnresolved[];
 }
-export interface OrgDeputy { userId: string; name: string; isActive: boolean; projectManagerCount: number }
+export interface OrgLeader { userId: string; name: string; role: string; isActive: boolean }
 export interface OrgStructure {
   scope: 'FULL' | 'OWN_TEAM';
   canManage: boolean;
-  management: { deputies: OrgDeputy[] } | null;
+  management: { leaders: OrgLeader[] } | null;
   functions: OrgFunctionGroup[];
 }
 export interface OrgHistoryEntry {

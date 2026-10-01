@@ -1,10 +1,11 @@
-import type { OrgFunctionCode, OrgFunctionGroup, OrgHistoryEntry, OrgManager, OrgObjectSummary } from '../data/orgStructureApi';
+import type { OrgEmployee, OrgFunctionCode, OrgFunctionGroup, OrgHistoryEntry, OrgManager, OrgUnresolved } from '../data/orgStructureApi';
 import { formatDate } from '../formatters';
 import { INTERNAL_ROLE_LABELS, isInternalCoreRole } from '../auth/internalRoles';
 
 /**
- * ORG-1 view-model helpers for «Структура компании»: Russian labels only (no storage names such as
- * function_code / manager_user_id / enum strings reach the screen) and the small pure rules the screen uses.
+ * ORG-1 view-model helpers for «Структура компании»: organizational structure ONLY (who, which unit, whose
+ * immediate manager). No object information exists here by design. Russian position titles only — no enum names,
+ * no «Роль:» prefixes, no storage vocabulary.
  */
 export const FUNCTION_TITLE: Record<OrgFunctionCode, string> = {
   PTO: 'ПТО',
@@ -12,36 +13,63 @@ export const FUNCTION_TITLE: Record<OrgFunctionCode, string> = {
   SDO: 'СДО',
   PROJECT_MANAGEMENT: 'Руководители проектов',
 };
-/** Order of the groups on the screen: Руководство is rendered first by the screen itself. */
+/** Order of the groups inside «Производственный блок». */
 export const FUNCTION_ORDER: readonly OrgFunctionCode[] = ['PTO', 'CONSTRUCTION_CONTROL', 'SDO', 'PROJECT_MANAGEMENT'];
 
-export const roleLabel = (role: string | null): string => (role && isInternalCoreRole(role) ? INTERNAL_ROLE_LABELS[role] : 'Роль не определена');
+/** Position titles; shared role labels are reused except where they name a department rather than a position. */
+const POSITION_OVERRIDE: Record<string, string> = { CONSTRUCTION_CONTROL: 'Инженер строительного контроля' };
+export const positionTitle = (role: string | null): string =>
+  role && POSITION_OVERRIDE[role] ? POSITION_OVERRIDE[role]! : role && isInternalCoreRole(role) ? INTERNAL_ROLE_LABELS[role] : 'Должность не определена';
 
-export const NO_MANAGER_LABEL = 'Без руководителя';
+export const NO_HEAD_LABEL = 'Руководитель подразделения не назначен';
+export const UNASSIGNED_GROUP_LABEL = 'Сотрудники без руководителя';
 
-export function objectRelationText(o: OrgObjectSummary): string {
-  if (o.relation === 'LEAD') return 'ведёт объект';
-  if (o.relation === 'PROJECT_MANAGER') return 'руководитель проекта объекта';
-  return o.objectLeadName ? `начальник объекта: ${o.objectLeadName}` : 'начальник объекта не назначен';
+/** Project Managers have no functional head: Deputy Director is company leadership, never a local head card. */
+export const hasLocalHead = (fn: OrgFunctionCode): boolean => fn !== 'PROJECT_MANAGEMENT';
+
+export const reasonIsValid = (reason: string): boolean => reason.trim().length > 0;
+
+/** Real heads to render as head cards: active heads, plus any head still carrying subordinates (inactive/changed role). */
+export const departmentHeads = (group: Pick<OrgFunctionGroup, 'managers'>): OrgManager[] => group.managers.filter((m) => m.isActive || m.orgMembers.length > 0);
+export const hasActiveHead = (group: Pick<OrgFunctionGroup, 'managers'>): boolean => group.managers.some((m) => m.isActive && m.roleMatches);
+
+/** Employees that genuinely have no organizational manager (empty array => no exception group is rendered at all). */
+export const unassignedEmployees = (group: Pick<OrgFunctionGroup, 'unassigned'>): OrgEmployee[] => group.unassigned;
+
+/** Project Managers as one flat list — the stored relation to a Deputy is not rendered as a local head. */
+export function projectManagers(group: Pick<OrgFunctionGroup, 'managers' | 'unassigned'>): OrgEmployee[] {
+  return [...group.managers.flatMap((m) => m.orgMembers), ...group.unassigned].sort((x, y) => x.name.localeCompare(y.name, 'ru'));
 }
-/** Informational label for a valid state — org manager differs from the object lead; never an error. */
-export const DIFFERENT_TEAM_LABEL = 'Другая организационная команда';
 
-export function reasonIsValid(reason: string): boolean {
-  return reason.trim().length > 0;
-}
+/** Banner items for a group; for Project Managers the (Deputy) manager side is never surfaced as a local head problem. */
+export const visibleUnresolved = (group: Pick<OrgFunctionGroup, 'functionCode' | 'unresolved'>): OrgUnresolved[] =>
+  hasLocalHead(group.functionCode) ? group.unresolved : group.unresolved.filter((u) => u.kind === 'MEMBER_UNAVAILABLE');
 
-/** Managers that may be offered as a NEW target: active, with the exact role, and not the employee's current one. */
+/** Managers that may be offered as a NEW target: active, exact role, and not the employee's current one. */
 export function targetManagers(group: Pick<OrgFunctionGroup, 'managers'>, currentManagerUserId: string | null): { value: string; label: string }[] {
   return group.managers.filter((m) => m.isActive && m.roleMatches && m.userId !== currentManagerUserId).map((m) => ({ value: m.userId, label: m.name }));
 }
 
-export const managerCountLabel = (m: Pick<OrgManager, 'orgMembers' | 'objectCount'>, fn: OrgFunctionCode): string =>
-  `Сотрудников: ${m.orgMembers.length} · Объектов: ${m.objectCount}${fn === 'PROJECT_MANAGEMENT' ? ' (у руководителей проектов)' : ''}`;
+export type EmployeeAction = 'assign' | 'change-manager' | 'history';
+/**
+ * Business-language actions an employee's ⋯ menu may contain. Derived from the backend capability (`canManage`, the
+ * assignment reference it only hands to a caller allowed to mutate) — never from a role label. Project Managers get
+ * no organizational mutation (no local head). «Перевести в другое подразделение» and ending a membership are not
+ * offered: no safe cross-function / dismissal workflow exists.
+ */
+export function employeeActions(args: { fn: OrgFunctionCode; canManage: boolean; employee: Pick<OrgEmployee, 'assignment' | 'orgManagerUserId'>; hasTargets: boolean }): EmployeeAction[] {
+  const out: EmployeeAction[] = [];
+  if (args.canManage && hasLocalHead(args.fn) && args.hasTargets) {
+    if (args.employee.orgManagerUserId === null) out.push('assign');
+    else if (args.employee.assignment) out.push('change-manager');
+  }
+  if (args.employee.orgManagerUserId !== null) out.push('history');
+  return out;
+}
+export const ACTION_LABEL: Record<EmployeeAction, string> = { assign: 'Назначить руководителя', 'change-manager': 'Сменить руководителя', history: 'История изменений' };
 
 export function historyLine(h: OrgHistoryEntry): string {
-  const from = h.previousManagerName ? `из команды «${h.previousManagerName}»` : 'первое назначение';
-  const to = h.nextManagerName ? `, далее «${h.nextManagerName}»` : '';
+  const from = h.previousManagerName ? `ранее: ${h.previousManagerName}` : 'первое назначение';
   const period = h.endedAt ? `${formatDate(h.startedAt)} — ${formatDate(h.endedAt)}` : `с ${formatDate(h.startedAt)}`;
-  return `${h.managerName} · ${period} · ${from}${to}`;
+  return `${h.managerName} · ${period} · ${from}`;
 }

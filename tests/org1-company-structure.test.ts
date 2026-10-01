@@ -157,8 +157,6 @@ test('I/J/K PROJECT_MANAGEMENT: Deputy -> РП is a real stored relation; it nev
   const o1 = await makeObject('РП-1', pm.id), o2 = await makeObject('РП-2', pm.id);
   let ov = await ok(d, 'org-structure');
   assert.ok(fnGroup(ov, 'PROJECT_MANAGEMENT').unassigned.some((u: any) => u.userId === pm.id), '«Без руководителя»');
-  const rpUnassigned = fnGroup(ov, 'PROJECT_MANAGEMENT').unassigned.find((u: any) => u.userId === pm.id);
-  assert.deepEqual(rpUnassigned.objects.map((o: any) => o.objectId).sort(), [o1.id, o2.id].sort(), 'authoritative object РП source is displayed even without an org manager');
   const objectsBefore = await snapshot('SELECT id,project_manager_id,version,updated_at FROM objects ORDER BY id');
   const lanesBefore = await snapshot("SELECT * FROM object_function_lead_assignments UNION ALL SELECT id,tenant_id,object_id,function_code,member_user_id,assigned_by,started_at,ended_at,ended_by,end_reason,version FROM object_function_member_assignments");
   const a = await ok(d, 'org-structure/PROJECT_MANAGEMENT/assign', { memberUserId: pm.id, managerUserId: d1.id });
@@ -170,9 +168,9 @@ test('I/J/K PROJECT_MANAGEMENT: Deputy -> РП is a real stored relation; it nev
   ov = await ok(d, 'org-structure');
   const mgr = manager(ov, 'PROJECT_MANAGEMENT', d2.id);
   assert.deepEqual(mgr.orgMembers.map((m: any) => m.userId), [pm.id]);
-  assert.deepEqual(mgr.orgMembers[0].objects.map((o: any) => o.relation), ['PROJECT_MANAGER', 'PROJECT_MANAGER']);
-  assert.equal(mgr.objectCount, 2);
-  assert.ok(ov.management.deputies.some((x: any) => x.userId === d2.id && x.projectManagerCount === 1));
+  assert.ok(ov.management.leaders.some((x: any) => x.userId === d2.id && x.role === 'DEPUTY_DIRECTOR'), 'Deputy appears once in company leadership');
+  assert.ok(ov.management.leaders.some((x: any) => x.role === 'GENERAL_DIRECTOR'));
+  assert.equal(JSON.stringify(ov).includes(o1.id) || JSON.stringify(ov).includes('Каскад'), false, 'no object data in the read model');
 });
 
 test('L inactive manager / member: relationship is surfaced as unresolved, nobody is moved, cleanup stays possible', async () => {
@@ -218,7 +216,7 @@ test('M/N/O authorization: full read GD/Deputy/Admin; heads only own team; engin
     const ov = await ok(await actorByRole(role), 'org-structure');
     assert.equal(ov.scope, 'FULL'); assert.equal(ov.canManage, canManage);
     assert.deepEqual(ov.functions.map((f: any) => f.functionCode), ['PTO', 'CONSTRUCTION_CONTROL', 'SDO', 'PROJECT_MANAGEMENT']);
-    assert.ok(ov.management.deputies.length > 0);
+    assert.ok(ov.management.leaders.length > 0);
     const asg = manager(ov, 'PTO', ph.id).orgMembers[0].assignment;
     assert.equal(asg !== null, canManage, `${role}: assignment id/version exposed only to a caller who may mutate`);
     assert.ok(Array.isArray((await ok(await actorByRole(role), 'org-structure/history')))); 
@@ -331,25 +329,19 @@ test('R history is append-only and readable: function, employee, old/new manager
   assert.equal(rows[0].id, r1.id);
 });
 
-test('object summaries: org manager != object lead is shown as inherited / different team (valid state), РП objects shown next to the relation', async () => {
+test('ORG-1 correction: the read model carries NO object information (no objects, counts, leads, inherited flags)', async () => {
   const d = await deputy();
-  const h1 = await makeUser('О Нач. 1', 'PTO_HEAD'), h2 = await makeUser('О Нач. 2', 'PTO_HEAD'), e = await makeUser('О Инж.', 'PTO'), e2 = await makeUser('О Инж. 2', 'PTO'), pm = await makeUser('О РП', 'PROJECT_MANAGER');
-  const o = await makeObject('Унаследованный', pm.id);
+  const h1 = await makeUser('О Нач. 1', 'PTO_HEAD'), h2 = await makeUser('О Нач. 2', 'PTO_HEAD'), e = await makeUser('О Инж.', 'PTO'), pm = await makeUser('О РП', 'PROJECT_MANAGER');
+  const o = await makeObject('Унаследованный-объект', pm.id);
   const { ObjectTeamService } = await import('../apps/backend/src/team-service');
   const svc = new ObjectTeamService();
   await svc.assignOrgMember(d, { memberUserId: e.id, managerUserId: h1.id });
-  await svc.assignOrgMember(d, { memberUserId: e2.id, managerUserId: h2.id });
   await svc.assignObjectLead(d, o.id, { leadUserId: h2.id });
-  await svc.redistribute(d, { reason: 'setup', orgTransfers: [], orgEnds: [], leadChanges: [], memberEnds: [], memberAdds: [{ objectId: o.id, memberUserId: e.id }, { objectId: o.id, memberUserId: e2.id }], handovers: [] });
-  const ov = await ok(d, 'org-structure');
-  const inherited = manager(ov, 'PTO', h1.id).orgMembers.find((m: any) => m.userId === e.id).objects[0];
-  assert.deepEqual({ r: inherited.relation, lead: inherited.objectLeadUserId, diff: inherited.differentOrgTeam, name: inherited.name }, { r: 'MEMBER', lead: h2.id, diff: true, name: 'Унаследованный' });
-  const same = manager(ov, 'PTO', h2.id).orgMembers.find((m: any) => m.userId === e2.id).objects[0];
-  assert.equal(same.differentOrgTeam, false);
-  const led = manager(ov, 'PTO', h2.id);
-  assert.deepEqual(led.ledObjects.map((x: any) => x.objectId), [o.id]); assert.equal(led.objectCount, 1);
-  assert.equal(manager(ov, 'PTO', h1.id).objectCount, 0);
-  assert.equal(JSON.stringify(ov).includes('"function_code"'), false, 'read model never exposes storage names');
+  await svc.redistribute(d, { reason: 'setup', orgTransfers: [], orgEnds: [], leadChanges: [], memberEnds: [], memberAdds: [{ objectId: o.id, memberUserId: e.id }], handovers: [] });
+  const json = JSON.stringify(await ok(d, 'org-structure'));
+  for (const needle of ['Унаследованный-объект', o.id, 'objects', 'objectCount', 'ledObjects', 'differentOrgTeam', 'objectLead', 'function_code'])
+    assert.equal(json.includes(needle), false, 'read model leaks: ' + needle);
+  assert.ok(json.includes(e.id), 'the organizational facts are still there');
 });
 
 test('request bodies are strict: tenantId / assignedBy / functionCode cannot be injected', async () => {

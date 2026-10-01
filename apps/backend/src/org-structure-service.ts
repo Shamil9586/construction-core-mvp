@@ -8,9 +8,9 @@ import { ORG_FUNCTIONS, ORG_FUNCTION_CODES, type OrgFunctionCode, lockTeamScope,
  * ORG-1 — «Структура компании»: tenant-scoped organizational read model + bounded mutations.
  *
  * Three independent axes (DR-ORG01): this service reads/writes ONLY the organizational axis
- * (functional_team_memberships). Object assignments (object_function_*) and the object РП
- * (objects.project_manager_id) are READ for display and are never written here — no cascade,
- * no handover, no role change. Bitrix descriptive fields are not consulted at all.
+ * (functional_team_memberships). The read model carries NO object data at all (ORG-1 UI correction: «Структура
+ * компании» is not an object-assignment screen); object_function_* and objects.project_manager_id are neither
+ * read nor written here — no cascade, no handover, no role change. Bitrix descriptive fields are not consulted at all.
  *
  * Visibility (enforced here, independent of any frontend predicate):
  *  - GENERAL_DIRECTOR / DEPUTY_DIRECTOR / ADMIN: whole company;
@@ -20,8 +20,7 @@ import { ORG_FUNCTIONS, ORG_FUNCTION_CODES, type OrgFunctionCode, lockTeamScope,
  */
 const FULL_READ_ROLES = ['GENERAL_DIRECTOR', 'DEPUTY_DIRECTOR', 'ADMIN'];
 const HEAD_FUNCTION: Record<string, OrgFunctionCode> = { PTO_HEAD: 'PTO', CONSTRUCTION_CONTROL_HEAD: 'CONSTRUCTION_CONTROL', SDO_HEAD: 'SDO' };
-const OBJECT_TEAM_FUNCTIONS: OrgFunctionCode[] = ['PTO', 'CONSTRUCTION_CONTROL', 'SDO'];
-const T_ORG = 'functional_team_memberships', T_LEAD = 'object_function_lead_assignments', T_MEM = 'object_function_member_assignments';
+const T_ORG = 'functional_team_memberships';
 
 type Scope = { kind: 'FULL' } | { kind: 'OWN_TEAM'; fn: OrgFunctionCode };
 
@@ -79,28 +78,11 @@ export class OrgStructureService {
         const users = await rows(pool, 'SELECT id,name,role,is_active FROM users WHERE tenant_id=$1 ORDER BY name,id', [t]);
         const byId = new Map<string, any>(users.map((u: any) => [u.id, u]));
         const memberships = await rows(pool, `SELECT * FROM ${T_ORG} WHERE tenant_id=$1 AND ended_at IS NULL`, [t]);
-        const leads = await rows(pool, `SELECT l.object_id,l.function_code,l.lead_user_id,o.name AS object_name FROM ${T_LEAD} l JOIN objects o ON o.tenant_id=l.tenant_id AND o.id=l.object_id WHERE l.tenant_id=$1 AND l.ended_at IS NULL`, [t]);
-        const objMembers = await rows(pool, `SELECT m.object_id,m.function_code,m.member_user_id,o.name AS object_name FROM ${T_MEM} m JOIN objects o ON o.tenant_id=m.tenant_id AND o.id=m.object_id WHERE m.tenant_id=$1 AND m.ended_at IS NULL`, [t]);
-        const pmObjects = await rows(pool, 'SELECT id,name,project_manager_id FROM objects WHERE tenant_id=$1 ORDER BY name,id', [t]);
 
         const functions = ORG_FUNCTION_CODES.filter(fn => scope.kind === 'FULL' || scope.fn === fn).map((fn) => {
             const def = ORG_FUNCTIONS[fn];
             const current = memberships.filter((m: any) => m.functionCode === fn);
-            const orgManagerOf = new Map<string, string>(current.map((m: any) => [m.memberUserId, m.managerUserId]));
-            const leadByObject = new Map<string, any>(leads.filter((l: any) => l.functionCode === fn).map((l: any) => [l.objectId, l]));
 
-            const objectsOf = (userId: string) => {
-                if (fn === 'PROJECT_MANAGEMENT')
-                    // The authoritative РП source stays objects.project_manager_id; shown, never copied.
-                    return pmObjects.filter((o: any) => o.projectManagerId === userId).map((o: any) => ({ objectId: o.id, name: o.name, relation: 'PROJECT_MANAGER', objectLeadUserId: null, objectLeadName: null, differentOrgTeam: false }));
-                const asLead = leads.filter((l: any) => l.functionCode === fn && l.leadUserId === userId).map((l: any) => ({ objectId: l.objectId, name: l.objectName, relation: 'LEAD', objectLeadUserId: userId, objectLeadName: byId.get(userId)?.name ?? null, differentOrgTeam: false }));
-                const asMember = objMembers.filter((m: any) => m.functionCode === fn && m.memberUserId === userId).map((m: any) => {
-                    const lead = leadByObject.get(m.objectId) ?? null, orgManager = orgManagerOf.get(userId) ?? null;
-                    // Valid state, not an error: org manager differs from the current object lead (inherited team).
-                    return { objectId: m.objectId, name: m.objectName, relation: 'MEMBER', objectLeadUserId: lead?.leadUserId ?? null, objectLeadName: lead ? byId.get(lead.leadUserId)?.name ?? null : null, differentOrgTeam: !!lead && !!orgManager && orgManager !== lead.leadUserId };
-                });
-                return [...asLead, ...asMember].sort((x, y) => x.name.localeCompare(y.name, 'ru'));
-            };
             const employee = (userId: string, m: any | null) => {
                 const u = byId.get(userId);
                 return {
@@ -108,7 +90,6 @@ export class OrgStructureService {
                     orgManagerUserId: m?.managerUserId ?? null, startedAt: m?.startedAt ?? null,
                     // id + version are handed out only to a caller allowed to mutate.
                     assignment: m && canManage ? { assignmentId: m.id, version: m.version } : null,
-                    objects: objectsOf(userId),
                 };
             };
 
@@ -118,9 +99,7 @@ export class OrgStructureService {
             const managers = [...managerIds].map((id) => {
                 const u = byId.get(id);
                 const team = current.filter((m: any) => m.managerUserId === id).map((m: any) => employee(m.memberUserId, m)).sort((x: any, y: any) => x.name.localeCompare(y.name, 'ru'));
-                const ledObjects = OBJECT_TEAM_FUNCTIONS.includes(fn) ? objectsOf(id).filter((o: any) => o.relation === 'LEAD') : [];
-                const objectIds = new Set<string>(fn === 'PROJECT_MANAGEMENT' ? team.flatMap((e: any) => e.objects.map((o: any) => o.objectId)) : ledObjects.map((o: any) => o.objectId));
-                return { userId: id, name: u?.name ?? '—', isActive: !!u?.isActive, role: u?.role ?? null, roleMatches: u?.role === def.managerRole, orgMembers: team, ledObjects, objectCount: objectIds.size };
+                return { userId: id, name: u?.name ?? '—', isActive: !!u?.isActive, role: u?.role ?? null, roleMatches: u?.role === def.managerRole, orgMembers: team };
             }).sort((x, y) => Number(y.isActive) - Number(x.isActive) || x.name.localeCompare(y.name, 'ru'));
 
             const assigned = new Set(current.map((m: any) => m.memberUserId));
@@ -142,10 +121,11 @@ export class OrgStructureService {
             return { functionCode: fn, managerRole: def.managerRole, memberRole: def.memberRole, managers, unassigned, unresolved };
         });
 
-        const pmTeams = memberships.filter((m: any) => m.functionCode === 'PROJECT_MANAGEMENT');
-        const deputyIds = new Set<string>([...users.filter((u: any) => u.role === ORG_FUNCTIONS.PROJECT_MANAGEMENT.managerRole && u.isActive).map((u: any) => u.id), ...pmTeams.map((m: any) => m.managerUserId)]);
+        // Company leadership: current GENERAL_DIRECTOR and DEPUTY_DIRECTOR users, once. Organizational structure only —
+        // no object data and no per-function «manager» is derived from these roles.
+        const order = ['GENERAL_DIRECTOR', 'DEPUTY_DIRECTOR'];
         const management = scope.kind === 'FULL'
-            ? { deputies: [...deputyIds].map((id) => ({ userId: id, name: byId.get(id)?.name ?? '—', isActive: !!byId.get(id)?.isActive, projectManagerCount: pmTeams.filter((m: any) => m.managerUserId === id).length })).sort((x, y) => Number(y.isActive) - Number(x.isActive) || x.name.localeCompare(y.name, 'ru')) }
+            ? { leaders: users.filter((u: any) => order.includes(u.role) && u.isActive).map((u: any) => ({ userId: u.id, name: u.name, role: u.role, isActive: true })).sort((x: any, y: any) => order.indexOf(x.role) - order.indexOf(y.role) || x.name.localeCompare(y.name, 'ru')) }
             : null;
         return { scope: scope.kind, canManage, management, functions };
     }

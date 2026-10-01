@@ -4,7 +4,7 @@ import { AppSidebar } from '../AppSidebar';
 import { RouteForbidden } from '../RouteStatus';
 import { useCoreRuntime } from '../CoreRuntimeContext';
 import { canViewCompanyStructure } from '../../auth/internalRoles';
-import { assignOrgMember, endOrgMember, getOrgHistory, getOrgStructure, transferOrgMember } from '../../data/orgStructureApi';
+import { assignOrgMember, getOrgHistory, getOrgStructure, transferOrgMember } from '../../data/orgStructureApi';
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
@@ -64,7 +64,6 @@ function CompanyStructureContainer() {
       onDismissNotice={() => setNotice(null)}
       onAssign={(fn, memberUserId, managerUserId) => run(() => assignOrgMember(fn, memberUserId, managerUserId), 'Руководитель назначен')}
       onTransfer={(fn, employee, managerUserId, reason) => (employee.assignment ? run(() => transferOrgMember(fn, employee.userId, managerUserId, reason, employee.assignment!), 'Сотрудник переведён к другому руководителю') : Promise.resolve(false))}
-      onEnd={(fn, employee, reason) => (employee.assignment ? run(() => endOrgMember(fn, employee.userId, reason, employee.assignment!), 'Организационное назначение завершено') : Promise.resolve(false))}
       onLoadHistory={getOrgHistory}
     />
   );
