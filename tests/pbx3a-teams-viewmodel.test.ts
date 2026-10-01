@@ -101,7 +101,15 @@ test('PBX3A-LIVE-UI-01: queued steps for the same object adjust the effective pi
   assert.ok(!values(objectMemberOptions(overview, 'memberAdd', 'o1', ended)).includes('A'), 'no remove+add of the same person in one command');
   const added: RedistributeOp[] = [{ kind: 'memberAdd', objectId: 'o1', memberUserId: 'C' }];
   assert.ok(!values(objectMemberOptions(overview, 'memberAdd', 'o1', added)).includes('C'), 'already queued for addition');
-  assert.ok(values(objectMemberOptions(overview, 'memberEnd', 'o1', added)).includes('C'));
+  assert.ok(!values(objectMemberOptions(overview, 'memberEnd', 'o1', added)).includes('C'), 'a queued add is not a current member (memberEnds run before memberAdds)');
   assert.ok(values(objectMemberOptions(overview, 'memberAdd', 'o2', added)).includes('C'), 'queued step on o1 does not affect o2');
   assert.ok(values(objectMemberOptions(overview, 'memberEnd', 'o2', ended)).includes('B'));
+});
+
+test('PBX3A-LIVE-UI-01-R01: queued memberAdd C is not offered by memberEnd nor again by memberAdd; A stays removable', () => {
+  const queued: RedistributeOp[] = [{ kind: 'memberAdd', objectId: 'o1', memberUserId: 'C' }];
+  const end = values(objectMemberOptions(overview, 'memberEnd', 'o1', queued));
+  assert.ok(end.includes('A'));
+  assert.ok(!end.includes('C'));
+  assert.ok(!values(objectMemberOptions(overview, 'memberAdd', 'o1', queued)).includes('C'));
 });

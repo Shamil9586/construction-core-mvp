@@ -78,10 +78,13 @@ export interface PickerOption { value: string; label: string }
 
 /**
  * Engineer picker for the object-scoped steps «Снять инженера с объекта» (memberEnd) and
- * «Добавить инженера на объект» (memberAdd). It is derived from the SELECTED object's current
- * PTO members, adjusted by the steps already queued for that same object:
- *  - memberEnd: effective members (a current member stays selectable even when inactive, labelled «(недоступен)»);
- *  - memberAdd: active PTO engineers who are not effective members (nor queued for removal in this command).
+ * «Добавить инженера на объект» (memberAdd), derived from the SELECTED object's PERSISTED
+ * current PTO members and the steps already queued for that same object. The backend runs
+ * memberEnds BEFORE memberAdds, so a queued add can never be removed in the same command.
+ *  - memberEnd: persisted members minus queued memberEnds (a current member stays selectable
+ *    even when inactive, labelled «(недоступен)»). Queued memberAdds are never offered.
+ *  - memberAdd: active PTO engineers who are not persisted members, not already queued for
+ *    addition, and not queued for removal (remove→re-add in one command is forbidden).
  * No object selected → empty list (never the whole tenant). The backend stays authoritative.
  */
 export function objectMemberOptions(
@@ -92,15 +95,14 @@ export function objectMemberOptions(
 ): PickerOption[] {
   const object = objectId ? overview.objects.find((o) => o.objectId === objectId) : undefined;
   if (!object) return [];
-  const effective = new Map<string, { name: string; isActive: boolean }>(object.members.map((m) => [m.userId, { name: m.name, isActive: m.isActive }]));
-  const endedNow = new Set<string>();
-  for (const op of queued) {
-    if (op.kind === 'memberEnd' && op.objectId === objectId) { effective.delete(op.memberUserId); endedNow.add(op.memberUserId); }
-    if (op.kind === 'memberAdd' && op.objectId === objectId) {
-      const e = overview.engineers.find((x) => x.userId === op.memberUserId);
-      effective.set(op.memberUserId, { name: e?.name ?? op.memberUserId, isActive: e?.isActive ?? true });
-    }
+  const forObject = queued.filter((op) => (op.kind === 'memberEnd' || op.kind === 'memberAdd') && op.objectId === objectId);
+  const queuedEnds = new Set(forObject.filter((op) => op.kind === 'memberEnd').map((op) => (op as { memberUserId: string }).memberUserId));
+  const queuedAdds = new Set(forObject.filter((op) => op.kind === 'memberAdd').map((op) => (op as { memberUserId: string }).memberUserId));
+  if (kind === 'memberEnd') {
+    return object.members.filter((m) => !queuedEnds.has(m.userId)).map((m) => ({ value: m.userId, label: m.isActive ? m.name : `${m.name} (недоступен)` }));
   }
-  if (kind === 'memberEnd') return [...effective].map(([value, m]) => ({ value, label: m.isActive ? m.name : `${m.name} (недоступен)` }));
-  return overview.engineers.filter((e) => e.isActive && !effective.has(e.userId) && !endedNow.has(e.userId)).map((e) => ({ value: e.userId, label: e.name }));
+  const persisted = new Set(object.members.map((m) => m.userId));
+  return overview.engineers
+    .filter((e) => e.isActive && !persisted.has(e.userId) && !queuedAdds.has(e.userId) && !queuedEnds.has(e.userId))
+    .map((e) => ({ value: e.userId, label: e.name }));
 }
