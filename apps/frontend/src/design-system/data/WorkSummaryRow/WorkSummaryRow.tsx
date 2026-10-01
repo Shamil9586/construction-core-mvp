@@ -80,8 +80,8 @@ export function WorkSummaryRow({
   };
 
   return (
-    <tr className={rowClasses} onClick={interactive ? activate : undefined}>
-      <td className={rowStyles.cell}>
+    <tr role="row" data-tone={tone === 'Attention' ? 'attention' : undefined} className={rowClasses} onClick={interactive ? activate : undefined}>
+      <td role="cell" data-label="Работа / Исполнитель" className={rowStyles.cell}>
         <div className={rowStyles.primary}>
           {interactive ? (
             <button
@@ -112,21 +112,21 @@ export function WorkSummaryRow({
         </div>
       </td>
 
-      <td className={[rowStyles.cell, rowStyles.alignEnd, typeClass('body')].join(' ')}>
+      <td role="cell" data-label="План" className={[rowStyles.cell, rowStyles.alignEnd, typeClass('body')].join(' ')}>
         {plan}
       </td>
 
-      <td className={[rowStyles.cell, rowStyles.alignEnd, typeClass('body')].join(' ')}>
+      <td role="cell" data-label="Факт" className={[rowStyles.cell, rowStyles.alignEnd, typeClass('body')].join(' ')}>
         {fact}
       </td>
 
-      <td
+      <td role="cell" data-label="СМР"
         className={[rowStyles.cell, rowStyles.alignEnd, typeClass('metric-md')].join(' ')}
       >
         {smr}
       </td>
 
-      <td className={rowStyles.cell}>
+      <td role="cell" data-label="График" className={rowStyles.cell}>
         <StatusBadge variant={status.variant}>{status.label}</StatusBadge>
       </td>
 
@@ -135,7 +135,7 @@ export function WorkSummaryRow({
         count as the table has columns — hiding a whole <td> makes "column 4 of 4"
         navigation disagree with the header row. Only the glyph is decorative.
       */}
-      <td className={[rowStyles.cell, rowStyles.chevron].join(' ')}>
+      <td role="cell" data-label="" className={[rowStyles.cell, rowStyles.chevron].join(' ')}>
         {interactive ? <span aria-hidden="true">›</span> : null}
       </td>
     </tr>

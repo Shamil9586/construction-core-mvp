@@ -78,6 +78,14 @@ export interface DataTableProps {
   /** Rows — `ObjectRow`, `WorkSummaryRow`, or another row of the same column set. */
   children?: ReactNode;
   className?: string;
+  /**
+   * Below the narrow breakpoint, lay each row out as a stacked, labelled card
+   * instead of scrolling a wide table sideways — so the figures that sit past
+   * the first column are not hidden off-screen. Presentation only: the same
+   * cells, the same order, the same values. Rows that support it carry a
+   * `data-label` per cell; header text stays available to assistive technology.
+   */
+  stackOnNarrow?: boolean;
 }
 
 export function DataTable({
@@ -92,8 +100,11 @@ export function DataTable({
   skeletonRows = 3,
   children,
   className,
+  stackOnNarrow = false,
 }: DataTableProps) {
-  const classes = [styles.root, className].filter(Boolean).join(' ');
+  const classes = [styles.root, stackOnNarrow ? styles.stackable : '', className]
+    .filter(Boolean)
+    .join(' ');
 
   const fixedColumnWidth = columns.reduce(
     (total, column) => total + (column.width === 'fill' ? 0 : column.width),
@@ -110,6 +121,7 @@ export function DataTable({
         tabIndex={0}
       >
         <table
+          role="table"
           className={styles.table}
           style={{ minWidth: `${tableMinWidth}px` }}
         >
@@ -137,11 +149,12 @@ export function DataTable({
             ))}
           </colgroup>
 
-          <thead>
-            <tr>
+          <thead role="rowgroup">
+            <tr role="row">
               {columns.map((column) => (
                 <th
                   key={column.key}
+                  role="columnheader"
                   scope="col"
                   className={[
                     styles.headerCell,
@@ -157,7 +170,7 @@ export function DataTable({
             </tr>
           </thead>
 
-          <tbody>
+          <tbody role="rowgroup">
             {state === 'Loading'
               ? Array.from({ length: skeletonRows }, (_, index) => (
                   <tr key={`skeleton-${index}`}>

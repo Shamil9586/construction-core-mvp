@@ -150,7 +150,7 @@ export function WorkCard({
               { label: 'Факт выполнения', value: viewModel.fact.value, meta: viewModel.fact.meta },
             ]}
           />
-          <span className={[styles.confirmationLabel, typeClass('meta')].join(' ')}>
+          <span className={[styles.confirmationLabel, typeClass('label')].join(' ')}>
             Факт — это выполнение, а не приёмка.
           </span>
         </div>
@@ -215,7 +215,7 @@ export function WorkCard({
       <section className={styles.sectionTight}>
         <div className={styles.card}>
           <ConfirmationBlock confirmation={viewModel.confirmation} />
-          <span className={[styles.confirmationLabel, typeClass('meta')].join(' ')}>
+          <span className={[styles.confirmationLabel, typeClass('label')].join(' ')}>
             Факт РП, подтверждение внутреннего СК и СК заказчика — отдельные величины; прежние значения не перезаписываются.
           </span>
         </div>

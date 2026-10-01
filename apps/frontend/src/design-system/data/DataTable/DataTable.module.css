@@ -121,3 +121,78 @@
     opacity: 0.55;
   }
 }
+
+/*
+ * Opt-in stacked layout (`stackOnNarrow`). At the narrow breakpoint the table's
+ * boxes become blocks and each row a labelled card, so every figure stays on
+ * screen instead of sitting past the edge of a sideways-scrolling region.
+ * Purely visual: DOM order, cell values and (explicit) ARIA table roles are
+ * unchanged, and the column headers stay in the accessibility tree.
+ * 639px is the breakpoint AppShell already uses.
+ */
+@media (max-width: 639px) {
+  .stackable .table {
+    min-width: 0 !important; /* beats the inline column-budget width */
+  }
+
+  .stackable .table,
+  .stackable .table tbody,
+  .stackable .table tr,
+  .stackable .table td,
+  .stackable .table caption {
+    display: block;
+  }
+
+  /* Header row is replaced by per-cell labels; kept for assistive technology. */
+  .stackable .table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .stackable .table colgroup {
+    display: none;
+  }
+
+  .stackable .table tbody tr {
+    height: auto;
+    padding: var(--cc-p-space-12) var(--cc-table-row-padding-x);
+    border-top: var(--cc-border-width) solid var(--cc-border-default);
+    border-radius: var(--cc-table-row-radius);
+  }
+
+  .stackable .table tbody td {
+    height: auto;
+    padding: var(--cc-p-space-4) 0;
+    text-align: left;
+    background: none;
+  }
+
+  /* The attention fill moves from the cells to the card as a whole. */
+  .stackable .table tbody tr[data-tone="attention"] {
+    background: var(--cc-table-row-attention);
+  }
+
+  .stackable .table tbody td[data-label]:not([data-label=""])::before {
+    content: attr(data-label);
+    display: block;
+    color: var(--cc-text-secondary);
+    font-size: var(--cc-p-size-12);
+    line-height: var(--cc-p-line-16);
+    font-weight: var(--cc-p-weight-medium);
+    margin-bottom: var(--cc-p-space-4);
+  }
+
+  /* Identity cell is the card's title: no label, full width. */
+  .stackable .table tbody td[data-label]:first-child::before {
+    display: none;
+  }
+
+  /* The activator is the row's control; the glyph cell has no content to show. */
+  .stackable .table tbody td:last-child {
+    display: none;
+  }
+}

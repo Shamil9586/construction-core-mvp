@@ -82,8 +82,8 @@ export function ObjectRow({
   };
 
   return (
-    <tr className={rowClasses} onClick={interactive ? activate : undefined}>
-      <td className={rowStyles.cell}>
+    <tr role="row" data-tone={tone === 'Attention' ? 'attention' : undefined} className={rowClasses} onClick={interactive ? activate : undefined}>
+      <td role="cell" data-label="Объект / РП" className={rowStyles.cell}>
         <div className={rowStyles.primary}>
           {interactive ? (
             <button
@@ -122,7 +122,7 @@ export function ObjectRow({
         </div>
       </td>
 
-      <td className={[rowStyles.cell, rowStyles.alignEnd].join(' ')}>
+      <td role="cell" data-label="СМР" className={[rowStyles.cell, rowStyles.alignEnd].join(' ')}>
         <div className={rowStyles.smr}>
           <span className={typeClass('metric-md')}>{smr}</span>
           {/*
@@ -138,7 +138,7 @@ export function ObjectRow({
         </div>
       </td>
 
-      <td className={rowStyles.cell}>
+      <td role="cell" data-label="График" className={rowStyles.cell}>
         <StatusBadge variant={status.variant}>{status.label}</StatusBadge>
       </td>
 
@@ -147,7 +147,7 @@ export function ObjectRow({
         count as the table has columns — hiding a whole <td> makes "column 4 of 4"
         navigation disagree with the header row. Only the glyph is decorative.
       */}
-      <td className={[rowStyles.cell, rowStyles.chevron].join(' ')}>
+      <td role="cell" data-label="" className={[rowStyles.cell, rowStyles.chevron].join(' ')}>
         {interactive ? <span aria-hidden="true">›</span> : null}
       </td>
     </tr>

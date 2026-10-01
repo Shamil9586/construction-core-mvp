@@ -373,3 +373,33 @@ test.describe('W01 — accepted work, real adapter (no demo override)', () => {
     await expect(section.getByText('800', { exact: true }).first()).toBeVisible();
   });
 });
+
+test.describe('F13.3 — narrow viewport (390px)', () => {
+  test.use({ viewport: { width: 390, height: 900 } });
+
+  test('C01: every portfolio row keeps its readiness figure inside the viewport', async ({ page }) => {
+    const table = c01Section(page).getByRole('table', { name: /Объекты компании/ });
+    const readiness = table.getByRole('row').nth(1).getByRole('cell').nth(1);
+    await expect(readiness).toContainText('%');
+    const box = await readiness.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.x + box!.width).toBeLessThanOrEqual(390);
+  });
+
+  test('C01: the attention queue and portfolio do not overflow the screen sideways', async ({ page }) => {
+    const overflowing = await c01Section(page).evaluate((el) =>
+      Array.from(el.querySelectorAll('*')).filter((node) => {
+        const box = (node as HTMLElement).getBoundingClientRect();
+        return box.width > 0 && box.right > window.innerWidth + 1;
+      }).length,
+    );
+    expect(overflowing).toBe(0);
+  });
+
+  test('O01: each work row keeps plan, fact and readiness visible, labelled', async ({ page }) => {
+    const row = o01Section(page).getByRole('table', { name: /Работы объекта/ }).getByRole('row').nth(1);
+    for (const label of ['План', 'Факт', 'СМР', 'График']) {
+      await expect(row.locator(`[data-label="${label}"]`)).toBeVisible();
+    }
+  });
+});

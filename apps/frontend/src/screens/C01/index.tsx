@@ -73,6 +73,7 @@ export function CompanyControlCenter({
         <DataTable
           columns={objectColumns}
           title="Объекты компании"
+          stackOnNarrow
           context={`${viewModel.portfolio.length} объектов`}
           state={viewModel.portfolio.length === 0 ? 'Empty' : 'Default'}
           emptyLabel="Объектов нет"
@@ -114,7 +115,7 @@ export function CompanyControlCenter({
                 <StatusBadge variant={item.status.variant}>{item.status.label}</StatusBadge>
                 <div className={styles.attentionBody}>
                   <span className={typeClass('body-strong')}>{item.objectName}</span>
-                  <span className={[styles.attentionMessage, typeClass('meta')].join(' ')}>
+                  <span className={[styles.attentionMessage, typeClass('label')].join(' ')}>
                     {item.responsible}
                   </span>
                   <span className={[styles.attentionMessage, typeClass('body')].join(' ')}>

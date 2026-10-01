@@ -92,7 +92,7 @@ export function ObjectOverview({
             Физическая готовность
           </h2>
           <span className={typeClass('display')}>{viewModel.readiness.formatted}</span>
-          <span className={[styles.cardNote, typeClass('meta')].join(' ')}>
+          <span className={[styles.cardNote, typeClass('label')].join(' ')}>
             Фактическое выполнение СМР — отдельно от документации и закрытия.
           </span>
           <div className={styles.readinessBar}>
@@ -121,7 +121,7 @@ export function ObjectOverview({
               ]}
             />
           </div>
-          <span className={[styles.cardNote, typeClass('meta')].join(' ')}>
+          <span className={[styles.cardNote, typeClass('label')].join(' ')}>
             Итоговый статус графика по объекту не определён: в данных нет подтверждённого значения.
           </span>
         </div>
@@ -133,6 +133,7 @@ export function ObjectOverview({
         <DataTable
           columns={workSummaryColumns}
           title="Работы объекта"
+          stackOnNarrow
           context={`${viewModel.works.length} работ объекта`}
           state={viewModel.works.length === 0 ? 'Empty' : 'Default'}
           emptyLabel="Работ пока нет"
