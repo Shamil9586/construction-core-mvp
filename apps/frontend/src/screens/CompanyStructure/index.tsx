@@ -251,7 +251,7 @@ function FunctionSection({ group, canManage, ownTeamOnly, busy, props }: { group
       {!hasActiveHead(group) && !ownTeamOnly ? (
         <div className={[styles.banner, styles.bannerWarning].join(' ')} role="status">
           <span className={typeClass('body')}>{NO_HEAD_LABEL}</span>
-          {canManage ? <span className={[typeClass('label')].join(' ')}>Начальник назначается в разделе «Пользователи и доступ».</span> : null}
+          {canManage ? <span className={[typeClass('label')].join(' ')}>Начальника подразделения назначает администратор в разделе «Пользователи и доступ»</span> : null}
         </div>
       ) : null}
       <div className={styles.heads}>

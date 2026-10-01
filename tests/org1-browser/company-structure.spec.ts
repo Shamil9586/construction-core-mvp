@@ -170,7 +170,11 @@ test('Missing department head: section-level notice + real unassigned employees 
   await openAs(page, deputy.token, '/company-structure');
   const sc = page.getByRole('region', { name: 'Строительный контроль', exact: true });
   await expect(sc.getByText('Руководитель подразделения не назначен')).toBeVisible();
-  await expect(sc.getByText('Начальник назначается в разделе «Пользователи и доступ».')).toBeVisible();
+  // F1: the copy names the ADMIN-only workflow truthfully (a Deputy cannot open that section) and adds no link/button to it.
+  await expect(sc.getByText('Начальника подразделения назначает администратор в разделе «Пользователи и доступ»', { exact: true })).toBeVisible();
+  await expect(page.getByText('Начальник назначается в разделе')).toHaveCount(0);
+  await expect(sc.getByRole('link')).toHaveCount(0);
+  await expect(page.getByRole('navigation').getByText('Пользователи и доступ')).toHaveCount(0); // Deputy: no Users & Access entry
   await expect(sc.getByRole('region', { name: 'Строительный контроль: Сотрудники без руководителя' })).toContainText('Елена Крылова');
   await expect(sc.getByRole('button', { name: 'Действия: Елена Крылова' })).toHaveCount(0); // nobody to assign to
   await expect(page.locator('main').getByText(/^Без руководителя$/)).toHaveCount(0);
