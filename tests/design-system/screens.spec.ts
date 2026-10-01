@@ -92,10 +92,10 @@ test.describe('C01 — Company Control Center', () => {
   test('attention queue uses management wording, never a work or trade name', async ({ page }) => {
     const section = c01Section(page);
     await expect(
-      section.getByText('Есть отставание по графику производства работ', { exact: true }),
+      section.getByText('Есть отставание по графику производства работ', { exact: true }).first(),
     ).toBeVisible();
     await expect(
-      section.getByText('Есть технологическая блокировка производства работ', { exact: true }),
+      section.getByText('Есть технологическая блокировка производства работ', { exact: true }).first(),
     ).toBeVisible();
 
     // The two works actually responsible for these signals are never named here

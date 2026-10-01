@@ -101,3 +101,20 @@
 .teamList { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: var(--cc-p-space-4); }
 .historyToggle { align-self: flex-start; margin-top: var(--cc-p-space-8); border: 0; background: none; padding: var(--cc-p-space-4); color: inherit; font: inherit; text-decoration: underline; cursor: pointer; }
 .historyToggle:focus-visible { outline: var(--cc-focus-ring-width) solid var(--cc-focus-ring); outline-offset: var(--cc-focus-ring-offset); }
+.cardNote {
+  color: var(--cc-text-secondary);
+}
+
+.blockerReasonList li {
+  overflow-wrap: anywhere;
+}
+
+/* Below the narrow breakpoint the two summary cards take the full row rather than
+   holding their wide-layout basis, so neither can push the page sideways. */
+@media (max-width: 639px) {
+  .readinessCard,
+  .scheduleCard {
+    flex: 1 1 100%;
+    min-width: 0;
+  }
+}

@@ -114,11 +114,31 @@ export function CompanyControlCenter({
                 <StatusBadge variant={item.status.variant}>{item.status.label}</StatusBadge>
                 <div className={styles.attentionBody}>
                   <span className={typeClass('body-strong')}>{item.objectName}</span>
+                  <span className={[styles.attentionMessage, typeClass('meta')].join(' ')}>
+                    {item.responsible}
+                  </span>
                   <span className={[styles.attentionMessage, typeClass('body')].join(' ')}>
                     {item.message}
                   </span>
+                  {item.otherReasons.length > 0 ? (
+                    <ul className={styles.otherReasons}>
+                      {item.otherReasons.map((other) => (
+                        <li key={other.reason} className={styles.otherReason}>
+                          <StatusBadge variant={other.status.variant}>{other.status.label}</StatusBadge>
+                          <span className={[styles.attentionMessage, typeClass('body')].join(' ')}>
+                            {other.message}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
                 </div>
-                <Button variant="Secondary" arrow="forward" onClick={() => onSelectObject(item.objectId)}>
+                <Button
+                  variant="Secondary"
+                  arrow="forward"
+                  className={styles.openAction}
+                  onClick={() => onSelectObject(item.objectId)}
+                >
                   Открыть объект
                 </Button>
               </li>

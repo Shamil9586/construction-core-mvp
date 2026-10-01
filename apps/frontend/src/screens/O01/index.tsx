@@ -92,6 +92,9 @@ export function ObjectOverview({
             Физическая готовность
           </h2>
           <span className={typeClass('display')}>{viewModel.readiness.formatted}</span>
+          <span className={[styles.cardNote, typeClass('meta')].join(' ')}>
+            Фактическое выполнение СМР — отдельно от документации и закрытия.
+          </span>
           <div className={styles.readinessBar}>
             <ProgressBar value={viewModel.readiness.value} label="Физическая готовность" size="Block" />
           </div>
@@ -118,6 +121,9 @@ export function ObjectOverview({
               ]}
             />
           </div>
+          <span className={[styles.cardNote, typeClass('meta')].join(' ')}>
+            Итоговый статус графика по объекту не определён: в данных нет подтверждённого значения.
+          </span>
         </div>
       </section>
 

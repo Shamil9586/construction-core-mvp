@@ -459,3 +459,23 @@ test('buildW01ViewModel never produces ConfirmedQuantity from real data', () => 
     }
   }
 });
+
+test('F13.2: one object with blocker + delay + risk is one queue entry carrying every reason, ranked', () => {
+  const object = makeObject({ healthStatus: 'RED' });
+  const blocked = makeWork({ id: 'w-b', scheduleStatus: 'GREEN', blockers: ['Нет допуска строительного контроля'] });
+  const red = makeWork({ id: 'w-r', scheduleStatus: 'RED' });
+  const yellow = makeWork({ id: 'w-y', scheduleStatus: 'YELLOW' });
+  const vm = buildC01ViewModel([object], [blocked, red, yellow]);
+  assert.equal(vm.attention.length, 1);
+  assert.equal(vm.attention[0].reason, 'Blocked');
+  assert.deepEqual(
+    vm.attention[0].otherReasons.map((r) => r.reason),
+    ['ScheduleDelay', 'ScheduleRisk'],
+  );
+  assert.ok(vm.attention[0].responsible.startsWith('РП'));
+});
+
+test('F13.2: a single reason leaves otherReasons empty', () => {
+  const vm = buildC01ViewModel([makeObject({})], [makeWork({ id: 'w', scheduleStatus: 'RED' })]);
+  assert.deepEqual(vm.attention[0].otherReasons, []);
+});

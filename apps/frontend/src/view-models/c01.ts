@@ -86,6 +86,14 @@ export interface C01AttentionItem {
   reason: C01AttentionReason;
   /** Management-worded sentence. Never names a work, a trade or a finish type. */
   message: string;
+  /** "РП · Сергей Волков" — same confirmed field the portfolio row shows. */
+  responsible: string;
+  /**
+   * Every other confirmed reason on the same object, in rank order. One object
+   * is one queue entry however many reasons it has; this is where the rest of
+   * them go, so "multiple issues" is visible without a count-only badge.
+   */
+  otherReasons: { reason: C01AttentionReason; status: StatusPresentation; message: string }[];
 }
 
 export interface C01ViewModel {
@@ -180,18 +188,27 @@ export function buildC01ViewModel(objects: ObjectSummary[], works: Work[]): C01V
     const hasCompleteScheduleData =
       objectWorks.length > 0 && objectWorks.every((work) => isKnownScheduleReading(work.scheduleStatus));
 
-    let reason: C01AttentionReason | null = null;
-    if (blocked) reason = 'Blocked';
-    else if (hasRed) reason = 'ScheduleDelay';
-    else if (hasYellow) reason = 'ScheduleRisk';
+    // Ranked: a blocker, then a delay, then a risk. A delay and a risk on the
+    // same object are both reported — the delay does not hide the risk.
+    const reasons: C01AttentionReason[] = [];
+    if (blocked) reasons.push('Blocked');
+    if (hasRed) reasons.push('ScheduleDelay');
+    if (hasYellow) reasons.push('ScheduleRisk');
 
-    if (reason !== null) {
+    const [reason, ...rest] = reasons;
+    if (reason !== undefined) {
       attention.push({
         objectId: object.id,
         objectName: object.name,
         status: attentionStatus(reason),
         reason,
         message: attentionMessage(reason),
+        responsible: joinMeta('РП', object.responsible),
+        otherReasons: rest.map((other) => ({
+          reason: other,
+          status: attentionStatus(other),
+          message: attentionMessage(other),
+        })),
       });
     }
 

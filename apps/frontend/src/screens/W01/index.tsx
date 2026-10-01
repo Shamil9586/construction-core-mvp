@@ -141,7 +141,8 @@ export function WorkCard({
         }
       />
 
-      <section className={styles.section}>
+      <h2 className={[styles.groupTitle, typeClass('heading-card')].join(' ')}>Производство</h2>
+      <section className={styles.sectionTight}>
         <div className={styles.card}>
           <PlanFact
             items={[
@@ -149,14 +150,13 @@ export function WorkCard({
               { label: 'Факт выполнения', value: viewModel.fact.value, meta: viewModel.fact.meta },
             ]}
           />
-        </div>
-
-        <div className={styles.card}>
-          <ConfirmationBlock confirmation={viewModel.confirmation} />
+          <span className={[styles.confirmationLabel, typeClass('meta')].join(' ')}>
+            Факт — это выполнение, а не приёмка.
+          </span>
         </div>
       </section>
 
-      <section className={styles.section}>
+      <section className={styles.sectionTight}>
         <div className={styles.card}>
           <h2 className={[styles.readinessLabel, typeClass('label')].join(' ')}>
             Готовность выполнения
@@ -210,6 +210,16 @@ export function WorkCard({
           </div>
         </section>
       ) : null}
+
+      <h2 className={[styles.groupTitle, typeClass('heading-card')].join(' ')}>Подтверждение</h2>
+      <section className={styles.sectionTight}>
+        <div className={styles.card}>
+          <ConfirmationBlock confirmation={viewModel.confirmation} />
+          <span className={[styles.confirmationLabel, typeClass('meta')].join(' ')}>
+            Факт РП, подтверждение внутреннего СК и СК заказчика — отдельные величины; прежние значения не перезаписываются.
+          </span>
+        </div>
+      </section>
 
       <ExecutionSection executionUnits={viewModel.executionUnits} actions={actions} />
 

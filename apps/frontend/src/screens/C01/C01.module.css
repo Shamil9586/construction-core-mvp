@@ -76,3 +76,31 @@
   color: var(--cc-text-secondary);
   margin: var(--cc-p-space-12) 0 0;
 }
+
+.otherReasons {
+  list-style: none;
+  margin: var(--cc-p-space-4) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-8);
+}
+
+.otherReason {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--cc-p-space-12);
+}
+
+/* Narrow viewports: the open-object action takes its own full-width line so it
+   stays an obvious, reachable target instead of floating beside wrapped text. */
+@media (max-width: 639px) {
+  .attentionRow {
+    align-items: flex-start;
+  }
+
+  .openAction {
+    width: 100%;
+  }
+}

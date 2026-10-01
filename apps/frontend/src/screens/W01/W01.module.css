@@ -66,3 +66,25 @@
   flex-direction: column;
   gap: var(--cc-p-space-4);
 }
+
+.groupTitle {
+  color: var(--cc-text-primary);
+  margin: var(--cc-p-space-32) 0 0;
+}
+
+.sectionTight {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--cc-card-gap);
+  margin-top: var(--cc-p-space-12);
+}
+
+.blockerList li {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 639px) {
+  .card {
+    min-width: 0;
+  }
+}
