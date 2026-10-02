@@ -48,11 +48,11 @@ after(async () => {
 });
 const client = async () => { const c = new Client({ connectionString: dbUrl() }); await c.connect(); return c; };
 
-test('A migration chain is exactly 1-18 on native PostgreSQL; rerun is a no-op', async () => {
+test('A migration chain is exactly 1-19 on native PostgreSQL; rerun is a no-op', async () => {
   const c = await client();
   try {
     const v = (await c.query('SELECT version FROM schema_migrations ORDER BY version')).rows.map((r) => r.version);
-    assert.deepEqual(v, Array.from({ length: 18 }, (_, i) => i + 1));
+    assert.deepEqual(v, Array.from({ length: 19 }, (_, i) => i + 1));
     const before = (await c.query('SELECT version, applied_at FROM schema_migrations ORDER BY version')).rows;
     await (await import('../scripts/migrate')).migrate();
     assert.deepEqual((await c.query('SELECT version, applied_at FROM schema_migrations ORDER BY version')).rows, before);
