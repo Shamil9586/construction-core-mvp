@@ -39,7 +39,9 @@ export const portionInspectionRequestDto = z.object({ inspectionType: z.enum(['I
 // the moment the inspection is portion-scoped; never defaulted from RP_FACT.
 export const inspectionAcceptDto = z.object({ version, comment: text, quantity: qty.optional() }).strict();
 // F8.2 PTO / Executive Documentation Foundation.
-export const documentationPackageDto = z.object({ objectWorkId: uuid, responsibleUserId: uuid }).strict();
+// PILOT-W01 UI03: responsibleUserId is optional — the responsible engineer is derived server-side from the persisted PTO work assignment; a client-sent value must match it exactly.
+export const documentationPackageDto = z.object({ objectWorkId: uuid, responsibleUserId: uuid.optional() }).strict();
+export const ptoWorkAssignmentDto = z.object({ assigneeUserId: uuid }).strict();
 export const documentationPackageEditDto = z.object({ responsibleUserId: uuid, version }).strict();
 export const documentationPackagePortionDto = z.object({ quantityPortionId: uuid }).strict();
 // GENERAL_WORK_LOG is deliberately absent — F8.2 Document Types MVP allows

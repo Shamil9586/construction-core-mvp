@@ -2,6 +2,7 @@ import { Controller, Post, Get, Param, Body, Query, Req, Inject, ForbiddenExcept
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { ProductionService } from '../../service';
 import { ReadService } from '../../read-service';
+import { PtoWorkAssignmentService } from '../../pto-work-assignment-service';
 import { authenticate } from '../../security';
 import { canAccessDocumentation } from '../../../../../packages/domain';
 import * as V from '../../validation';
@@ -27,7 +28,19 @@ import * as V from '../../validation';
 @ApiTags('Documentation')
 @ApiBearerAuth()
 export class DocumentationController {
-    constructor(@Inject(ProductionService) private service: ProductionService, @Inject(ReadService) private read: ReadService) {}
+    constructor(@Inject(ProductionService) private service: ProductionService, @Inject(ReadService) private read: ReadService, @Inject(PtoWorkAssignmentService) private ptoAssignment: PtoWorkAssignmentService) {}
+
+    /** PILOT-W01 UI03 — W01's PTO handoff read model: assigned PTO_HEAD, eligible engineers (assigner only), current assignment, server-decided action flags. */
+    @Get('works/:id/pto-assignment')
+    async ptoAssignmentView(@Req() r: any, @Param('id') id: string) {
+        return this.ptoAssignment.view(await authenticate(r), V.uuid.parse(id));
+    }
+
+    /** PILOT-W01 UI03 — «Передать в работу»: persists the assignment ONLY; never creates a package. */
+    @Post('works/:id/pto-assignment')
+    async assignPto(@Req() r: any, @Param('id') id: string, @Body() b: any) {
+        return this.ptoAssignment.assign(await authenticate(r), V.uuid.parse(id), V.ptoWorkAssignmentDto.parse(b));
+    }
 
     @Post('documentation-packages')
     async createPackage(@Req() r: any, @Body() b: any) {
