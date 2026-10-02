@@ -18,7 +18,12 @@
   # The Content-Security-Policy is the same policy as the handle below —
   # keep the two identical.
   @core path /app.html /app.html/*
+  # The shell must never be served from a browser/WebView cache: it names the
+  # hashed bundle, so a stale copy pins an embedded Bitrix24 frame to an old
+  # deploy. file_server alone sends only ETag/Last-Modified (no Cache-Control),
+  # which lets heuristic caching reuse the document. /assets/* is untouched.
   handle @core {
+    header Cache-Control "no-store"
     header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'self' {$BITRIX_FRAME_ORIGIN:https://invalid.example}; base-uri 'self'; object-src 'none'"
     root * /srv
     rewrite * /app.html

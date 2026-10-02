@@ -603,3 +603,13 @@ test('Caddyfile: the legacy catch-all is unchanged and the Core CSP is identical
   assert.ok(cspOf(legacy));
   assert.equal(cspOf(handleBlock('  handle @core {')), cspOf(legacy));
 });
+
+test('Caddyfile: the Core shell is no-store on every /app.html route and the cache policy stays out of the shared and asset handles', () => {
+  const core = handleBlock('  handle @core {');
+  assert.match(core, /^\s*header Cache-Control "no-store"$/m);
+  // @core matches /app.html and /app.html/*, so deep links share this one handle.
+  assert.match(caddyfile, /@core path \/app\.html \/app\.html\/\*/);
+  // No site-wide Cache-Control, which would also cover hashed /assets/*.
+  const withoutCore = caddyfile.replace(core, '').split('\n').filter((line) => !line.trimStart().startsWith('#')).join('\n');
+  assert.doesNotMatch(withoutCore, /Cache-Control/);
+});
