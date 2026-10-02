@@ -825,3 +825,73 @@ test('Package detail (UI04): PTO_HEAD and ADMIN keep their existing controls wit
     await expectMutationControls(page, true);
   }
 });
+
+// ---------------------------------------------------------------------------------------------------------------
+// PILOT-W01 UI04-F01 — a malformed or mis-bound 200 response must never authorize package mutation controls.
+// ---------------------------------------------------------------------------------------------------------------
+function validAssignmentView(assigneeUserId: string, overrides: Record<string, unknown> = {}) {
+  return {
+    objectWorkId: WORK_DRAFT,
+    objectId: OBJECT_A,
+    head: { id: HEAD.id, name: HEAD.name },
+    assignment: { id: 'assignment-1', assigneeUserId, assigneeName: 'X', assignedByName: HEAD.name, assignedAt: '2026-10-01T00:00:00Z', version: 1 },
+    eligible: [],
+    packageCount: 1,
+    canAssign: false,
+    canReassign: false,
+    canCreatePackage: true,
+    ...overrides,
+  };
+}
+
+async function openWithAssignmentResponse(page: Page, token: string, body: unknown) {
+  const state = makeState(PTO, [draftPackage()], { [WORK_DRAFT]: PTO.id });
+  await seedSession(page, token);
+  await mockApi(page, state);
+  await page.route('**/api/works/*/pto-assignment', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) }));
+  await page.goto(`/app.html/pto/package/${draftPackage().id}`);
+  await expect(page.getByText('Черновик')).toBeVisible();
+}
+
+const withoutKey = (obj: Record<string, unknown>, key: string) => Object.fromEntries(Object.entries(obj).filter(([k]) => k !== key));
+
+test('Package detail (UI04-F01): 200 response missing objectWorkId exposes no mutation controls', async ({ page }) => {
+  await openWithAssignmentResponse(page, 'f01-a', withoutKey(validAssignmentView(PTO.id), 'objectWorkId'));
+  await expectMutationControls(page, false);
+});
+
+test('Package detail (UI04-F01): 200 response for another Work (W02) exposes no mutation controls', async ({ page }) => {
+  await openWithAssignmentResponse(page, 'f01-b', validAssignmentView(PTO.id, { objectWorkId: 'work-other' }));
+  await expectMutationControls(page, false);
+});
+
+test('Package detail (UI04-F01): the exact review finding — a partial assignment {assigneeUserId} exposes no mutation controls', async ({ page }) => {
+  await openWithAssignmentResponse(page, 'f01-c', validAssignmentView(PTO.id, { assignment: { assigneeUserId: PTO.id } }));
+  await expectMutationControls(page, false);
+});
+
+test('Package detail (UI04-F01): nested assignment pointing at another Work exposes no mutation controls', async ({ page }) => {
+  const view = validAssignmentView(PTO.id);
+  await openWithAssignmentResponse(page, 'f01-d', { ...view, assignment: { ...view.assignment, objectWorkId: 'work-other' } });
+  await expectMutationControls(page, false);
+});
+
+test('Package detail (UI04-F01): wrong objectId exposes no mutation controls', async ({ page }) => {
+  await openWithAssignmentResponse(page, 'f01-d2', validAssignmentView(PTO.id, { objectId: 'object-other' }));
+  await expectMutationControls(page, false);
+});
+
+test('Package detail (UI04-F01): a fully valid effective assignment for the current user still shows the controls', async ({ page }) => {
+  await openWithAssignmentResponse(page, 'f01-e', validAssignmentView(PTO.id));
+  await expectMutationControls(page, true);
+});
+
+test('Package detail (UI04-F01): a fully valid assignment for ANOTHER user exposes no mutation controls', async ({ page }) => {
+  await openWithAssignmentResponse(page, 'f01-f', validAssignmentView(PTO_USER_2.id));
+  await expectMutationControls(page, false);
+});
+
+test('Package detail (UI04-F01): non-object / empty successful bodies expose no mutation controls and do not crash', async ({ page }) => {
+  await openWithAssignmentResponse(page, 'f01-g', {});
+  await expectMutationControls(page, false);
+});

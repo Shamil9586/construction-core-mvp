@@ -41,9 +41,9 @@ export function PackageDetailRoute() {
   // PILOT-W01 UI04 — the backend's PTO handoff read model for THIS package's Work (effective assignment only).
   // Called before any early return (Rules of Hooks); fetched only for an ordinary PTO engineer, the one role
   // whose package mutations the server gates on being the current effective assignee.
-  const packageWorkId =
-    state.status === 'Ready' ? (state.snapshot.documentationPackages ?? []).find((c) => c.id === packageId)?.objectWorkId : undefined;
-  const ptoAssignment = useWorkPtoAssignment(packageWorkId, !!session && session.user.role === 'PTO');
+  const routePackage =
+    state.status === 'Ready' ? (state.snapshot.documentationPackages ?? []).find((c) => c.id === packageId) : undefined;
+  const ptoAssignment = useWorkPtoAssignment(routePackage?.objectWorkId, !!session && session.user.role === 'PTO', routePackage?.objectId);
 
   if (state.status === 'Loading') return <RouteLoading />;
   if (state.status === 'Error') return <RouteError message={state.message} />;
@@ -86,7 +86,10 @@ export function PackageDetailRoute() {
   const mayMutate =
     !!session &&
     canManageDocumentation(session.user.role) &&
-    (session.user.role !== 'PTO' || (!!ptoAssignment.view?.assignment && ptoAssignment.view.assignment.assigneeUserId === session.user.id));
+    (session.user.role !== 'PTO' ||
+      (!!ptoAssignment.view?.assignment &&
+        ptoAssignment.view.objectWorkId === pkg.objectWorkId &&
+        ptoAssignment.view.assignment.assigneeUserId === session.user.id));
   // Every mutation re-reads the handoff view too, so a handoff that went stale is reflected after the refresh.
   const refetchAll = () => {
     refetch();
