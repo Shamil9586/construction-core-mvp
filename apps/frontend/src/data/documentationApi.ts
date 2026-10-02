@@ -7,7 +7,6 @@ import type {
   DocumentationVersion,
   SdoClosingCase,
   StorageProvider,
-  UserSummary,
   Uuid,
 } from '../types/api';
 import { parseResponse } from '../http';
@@ -26,18 +25,23 @@ import { readSessionToken } from '../auth/sessionToken';
  */
 
 /**
- * F8.2.1-04 (Corrective Patch) — how a "Создать пакет" action resolves the
- * package's `responsibleUserId`, which the backend requires to name an
- * active PTO user (`ensure(responsible.role === 'PTO' && responsible.isActive, ...)`,
- * `service.ts`, unchanged by this patch). A PTO session is itself an active
- * PTO user and defaults to itself; ADMIN is not a PTO user at all and has
- * nothing to default to, so it must choose one from `ptoUsers`. Shared by
- * P01 and W01 (Decision 1) rather than each screen re-deriving which mode
- * applies to the current actor.
+ * PILOT-W01 UI03 — W01's PTO handoff read model (`GET works/:id/pto-assignment`).
+ * Everything the screen decides (who may assign, who may create the package,
+ * which engineers are eligible) is computed by the backend from object → assigned
+ * PTO_HEAD → functional team → engineer; the client never derives eligibility.
+ * `eligible` is non-empty only for the actor who may assign.
  */
-export type CreatePackageResponsible =
-  | { mode: 'self'; userId: Uuid }
-  | { mode: 'pick'; ptoUsers: UserSummary[] };
+export interface PtoWorkAssignmentView {
+  objectWorkId: Uuid;
+  objectId: Uuid;
+  head: { id: Uuid; name: string } | null;
+  assignment: { id: Uuid; assigneeUserId: Uuid; assigneeName: string; assignedByName: string; assignedAt: string; version: number } | null;
+  eligible: { id: Uuid; name: string }[];
+  packageCount: number;
+  canAssign: boolean;
+  canReassign: boolean;
+  canCreatePackage: boolean;
+}
 async function post<T>(path: string, body: unknown): Promise<T> {
   const token = readSessionToken();
   const response = await fetch(`/api/${path}`, {
@@ -48,11 +52,30 @@ async function post<T>(path: string, body: unknown): Promise<T> {
   return parseResponse(response) as Promise<T>;
 }
 
+async function get<T>(path: string): Promise<T> {
+  const token = readSessionToken();
+  const response = await fetch(`/api/${path}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  return parseResponse(response) as Promise<T>;
+}
+
+export function getPtoWorkAssignment(objectWorkId: Uuid): Promise<PtoWorkAssignmentView> {
+  return get(`works/${objectWorkId}/pto-assignment`);
+}
+
+/** «Передать в работу» — persists the assignment only; never creates a package. */
+export function assignPtoWork(objectWorkId: Uuid, assigneeUserId: Uuid): Promise<unknown> {
+  return post(`works/${objectWorkId}/pto-assignment`, { assigneeUserId });
+}
+
+/**
+ * The assigned engineer's action. `responsibleUserId` is optional: the backend derives the
+ * responsible from the authenticated actor and the persisted assignment, and rejects any other id.
+ */
 export function createDocumentationPackage(
   objectWorkId: Uuid,
-  responsibleUserId: Uuid,
+  responsibleUserId?: Uuid,
 ): Promise<DocumentationPackage> {
-  return post('documentation-packages', { objectWorkId, responsibleUserId });
+  return post('documentation-packages', { objectWorkId, ...(responsibleUserId ? { responsibleUserId } : {}) });
 }
 
 export function editDocumentationPackage(

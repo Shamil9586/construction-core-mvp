@@ -83,6 +83,13 @@ export type WorkConfirmation =
   | { kind: 'Rejected' }
   | { kind: 'Unknown' }
   | { kind: 'Accepted' }
+  /**
+   * PILOT-W01 UI01 — one or more portions are accepted by the internal SC but the work as a whole
+   * is not (backend `internalScAccepted` for the work needs full coverage). Never `NotSubmitted`:
+   * an ACCEPTED Internal SC inspection exists. The accepted quantity itself is
+   * `W01ViewModel.internalScAccepted`, a figure separate from plan and RP fact.
+   */
+  | { kind: 'PortionsAccepted' }
   | { kind: 'ConfirmedQuantity'; value: string; meta: string };
 
 /**
@@ -119,6 +126,7 @@ export function confirmationVariant(confirmation: WorkConfirmation): 'OnTrack' |
   switch (confirmation.kind) {
     case 'ConfirmedQuantity':
     case 'Accepted':
+    case 'PortionsAccepted':
       return 'OnTrack';
     case 'IssuesFound':
     case 'Rejected':
@@ -140,6 +148,8 @@ export function confirmationLabel(confirmation: WorkConfirmation): string {
       return `Подтверждено СК: ${confirmation.value} ${confirmation.meta}`;
     case 'Accepted':
       return 'Принято СК';
+    case 'PortionsAccepted':
+      return 'Принято по участкам';
     case 'Pending':
       return 'На проверке';
     case 'IssuesFound':
@@ -220,6 +230,8 @@ export interface W01PortionViewModel {
   planned: Measure;
   fact: Measure;
   internalSc: WorkConfirmation;
+  /** PILOT-W01 UI01 — the append-only INTERNAL_SC confirmed quantity (e.g. 498), shown next to — never in place of — the RP fact. `null` until the Internal SC accepts. */
+  internalScConfirmed: Measure | null;
   /** The one Internal SC inspection to register a decision on, when one is awaiting a decision. */
   decidableInspection: { id: string; version: number } | null;
   canEnterFact: boolean;
@@ -271,6 +283,9 @@ function buildW01PortionViewModel(
     planned: formatMeasure(portion.plannedQuantity, unit, 'плановый объём участка'),
     fact: formatMeasure(portion.rpFactQuantity, unit, 'факт участка'),
     internalSc,
+    internalScConfirmed: portion.internalScAccepted && portion.internalScConfirmedQuantity !== null
+      ? formatMeasure(portion.internalScConfirmedQuantity, unit, 'принято внутренним СК')
+      : null,
     decidableInspection:
       latest && DECIDABLE_INTERNAL_SC_STATUSES.has(latest.status) ? { id: latest.id, version: latest.version } : null,
     canEnterFact: !hasBlockingInternalSc,
@@ -390,6 +405,12 @@ export interface W01ViewModel {
   plan: Measure;
   fact: Measure;
   confirmation: WorkConfirmation;
+  /**
+   * PILOT-W01 UI01 — total accepted by the internal SC across this work's portions (sum of each
+   * accepted portion's INTERNAL_SC confirmed quantity); `null` when no portion is accepted.
+   * Independent of `fact` (RP fact) and `plan`: 500 fact with 498 accepted stays 500 / 498.
+   */
+  internalScAccepted: Measure | null;
   /** For the readiness bar — physical execution, not acceptance (see `ProgressBar`). */
   readiness: number | null;
   blockers: string[];
@@ -428,13 +449,29 @@ export function buildW01ViewModel(
     .filter((inspection) => inspection.objectWorkId === work.id && !inspection.portionId)
     .sort((a, b) => (a.requestedAt < b.requestedAt ? 1 : -1))[0];
 
+  // PILOT-W01 UI01 — portion-scoped Internal SC acceptance. The whole-work lookup above
+  // deliberately excludes portion inspections, and `work.accepted` only turns true once every
+  // portion is fully covered, so a work with 500 planned / 498 accepted used to fall through to
+  // `NotSubmitted` ("Не предъявлено") despite an ACCEPTED Internal SC. CUSTOMER_SC is never read.
+  const acceptedPortions = portions.filter(
+    (portion) =>
+      portion.internalScAccepted &&
+      executionUnits.some((unit) => unit.id === portion.executionUnitId && unit.objectWorkId === work.id),
+  );
+  const internalScAcceptedTotal = acceptedPortions.reduce(
+    (sum, portion) => sum.add(portion.internalScConfirmedQuantity ?? 0),
+    new Decimal(0),
+  );
+
   // No branch here ever attaches a quantity — `work.accepted` is a decision
   // about the whole work, not a measurement, so it can only produce a status.
   const confirmation: WorkConfirmation = work.accepted
     ? { kind: 'Accepted' }
     : latestInspection
       ? confirmationFromInspectionStatus(latestInspection.status)
-      : { kind: 'NotSubmitted' };
+      : acceptedPortions.length > 0
+        ? { kind: 'PortionsAccepted' }
+        : { kind: 'NotSubmitted' };
 
   return {
     id: work.id,
@@ -446,6 +483,8 @@ export function buildW01ViewModel(
     plan: formatMeasure(work.plannedQuantity, work.unit, 'плановый объём'),
     fact: formatMeasure(factReported ? work.actualQuantity : null, work.unit, 'физически выполнено'),
     confirmation,
+    internalScAccepted:
+      acceptedPortions.length > 0 ? formatMeasure(internalScAcceptedTotal.toFixed(4), work.unit, 'принято внутренним СК') : null,
     readiness: work.actualProgress,
     blockers: work.blockers,
     schedule: {

@@ -408,6 +408,11 @@ function PortionRow({ portion, actions }: { portion: W01PortionViewModel; action
         <span className={typeClass('body')}>
           {portion.fact.value} <span className={styles.meta}>{portion.fact.meta}</span>
         </span>
+        {portion.internalScConfirmed ? (
+          <span className={typeClass('body')}>
+            {portion.internalScConfirmed.value} <span className={styles.meta}>{portion.internalScConfirmed.meta}</span>
+          </span>
+        ) : null}
       </div>
       {actions && portion.canEnterFact ? (
         <FactForm

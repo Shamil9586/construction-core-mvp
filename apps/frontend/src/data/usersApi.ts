@@ -1,17 +1,15 @@
 import type { UserSummary } from '../types/api';
 import { parseResponse } from '../http';
 import { readSessionToken } from '../auth/sessionToken';
-import { isPtoRole, isSdoRole } from '../auth/internalRoles';
+import { isSdoRole } from '../auth/internalRoles';
 
 /**
- * F8.2.1-04 (Corrective Patch) — `GET /users` already exists and already
- * requires no more than `OBJECT_VIEW` (every internal role, `users.controller.ts`),
- * so this is a read, not a new backend capability. Its one caller today is
- * the ADMIN responsible-picker (`app/useActivePtoUsers.ts`): ADMIN has
- * `DOCUMENTATION_MANAGE` but is not itself a PTO user, so it cannot default
- * to `session.user.id` the way a PTO session does — it must choose an
- * active PTO user from this list instead. Mirrors `documentationApi.ts`'s
- * own `post<T>` pattern for the GET side.
+ * `GET /users` — a plain read (no more than `OBJECT_VIEW`). Mirrors
+ * `documentationApi.ts`'s own `post<T>` pattern for the GET side.
+ *
+ * PILOT-W01 UI03: the former tenant-wide PTO list (`listActivePtoUsers`) that fed the
+ * package-create responsible picker is gone — PTO eligibility is now object-scoped and
+ * server-authoritative (`GET works/:id/pto-assignment`).
  */
 async function get<T>(path: string): Promise<T> {
   const token = readSessionToken();
@@ -21,16 +19,10 @@ async function get<T>(path: string): Promise<T> {
   return parseResponse(response) as Promise<T>;
 }
 
-export async function listActivePtoUsers(): Promise<UserSummary[]> {
-  const users = await get<UserSummary[]>('users');
-  return users.filter((user) => isPtoRole(user.role));
-}
-
 /**
  * F8.3 — the SDO Case responsible-assignment picker's own data source
  * (`ensure(responsible.role === 'SDO' && responsible.isActive, ...)`,
- * `service.ts`), the exact same treatment `listActivePtoUsers` above
- * already gives PTO's own responsible picker.
+ * `service.ts`).
  */
 export async function listActiveSdoUsers(): Promise<UserSummary[]> {
   const users = await get<UserSummary[]>('users');

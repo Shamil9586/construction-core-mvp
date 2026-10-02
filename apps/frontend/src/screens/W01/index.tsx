@@ -10,7 +10,7 @@ import {
 } from '../../design-system';
 import type { W01ViewModel, WorkConfirmation } from '../../view-models/w01';
 import { ExecutionSection, type W01ActionHandlers } from './ExecutionSection';
-import { DocumentationSection, type DocumentationSectionActionHandlers } from './DocumentationSection';
+import { DocumentationSection, type DocumentationHandoff, type DocumentationSectionActionHandlers } from './DocumentationSection';
 import { SdoSection } from './SdoSection';
 import styles from './W01.module.css';
 
@@ -50,6 +50,8 @@ export interface W01Props {
    * `WorkRoute.tsx`).
    */
   documentationActions?: DocumentationSectionActionHandlers;
+  /** PILOT-W01 UI03 — PTO handoff state and action («Передать в работу»); see `DocumentationHandoff`. */
+  documentationHandoff?: DocumentationHandoff;
   /** F8.2.1 — `false` only for a confirmed excluded role (SDO); see `DocumentationSection`'s own prop comment. */
   documentationVisible?: boolean;
 }
@@ -88,6 +90,10 @@ function ConfirmationBlock({ confirmation }: { confirmation: WorkConfirmation })
     // confirmed figure equal to (or different from) Fact.
     case 'Accepted':
       return <ConfirmationStatus variant="OnTrack">Принято СК</ConfirmationStatus>;
+    // Portions accepted by the internal SC, work not yet fully covered — the accepted
+    // figure itself is the separate PlanFact below, never merged into plan or RP fact.
+    case 'PortionsAccepted':
+      return <ConfirmationStatus variant="OnTrack">Принято по участкам</ConfirmationStatus>;
     // WAITING / IN_REVIEW / REINSPECTION — genuinely still open, no decision
     // made yet (see the corrective note in view-models/w01.ts).
     case 'Pending':
@@ -120,6 +126,7 @@ export function WorkCard({
   className,
   actions,
   documentationActions,
+  documentationHandoff,
   documentationVisible,
 }: W01Props) {
   return (
@@ -215,6 +222,17 @@ export function WorkCard({
       <section className={styles.sectionTight}>
         <div className={[styles.card, styles.cardConfirmation].join(' ')}>
           <ConfirmationBlock confirmation={viewModel.confirmation} />
+          {viewModel.internalScAccepted ? (
+            <PlanFact
+              items={[
+                {
+                  label: 'Принято внутренним СК',
+                  value: viewModel.internalScAccepted.value,
+                  meta: viewModel.internalScAccepted.meta,
+                },
+              ]}
+            />
+          ) : null}
           <span className={[styles.confirmationLabel, typeClass('label')].join(' ')}>
             Факт РП, подтверждение внутреннего СК и СК заказчика — отдельные величины; прежние значения не перезаписываются.
           </span>
@@ -226,6 +244,7 @@ export function WorkCard({
       <DocumentationSection
         documentationPackages={viewModel.documentationPackages}
         actions={documentationActions}
+        handoff={documentationHandoff}
         visible={documentationVisible}
       />
 

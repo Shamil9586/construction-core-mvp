@@ -1,14 +1,14 @@
 import { useNavigate, useParams } from 'react-router-dom';
 import { WorkCard } from '../../screens/W01';
 import type { W01ActionHandlers } from '../../screens/W01/ExecutionSection';
-import type { DocumentationSectionActionHandlers } from '../../screens/W01/DocumentationSection';
+import type { DocumentationHandoff, DocumentationSectionActionHandlers } from '../../screens/W01/DocumentationSection';
 import { buildW01ViewModel } from '../../view-models/w01';
 import { useRefetchSnapshot, useSnapshot } from '../../data/SnapshotContext';
 import * as executionUnitsApi from '../../data/executionUnitsApi';
 import * as documentationApi from '../../data/documentationApi';
 import { useCoreRuntime } from '../CoreRuntimeContext';
-import { canAccessDocumentation, canManageDocumentation, isPtoRole } from '../../auth/internalRoles';
-import { useActivePtoUsers } from '../useActivePtoUsers';
+import { canAccessDocumentation, canManageDocumentation } from '../../auth/internalRoles';
+import { useWorkPtoAssignment } from '../useWorkPtoAssignment';
 import { AppSidebar } from '../AppSidebar';
 import { ROUTE_PATHS, objectPath, packagePath } from '../routePaths';
 import { RouteError, RouteLoading, RouteNotFound } from '../RouteStatus';
@@ -25,9 +25,12 @@ export function WorkRoute() {
   const refetch = useRefetchSnapshot();
   const { session } = useCoreRuntime();
   const navigate = useNavigate();
-  // F8.2.1-04 — fetched only for ADMIN (see the hook's own comment); called
-  // unconditionally, before any early return, per the Rules of Hooks.
-  const ptoUsers = useActivePtoUsers(session?.user.role);
+  // PILOT-W01 UI03 — the backend's PTO handoff read model; called unconditionally,
+  // before any early return, per the Rules of Hooks.
+  const ptoAssignment = useWorkPtoAssignment(
+    workId,
+    !!session && canAccessDocumentation(session.user.role),
+  );
 
   if (state.status === 'Loading') return <RouteLoading />;
   if (state.status === 'Error') return <RouteError message={state.message} />;
@@ -91,11 +94,10 @@ export function WorkRoute() {
   const documentationActions: DocumentationSectionActionHandlers | undefined =
     session && canManageDocumentation(session.user.role)
       ? {
-          // F8.2.1-04 — PTO defaults to itself; ADMIN picks an active PTO
-          // user instead (see CreatePackageButton, W01/DocumentationSection.tsx).
-          responsible: isPtoRole(session.user.role) ? { mode: 'self', userId: session.user.id } : { mode: 'pick', ptoUsers },
-          onCreatePackage: async (responsibleUserId) => {
-            const pkg = await documentationApi.createDocumentationPackage(work.id, responsibleUserId);
+          // PILOT-W01 UI03 — no responsible id is sent: the backend derives it from the
+          // authenticated engineer + the persisted PTO work assignment.
+          onCreatePackage: async () => {
+            const pkg = await documentationApi.createDocumentationPackage(work.id);
             refetch();
             navigate(packagePath(pkg.id));
           },
@@ -104,6 +106,17 @@ export function WorkRoute() {
           },
         }
       : undefined;
+
+  // PILOT-W01 UI03 — «Передать в работу»: assignment only, never a package.
+  const documentationHandoff: DocumentationHandoff | undefined = ptoAssignment.view
+    ? {
+        view: ptoAssignment.view,
+        onAssign: async (assigneeUserId) => {
+          await documentationApi.assignPtoWork(work.id, assigneeUserId);
+          ptoAssignment.reload();
+        },
+      }
+    : undefined;
 
   // F8.2.1 — no session (mock/demo runtime) stays visible, unchanged from
   // F8.2; a confirmed excluded role (SDO) is the only case this hides.
@@ -117,6 +130,7 @@ export function WorkRoute() {
       onSelectObject={(id) => navigate(objectPath(id))}
       actions={actions}
       documentationActions={documentationActions}
+      documentationHandoff={documentationHandoff}
       documentationVisible={documentationVisible}
     />
   );

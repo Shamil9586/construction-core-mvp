@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { StatusBadge, typeClass } from '../../design-system';
 import type { W01DocumentationPackageViewModel } from '../../view-models/w01';
-import type { CreatePackageResponsible } from '../../data/documentationApi';
+import type { PtoWorkAssignmentView } from '../../data/documentationApi';
 import styles from './DocumentationSection.module.css';
 
 /**
@@ -22,15 +22,26 @@ import styles from './DocumentationSection.module.css';
  */
 
 export interface DocumentationSectionActionHandlers {
-  onCreatePackage: (responsibleUserId: string) => Promise<void>;
+  /** PILOT-W01 UI03 — no responsible argument: the backend derives it from the actor + the persisted PTO assignment. */
+  onCreatePackage: () => Promise<void>;
   onOpenPackage: (packageId: string) => void;
-  /** F8.2.1-04 (Corrective Patch) — how the create action resolves its responsible PTO user: PTO defaults to itself, ADMIN must pick one. */
-  responsible: CreatePackageResponsible;
+}
+
+/**
+ * PILOT-W01 UI03 — the PTO handoff («Передать в работу») for this work. `view` is the backend's own
+ * read model (eligibility, who may assign, who may create the package); `onAssign` persists the
+ * assignment and never creates a package. Omitted (no session / read-model not loaded) renders no
+ * handoff block and no package-create control.
+ */
+export interface DocumentationHandoff {
+  view: PtoWorkAssignmentView;
+  onAssign: (assigneeUserId: string) => Promise<void>;
 }
 
 export interface DocumentationSectionProps {
   documentationPackages: W01DocumentationPackageViewModel[];
   actions?: DocumentationSectionActionHandlers;
+  handoff?: DocumentationHandoff;
   /**
    * F8.2.1 — `false` only for a *confirmed* excluded role (SDO,
    * `canAccessDocumentation`); defaults to `true` so every existing caller
@@ -49,82 +60,130 @@ function errorMessage(error: unknown): string {
 
 function CreatePackageButton({
   onCreate,
-  responsible,
-  label = 'Создать пакет',
+  label = 'Создать пакет ИД',
 }: {
-  onCreate: (responsibleUserId: string) => Promise<void>;
-  responsible: CreatePackageResponsible;
+  onCreate: () => Promise<void>;
   /** Corrective F8.2.1-03 — "Создать ещё один пакет" when the work already has one. */
   label?: string;
 }) {
-  const [selected, setSelected] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function handleCreate(responsibleUserId: string) {
+  async function handleCreate() {
     setPending(true);
     setError(null);
     try {
-      await onCreate(responsibleUserId);
+      await onCreate();
     } catch (submitError) {
       setError(errorMessage(submitError));
       setPending(false);
     }
   }
 
-  // F8.2.1-04 — ADMIN is not itself a PTO user (the backend requires an
-  // active PTO responsible), so it picks one here rather than the button
-  // defaulting to `session.user.id` the way it safely can for PTO.
-  if (responsible.mode === 'pick') {
-    if (responsible.ptoUsers.length === 0) {
-      return (
-        <div className={styles.emptyAction}>
-          <span className={styles.errorText}>Нет активных сотрудников ПТО</span>
-        </div>
-      );
-    }
-    return (
-      <div className={styles.emptyAction}>
-        <select
-          className={styles.pickerSelect}
-          value={selected}
-          onChange={(event) => setSelected(event.target.value)}
-          disabled={pending}
-          aria-label="Ответственный сотрудник ПТО"
-        >
-          <option value="">Выберите сотрудника ПТО…</option>
-          {responsible.ptoUsers.map((user) => (
-            <option key={user.id} value={user.id}>
-              {user.name}
-            </option>
-          ))}
-        </select>
-        <button
-          type="button"
-          className={styles.actionButton}
-          onClick={() => handleCreate(selected)}
-          disabled={pending || !selected}
-        >
-          {pending ? 'Создание…' : label}
-        </button>
-        {error ? <span className={styles.errorText}>{error}</span> : null}
-      </div>
-    );
-  }
-
   return (
     <div className={styles.emptyAction}>
-      <button
-        type="button"
-        className={styles.actionButton}
-        onClick={() => handleCreate(responsible.userId)}
-        disabled={pending}
-      >
+      <button type="button" className={styles.actionButton} onClick={handleCreate} disabled={pending}>
         {pending ? 'Создание…' : label}
       </button>
       {error ? <span className={styles.errorText}>{error}</span> : null}
     </div>
   );
+}
+
+/** Engineer picker + submit, shared by the first handoff and the pre-package change of responsible. */
+function AssigneePicker({
+  engineers,
+  onAssign,
+  label,
+}: {
+  engineers: { id: string; name: string }[];
+  onAssign: (assigneeUserId: string) => Promise<void>;
+  label: string;
+}) {
+  const [selected, setSelected] = useState('');
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleAssign() {
+    setPending(true);
+    setError(null);
+    try {
+      await onAssign(selected);
+      setSelected('');
+    } catch (submitError) {
+      setError(errorMessage(submitError));
+    }
+    setPending(false);
+  }
+
+  return (
+    <div className={styles.emptyAction}>
+      <select
+        className={styles.pickerSelect}
+        value={selected}
+        onChange={(event) => setSelected(event.target.value)}
+        disabled={pending}
+        aria-label="Сотрудник ПТО"
+      >
+        <option value="">Выберите сотрудника ПТО…</option>
+        {engineers.map((engineer) => (
+          <option key={engineer.id} value={engineer.id}>
+            {engineer.name}
+          </option>
+        ))}
+      </select>
+      <button type="button" className={styles.actionButton} onClick={handleAssign} disabled={pending || !selected}>
+        {pending ? 'Передача…' : label}
+      </button>
+      {error ? <span className={styles.errorText}>{error}</span> : null}
+    </div>
+  );
+}
+
+/**
+ * The handoff state of the work. Assignment and package creation are two separate actions: the
+ * assigned object PTO_HEAD hands the work off here; the selected engineer (not the head) then
+ * sees «Создать пакет ИД» below. Every flag comes from the backend read model.
+ */
+function HandoffBlock({ handoff }: { handoff: DocumentationHandoff }) {
+  const { view } = handoff;
+  const alternatives = view.eligible.filter((engineer) => engineer.id !== view.assignment?.assigneeUserId);
+
+  if (view.assignment) {
+    return (
+      <div className={styles.packageCard}>
+        <div className={styles.packageHeader}>
+          <StatusBadge variant="OnTrack">Передано в работу</StatusBadge>
+        </div>
+        <dl className={styles.packageDetails}>
+          <div className={styles.detailRow}>
+            <dt className={[styles.detailLabel, typeClass('label')].join(' ')}>Ответственный ПТО</dt>
+            <dd className={typeClass('body-strong')}>{view.assignment.assigneeName}</dd>
+          </div>
+        </dl>
+        {view.canReassign ? (
+          alternatives.length > 0 ? (
+            <AssigneePicker engineers={alternatives} onAssign={handoff.onAssign} label="Изменить ответственного" />
+          ) : null
+        ) : null}
+      </div>
+    );
+  }
+
+  if (view.canAssign) {
+    if (view.eligible.length === 0) {
+      return (
+        <span className={[styles.errorText, typeClass('body')].join(' ')}>
+          {view.head
+            ? 'Передача в работу недоступна: в команде начальника ПТО нет доступных сотрудников'
+            : 'Передача в работу недоступна: на объекте не назначен начальник ПТО'}
+        </span>
+      );
+    }
+    return <AssigneePicker engineers={view.eligible} onAssign={handoff.onAssign} label="Передать в работу" />;
+  }
+
+  return <span className={[styles.empty, typeClass('body')].join(' ')}>Не передано в работу</span>;
 }
 
 function PackageCard({
@@ -158,7 +217,8 @@ function PackageCard({
   );
 }
 
-export function DocumentationSection({ documentationPackages, actions, visible = true }: DocumentationSectionProps) {
+export function DocumentationSection({ documentationPackages, actions, handoff, visible = true }: DocumentationSectionProps) {
+  const canCreate = !!actions && !!handoff?.view.canCreatePackage;
   return (
     <section className={styles.section}>
       <h2 className={[styles.sectionLabel, typeClass('label')].join(' ')}>
@@ -170,30 +230,22 @@ export function DocumentationSection({ documentationPackages, actions, visible =
         </span>
       ) : documentationPackages.length > 0 ? (
         <>
+          {handoff ? <HandoffBlock handoff={handoff} /> : null}
           <div className={styles.packageList}>
             {documentationPackages.map((pkg) => (
               <PackageCard key={pkg.id} pkg={pkg} onOpenPackage={actions?.onOpenPackage} />
             ))}
           </div>
-          {actions ? (
-            <CreatePackageButton
-              onCreate={actions.onCreatePackage}
-              responsible={actions.responsible}
-              label="Создать ещё один пакет"
-            />
-          ) : null}
+          {canCreate ? <CreatePackageButton onCreate={actions!.onCreatePackage} label="Создать ещё один пакет" /> : null}
         </>
-      ) : actions ? (
+      ) : (
         <>
           <span className={[styles.empty, typeClass('body')].join(' ')}>
             Пакет исполнительной документации ещё не создан
           </span>
-          <CreatePackageButton onCreate={actions.onCreatePackage} responsible={actions.responsible} />
+          {handoff ? <HandoffBlock handoff={handoff} /> : null}
+          {canCreate ? <CreatePackageButton onCreate={actions!.onCreatePackage} /> : null}
         </>
-      ) : (
-        <span className={[styles.empty, typeClass('body')].join(' ')}>
-          Пакет исполнительной документации ещё не создан
-        </span>
       )}
     </section>
   );

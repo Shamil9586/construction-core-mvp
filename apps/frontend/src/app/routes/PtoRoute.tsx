@@ -2,13 +2,11 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { PtoWorkspace } from '../../screens/P01';
 import type { P01ActionHandlers } from '../../screens/P01';
 import { buildP01ViewModel } from '../../view-models/p01';
-import { useRefetchSnapshot, useSnapshot } from '../../data/SnapshotContext';
-import * as documentationApi from '../../data/documentationApi';
+import { useSnapshot } from '../../data/SnapshotContext';
 import { useCoreRuntime } from '../CoreRuntimeContext';
-import { canAccessDocumentation, canManageDocumentation, isPtoRole } from '../../auth/internalRoles';
-import { useActivePtoUsers } from '../useActivePtoUsers';
+import { canAccessDocumentation, canManageDocumentation } from '../../auth/internalRoles';
 import { AppSidebar } from '../AppSidebar';
-import { packagePath } from '../routePaths';
+import { packagePath, workPath } from '../routePaths';
 import { RouteError, RouteForbidden, RouteLoading } from '../RouteStatus';
 
 /**
@@ -45,13 +43,9 @@ import { RouteError, RouteForbidden, RouteLoading } from '../RouteStatus';
  */
 export function PtoRoute() {
   const state = useSnapshot();
-  const refetch = useRefetchSnapshot();
-  const { session } = useCoreRuntime();
+    const { session } = useCoreRuntime();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
-  // F8.2.1-04 — fetched only for ADMIN (see the hook's own comment); called
-  // unconditionally, before any early return, per the Rules of Hooks.
-  const ptoUsers = useActivePtoUsers(session?.user.role);
 
   if (state.status === 'Loading') return <RouteLoading />;
   if (state.status === 'Error') return <RouteError message={state.message} />;
@@ -80,14 +74,9 @@ export function PtoRoute() {
   const actions: P01ActionHandlers | undefined =
     session && canManageDocumentation(session.user.role)
       ? {
-          // F8.2.1-04 — PTO is itself an active PTO user and defaults to
-          // itself; ADMIN is not, so it picks one from `ptoUsers` instead
-          // (see CreatePackageButton, screens/P01/index.tsx).
-          responsible: isPtoRole(session.user.role) ? { mode: 'self', userId: session.user.id } : { mode: 'pick', ptoUsers },
-          onCreatePackage: async (objectWorkId, responsibleUserId) => {
-            const pkg = await documentationApi.createDocumentationPackage(objectWorkId, responsibleUserId);
-            refetch();
-            navigate(packagePath(pkg.id));
+          // PILOT-W01 UI03 — package creation lives on W01 (handoff first, then the assigned engineer).
+          onOpenWork: (objectId, objectWorkId) => {
+            navigate(workPath(objectId, objectWorkId));
           },
           onOpenPackage: (packageId) => {
             navigate(packagePath(packageId));
