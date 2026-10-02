@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import Decimal from 'decimal.js';
 import { pool, rows, one } from './db';
-import { Actor, requirePermission, objectAccess } from './security';
+import { Actor, requirePermission, objectAccess, effectivePtoAssignedWork } from './security';
 import { Permission as P, ProgressCalculationService, ScheduleStatusService, PotentialClosingService, ObjectHealthService, PortionCompletionService, defaultRisk, resolveInternalScAccepted, resolveActualQuantity, canAccessDocumentation, resolveDocumentationAttention, resolvePackageSdoReadiness, isCustomerAcceptanceSnapshotCurrent, resolveCustomerScLatestGroup } from '../../../packages/domain';
 @Injectable()
 export class ReadService {
@@ -12,25 +12,38 @@ export class ReadService {
         if (a.role === 'PROJECT_MANAGER') { params.push(a.id); objectFilter += ` AND o.project_manager_id=$${params.length}`; }
         // PBX-3A (PBX3-D08): PTO/PTO_HEAD operational workspace = only the objects they are
         // CURRENTLY assigned to (member) / lead. Leadership oversight roles keep the whole portfolio.
-        if (a.role === 'PTO') { params.push(a.id); objectFilter += ` AND (EXISTS(SELECT 1 FROM object_function_member_assignments pm WHERE pm.tenant_id=o.tenant_id AND pm.object_id=o.id AND pm.function_code='PTO' AND pm.member_user_id=$${params.length} AND pm.ended_at IS NULL) OR EXISTS(SELECT 1 FROM pto_work_assignments pa JOIN object_function_lead_assignments pl2 ON pl2.tenant_id=pa.tenant_id AND pl2.object_id=pa.object_id AND pl2.function_code='PTO' AND pl2.ended_at IS NULL JOIN functional_team_memberships pt ON pt.tenant_id=pa.tenant_id AND pt.function_code='PTO' AND pt.manager_user_id=pl2.lead_user_id AND pt.member_user_id=pa.assignee_user_id AND pt.ended_at IS NULL WHERE pa.tenant_id=o.tenant_id AND pa.object_id=o.id AND pa.assignee_user_id=$${params.length} AND pa.ended_at IS NULL))`; }
+        // PILOT-W01: object SHELL for a PTO engineer = PBX-3A membership OR an EFFECTIVE handoff on some work of the object
+        // (effective = exact work, still on the object head's functional team — see security.ts). Work DATA is narrowed below.
+        const ptoAssigned = a.role === 'PTO' ? await effectivePtoAssignedWork(pool, a.tenantId, a.id) : [];
+        if (a.role === 'PTO') { params.push(a.id); params.push(ptoAssigned.map((w: any) => w.objectId)); objectFilter += ` AND (EXISTS(SELECT 1 FROM object_function_member_assignments pm WHERE pm.tenant_id=o.tenant_id AND pm.object_id=o.id AND pm.function_code='PTO' AND pm.member_user_id=$${params.length - 1} AND pm.ended_at IS NULL) OR o.id=ANY($${params.length}::uuid[]))`; }
         if (a.role === 'PTO_HEAD') { params.push(a.id); objectFilter += ` AND EXISTS(SELECT 1 FROM object_function_lead_assignments pl WHERE pl.tenant_id=o.tenant_id AND pl.object_id=o.id AND pl.function_code='PTO' AND pl.lead_user_id=$${params.length} AND pl.ended_at IS NULL)`; }
         if (a.role === 'CONTRACTOR_VIEWER') { params.push(a.contractorId ?? null); objectFilter += ` AND EXISTS(SELECT 1 FROM object_contractors_active oc WHERE oc.tenant_id=o.tenant_id AND oc.object_id=o.id AND oc.contractor_id=$${params.length})`; }
         if (filters.contractorId) { params.push(filters.contractorId); objectFilter += ` AND EXISTS(SELECT 1 FROM object_contractors_active oc2 WHERE oc2.tenant_id=o.tenant_id AND oc2.object_id=o.id AND oc2.contractor_id=$${params.length})`; }
         const objects = await rows(pool, 'SELECT o.*,u.name AS responsible FROM objects o JOIN users u ON u.tenant_id=o.tenant_id AND u.id=o.project_manager_id WHERE o.tenant_id=$1' + objectFilter + ' ORDER BY o.name', params);
         const ids = objects.map(o => o.id);
+        // PILOT-W01 work scoping: a PTO engineer keeps WORK data only for objects they are a PBX-3A member of (unchanged) or for the
+        // exact work(s) they are the EFFECTIVE assignee of. Everything below is keyed off these works / objects, so filtering
+        // works + the object-keyed lists here narrows executionUnits, portions, packages, documents, SDO cases... consistently.
+        let ptoKeep: (objectId: string, workId: string | null) => boolean = () => true;
+        if (a.role === 'PTO') {
+            const memberObjects = new Set((await rows(pool, "SELECT object_id FROM object_function_member_assignments WHERE tenant_id=$1 AND function_code='PTO' AND member_user_id=$2 AND ended_at IS NULL", [t, a.id])).map((r: any) => r.objectId));
+            const assignedWorks = new Set(ptoAssigned.map((w: any) => w.objectWorkId));
+            ptoKeep = (objectId, workId) => memberObjects.has(objectId) || (workId !== null && assignedWorks.has(workId));
+        }
+        const scopeByWork = <T extends Record<string, any>>(list: T[]): T[] => (a.role === 'PTO' ? list.filter(r => ptoKeep(r.objectId, r.objectWorkId ?? null)) : list);
         // Active object_contractors (object_contractors_active — единый read source,
         // infra/005) — current assignment, used for objectList.contractorIds/
         // contractors below. Distinct from works.contractor_id (historical/actual
         // attribution) and from CONTRACTOR_VIEWER's own-work filter above, which is
         // unaffected by this and stays keyed off works directly.
         const activeAssignments = await rows(pool, 'SELECT oc.object_id,oc.contractor_id,c.name AS contractor_name FROM object_contractors_active oc JOIN contractors c ON c.id=oc.contractor_id AND c.tenant_id=oc.tenant_id WHERE oc.tenant_id=$1 AND oc.object_id=ANY($2::uuid[])', [t, ids]);
-        const works = await rows(pool, `SELECT w.*,t.requires_inspection,t.requires_materials,t.category_id,c.name AS contractor,u.name AS responsible,(SELECT max(reported_at) FROM work_progress p WHERE p.tenant_id=w.tenant_id AND p.object_work_id=w.id) AS last_reported_at FROM works w JOIN work_types t ON t.id=w.work_type_id AND t.tenant_id=w.tenant_id JOIN contractors c ON c.id=w.contractor_id AND c.tenant_id=w.tenant_id JOIN users u ON u.id=w.responsible_user_id AND u.tenant_id=w.tenant_id WHERE w.tenant_id=$1 AND w.object_id=ANY($2::uuid[]) ${a.role === 'CONTRACTOR_VIEWER' ? 'AND w.contractor_id=$3' : ''} ORDER BY w.planned_start_date,w.name`, a.role === 'CONTRACTOR_VIEWER' ? [t, ids, a.contractorId ?? null] : [t, ids]);
-        const inspections = await rows(pool, 'SELECT * FROM inspections WHERE tenant_id=$1 AND object_id=ANY($2::uuid[]) ORDER BY created_at DESC', [t, ids]);
-        const issues = await rows(pool, 'SELECT x.*,i.object_id,i.object_work_id,u.name AS responsible FROM issues x JOIN inspections i ON i.id=x.inspection_id AND i.tenant_id=x.tenant_id JOIN users u ON u.id=x.responsible_user_id AND u.tenant_id=x.tenant_id WHERE x.tenant_id=$1 AND i.object_id=ANY($2::uuid[])', [t, ids]);
-        const packages = await rows(pool, 'SELECT * FROM executive_packages WHERE tenant_id=$1 AND object_id=ANY($2::uuid[])', [t, ids]);
-        const documents = await rows(pool, 'SELECT * FROM executive_documents WHERE tenant_id=$1 AND object_id=ANY($2::uuid[])', [t, ids]);
-        const sdo = await rows(pool, 'SELECT * FROM sdo_cases WHERE tenant_id=$1 AND object_id=ANY($2::uuid[])', [t, ids]);
-        const closings = await rows(pool, 'SELECT * FROM financial_closings WHERE tenant_id=$1 AND object_id=ANY($2::uuid[])', [t, ids]);
+        const works = (await rows(pool, `SELECT w.*,t.requires_inspection,t.requires_materials,t.category_id,c.name AS contractor,u.name AS responsible,(SELECT max(reported_at) FROM work_progress p WHERE p.tenant_id=w.tenant_id AND p.object_work_id=w.id) AS last_reported_at FROM works w JOIN work_types t ON t.id=w.work_type_id AND t.tenant_id=w.tenant_id JOIN contractors c ON c.id=w.contractor_id AND c.tenant_id=w.tenant_id JOIN users u ON u.id=w.responsible_user_id AND u.tenant_id=w.tenant_id WHERE w.tenant_id=$1 AND w.object_id=ANY($2::uuid[]) ${a.role === 'CONTRACTOR_VIEWER' ? 'AND w.contractor_id=$3' : ''} ORDER BY w.planned_start_date,w.name`, a.role === 'CONTRACTOR_VIEWER' ? [t, ids, a.contractorId ?? null] : [t, ids])).filter((w: any) => ptoKeep(w.objectId, w.id));
+        const inspections = scopeByWork(await rows(pool, 'SELECT * FROM inspections WHERE tenant_id=$1 AND object_id=ANY($2::uuid[]) ORDER BY created_at DESC', [t, ids]));
+        const issues = scopeByWork(await rows(pool, 'SELECT x.*,i.object_id,i.object_work_id,u.name AS responsible FROM issues x JOIN inspections i ON i.id=x.inspection_id AND i.tenant_id=x.tenant_id JOIN users u ON u.id=x.responsible_user_id AND u.tenant_id=x.tenant_id WHERE x.tenant_id=$1 AND i.object_id=ANY($2::uuid[])', [t, ids]));
+        const packages = scopeByWork(await rows(pool, 'SELECT * FROM executive_packages WHERE tenant_id=$1 AND object_id=ANY($2::uuid[])', [t, ids]));
+        const documents = scopeByWork(await rows(pool, 'SELECT * FROM executive_documents WHERE tenant_id=$1 AND object_id=ANY($2::uuid[])', [t, ids]));
+        const sdo = scopeByWork(await rows(pool, 'SELECT * FROM sdo_cases WHERE tenant_id=$1 AND object_id=ANY($2::uuid[])', [t, ids]));
+        const closings = scopeByWork(await rows(pool, 'SELECT * FROM financial_closings WHERE tenant_id=$1 AND object_id=ANY($2::uuid[])', [t, ids]));
         // Фото приёмок (inspection_photos) — добавлено для вкладки «Фото» карточки
         // объекта (перенос сильной стороны construction-erp, ХАРДЕНИНГ этой
         // итерации): раньше строился только POST-эндпоинт загрузки, без
@@ -38,7 +51,9 @@ export class ReadService {
         // inspections, что уже выбраны выше — без новых прав/эндпоинтов.
         const photos = await rows(pool, 'SELECT * FROM inspection_photos WHERE tenant_id=$1 AND inspection_id=ANY($2::uuid[])', [t, inspections.map(i => i.id)]);
         const contractors = await rows(pool, 'SELECT * FROM contractors WHERE tenant_id=$1' + (a.role === 'CONTRACTOR_VIEWER' ? ' AND id=$2' : ''), a.role === 'CONTRACTOR_VIEWER' ? [t, a.contractorId ?? null] : [t]);
-        const dependencies = await rows(pool, 'SELECT d.* FROM work_dependencies d JOIN works w ON w.id=d.successor_work_id AND w.tenant_id=d.tenant_id WHERE d.tenant_id=$1 AND w.object_id=ANY($2::uuid[])', [t, ids]);
+        const dependenciesAll = await rows(pool, 'SELECT d.* FROM work_dependencies d JOIN works w ON w.id=d.successor_work_id AND w.tenant_id=d.tenant_id WHERE d.tenant_id=$1 AND w.object_id=ANY($2::uuid[])', [t, ids]);
+        const keptWorkIds = new Set(works.map((w: any) => w.id));
+        const dependencies = a.role === 'PTO' ? dependenciesAll.filter((d: any) => keptWorkIds.has(d.successorWorkId) && keptWorkIds.has(d.predecessorWorkId)) : dependenciesAll;
         // F8.1 Production Execution + Construction Control Foundation. Scoped by
         // work id, not directly by object id — work_execution_units joins to
         // works, quantity_portions/portion_quantity_confirmations chain from
@@ -315,7 +330,7 @@ export class ReadService {
         }
         const objectList = objects.map(o => { const ws = enriched.filter(w => w.objectId === o.id); const cost = ws.reduce((s, w) => s + Number(w.estimatedCost), 0); const weighted = (field: string) => cost ? ws.reduce((s, w) => s + Number(w.estimatedCost) * (w[field] ?? 0), 0) / cost : ws.length ? ws.reduce((s, w) => s + (w[field] ?? 0), 0) / ws.length : null; const sum = (field: string) => ws.reduce((s, w) => s.add(w.financial[field]), new Decimal(0)).toFixed(2); const active = activeAssignments.filter(x => x.objectId === o.id); return { ...o, contractorIds: active.map(x => x.contractorId), contractors: active.map(x => x.contractorName), actualProgress: weighted('actualProgress'), plannedProgress: weighted('plannedProgress'), closed: sum('closed'), potential: sum('potential'), healthStatus: new ObjectHealthService().calculate({ statuses: ws.map(w => w.scheduleStatus), criticalIssues: issues.filter(i => i.objectId === o.id && i.severity === 'CRITICAL' && i.status !== 'CLOSED').length, overdueIssues: issues.filter(i => i.objectId === o.id && i.status !== 'CLOSED' && age(i.dueDate) > 0).length, stale: ws.some(w => w.stale && w.actualProgress < 100), blocked: ws.some(w => w.blockers.length && w.delayDays > 0), ptoLate: attentionRequired.some(x => x.objectId === o.id && x.entityType === 'Package'), sdoLate: attentionRequired.some(x => x.objectId === o.id && x.entityType === 'SdoCase') }) }; });
         const total = (field: string) => objectList.reduce((s, o) => s.add(o[field]), new Decimal(0)).toFixed(2);
-        const monthly = await rows(pool, 'SELECT * FROM monthly_plans WHERE tenant_id=$1 AND object_id=ANY($2::uuid[])', [t, ids]);
+        const monthly = scopeByWork(await rows(pool, 'SELECT * FROM monthly_plans WHERE tenant_id=$1 AND object_id=ANY($2::uuid[])', [t, ids]));
         const period = today.toISOString().slice(0, 7);
         const closedThisMonth = closings.filter(f => f.period === period).reduce((s, f) => s.add(f.amount), new Decimal(0));
         const available = sdo.filter(s => ['CALCULATED', 'READY_TO_CLOSE'].includes(s.status)).reduce((sum, s) => sum.add(Decimal.max(0, new Decimal(s.acceptedClosingValue ?? 0).minus(closings.filter(f => f.sdoCaseId === s.id).reduce((v, f) => v.add(f.amount), new Decimal(0))))), new Decimal(0));

@@ -1,6 +1,6 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
 import { pool, transaction, one, rows, insert } from './db';
-import { Actor, requirePermission, scoped, objectAccess, audit, ensure } from './security';
+import { Actor, requirePermission, scoped, objectAccess, workAccess, effectivePtoWorkAssignment, audit, ensure } from './security';
 import { Permission as P, canAccessDocumentation } from '../../../packages/domain';
 import { lockTeamScope } from './team-service';
 
@@ -35,9 +35,11 @@ export class PtoWorkAssignmentService {
         if (!canAccessDocumentation(a.role))
             throw new ForbiddenException('Недостаточно прав: доступ к исполнительной документации');
         const w = await scoped(pool, 'works', workId, a);
-        await objectAccess(pool, a, w.objectId);
+        await workAccess(pool, a, w); // PTO engineer: object member or EFFECTIVE assignee of this exact work
         const elig = await resolvePtoWorkEligibility(pool, a.tenantId, w.objectId);
-        const current = await activePtoWorkAssignment(pool, a.tenantId, workId);
+        // Only an EFFECTIVE assignment is reported (stale rows — assignee left the head's team, deactivated, head changed — are not);
+        // assign() (not this read) decides whether a stale row can be superseded.
+        const current = await effectivePtoWorkAssignment(pool, a.tenantId, workId);
         const user = current ? await one(pool, 'SELECT name FROM users WHERE tenant_id=$1 AND id=$2', [a.tenantId, current.assigneeUserId]) : null;
         const by = current ? await one(pool, 'SELECT name FROM users WHERE tenant_id=$1 AND id=$2', [a.tenantId, current.assignedBy]) : null;
         const pkgs = await one(pool, 'SELECT count(*)::int AS n FROM documentation_packages WHERE tenant_id=$1 AND object_work_id=$2', [a.tenantId, workId]);

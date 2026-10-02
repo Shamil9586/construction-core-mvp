@@ -403,10 +403,13 @@ test('PBX-3A PTO object scope: PTO/PTO_HEAD operate only on assigned objects; pa
     // leadership oversight keeps the whole portfolio (read-only)
     await h.login('GENERAL_DIRECTOR'); assert.equal((await h.req('objects')).length >= 2, true);
     await h.login(DEPUTY); assert.equal((await h.req('objects')).length >= 2, true);
-    // ADMIN override on operational writes, but the responsible must still be on the team
+    // ADMIN keeps its administrative create path ONLY for a currently valid handoff assignee (PILOT-W01 UI03): no handoff on B => denied
+    // whoever is named; on A (eng is the effective assignee) it works for eng and for nobody else.
     await h.login('ADMIN');
-    assert.equal((await h.raw('documentation-packages', { objectWorkId: B.work.id, responsibleUserId: eng.id })).status, 400);
-    assert.equal((await h.raw('documentation-packages', { objectWorkId: B.work.id, responsibleUserId: notLead.id })).status, 201);
+    assert.equal((await h.raw('documentation-packages', { objectWorkId: B.work.id, responsibleUserId: eng.id })).status, 403);
+    assert.equal((await h.raw('documentation-packages', { objectWorkId: B.work.id, responsibleUserId: notLead.id })).status, 403);
+    assert.equal((await h.raw('documentation-packages', { objectWorkId: A.work.id, responsibleUserId: stranger.id })).status, 403);
+    assert.equal((await h.raw('documentation-packages', { objectWorkId: A.work.id, responsibleUserId: eng.id })).status, 201);
     // Edit responsible on an existing package: new responsible must also be current on the team
     await h.as(head);
     const edited = (r: any) => h.raw(`documentation-packages/${p.id}/edit`, r);

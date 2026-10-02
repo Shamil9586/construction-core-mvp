@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { pool, rows } from '../../db';
 import { ProductionService } from '../../service';
 import { ReadService } from '../../read-service';
-import { authenticate, scoped, objectAccess, requirePermission, ensure } from '../../security';
+import { authenticate, scoped, objectAccess, workAccess, requirePermission, ensure } from '../../security';
 import { Permission as P } from '../../../../../packages/domain';
 import * as V from '../../validation';
 @Controller()
@@ -23,7 +23,7 @@ export class WorksController {
     @Req()
     r: any,
     @Param('id')
-    id: string) { const a = await authenticate(r); const w = await scoped(pool, 'works', V.uuid.parse(id), a); await objectAccess(pool, a, w.objectId); ensure(a.role !== 'CONTRACTOR_VIEWER' || a.contractorId === w.contractorId, 'Работа другого подрядчика'); return (await this.read.snapshot(a)).works.find(w => w.id === id); }
+    id: string) { const a = await authenticate(r); const w = await scoped(pool, 'works', V.uuid.parse(id), a); await workAccess(pool, a, w); ensure(a.role !== 'CONTRACTOR_VIEWER' || a.contractorId === w.contractorId, 'Работа другого подрядчика'); return (await this.read.snapshot(a)).works.find(w => w.id === id); }
     @Get('works/:id/transition')
     async transition(
     @Req()
@@ -49,7 +49,7 @@ export class WorksController {
     @Req()
     r: any,
     @Param('id')
-    id: string) { const a = await authenticate(r), w = await scoped(pool, 'works', V.uuid.parse(id), a); await objectAccess(pool, a, w.objectId); requirePermission(a, P.WORK_VIEW); ensure(a.role !== 'CONTRACTOR_VIEWER' || a.contractorId === w.contractorId, 'Работа другого подрядчика'); return rows(pool, 'SELECT * FROM work_progress WHERE tenant_id=$1 AND object_work_id=$2 ORDER BY reported_at', [a.tenantId, id]); }
+    id: string) { const a = await authenticate(r), w = await scoped(pool, 'works', V.uuid.parse(id), a); await workAccess(pool, a, w); requirePermission(a, P.WORK_VIEW); ensure(a.role !== 'CONTRACTOR_VIEWER' || a.contractorId === w.contractorId, 'Работа другого подрядчика'); return rows(pool, 'SELECT * FROM work_progress WHERE tenant_id=$1 AND object_work_id=$2 ORDER BY reported_at', [a.tenantId, id]); }
     @Post('works/:id/start')
     async start(
     @Req()

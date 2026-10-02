@@ -1,6 +1,6 @@
 import { ForbiddenException, UnauthorizedException, ConflictException, NotFoundException, BadRequestException } from '@nestjs/common';
 import { createHash, randomBytes, timingSafeEqual, createCipheriv, createDecipheriv } from 'node:crypto';
-import { pool, one, insert } from './db';
+import { pool, one, rows, insert } from './db';
 import { hasPermission, isPtoRole, Permission, Role } from '../../../packages/domain';
 export type Actor = {
     id: string;
@@ -27,7 +27,7 @@ export async function scoped(c: any, table: string, id: string, a: Actor, lock =
     throw new NotFoundException('Запись не найдена'); return row; }
 export async function objectAccess(c: any, a: Actor, objectId: string, write = false) { const o = await scoped(c, 'objects', objectId, a); if (a.role === 'PROJECT_MANAGER' && o.projectManagerId !== a.id)
     throw new ForbiddenException('Объект закреплён за другим РП'); if (a.role === 'CONTRACTOR_VIEWER' && (!a.contractorId || !(await one(c, 'SELECT id FROM object_contractors_active WHERE tenant_id=$1 AND object_id=$2 AND contractor_id=$3', [a.tenantId, objectId, a.contractorId]))))
-    throw new ForbiddenException('Нет доступа к объекту'); await ensurePtoObjectScope(c, a, objectId); return o; }
+    throw new ForbiddenException('Нет доступа к объекту'); await ensurePtoObjectScope(c, a, objectId, write); return o; }
 export async function audit(c: any, a: Actor, entityType: string, entityId: string, action: string, oldValue: any, newValue: any, eventType?: string) { await insert(c, 'audit_logs', a.tenantId, { userId: a.id, entityType, entityId, action, oldValue: oldValue ? JSON.stringify(oldValue) : null, newValue: JSON.stringify(newValue) }); if (eventType) {
     const event = await insert(c, 'domain_events', a.tenantId, { eventType, entityId, payload: JSON.stringify({ actorId: a.id, entityType, entityId }) });
     const users = (await c.query("SELECT id FROM users WHERE tenant_id=$1 AND is_active=true AND role IN ('PTO','PTO_HEAD','DEPUTY_DIRECTOR','GENERAL_DIRECTOR','CONSTRUCTION_CONTROL','CONSTRUCTION_CONTROL_HEAD','SDO','SDO_HEAD','PROJECT_MANAGER')", [a.tenantId])).rows;
@@ -156,22 +156,50 @@ export async function isCurrentPtoLead(c: any, tenantId: string, objectId: strin
 export async function isCurrentPtoMember(c: any, tenantId: string, objectId: string, userId: string): Promise<boolean> {
     return !!(await one(c, "SELECT 1 FROM object_function_member_assignments WHERE tenant_id=$1 AND object_id=$2 AND function_code='PTO' AND member_user_id=$3 AND ended_at IS NULL", [tenantId, objectId, userId]));
 }
-// PILOT-W01 UI03: an ACTIVE PTO work assignment (pto_work_assignments, the PTO_HEAD's «Передать в работу») is
-// work-scoped PTO access for its assignee — no object-team membership is required or created. It lasts exactly as
-// long as the assignment AND while the assignee is still on the object's current PTO_HEAD's functional team (the same
-// rule as eligibility): reassignment, or a team change, ends the access. Never granted to anyone else.
-export async function hasActivePtoWorkAssignmentOnObject(c: any, tenantId: string, objectId: string, userId: string): Promise<boolean> {
-    return !!(await one(c, `SELECT 1 FROM pto_work_assignments pa
-        JOIN object_function_lead_assignments l ON l.tenant_id=pa.tenant_id AND l.object_id=pa.object_id AND l.function_code='PTO' AND l.ended_at IS NULL
-        JOIN functional_team_memberships t ON t.tenant_id=pa.tenant_id AND t.function_code='PTO' AND t.manager_user_id=l.lead_user_id AND t.member_user_id=pa.assignee_user_id AND t.ended_at IS NULL
-        WHERE pa.tenant_id=$1 AND pa.object_id=$2 AND pa.assignee_user_id=$3 AND pa.ended_at IS NULL`, [tenantId, objectId, userId]));
+// PILOT-W01 UI03 — WORK-scoped PTO access from a persisted handoff (pto_work_assignments, «Передать в работу»).
+// An assignment is EFFECTIVE only at action time and only if ALL hold: it is the active row for that exact work; the
+// assignee is an active PTO of the same tenant; the object still has a current active PTO_HEAD; and the assignee is
+// still a current member of THAT head's functional PTO team. A stale row (assignee left the team, deactivated,
+// head changed, row superseded by reassignment) authorizes nothing. No object-team membership is read or created here.
+const EFFECTIVE_PTO_ASSIGNMENT_SQL = `SELECT pa.* FROM pto_work_assignments pa
+    JOIN object_function_lead_assignments l ON l.tenant_id=pa.tenant_id AND l.object_id=pa.object_id AND l.function_code='PTO' AND l.ended_at IS NULL
+    JOIN users h ON h.tenant_id=l.tenant_id AND h.id=l.lead_user_id AND h.is_active=true AND h.role='PTO_HEAD'
+    JOIN functional_team_memberships t ON t.tenant_id=pa.tenant_id AND t.function_code='PTO' AND t.manager_user_id=l.lead_user_id AND t.member_user_id=pa.assignee_user_id AND t.ended_at IS NULL
+    JOIN users u ON u.tenant_id=pa.tenant_id AND u.id=pa.assignee_user_id AND u.is_active=true AND u.role='PTO'
+    WHERE pa.tenant_id=$1 AND pa.ended_at IS NULL`;
+export async function effectivePtoWorkAssignment(c: any, tenantId: string, workId: string) {
+    return one(c, EFFECTIVE_PTO_ASSIGNMENT_SQL + ' AND pa.object_work_id=$2', [tenantId, workId]);
 }
-export async function ensurePtoObjectScope(c: any, a: Actor, objectId: string) {
+export async function isEffectivePtoWorkAssignee(c: any, tenantId: string, workId: string, userId: string): Promise<boolean> {
+    const e = await effectivePtoWorkAssignment(c, tenantId, workId);
+    return !!e && e.assigneeUserId === userId;
+}
+/** Ids of the works the user is the EFFECTIVE assignee of (snapshot scoping and object-shell navigation). */
+export async function effectivePtoAssignedWork(c: any, tenantId: string, userId: string): Promise<{ objectId: string; objectWorkId: string }[]> {
+    return rows(c, EFFECTIVE_PTO_ASSIGNMENT_SQL + ' AND pa.assignee_user_id=$2', [tenantId, userId]);
+}
+export async function ensurePtoObjectScope(c: any, a: Actor, objectId: string, write = false) {
     if (!isPtoRole(a.role))
         return;
-    const allowed = a.role === 'PTO_HEAD' ? await isCurrentPtoLead(c, a.tenantId, objectId, a.id) : (await isCurrentPtoMember(c, a.tenantId, objectId, a.id)) || (await hasActivePtoWorkAssignmentOnObject(c, a.tenantId, objectId, a.id));
+    // Object-level: PBX-3A membership (unchanged). Object SHELL (navigation/read) is also open to an engineer with an
+    // effective handoff on some work of the object — never object-level WRITE, and never work data (see workAccess).
+    const shell = a.role === 'PTO' && !write ? (await effectivePtoAssignedWork(c, a.tenantId, a.id)).some((w: any) => w.objectId === objectId) : false;
+    const allowed = a.role === 'PTO_HEAD' ? await isCurrentPtoLead(c, a.tenantId, objectId, a.id) : (await isCurrentPtoMember(c, a.tenantId, objectId, a.id)) || shell;
     if (!allowed)
         throw new ForbiddenException(a.role === 'PTO_HEAD' ? 'Вы не являетесь текущим начальником ПТО этого объекта' : 'Вы не назначены на ПТО этого объекта');
+}
+/**
+ * Work-level access (PILOT-W01). Every role other than PTO is exactly objectAccess(). A PTO engineer needs either generic
+ * PBX-3A object membership (unchanged semantics) or to be the EFFECTIVE assignee of THIS exact work; an assignment on a
+ * sibling work of the same object grants nothing here.
+ */
+export async function workAccess(c: any, a: Actor, work: { id: string; objectId: string }, write = false) {
+    if (a.role !== 'PTO')
+        return objectAccess(c, a, work.objectId, write);
+    const o = await scoped(c, 'objects', work.objectId, a);
+    if ((await isCurrentPtoMember(c, a.tenantId, work.objectId, a.id)) || (await isEffectivePtoWorkAssignee(c, a.tenantId, work.id, a.id)))
+        return o;
+    throw new ForbiddenException('Вы не назначены на ПТО этой работы');
 }
 // PBX-3A (PBX3-D08): a PTO responsible selected for an object's documentation
 // package must be active AND currently on that object's PTO team — a current

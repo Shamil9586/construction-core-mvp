@@ -574,6 +574,20 @@ test('W01 (PILOT-W01 UI03): an engineer who is NOT the assignee sees who is resp
   await expect(section.getByLabel('Сотрудник ПТО')).toHaveCount(0);
 });
 
+test('W01 (PILOT-W01 work scope): a PTO engineer whose handoff is no longer effective (server reports no assignment, canCreatePackage=false) is offered no "Создать пакет ИД"', async ({
+  page,
+}) => {
+  const state = makeState(PTO); // the backend view for this actor: assignment null, canCreatePackage false (e.g. left the head's team)
+  await seedSession(page, 'f8-2-1-browser-token-w01-stale');
+  await mockApi(page, state);
+
+  await page.goto(`/app.html/object/${OBJECT_A}/work/${WORK_NEW}`);
+  const section = page.locator('section', { hasText: 'Исполнительная документация' });
+  await expect(section.getByText('Не передано в работу')).toBeVisible();
+  await expect(section.getByRole('button')).toHaveCount(0);
+  expect(state.packages.length).toBe(0);
+});
+
 test('W01 (PILOT-W01 UI03): the assigned PTO_HEAD hands the work off from a team-scoped picker — assignment persists, NO package is created, and the head never gets "Создать пакет ИД"', async ({
   page,
 }) => {
