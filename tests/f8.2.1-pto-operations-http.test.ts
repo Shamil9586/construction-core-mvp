@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { handoffWorkToPto } from './helpers/pbx3-fixtures';
 
 /**
  * F8.2.1 PTO Operations Layer — HTTP-level. Step 3 ("Backend: добавить API.
@@ -70,6 +71,7 @@ test('F8.2.1 HTTP: DRAFT -> PREPARING passes, DRAFT -> PRESENTED is refused (400
   try {
     const { work } = await setUpObjectAndWork(req, login, 'F821-TRANS-' + Date.now(), 'F8.2.1 переходы статусов');
     const pto = await login('PTO');
+    await handoffWorkToPto(work.id);
     const pkg = await req('documentation-packages', { objectWorkId: work.id, responsibleUserId: pto.id });
     assert.equal(pkg.status, 'DRAFT');
 
@@ -91,6 +93,7 @@ test('F8.2.1 HTTP (Corrective F8.2.1-01): the full allowed chain succeeds end to
   try {
     const { work } = await setUpObjectAndWork(req, login, 'F821-CHAIN-' + Date.now(), 'F8.2.1 полная цепочка');
     const pto = await login('PTO');
+    await handoffWorkToPto(work.id);
     let pkg = await req('documentation-packages', { objectWorkId: work.id, responsibleUserId: pto.id });
 
     pkg = await req(`documentation-packages/${pkg.id}/status`, { status: 'PREPARING', version: pkg.version });
@@ -126,6 +129,7 @@ test('F8.2.1 HTTP (Corrective F8.2.1-01): CORRECTING is reachable only through R
   try {
     const { work } = await setUpObjectAndWork(req, login, 'F821-CORR-GUARD-' + Date.now(), 'F8.2.1 защита CORRECTING');
     const pto = await login('PTO');
+    await handoffWorkToPto(work.id);
     const pkg = await req('documentation-packages', { objectWorkId: work.id, responsibleUserId: pto.id });
 
     // DRAFT -> CORRECTING is not a listed edge.
@@ -151,6 +155,7 @@ test('F8.2.1 HTTP: a backward or skip-ahead transition is refused even for an ot
   try {
     const { work } = await setUpObjectAndWork(req, login, 'F821-SKIP-' + Date.now(), 'F8.2.1 пропуск шага');
     const pto = await login('PTO');
+    await handoffWorkToPto(work.id);
     const pkg = await req('documentation-packages', { objectWorkId: work.id, responsibleUserId: pto.id });
     // DRAFT -> READY_FOR_PRESENTATION skips PREPARING entirely.
     await req(`documentation-packages/${pkg.id}/status`, { status: 'READY_FOR_PRESENTATION', version: pkg.version }, 400);
@@ -177,6 +182,7 @@ test('F8.2.1 HTTP: a work with no package appears in the queue; READY_FOR_PRESEN
     assert.ok(beforeItem, 'a work with no documentation package at all must appear in the queue');
     assert.equal(beforeItem.level, 'RED');
 
+    await handoffWorkToPto(work.id);
     let pkg = await req('documentation-packages', { objectWorkId: work.id, responsibleUserId: pto.id });
     const afterCreate = await req('snapshot');
     const afterCreateItem = afterCreate.documentationAttentionQueue.find((item: any) => item.objectWorkId === work.id);
@@ -218,7 +224,9 @@ test('F8.2.1 HTTP (Corrective F8.2.1-03): creating a second package for a work t
   try {
     const { work } = await setUpObjectAndWork(req, login, 'F821-MULTI-' + Date.now(), 'F8.2.1 несколько пакетов');
     const pto = await login('PTO');
+    await handoffWorkToPto(work.id);
     const first = await req('documentation-packages', { objectWorkId: work.id, responsibleUserId: pto.id });
+    await handoffWorkToPto(work.id);
     const second = await req('documentation-packages', { objectWorkId: work.id, responsibleUserId: pto.id });
 
     assert.notEqual(first.id, second.id);
@@ -244,6 +252,7 @@ test('F8.2.1 HTTP: RP and SC can read a package\'s status but cannot change it',
   try {
     const { work, pm } = await setUpObjectAndWork(req, login, 'F821-ROLE-' + Date.now(), 'F8.2.1 роли');
     const pto = await login('PTO');
+    await handoffWorkToPto(work.id);
     const pkg = await req('documentation-packages', { objectWorkId: work.id, responsibleUserId: pto.id });
 
     await login('PROJECT_MANAGER');

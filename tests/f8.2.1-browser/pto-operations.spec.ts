@@ -31,6 +31,11 @@ const PTO = { id: 'u-pto', tenantId: 't-1', name: 'Ольга Морозова',
 const RP = { id: 'u-pm', tenantId: 't-1', name: 'Пётр Петров', role: 'PROJECT_MANAGER' };
 const SDO = { id: 'u-sdo', tenantId: 't-1', name: 'Сергей Сидоров', role: 'SDO' };
 const ADMIN = { id: 'u-admin', tenantId: 't-1', name: 'Админов Админ Админович', role: 'ADMIN' };
+// PILOT-W01 UI03 — the object's assigned PTO_HEAD, a PTO_HEAD of some other object, and an engineer
+// who is a tenant PTO user but NOT on the object head's functional team (must never be offered).
+const HEAD = { id: 'u-head', tenantId: 't-1', name: 'Игорь Начальников', role: 'PTO_HEAD' };
+const OTHER_HEAD = { id: 'u-head-other', tenantId: 't-1', name: 'Чужой Начальник', role: 'PTO_HEAD' };
+const OUTSIDER = { id: 'u-outsider', name: 'Чужая Команда', role: 'PTO', bitrixUserId: null };
 
 // F8.2.1-04 (Corrective Patch) — GET /api/users' own fixture, standing in
 // for the real `SELECT id,name,role,bitrix_user_id FROM users WHERE
@@ -42,6 +47,7 @@ const PTO_USER_2 = { id: 'u-pto-2', name: 'Виктор Волков', role: 'PT
 const ALL_USERS = [
   { id: PTO.id, name: PTO.name, role: 'PTO', bitrixUserId: null },
   PTO_USER_2,
+  OUTSIDER,
   { id: RP.id, name: RP.name, role: 'PROJECT_MANAGER', bitrixUserId: null },
 ];
 
@@ -127,10 +133,18 @@ interface State {
   versions: FakeVersion[];
   statusHistory: FakeHistoryEntry[];
   counter: number;
+  /** PILOT-W01 UI03 — persisted PTO work assignments: workId -> assigned engineer id. */
+  assignments: Record<string, string>;
+  /** `false` models an object with no assigned PTO_HEAD. */
+  hasHead: boolean;
+  lastCreateBody: Record<string, unknown> | null;
 }
 
-function makeState(actor: Actor, initialPackages: FakePackage[] = []): State {
+function makeState(actor: Actor, initialPackages: FakePackage[] = [], assignments: Record<string, string> = {}): State {
   return {
+    assignments,
+    hasHead: true,
+    lastCreateBody: null,
     actor,
     packages: initialPackages,
     packagePortions: [],
@@ -323,22 +337,54 @@ function handleApi(
   if (method === 'GET' && path === '/api/snapshot') return { status: 200, body: buildSnapshot(state) };
   if (method === 'GET' && path === '/api/users') return { status: 200, body: ALL_USERS };
 
-  if (method === 'POST' && path === '/api/documentation-packages') {
-    const body = request.postDataJSON() as { objectWorkId: string; responsibleUserId: string };
-    // F8.2.1-04 — the real backend rejects anything but an active PTO user;
-    // this mock enforces the same rule so a test that (by mistake, or by a
-    // regression) sends the wrong id fails loudly here rather than silently
-    // succeeding against a lenient fake.
-    const responsibleUser = ALL_USERS.find((u) => u.id === body.responsibleUserId);
-    if (!responsibleUser || responsibleUser.role !== 'PTO') {
-      return { status: 400, body: { message: 'Назначьте активного сотрудника ПТО' } };
+  // PILOT-W01 UI03 — mirrors PtoWorkAssignmentService: eligibility is the assigned head's team (never /api/users),
+  // only the object's head (or ADMIN) may assign, only the assignee (or ADMIN) may create the package.
+  const ELIGIBLE = [{ id: PTO.id, name: PTO.name }, { id: PTO_USER_2.id, name: PTO_USER_2.name }];
+  const assignMatch = path.match(/^\/api\/works\/([^/]+)\/pto-assignment$/);
+  if (assignMatch) {
+    const workId = assignMatch[1]!;
+    const role = state.actor.role;
+    if (role === 'SDO' || (role === 'PTO_HEAD' && state.actor.id !== HEAD.id)) return { status: 403, body: { message: 'Нет доступа' } };
+    const canAssign = role === 'ADMIN' || (role === 'PTO_HEAD' && state.hasHead && state.actor.id === HEAD.id);
+    if (method === 'GET') {
+      const assigneeId = state.assignments[workId];
+      const assignee = ALL_USERS.find((u) => u.id === assigneeId);
+      return {
+        status: 200,
+        body: {
+          objectWorkId: workId,
+          objectId: OBJECT_A,
+          head: state.hasHead ? { id: HEAD.id, name: HEAD.name } : null,
+          assignment: assignee ? { id: 'assignment-1', assigneeUserId: assignee.id, assigneeName: assignee.name, assignedByName: HEAD.name, assignedAt: '2026-10-01T00:00:00Z', version: 1 } : null,
+          eligible: canAssign && state.hasHead ? ELIGIBLE : [],
+          packageCount: state.packages.filter((p) => p.objectWorkId === workId).length,
+          canAssign,
+          canReassign: canAssign && !!assignee && !state.packages.some((p) => p.objectWorkId === workId),
+          canCreatePackage: !!assignee && (role === 'ADMIN' || (role === 'PTO' && state.actor.id === assigneeId)),
+        },
+      };
     }
+    const body = request.postDataJSON() as { assigneeUserId: string };
+    if (!canAssign) return { status: 403, body: { message: 'Передать работу в ПТО может только текущий начальник ПТО этого объекта' } };
+    if (!ELIGIBLE.some((e) => e.id === body.assigneeUserId) || !state.hasHead) return { status: 400, body: { message: 'Сотрудник не входит в команду ПТО этого объекта' } };
+    state.assignments[workId] = body.assigneeUserId;
+    return { status: 201, body: { id: 'assignment-1' } };
+  }
+
+  if (method === 'POST' && path === '/api/documentation-packages') {
+    const body = request.postDataJSON() as { objectWorkId: string; responsibleUserId?: string };
+    state.lastCreateBody = body;
+    const assigneeId = state.assignments[body.objectWorkId];
+    const allowed = !!assigneeId && (state.actor.role === 'ADMIN' || (state.actor.role === 'PTO' && state.actor.id === assigneeId));
+    if (!allowed) return { status: 403, body: { message: 'Пакет ИД может создать только сотрудник ПТО, назначенный на эту работу' } };
+    if (body.responsibleUserId !== undefined && body.responsibleUserId !== assigneeId) return { status: 403, body: { message: 'Ответственным за пакет является назначенный сотрудник ПТО' } };
+    const responsibleUser = ALL_USERS.find((u) => u.id === assigneeId)!;
     const pkg: FakePackage = {
       id: nextId(state, 'package'),
       objectId: OBJECT_A,
       objectWorkId: body.objectWorkId,
       status: 'DRAFT',
-      responsibleUserId: body.responsibleUserId,
+      responsibleUserId: assigneeId,
       responsible: responsibleUser.name,
       createdBy: state.actor.id,
       version: 1,
@@ -434,7 +480,7 @@ function draftPackage(): FakePackage {
   };
 }
 
-test('P01: the attention queue shows a RED reason + "Создать пакет" for a work with no package, and a YELLOW reason + "Открыть" for one with a DRAFT package', async ({
+test('P01: the attention queue shows a RED reason + "К работе" (no package creation here) for a work with no package, and a YELLOW reason + "Открыть" for one with a DRAFT package', async ({
   page,
 }) => {
   const state = makeState(PTO, [draftPackage()]);
@@ -446,26 +492,27 @@ test('P01: the attention queue shows a RED reason + "Создать пакет" 
 
   const table = page.locator('table', { hasText: 'Очередь ПТО' });
   const rowNew = table.locator('tr', { hasText: 'Устройство кровли' });
-  await expect(rowNew).toContainText('🔴');
   await expect(rowNew).toContainText('Нет пакета ИД');
-  await expect(rowNew.getByRole('button', { name: 'Создать пакет' })).toBeVisible();
+  await expect(rowNew.getByRole('button', { name: 'К работе' })).toBeVisible();
+  await expect(rowNew.getByRole('button', { name: /Создать пакет/ })).toHaveCount(0);
 
   const rowDraft = table.locator('tr', { hasText: 'Штукатурка стен' });
-  await expect(rowDraft).toContainText('🟡');
   await expect(rowDraft).toContainText('Документы формируются');
   await expect(rowDraft.getByRole('button', { name: 'Открыть' })).toBeVisible();
 });
 
-test('P01 → package detail: create a package, link a portion, create a document, add a version, advance status — the full PTO flow in one pass', async ({
+test('P01 → W01 → package detail: open the work, the assigned engineer creates the package, link a portion, create a document, add a version, advance status — the full PTO flow in one pass', async ({
   page,
 }) => {
-  const state = makeState(PTO);
+  const state = makeState(PTO, [], { [WORK_NEW]: PTO.id });
   await seedSession(page, 'f8-2-1-browser-token-golden');
   await mockApi(page, state);
 
   await page.goto('/app.html/pto');
   const table = page.locator('table', { hasText: 'Очередь ПТО' });
-  await table.locator('tr', { hasText: 'Устройство кровли' }).getByRole('button', { name: 'Создать пакет' }).click();
+  await table.locator('tr', { hasText: 'Устройство кровли' }).getByRole('button', { name: 'К работе' }).click();
+  const section = page.locator('section', { hasText: 'Исполнительная документация' });
+  await section.getByRole('button', { name: 'Создать пакет ИД' }).click();
 
   await expect(page.getByRole('heading', { level: 1, name: 'Устройство кровли' })).toBeVisible();
   await expect(page.getByText('Черновик')).toBeVisible();
@@ -488,10 +535,10 @@ test('P01 → package detail: create a package, link a portion, create a documen
   await expect(page.getByRole('button', { name: 'Отметить готовность к предъявлению' })).toBeVisible();
 });
 
-test('W01: "Создать пакет" creates a package and opens the same package detail screen P01\'s own action opens', async ({
+test('W01: the assigned engineer sees "Создать пакет ИД"; it creates a package (no responsible id sent) and opens the package detail screen', async ({
   page,
 }) => {
-  const state = makeState(PTO);
+  const state = makeState(PTO, [], { [WORK_NEW]: PTO.id });
   await seedSession(page, 'f8-2-1-browser-token-w01-create');
   await mockApi(page, state);
 
@@ -500,37 +547,86 @@ test('W01: "Создать пакет" creates a package and opens the same pack
 
   const section = page.locator('section', { hasText: 'Исполнительная документация' });
   await expect(section.getByText('Пакет исполнительной документации ещё не создан')).toBeVisible();
-  await section.getByRole('button', { name: 'Создать пакет' }).click();
+  await expect(section.getByText('Передано в работу')).toBeVisible();
+  await section.getByRole('button', { name: 'Создать пакет ИД' }).click();
 
   await expect(page.getByRole('heading', { level: 1, name: 'Устройство кровли' })).toBeVisible();
   await expect(page.getByText('Черновик')).toBeVisible();
+  expect(state.lastCreateBody).toEqual({ objectWorkId: WORK_NEW });
+  expect(state.packages[0]!.responsibleUserId).toBe(PTO.id);
 });
 
-test('P01 (Corrective F8.2.1-03): a work with an existing package still offers "Создать ещё один пакет" alongside "Открыть", creating a second, distinct package', async ({
+test('W01 (PILOT-W01 UI03): an engineer who is NOT the assignee sees who is responsible, but no "Создать пакет ИД" and no picker', async ({
   page,
 }) => {
-  const state = makeState(PTO, [draftPackage()]);
-  await seedSession(page, 'f8-2-1-browser-token-multi-p01');
+  const state = makeState(PTO, [], { [WORK_NEW]: PTO_USER_2.id });
+  await seedSession(page, 'f8-2-1-browser-token-w01-unassigned');
   await mockApi(page, state);
 
-  await page.goto('/app.html/pto');
-  const table = page.locator('table', { hasText: 'Очередь ПТО' });
-  const row = table.locator('tr', { hasText: 'Штукатурка стен' });
-  await expect(row.getByRole('button', { name: 'Открыть' })).toBeVisible();
-  await row.getByRole('button', { name: 'Создать ещё один пакет' }).click();
+  await page.goto(`/app.html/object/${OBJECT_A}/work/${WORK_NEW}`);
+  const section = page.locator('section', { hasText: 'Исполнительная документация' });
+  await expect(section.getByText('Передано в работу')).toBeVisible();
+  await expect(section.getByText(PTO_USER_2.name)).toBeVisible();
+  await expect(section.getByRole('button')).toHaveCount(0);
+  await expect(section.getByLabel('Сотрудник ПТО')).toHaveCount(0);
+});
 
-  await expect(page.getByRole('heading', { level: 1, name: 'Штукатурка стен' })).toBeVisible();
-  await expect(page.getByText('Черновик', { exact: true })).toBeVisible();
+test('W01 (PILOT-W01 UI03): the assigned PTO_HEAD hands the work off from a team-scoped picker — assignment persists, NO package is created, and the head never gets "Создать пакет ИД"', async ({
+  page,
+}) => {
+  const state = makeState(HEAD);
+  await seedSession(page, 'f8-2-1-browser-token-w01-head');
+  await mockApi(page, state);
 
-  expect(state.packages.length).toBe(2);
-  expect(state.packages[0]!.id).not.toBe(state.packages[1]!.id);
-  expect(state.packages.every((p) => p.objectWorkId === WORK_DRAFT)).toBe(true);
+  await page.goto(`/app.html/object/${OBJECT_A}/work/${WORK_NEW}`);
+  const section = page.locator('section', { hasText: 'Исполнительная документация' });
+  const picker = section.getByLabel('Сотрудник ПТО');
+  await expect(picker).toBeVisible();
+  // only the head's own team: never the tenant-wide PTO list (OUTSIDER is in /api/users but not eligible)
+  await expect(picker.locator('option')).toHaveText(['Выберите сотрудника ПТО…', PTO.name, PTO_USER_2.name]);
+  await expect(section.getByRole('button', { name: 'Передать в работу' })).toBeDisabled();
+  await expect(section.getByRole('button', { name: /Создать пакет/ })).toHaveCount(0);
+
+  await picker.selectOption({ label: PTO_USER_2.name });
+  await section.getByRole('button', { name: 'Передать в работу' }).click();
+
+  await expect(section.getByText('Передано в работу')).toBeVisible();
+  await expect(section.getByText(PTO_USER_2.name)).toBeVisible();
+  await expect(section.getByRole('button', { name: /Создать пакет/ })).toHaveCount(0);
+  await expect(page.getByRole('heading', { level: 1, name: 'Устройство кровли' })).toBeVisible();
+  expect(state.assignments[WORK_NEW]).toBe(PTO_USER_2.id);
+  expect(state.packages.length).toBe(0);
+});
+
+test('W01 (PILOT-W01 UI03): another PTO_HEAD gets no handoff control for an object they do not lead', async ({ page }) => {
+  const state = makeState(OTHER_HEAD);
+  await seedSession(page, 'f8-2-1-browser-token-w01-other-head');
+  await mockApi(page, state);
+
+  await page.goto(`/app.html/object/${OBJECT_A}/work/${WORK_NEW}`);
+  const section = page.locator('section', { hasText: 'Исполнительная документация' });
+  await expect(section.getByText('Пакет исполнительной документации ещё не создан')).toBeVisible();
+  await expect(section.getByRole('button')).toHaveCount(0);
+  await expect(section.getByLabel('Сотрудник ПТО')).toHaveCount(0);
+});
+
+test('W01 (PILOT-W01 UI02): no assigned PTO_HEAD on the object shows an explicit unavailable state — never a tenant-wide list', async ({ page }) => {
+  const state = makeState(ADMIN);
+  state.hasHead = false;
+  await seedSession(page, 'f8-2-1-browser-token-w01-no-head');
+  await mockApi(page, state);
+
+  await page.goto(`/app.html/object/${OBJECT_A}/work/${WORK_NEW}`);
+  const section = page.locator('section', { hasText: 'Исполнительная документация' });
+  await expect(section.getByText('Передача в работу недоступна: на объекте не назначен начальник ПТО')).toBeVisible();
+  await expect(section.getByRole('button')).toHaveCount(0);
+  await expect(section.getByLabel('Сотрудник ПТО')).toHaveCount(0);
 });
 
 test('W01 (Corrective F8.2.1-03): a work with an existing package still offers "Создать ещё один пакет" alongside "Открыть пакет", creating a second, distinct package', async ({
   page,
 }) => {
-  const state = makeState(PTO, [draftPackage()]);
+  const state = makeState(PTO, [draftPackage()], { [WORK_DRAFT]: PTO.id });
   await seedSession(page, 'f8-2-1-browser-token-multi-w01');
   await mockApi(page, state);
 
@@ -546,91 +642,23 @@ test('W01 (Corrective F8.2.1-03): a work with an existing package still offers "
   expect(state.packages[0]!.id).not.toBe(state.packages[1]!.id);
 });
 
-test('P01 (Corrective F8.2.1-04): ADMIN opening the create-package flow sees a PTO-user picker and cannot submit before choosing one — never admin.id', async ({
+test('ADMIN (PILOT-W01 UI03): P01 has no responsible picker and no package creation; on W01 ADMIN creates only for the assigned engineer, never admin.id', async ({
   page,
 }) => {
-  const state = makeState(ADMIN);
-  await seedSession(page, 'f8-2-1-browser-token-admin-picker');
+  const state = makeState(ADMIN, [], { [WORK_NEW]: PTO_USER_2.id });
+  await seedSession(page, 'f8-2-1-browser-token-admin');
   await mockApi(page, state);
 
   await page.goto('/app.html/pto');
   const table = page.locator('table', { hasText: 'Очередь ПТО' });
   const row = table.locator('tr', { hasText: 'Устройство кровли' });
-
-  await expect(row.getByLabel('Ответственный сотрудник ПТО')).toBeVisible();
-  await expect(row.getByRole('button', { name: 'Создать пакет' })).toBeDisabled();
-
-  expect(state.packages.length).toBe(0);
-});
-
-test('P01 (Corrective F8.2.1-04): ADMIN creates a first package by selecting a PTO responsible user — the package is created for that PTO user, not ADMIN', async ({
-  page,
-}) => {
-  const state = makeState(ADMIN);
-  await seedSession(page, 'f8-2-1-browser-token-admin-first');
-  await mockApi(page, state);
-
-  await page.goto('/app.html/pto');
-  const table = page.locator('table', { hasText: 'Очередь ПТО' });
-  const row = table.locator('tr', { hasText: 'Устройство кровли' });
-
-  await row.getByLabel('Ответственный сотрудник ПТО').selectOption({ label: PTO_USER_2.name });
-  await row.getByRole('button', { name: 'Создать пакет' }).click();
-
-  await expect(page.getByRole('heading', { level: 1, name: 'Устройство кровли' })).toBeVisible();
-  await expect(page.getByText('Черновик', { exact: true })).toBeVisible();
-  await expect(page.getByText(PTO_USER_2.name)).toBeVisible();
-
-  expect(state.packages.length).toBe(1);
-  expect(state.packages[0]!.responsibleUserId).toBe(PTO_USER_2.id);
-  expect(state.packages[0]!.responsibleUserId).not.toBe(ADMIN.id);
-});
-
-test('P01 (Corrective F8.2.1-04): ADMIN creates a second package for a work that already has one, again by selecting a PTO responsible user', async ({
-  page,
-}) => {
-  const state = makeState(ADMIN, [draftPackage()]);
-  await seedSession(page, 'f8-2-1-browser-token-admin-second');
-  await mockApi(page, state);
-
-  await page.goto('/app.html/pto');
-  const table = page.locator('table', { hasText: 'Очередь ПТО' });
-  const row = table.locator('tr', { hasText: 'Штукатурка стен' });
-
-  await expect(row.getByRole('button', { name: 'Открыть' })).toBeVisible();
-  await row.getByLabel('Ответственный сотрудник ПТО').selectOption({ label: PTO_USER_2.name });
-  await row.getByRole('button', { name: 'Создать ещё один пакет' }).click();
-
-  await expect(page.getByRole('heading', { level: 1, name: 'Штукатурка стен' })).toBeVisible();
-  await expect(page.getByText('Черновик', { exact: true })).toBeVisible();
-
-  expect(state.packages.length).toBe(2);
-  expect(state.packages[0]!.id).not.toBe(state.packages[1]!.id);
-  const second = state.packages.find((p) => p.id !== 'package-draft')!;
-  expect(second.responsibleUserId).toBe(PTO_USER_2.id);
-  expect(second.responsibleUserId).not.toBe(ADMIN.id);
-});
-
-test('W01 (Corrective F8.2.1-04): ADMIN also sees the PTO-user picker there, the same shared flow P01 uses (Decision 1), and never submits admin.id', async ({
-  page,
-}) => {
-  const state = makeState(ADMIN);
-  await seedSession(page, 'f8-2-1-browser-token-admin-w01');
-  await mockApi(page, state);
+  await expect(row.getByLabel('Ответственный сотрудник ПТО')).toHaveCount(0);
+  await expect(row.getByRole('button', { name: /Создать пакет/ })).toHaveCount(0);
 
   await page.goto(`/app.html/object/${OBJECT_A}/work/${WORK_NEW}`);
   const section = page.locator('section', { hasText: 'Исполнительная документация' });
-
-  await expect(section.getByLabel('Ответственный сотрудник ПТО')).toBeVisible();
-  await expect(section.getByRole('button', { name: 'Создать пакет' })).toBeDisabled();
-  expect(state.packages.length).toBe(0);
-
-  await section.getByLabel('Ответственный сотрудник ПТО').selectOption({ label: PTO_USER_2.name });
-  await section.getByRole('button', { name: 'Создать пакет' }).click();
-
+  await section.getByRole('button', { name: 'Создать пакет ИД' }).click();
   await expect(page.getByRole('heading', { level: 1, name: 'Устройство кровли' })).toBeVisible();
-  await expect(page.getByText('Черновик', { exact: true })).toBeVisible();
-
   expect(state.packages.length).toBe(1);
   expect(state.packages[0]!.responsibleUserId).toBe(PTO_USER_2.id);
   expect(state.packages[0]!.responsibleUserId).not.toBe(ADMIN.id);

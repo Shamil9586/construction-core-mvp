@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { handoffWorkToPto } from './helpers/pbx3-fixtures';
 
 /**
  * F12-SDO-03 re-verification, corrected for FINAL-R02 (independent review of
@@ -76,6 +77,7 @@ test('F12-SDO-03: handoff/return/status-change are already retry-safe via Packag
     await req(`inspections/${custRequest.id}/accept`, { version: custRequest.version, comment: 'Подтверждено', quantity: 200 });
 
     const pto = await login('PTO');
+    await handoffWorkToPto(work.id);
     let pkg = await req('documentation-packages', { objectWorkId: work.id, responsibleUserId: pto.id });
     await req(`documentation-packages/${pkg.id}/portions`, { quantityPortionId: portion.id });
     const doc = await req(`documentation-packages/${pkg.id}/documents`, { type: 'AOSR' });

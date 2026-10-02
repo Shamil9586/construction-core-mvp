@@ -46,3 +46,18 @@ export async function orgExpectation(memberUserId: string, fn = 'PTO') {
   const r = await one(pool, 'SELECT id,version FROM functional_team_memberships WHERE tenant_id=$1 AND function_code=$2 AND member_user_id=$3 AND ended_at IS NULL', [await tenantId(), fn, memberUserId]);
   return { expectedAssignmentId: r.id as string, expectedVersion: r.version as number };
 }
+
+/**
+ * PILOT-W01 UI03: package creation now requires the PTO work handoff. Performs it through the REAL
+ * PtoWorkAssignmentService as the object's CURRENT PTO_HEAD (never a raw INSERT) for `engineer`
+ * (default: the seeded PTO user, who assignPtoToObject() already put on the head's team and the object).
+ */
+export async function handoffWorkToPto(workId: string, engineer?: any) {
+  const { pool, one } = await import('../../apps/backend/src/db');
+  const { PtoWorkAssignmentService } = await import('../../apps/backend/src/pto-work-assignment-service');
+  const t = await tenantId();
+  const work = await one(pool, 'SELECT object_id FROM works WHERE tenant_id=$1 AND id=$2', [t, workId]);
+  const head = await one(pool, "SELECT u.* FROM object_function_lead_assignments l JOIN users u ON u.tenant_id=l.tenant_id AND u.id=l.lead_user_id WHERE l.tenant_id=$1 AND l.object_id=$2 AND l.function_code='PTO' AND l.ended_at IS NULL", [t, work.objectId]);
+  const assignee = engineer ?? (await actorByRole('PTO'));
+  return new PtoWorkAssignmentService().assign(head, workId, { assigneeUserId: assignee.id });
+}

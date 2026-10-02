@@ -85,6 +85,9 @@ test('PBX-3A acceptance: Kuznetsov leaves; lead replacement alone keeps members;
 
     // Work + a package responsibility created BEFORE the swap (historical attribution must survive).
     await h.as(kuznetsov);
+    // PILOT-W01 UI03: the head hands the work off; the assigned engineer creates the package.
+    await h.req(`works/${objs[2].work.id}/pto-assignment`, { assigneeUserId: akhmetov.id });
+    await h.as(akhmetov);
     const pkgBefore = await h.req('documentation-packages', { objectWorkId: objs[2].work.id, responsibleUserId: akhmetov.id });
     assert.equal(pkgBefore.responsibleUserId, akhmetov.id);
 
@@ -138,13 +141,14 @@ test('PBX-3A acceptance: Kuznetsov leaves; lead replacement alone keeps members;
     await h.as(smirnov);
     assert.equal((await h.raw(`objects/${o3.id}/function-team/pto/members`, { memberUserId: akhmetov.id })).status, 403, 'Smirnov cannot add Akhmetov (org team = Ivanov)');
     assert.equal((await h.raw(`objects/${o3.id}/function-team/pto/members/${akhmetov.id}/end`, {})).status, 400, 'Smirnov cannot manage Akhmetov on Object 3 (no longer a member)');
-    assert.equal((await h.raw('documentation-packages', { objectWorkId: objs[2].work.id, responsibleUserId: akhmetov.id })).status, 400, 'Smirnov cannot assign Akhmetov responsibility on Object 3');
-    await h.req('documentation-packages', { objectWorkId: objs[2].work.id, responsibleUserId: orlov.id }); // Orlov now valid on Object 3
+    assert.equal((await h.raw(`works/${objs[2].work.id}/pto-assignment`, { assigneeUserId: akhmetov.id })).status, 400, 'Smirnov cannot hand Object 3 work to Akhmetov');
+    const eligO3 = (await h.req(`works/${objs[2].work.id}/pto-assignment`)).eligible.map((e: any) => e.name).sort();
+    assert.deepEqual(eligO3, ['Орлов', 'Петров', 'Сидоров'], 'Orlov now eligible on Object 3, Akhmetov not');
     await h.as(ivanov);
     assert.equal((await h.raw(`objects/${o4.id}/function-team/pto/members`, { memberUserId: orlov.id })).status, 403, 'Ivanov cannot add Orlov (org team = Smirnov)');
     assert.equal((await h.raw(`objects/${o4.id}/function-team/pto/members/${orlov.id}/end`, {})).status, 400);
-    assert.equal((await h.raw('documentation-packages', { objectWorkId: objs[3].work.id, responsibleUserId: orlov.id })).status, 400, 'Ivanov cannot assign Orlov responsibility on Object 4');
-    await h.req('documentation-packages', { objectWorkId: objs[3].work.id, responsibleUserId: akhmetov.id });
+    assert.equal((await h.raw(`works/${objs[3].work.id}/pto-assignment`, { assigneeUserId: orlov.id })).status, 400, 'Ivanov cannot hand Object 4 work to Orlov');
+    await h.req(`works/${objs[3].work.id}/pto-assignment`, { assigneeUserId: akhmetov.id });
     // Akhmetov (now Object 4 member) lost Object 3 entirely; Orlov lost Object 4.
     await h.as(akhmetov);
     assert.equal((await h.raw(`objects/${o3.id}`)).status, 403);
@@ -377,14 +381,16 @@ test('PBX-3A PTO object scope: PTO/PTO_HEAD operate only on assigned objects; pa
     await h.req(`objects/${B.o.id}/function-team/pto/lead`, { leadUserId: notLead.id });
     await h.req('function-teams/pto/redistribute', { reason: 'seed', memberAdds: [{ objectId: A.o.id, memberUserId: eng.id }] });
     const pkg = (_: string, work: any, resp: any) => h.raw('documentation-packages', { objectWorkId: work.id, responsibleUserId: resp.id });
-    // head: leads A only
+    const handoff = (work: any, who: any) => h.raw(`works/${work.id}/pto-assignment`, { assigneeUserId: who.id });
+    // head: leads A only (PILOT-W01 UI03: the head hands off, the assigned engineer creates the package)
     await h.as(head);
-    assert.equal((await pkg('', B.work, eng)).status, 403, 'head is not lead of B');
-    assert.equal((await pkg('', A.work, stranger)).status, 400, 'responsible must be on the object\'s PTO team');
-    const p = await h.req('documentation-packages', { objectWorkId: A.work.id, responsibleUserId: eng.id });
-    await h.req('documentation-packages', { objectWorkId: A.work.id, responsibleUserId: head.id }).catch(() => undefined);
+    assert.equal((await handoff(B.work, eng)).status, 403, 'head is not lead of B');
+    assert.equal((await handoff(A.work, stranger)).status, 400, 'assignee must be on the object\'s PTO team');
+    assert.equal((await handoff(A.work, eng)).status, 201);
+    assert.equal((await pkg('', A.work, eng)).status, 403, 'PTO_HEAD does not use the engineer create-package path');
     // engineer: member of A only
     await h.as(eng);
+    const p = await h.req('documentation-packages', { objectWorkId: A.work.id, responsibleUserId: eng.id });
     assert.equal((await pkg('', B.work, eng)).status, 403);
     assert.equal((await h.raw(`documentation-packages/${p.id}/status`, { status: 'PREPARING', version: p.version })).status, 201);
     await h.as(stranger);
@@ -408,7 +414,7 @@ test('PBX-3A PTO object scope: PTO/PTO_HEAD operate only on assigned objects; pa
     assert.equal((await edited({ responsibleUserId: stranger.id, version: cur.version })).status, 400);
     // remove eng from A; head can no longer make eng responsible (D08) while history stays
     await h.req(`objects/${A.o.id}/function-team/pto/members/${eng.id}/end`, {}, 201);
-    assert.equal((await h.raw('documentation-packages', { objectWorkId: A.work.id, responsibleUserId: eng.id })).status, 400);
+    assert.equal((await handoff(A.work, eng)).status, 400, 'removed engineer is no longer eligible for handoff');
     await h.as(eng);
     assert.equal((await h.raw(`objects/${A.o.id}`)).status, 403, 'removed engineer loses object access at once');
     const { pool } = await import('../apps/backend/src/db');

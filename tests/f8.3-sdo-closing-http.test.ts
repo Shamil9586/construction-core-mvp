@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
+import { handoffWorkToPto } from './helpers/pbx3-fixtures';
 
 /**
  * F8.3 SDO / Closing — HTTP-level, over the real backend, PGlite. Same
@@ -77,6 +78,7 @@ async function setUpPresentedPackage(req: any, login: any, code: string, name: s
   await req(`inspections/${custRequest.id}/accept`, { version: custRequest.version, comment: 'Подтверждено', quantity: 200 });
 
   const pto = await login('PTO');
+  await handoffWorkToPto(work.id);
   const pkg = await req('documentation-packages', { objectWorkId: work.id, responsibleUserId: pto.id });
   await req(`documentation-packages/${pkg.id}/portions`, { quantityPortionId: portion.id });
   const doc = await req(`documentation-packages/${pkg.id}/documents`, { type: 'AOSR' });
@@ -379,6 +381,7 @@ test('F8.3 HTTP (1): an upcoming package is visible to SDO before it is ready �
     await login('PROJECT_MANAGER');
     const work = await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: pm.id, name: 'Работа', unit: 'м²', plannedQuantity: 100, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '20000' });
     const pto = await login('PTO');
+    await handoffWorkToPto(work.id);
     const pkg = await req('documentation-packages', { objectWorkId: work.id, responsibleUserId: pto.id });
 
     await login('SDO');
@@ -422,6 +425,7 @@ test('F8.3 HTTP (3): readiness is false when the Customer SC quantity confirmati
     const portion = await req(`execution-units/${unit.id}/portions`, { label: 'Секция A', plannedQuantity: 200 });
     // No Customer SC confirmation recorded for this portion at all.
     const pto = await login('PTO');
+    await handoffWorkToPto(work.id);
     let pkg = await req('documentation-packages', { objectWorkId: work.id, responsibleUserId: pto.id });
     await req(`documentation-packages/${pkg.id}/portions`, { quantityPortionId: portion.id });
     const doc = await req(`documentation-packages/${pkg.id}/documents`, { type: 'AOSR' });
@@ -639,6 +643,7 @@ test('F8.3-R02b (1): customer-acceptance is refused when a Documentation Documen
     await login('PROJECT_MANAGER');
     const work = await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: pm.id, name: 'Работа', unit: 'м²', plannedQuantity: 100, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '20000' });
     const pto = await login('PTO');
+    await handoffWorkToPto(work.id);
     const pkg = await req('documentation-packages', { objectWorkId: work.id, responsibleUserId: pto.id });
     // Document A is created but never given a version — the exact Case A
     // from the corrective report.
@@ -664,6 +669,7 @@ test('F8.3-R02b (2): customer-acceptance is refused when the Package has zero Do
     await login('PROJECT_MANAGER');
     const work = await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: pm.id, name: 'Работа', unit: 'м²', plannedQuantity: 100, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '20000' });
     const pto = await login('PTO');
+    await handoffWorkToPto(work.id);
     const pkg = await req('documentation-packages', { objectWorkId: work.id, responsibleUserId: pto.id });
     let p = await req(`documentation-packages/${pkg.id}/status`, { status: 'PREPARING', version: pkg.version });
     p = await req(`documentation-packages/${p.id}/status`, { status: 'READY_FOR_PRESENTATION', version: p.version });
@@ -956,6 +962,7 @@ test('F8.3 HTTP: customer-acceptance is refused before PRESENTED (still an ordin
     await login('PROJECT_MANAGER');
     const work = await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: pm.id, name: 'Работа', unit: 'м²', plannedQuantity: 100, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '20000' });
     const pto = await login('PTO');
+    await handoffWorkToPto(work.id);
     const pkg = await req('documentation-packages', { objectWorkId: work.id, responsibleUserId: pto.id });
     await req(`documentation-packages/${pkg.id}/customer-acceptance`, { version: pkg.version, acceptedDate: dt(0) }, 400);
   } finally {

@@ -319,6 +319,12 @@ test('F8.1 golden path: add a portion, enter RP fact, request and register an In
   await portionRow.getByRole('button', { name: 'Принять' }).click();
 
   await expect(portionRow.getByText('Принято СК')).toBeVisible();
+  // PILOT-W01 UI01 — the inspector's 298 is rendered next to (never instead of) the 300 plan / RP fact,
+  // and an accepted Internal SC never shows "Не предъявлено" anywhere on the card; no CUSTOMER_SC exists here.
+  await expect(portionRow.getByText('принято внутренним СК')).toBeVisible();
+  await expect(portionRow.getByText('300', { exact: false }).first()).toBeVisible();
+  await expect(page.getByText('Принято внутренним СК', { exact: true })).toBeVisible();
+  await expect(page.getByText('Не предъявлено', { exact: true })).toHaveCount(0);
   await expect(portionRow.getByRole('button', { name: 'Принять' })).toHaveCount(0);
   await expect(portionRow.getByRole('button', { name: 'Предъявить на СК' })).toHaveCount(0);
 

@@ -508,7 +508,7 @@ test.describe('P01 — dense table stays readable and scoped', () => {
     await page.setViewportSize({ width: 390, height: 900 });
     await openP01(page);
 
-    const createButton = table(page).getByRole('button', { name: 'Создать пакет' }).first();
+    const createButton = table(page).getByRole('button', { name: 'К работе' }).first();
     await createButton.scrollIntoViewIfNeeded();
     await expect(createButton).toBeVisible();
     await expect(createButton).toBeEnabled();

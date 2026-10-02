@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { handoffWorkToPto } from './helpers/pbx3-fixtures';
 
 /**
  * F8.2 PTO / Executive Documentation Foundation — backend integration, real
@@ -50,6 +51,9 @@ test('F8.2: Documentation Package / Document / Version / status history — crea
     (e: any) => e.status === 403 || /Недостаточно прав/.test(e.message),
     'PROJECT_MANAGER (read-only per the Foundation contract) must be refused',
   );
+
+  // PILOT-W01 UI03: the PTO handoff precedes package creation; the responsible is then bound to the assignee.
+  await handoffWorkToPto(work.id);
 
   // --- responsible must actually be an active PTO user ---
   await assert.rejects(

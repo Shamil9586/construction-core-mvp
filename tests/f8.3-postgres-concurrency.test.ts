@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Client } from 'pg';
+import { handoffWorkToPto } from './helpers/pbx3-fixtures';
 
 /**
  * F8.3-18 — real PostgreSQL concurrency verification.
@@ -149,6 +150,7 @@ async function setUpHandedOffCase(req: any, login: any, code: string, name: stri
 
   const ptoToken = await login('PTO');
   const ptoUser = (await req('me', undefined, ptoToken, 200)).data;
+  await handoffWorkToPto(work.id);
   const pkg0 = (await req('documentation-packages', { objectWorkId: work.id, responsibleUserId: ptoUser.id }, ptoToken, 201)).data;
   await req(`documentation-packages/${pkg0.id}/portions`, { quantityPortionId: portion.id }, ptoToken, 201);
   const doc = (await req(`documentation-packages/${pkg0.id}/documents`, { type: 'AOSR' }, ptoToken, 201)).data;
@@ -182,6 +184,7 @@ async function setUpAcceptedNotHandedOff(req: any, login: any, code: string, nam
   await req(`inspections/${custRequest.id}/accept`, { version: custRequest.version, comment: 'ok', quantity: 200 }, ccToken, 201);
 
   const ptoUser = (await req('me', undefined, ptoToken, 200)).data;
+  await handoffWorkToPto(work.id);
   const pkg0 = (await req('documentation-packages', { objectWorkId: work.id, responsibleUserId: ptoUser.id }, ptoToken, 201)).data;
   await req(`documentation-packages/${pkg0.id}/portions`, { quantityPortionId: portion.id }, ptoToken, 201);
   const doc = (await req(`documentation-packages/${pkg0.id}/documents`, { type: 'AOSR' }, ptoToken, 201)).data;

@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { handoffWorkToPto } from './helpers/pbx3-fixtures';
 
 /**
  * F8.2 PTO / Executive Documentation Foundation — HTTP-level. Step 3
@@ -76,6 +77,7 @@ test('F8.2 HTTP: full round trip — PTO creates a package, links portions, crea
     await req('documentation-packages', { objectWorkId: work.id, responsibleUserId: pm.id }, 403);
 
     const pto = await login('PTO');
+    await handoffWorkToPto(work.id);
     const pkg = await req('documentation-packages', { objectWorkId: work.id, responsibleUserId: pto.id });
     assert.equal(pkg.status, 'DRAFT');
     assert.equal(pkg.objectWorkId, work.id);
@@ -135,6 +137,7 @@ test('F8.2 HTTP: SDO has no F8.2 access at all — snapshot omits it, the dedica
     await login('PROJECT_MANAGER');
     const work = await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: pm.id, name: 'Работа', unit: 'м²', plannedQuantity: 100, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '20000' });
     const pto = await login('PTO');
+    await handoffWorkToPto(work.id);
     await req('documentation-packages', { objectWorkId: work.id, responsibleUserId: pto.id });
 
     await login('SDO');
@@ -170,6 +173,7 @@ test('F8.2 HTTP: an invalid document type is rejected by the DTO, before it ever
     await login('PROJECT_MANAGER');
     const work = await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: pm.id, name: 'Работа', unit: 'м²', plannedQuantity: 100, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '20000' });
     const pto = await login('PTO');
+    await handoffWorkToPto(work.id);
     const pkg = await req('documentation-packages', { objectWorkId: work.id, responsibleUserId: pto.id });
     await req(`documentation-packages/${pkg.id}/documents`, { type: 'GENERAL_WORK_LOG' }, 400);
   } finally {
