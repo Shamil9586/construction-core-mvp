@@ -158,9 +158,13 @@ export async function isCurrentPtoMember(c: any, tenantId: string, objectId: str
 }
 // PILOT-W01 UI03: an ACTIVE PTO work assignment (pto_work_assignments, the PTO_HEAD's «Передать в работу») is
 // work-scoped PTO access for its assignee — no object-team membership is required or created. It lasts exactly as
-// long as the assignment: reassignment ends the row and the access with it. Never granted to anyone else.
+// long as the assignment AND while the assignee is still on the object's current PTO_HEAD's functional team (the same
+// rule as eligibility): reassignment, or a team change, ends the access. Never granted to anyone else.
 export async function hasActivePtoWorkAssignmentOnObject(c: any, tenantId: string, objectId: string, userId: string): Promise<boolean> {
-    return !!(await one(c, 'SELECT 1 FROM pto_work_assignments WHERE tenant_id=$1 AND object_id=$2 AND assignee_user_id=$3 AND ended_at IS NULL', [tenantId, objectId, userId]));
+    return !!(await one(c, `SELECT 1 FROM pto_work_assignments pa
+        JOIN object_function_lead_assignments l ON l.tenant_id=pa.tenant_id AND l.object_id=pa.object_id AND l.function_code='PTO' AND l.ended_at IS NULL
+        JOIN functional_team_memberships t ON t.tenant_id=pa.tenant_id AND t.function_code='PTO' AND t.manager_user_id=l.lead_user_id AND t.member_user_id=pa.assignee_user_id AND t.ended_at IS NULL
+        WHERE pa.tenant_id=$1 AND pa.object_id=$2 AND pa.assignee_user_id=$3 AND pa.ended_at IS NULL`, [tenantId, objectId, userId]));
 }
 export async function ensurePtoObjectScope(c: any, a: Actor, objectId: string) {
     if (!isPtoRole(a.role))
