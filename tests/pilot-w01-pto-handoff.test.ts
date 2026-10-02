@@ -10,6 +10,8 @@ import { makeUser, tokenFor } from './helpers/pbx3-fixtures';
  *   Object C → no PTO_HEAD at all;  Object D → PTO_HEAD D with no engineers
  *   U: PTO user in no team, X: PTO user of ANOTHER tenant.
  *
+ * The engineers are deliberately NOT object PTO members: the handoff is the work-level assignment and, while it is
+ * active, the assignee's work-scoped access (no pre-existing object membership is required or created).
  * Eligibility is object → assigned PTO_HEAD → functional team → engineer, computed once on the
  * server (resolvePtoWorkEligibility) and used by BOTH the read model and the write validation.
  */
@@ -66,7 +68,7 @@ async function scenario() {
   await h.login('DEPUTY_DIRECTOR');
   for (const [m, mg] of [[A1, headA], [A2, headA], [B1, headB]]) await h.req('function-teams/pto/org-members', { memberUserId: m.id, managerUserId: mg.id });
   for (const [o, lead] of [[A, headA], [B, headB], [D, headD]] as any[]) await h.req(`objects/${o.o.id}/function-team/pto/lead`, { leadUserId: lead.id });
-  await h.req('function-teams/pto/redistribute', { reason: 'seed', memberAdds: [{ objectId: A.o.id, memberUserId: A1.id }, { objectId: A.o.id, memberUserId: A2.id }, { objectId: B.o.id, memberUserId: B1.id }] });
+  // no object-team memberAdds on purpose (see header)
   const handoff = (work: any, who: any) => h.raw(`works/${work.id}/pto-assignment`, { assigneeUserId: who.id });
   const view = (work: any) => h.req(`works/${work.id}/pto-assignment`);
   const counts = async (workId: string) => ({
@@ -88,8 +90,7 @@ test('UI02 eligibility: only head A\'s team on object A — not B1, not unrelate
     for (const excluded of [s.B1, s.U, s.X, s.headA, s.headB]) assert.ok(!v.eligible.some((e: any) => e.id === excluded.id), excluded.name);
     // only the assigner receives the list; an engineer and a read-only role never do
     await s.h.as(s.A1);
-    const ev = await s.view(s.A.work);
-    assert.deepEqual(ev.eligible, []); assert.equal(ev.canAssign, false);
+    assert.equal((await s.h.raw(`works/${s.A.work.id}/pto-assignment`)).status, 403, 'an unassigned engineer has no access, hence never receives the list');
     await s.h.login('GENERAL_DIRECTOR');
     const gv = await s.view(s.A.work);
     assert.deepEqual(gv.eligible, []); assert.equal(gv.canAssign, false); assert.equal(gv.canCreatePackage, false);
@@ -110,9 +111,15 @@ test('UI02 eligibility: no assigned PTO_HEAD => empty, never tenant-wide; head w
     const d = await s.view(s.D.work);
     assert.equal(d.head.id, s.headD.id); assert.deepEqual(d.eligible, []);
     assert.equal((await s.handoff(s.D.work, s.A1)).status, 400);
-    // a team member who is NOT a current object member is not eligible (cannot act on the object)
+    // a team member with NO object membership IS eligible (the team, not object membership, is the rule)
     await s.h.login('DEPUTY_DIRECTOR');
     await s.h.req('function-teams/pto/org-members', { memberUserId: s.U.id, managerUserId: s.headA.id });
+    await s.h.as(s.headA);
+    assert.deepEqual(names(await s.view(s.A.work)), ['Инженер А1', 'Инженер А2', 'Инженер без команды']);
+    // and an engineer who leaves head A's team stops being eligible
+    await s.h.login('DEPUTY_DIRECTOR');
+    const cur = await s.pool.query('SELECT id,version FROM functional_team_memberships WHERE member_user_id=$1 AND ended_at IS NULL', [s.U.id]);
+    await s.h.req('function-teams/pto/redistribute', { reason: 'leaves', orgEnds: [{ memberUserId: s.U.id, expectedAssignmentId: cur.rows[0].id, expectedVersion: cur.rows[0].version }] });
     await s.h.as(s.headA);
     assert.deepEqual(names(await s.view(s.A.work)), ['Инженер А1', 'Инженер А2']);
     assert.equal((await s.handoff(s.A.work, s.U)).status, 400);
@@ -147,6 +154,67 @@ test('UI03 handoff authorization: head A -> A1/A2 only; B1, other head, engineer
   } finally { await s.h.app.close(); }
 });
 
+test('UI03 work-scoped access: team engineer with NO object membership is handed off, then reaches W01 and creates the package — nobody else gains access', async () => {
+  const s = await scenario();
+  try {
+    assert.equal((await s.pool.query("SELECT count(*)::int n FROM object_function_member_assignments WHERE object_id=$1 AND function_code='PTO'", [s.A.o.id])).rows[0].n, 0, 'precondition: object A has NO PTO object members');
+    await s.h.as(s.A1);
+    assert.equal((await s.h.raw(`works/${s.A.work.id}/pto-assignment`)).status, 403, 'before handoff A1 has no access to object A');
+    assert.deepEqual(await s.h.req('objects'), []);
+    await s.h.as(s.headA);
+    assert.deepEqual(names(await s.view(s.A.work)), ['Инженер А1', 'Инженер А2'], 'A1 is eligible without any object membership');
+    assert.equal((await s.handoff(s.A.work, s.A1)).status, 201);
+    assert.equal((await s.pool.query("SELECT count(*)::int n FROM object_function_member_assignments WHERE object_id=$1 AND function_code='PTO'", [s.A.o.id])).rows[0].n, 0, 'handoff does not create object membership');
+    assert.deepEqual(await s.counts(s.A.work.id), { packages: 0, history: 0 });
+    await s.h.as(s.A1);
+    const v = await s.view(s.A.work);
+    assert.equal(v.canCreatePackage, true);
+    assert.deepEqual((await s.h.req('objects')).map((o: any) => o.id), [s.A.o.id], 'W01 path: A1 sees exactly object A');
+    const snap = await s.h.req('snapshot');
+    assert.ok(snap.works.some((w: any) => w.id === s.A.work.id));
+    assert.ok(!snap.works.some((w: any) => w.id === s.B.work.id), 'no other object is exposed');
+    assert.equal((await s.h.raw(`objects/${s.B.o.id}`)).status, 403);
+    const made = await s.h.raw('documentation-packages', { objectWorkId: s.A.work.id });
+    assert.equal(made.status, 201, JSON.stringify(made.data));
+    assert.equal(made.data.responsibleUserId, s.A1.id);
+    // the package-detail operations work for the assignee too (same object-scope check)
+    assert.equal((await s.h.raw(`documentation-packages/${made.data.id}/documents`, { type: 'AOSR' })).status, 201);
+    // others: unrelated team engineer A2 (not assigned), B1, cross-tenant X — no access, no handoff
+    for (const who of [s.A2, s.B1]) { await s.h.as(who); assert.equal((await s.h.raw(`objects/${s.A.o.id}`)).status, 403, who.name); assert.deepEqual(await s.h.req('objects'), []); }
+    await s.h.as(s.headA);
+    assert.equal((await s.handoff(s.B.work, s.B1)).status, 403);
+    assert.equal((await s.handoff(s.A.work, s.B1)).status, 400, 'B1 is on another team');
+    assert.equal((await s.handoff(s.A.work, s.X)).status, 400, 'cross-tenant engineer');
+  } finally { await s.h.app.close(); }
+});
+
+test('UI03 package responsible integrity: fixed at creation; no arbitrary change through the edit path', async () => {
+  const s = await scenario();
+  try {
+    await s.h.as(s.headA);
+    assert.equal((await s.handoff(s.A.work, s.A1)).status, 201);
+    await s.h.as(s.A1);
+    const made = await s.h.raw('documentation-packages', { objectWorkId: s.A.work.id });
+    assert.equal(made.status, 201);
+    const pkg = made.data; assert.equal(pkg.responsibleUserId, s.A1.id);
+    const edit = (responsibleUserId: string, version: number) => s.h.raw(`documentation-packages/${pkg.id}/edit`, { responsibleUserId, version });
+    assert.equal((await edit(s.A2.id, pkg.version)).status, 400, 'A1 -> A2 (same team) rejected');
+    assert.equal((await edit(s.B1.id, pkg.version)).status, 400, 'A1 -> unrelated B1 rejected');
+    assert.equal((await edit(s.X.id, pkg.version)).status, 400, 'cross-tenant responsible rejected');
+    assert.equal((await edit(s.headA.id, pkg.version)).status, 400, 'a PTO_HEAD is not a substitute either');
+    assert.equal((await s.pool.query('SELECT responsible_user_id,version FROM documentation_packages WHERE id=$1', [pkg.id])).rows[0].responsible_user_id, s.A1.id);
+    const same = await edit(s.A1.id, pkg.version);
+    assert.equal(same.status, 201, 'an edit that keeps the responsible still works');
+    assert.equal(same.data.responsibleUserId, s.A1.id); assert.equal(same.data.version, pkg.version + 1);
+    // a stale version is still a 409 (existing optimistic-concurrency rule), and the other normal package operations are unaffected
+    assert.equal((await edit(s.A1.id, pkg.version)).status, 409);
+    assert.equal((await s.h.raw(`documentation-packages/${pkg.id}/status`, { status: 'PREPARING', version: same.data.version })).status, 201);
+    // an engineer who is not the responsible cannot edit at all
+    await s.h.as(s.A2);
+    assert.equal((await edit(s.A2.id, 99)).status, 403);
+  } finally { await s.h.app.close(); }
+});
+
 test('UI03 hard acceptance: handoff persists an assignment but creates NO package, DRAFT or workflow state', async () => {
   const s = await scenario();
   try {
@@ -163,7 +231,7 @@ test('UI03 hard acceptance: handoff persists an assignment but creates NO packag
     assert.equal(v.canReassign, true);
     // the same view for the engineers: only the assigned one may create
     await s.h.as(s.A1); assert.equal((await s.view(s.A.work)).canCreatePackage, true);
-    await s.h.as(s.A2); const a2 = await s.view(s.A.work); assert.equal(a2.canCreatePackage, false); assert.equal(a2.assignment.assigneeName, 'Инженер А1');
+    await s.h.as(s.A2); assert.equal((await s.h.raw(`works/${s.A.work.id}/pto-assignment`)).status, 403, 'unassigned team engineer without object membership has no access');
   } finally { await s.h.app.close(); }
 });
 

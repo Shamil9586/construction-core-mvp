@@ -156,10 +156,16 @@ export async function isCurrentPtoLead(c: any, tenantId: string, objectId: strin
 export async function isCurrentPtoMember(c: any, tenantId: string, objectId: string, userId: string): Promise<boolean> {
     return !!(await one(c, "SELECT 1 FROM object_function_member_assignments WHERE tenant_id=$1 AND object_id=$2 AND function_code='PTO' AND member_user_id=$3 AND ended_at IS NULL", [tenantId, objectId, userId]));
 }
+// PILOT-W01 UI03: an ACTIVE PTO work assignment (pto_work_assignments, the PTO_HEAD's «Передать в работу») is
+// work-scoped PTO access for its assignee — no object-team membership is required or created. It lasts exactly as
+// long as the assignment: reassignment ends the row and the access with it. Never granted to anyone else.
+export async function hasActivePtoWorkAssignmentOnObject(c: any, tenantId: string, objectId: string, userId: string): Promise<boolean> {
+    return !!(await one(c, 'SELECT 1 FROM pto_work_assignments WHERE tenant_id=$1 AND object_id=$2 AND assignee_user_id=$3 AND ended_at IS NULL', [tenantId, objectId, userId]));
+}
 export async function ensurePtoObjectScope(c: any, a: Actor, objectId: string) {
     if (!isPtoRole(a.role))
         return;
-    const allowed = a.role === 'PTO_HEAD' ? await isCurrentPtoLead(c, a.tenantId, objectId, a.id) : await isCurrentPtoMember(c, a.tenantId, objectId, a.id);
+    const allowed = a.role === 'PTO_HEAD' ? await isCurrentPtoLead(c, a.tenantId, objectId, a.id) : (await isCurrentPtoMember(c, a.tenantId, objectId, a.id)) || (await hasActivePtoWorkAssignmentOnObject(c, a.tenantId, objectId, a.id));
     if (!allowed)
         throw new ForbiddenException(a.role === 'PTO_HEAD' ? 'Вы не являетесь текущим начальником ПТО этого объекта' : 'Вы не назначены на ПТО этого объекта');
 }

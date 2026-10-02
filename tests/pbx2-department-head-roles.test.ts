@@ -140,12 +140,13 @@ test('HTTP (mock auth): heads behave like their department role; legacy POST /us
       const snapshot = (await call('GET', 'snapshot', tokens[role])).data;
       assert.ok(snapshot.documentationPackages.some((p: any) => p.id === pkg.data.id), role);
     }
-    // a PTO_HEAD is an accepted responsible engineer, and a PTO may be the responsible on a head's package
+    // an edit that keeps the responsible still works
     const pkgB = (await call('GET', 'documentation-packages', tokens.PTO)).data.find((p: any) => p.objectWorkId === workB.id);
     assert.equal((await call('POST', `documentation-packages/${pkgB.id}/edit`, tokens.PTO_HEAD, { responsibleUserId: users.PTO.id, version: pkgB.version })).status, 201);
-    assert.equal((await call('POST', `documentation-packages/${pkgB.id}/edit`, tokens.PTO, { responsibleUserId: users.PTO_HEAD.id, version: pkgB.version + 1 })).status, 201);
+    // PILOT-W01 UI03: the responsible is fixed by the handoff — no arbitrary change, not even to a PTO_HEAD
+    assert.equal((await call('POST', `documentation-packages/${pkgB.id}/edit`, tokens.PTO, { responsibleUserId: users.PTO_HEAD.id, version: pkgB.version + 1 })).status, 400);
     // a non-PTO user is still not an acceptable responsible
-    assert.equal((await call('POST', `documentation-packages/${pkgB.id}/edit`, tokens.PTO_HEAD, { responsibleUserId: users.SDO_HEAD.id, version: pkgB.version + 2 })).status, 400);
+    assert.equal((await call('POST', `documentation-packages/${pkgB.id}/edit`, tokens.PTO_HEAD, { responsibleUserId: users.SDO_HEAD.id, version: pkgB.version + 1 })).status, 400);
 
     // --- SDO parity: SDO and SDO_HEAD are excluded from documentation identically, and both reach the SDO contour ---
     for (const role of ['SDO', 'SDO_HEAD']) {

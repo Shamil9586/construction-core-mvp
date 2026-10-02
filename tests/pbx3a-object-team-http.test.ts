@@ -412,11 +412,17 @@ test('PBX-3A PTO object scope: PTO/PTO_HEAD operate only on assigned objects; pa
     const edited = (r: any) => h.raw(`documentation-packages/${p.id}/edit`, r);
     const cur = (await h.req('documentation-packages')).find?.((x: any) => x.id === p.id) ?? p;
     assert.equal((await edited({ responsibleUserId: stranger.id, version: cur.version })).status, 400);
+    // PILOT-W01: the responsible is fixed at creation; an unchanged edit still works and versions the package
+    assert.equal((await edited({ responsibleUserId: eng.id, version: cur.version })).status, 201);
     // remove eng from A; head can no longer make eng responsible (D08) while history stays
     await h.req(`objects/${A.o.id}/function-team/pto/members/${eng.id}/end`, {}, 201);
-    assert.equal((await handoff(A.work, eng)).status, 400, 'removed engineer is no longer eligible for handoff');
+    // PILOT-W01 UI03: eligibility is the head's FUNCTIONAL team, not object membership, so the same assignee stays a valid (idempotent) handoff;
+    // a team change is what makes an engineer ineligible (covered in pilot-w01-pto-handoff.test.ts).
+    assert.equal((await handoff(A.work, eng)).status, 201, 'handoff eligibility does not depend on object membership');
     await h.as(eng);
-    assert.equal((await h.raw(`objects/${A.o.id}`)).status, 403, 'removed engineer loses object access at once');
+    assert.equal((await h.raw(`objects/${A.o.id}`)).status, 200, 'eng keeps WORK-scoped access only while the active PTO assignment lasts');
+    await h.as(stranger);
+    assert.equal((await h.raw(`objects/${A.o.id}`)).status, 403, 'an engineer with neither membership nor assignment has no access');
     const { pool } = await import('../apps/backend/src/db');
     assert.equal((await pool.query('SELECT responsible_user_id FROM documentation_packages WHERE id=$1', [p.id])).rows[0].responsible_user_id, eng.id, 'existing attribution untouched');
   } finally { await h.app.close(); }

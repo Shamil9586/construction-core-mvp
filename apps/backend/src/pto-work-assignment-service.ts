@@ -7,19 +7,16 @@ import { lockTeamScope } from './team-service';
 /**
  * PILOT-W01 UI03 — PTO work handoff («Передать в работу»).
  *
- * Authoritative eligibility (one rule, used by BOTH the read model the UI renders and the write
- * validation): object → current PTO_HEAD of that object → that head's CURRENT organizational PTO
- * team (functional_team_memberships) → active PTO engineers who are also CURRENT PTO members of
- * the object. The object-member intersection is not a second team model: package creation
- * already requires the responsible to be a current object PTO member (ensurePtoResponsibleOnObject),
- * and PTO objectAccess requires it to open the work at all, so an engineer outside it could be
- * "assigned" yet never act. No head => empty (never a tenant-wide fallback).
+ * Authoritative eligibility: object → current PTO_HEAD of that object → that head's CURRENT organizational PTO team
+ * (functional_team_memberships) → active PTO engineers. Nothing else: no prior object membership is required (the handoff
+ * itself is the work-level assignment and, while active, the assignee's work-scoped PTO access — see
+ * hasActivePtoWorkAssignmentOnObject in security.ts). No head => empty (never a tenant-wide fallback).
  */
 export async function resolvePtoWorkEligibility(c: any, tenantId: string, objectId: string): Promise<{ head: { id: string; name: string } | null; engineers: { id: string; name: string }[] }> {
     const head = await one(c, `SELECT u.id,u.name FROM object_function_lead_assignments l JOIN users u ON u.tenant_id=l.tenant_id AND u.id=l.lead_user_id WHERE l.tenant_id=$1 AND l.object_id=$2 AND l.function_code='PTO' AND l.ended_at IS NULL AND u.is_active=true AND u.role='PTO_HEAD'`, [tenantId, objectId]);
     if (!head)
         return { head: null, engineers: [] };
-    const engineers = await rows(c, `SELECT u.id,u.name FROM functional_team_memberships t JOIN object_function_member_assignments m ON m.tenant_id=t.tenant_id AND m.member_user_id=t.member_user_id AND m.object_id=$2 AND m.function_code='PTO' AND m.ended_at IS NULL JOIN users u ON u.tenant_id=t.tenant_id AND u.id=t.member_user_id WHERE t.tenant_id=$1 AND t.function_code='PTO' AND t.manager_user_id=$3 AND t.ended_at IS NULL AND u.is_active=true AND u.role='PTO' ORDER BY u.name,u.id`, [tenantId, objectId, head.id]);
+    const engineers = await rows(c, `SELECT u.id,u.name FROM functional_team_memberships t JOIN users u ON u.tenant_id=t.tenant_id AND u.id=t.member_user_id WHERE t.tenant_id=$1 AND t.function_code='PTO' AND t.manager_user_id=$2 AND t.ended_at IS NULL AND u.is_active=true AND u.role='PTO' ORDER BY u.name,u.id`, [tenantId, head.id]);
     return { head: { id: head.id, name: head.name }, engineers: engineers.map((e: any) => ({ id: e.id, name: e.name })) };
 }
 export async function activePtoWorkAssignment(c: any, tenantId: string, workId: string, lock = false) {
