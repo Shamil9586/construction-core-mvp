@@ -246,6 +246,18 @@ function handleApi(state: State, actor: Actor, method: string, path: string, req
   if (method === 'GET' && path === '/api/snapshot') return { status: 200, body: buildSnapshot(state, actor) };
   if (method === 'GET' && path === '/api/users') return { status: 200, body: ALL_USERS };
   if (method === 'GET' && path === '/api/sdo-closing-cases') return { status: 200, body: state.sdoCases };
+  // PILOT-W01 UI04 — an ordinary PTO engineer's package controls follow the effective handoff: here PTO is the assignee.
+  const assignmentMatch = path.match(/^\/api\/works\/([^/]+)\/pto-assignment$/);
+  if (method === 'GET' && assignmentMatch) {
+    return {
+      status: 200,
+      body: {
+        objectWorkId: assignmentMatch[1], objectId: OBJECT_A, head: null, eligible: [], packageCount: 1, canAssign: false, canReassign: false,
+        canCreatePackage: actor.id === PTO.id,
+        assignment: { id: 'assignment-1', assigneeUserId: PTO.id, assigneeName: PTO.name, assignedByName: '', assignedAt: '2026-10-01T00:00:00Z', version: 1 },
+      },
+    };
+  }
 
   const acceptanceMatch = path.match(/^\/api\/documentation-packages\/([^/]+)\/customer-acceptance$/);
   if (method === 'POST' && acceptanceMatch) {

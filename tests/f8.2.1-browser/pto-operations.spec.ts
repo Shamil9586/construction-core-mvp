@@ -744,3 +744,84 @@ test('Role visibility: SDO has no "ПТО" nav item, and direct navigation to /p
   await page.goto('/app.html/pto');
   await expect(page.getByText('У вас нет доступа к разделу «ПТО».')).toBeVisible();
 });
+
+// ---------------------------------------------------------------------------------------------------------------
+// PILOT-W01 UI04 — package mutation controls follow the server-authoritative EFFECTIVE assignment.
+// The mocked `GET works/:id/pto-assignment` reports only an effective assignment (as the backend does); a PTO
+// engineer with PBX-3A object membership but no effective assignment still reads the package, with no controls.
+// ---------------------------------------------------------------------------------------------------------------
+const PACKAGE_MUTATION_CONTROLS = ['Начать подготовку', 'Создать документ'];
+
+async function expectMutationControls(page: Page, present: boolean) {
+  for (const name of PACKAGE_MUTATION_CONTROLS) {
+    await expect(page.getByRole('button', { name }), name).toHaveCount(present ? 1 : 0);
+  }
+  await expect(page.getByLabel('Тип документа')).toHaveCount(present ? 1 : 0);
+}
+
+test('Package detail (UI04): the CURRENT effective assignee keeps the package mutation controls', async ({ page }) => {
+  const state = makeState(PTO, [draftPackage()], { [WORK_DRAFT]: PTO.id });
+  await seedSession(page, 'ui04-assignee');
+  await mockApi(page, state);
+
+  await page.goto(`/app.html/pto/package/${draftPackage().id}`);
+  await expect(page.getByText('Черновик')).toBeVisible();
+  await expectMutationControls(page, true);
+});
+
+test('Package detail (UI04): a PTO engineer with object access but NO effective assignment reads the package and gets no mutation controls', async ({ page }) => {
+  const state = makeState(PTO, [draftPackage()]); // no handoff row for this work
+  await seedSession(page, 'ui04-no-assignment');
+  await mockApi(page, state);
+
+  await page.goto(`/app.html/pto/package/${draftPackage().id}`);
+  await expect(page.getByText('Черновик')).toBeVisible();
+  await expectMutationControls(page, false);
+});
+
+test('Package detail (UI04): another PTO engineer of the same team, not the assignee, gets no mutation controls', async ({ page }) => {
+  const state = makeState(PTO, [draftPackage()], { [WORK_DRAFT]: PTO_USER_2.id });
+  await seedSession(page, 'ui04-other-engineer');
+  await mockApi(page, state);
+
+  await page.goto(`/app.html/pto/package/${draftPackage().id}`);
+  await expect(page.getByText('Черновик')).toBeVisible();
+  await expectMutationControls(page, false);
+});
+
+test('Package detail (UI04): when the handoff becomes stale (reassigned / left the head\'s team) the controls disappear after the next authoritative read — no 403 click needed', async ({ page }) => {
+  const state = makeState(PTO, [draftPackage()], { [WORK_DRAFT]: PTO.id });
+  await seedSession(page, 'ui04-stale');
+  await mockApi(page, state);
+
+  await page.goto(`/app.html/pto/package/${draftPackage().id}`);
+  await expectMutationControls(page, true);
+
+  delete state.assignments[WORK_DRAFT]; // server now reports no effective assignment for this actor
+  await page.reload();
+  await expect(page.getByText('Черновик')).toBeVisible();
+  await expectMutationControls(page, false);
+});
+
+test('Package detail (UI04): a failed handoff read model fails closed — no mutation controls for an ordinary PTO engineer', async ({ page }) => {
+  const state = makeState(PTO, [draftPackage()], { [WORK_DRAFT]: PTO.id });
+  await seedSession(page, 'ui04-read-fails');
+  await mockApi(page, state);
+  await page.route('**/api/works/*/pto-assignment', (route) => route.fulfill({ status: 500, contentType: 'application/json', body: '{"message":"x"}' }));
+
+  await page.goto(`/app.html/pto/package/${draftPackage().id}`);
+  await expect(page.getByText('Черновик')).toBeVisible();
+  await expectMutationControls(page, false);
+});
+
+test('Package detail (UI04): PTO_HEAD and ADMIN keep their existing controls without an engineer assignment', async ({ page }) => {
+  for (const actor of [HEAD, ADMIN]) {
+    const state = makeState(actor, [draftPackage()]); // no engineer assignment on this work
+    await seedSession(page, `ui04-${actor.role}`);
+    await mockApi(page, state);
+
+    await page.goto(`/app.html/pto/package/${draftPackage().id}`);
+    await expect(page.getByText('Черновик')).toBeVisible();
+    await expectMutationControls(page, true);
+  }
+});

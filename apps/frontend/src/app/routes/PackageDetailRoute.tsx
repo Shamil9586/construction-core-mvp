@@ -5,6 +5,7 @@ import { buildPackageDetailViewModel } from '../../view-models/documentationPack
 import { useRefetchSnapshot, useSnapshot } from '../../data/SnapshotContext';
 import * as documentationApi from '../../data/documentationApi';
 import { useCoreRuntime } from '../CoreRuntimeContext';
+import { useWorkPtoAssignment } from '../useWorkPtoAssignment';
 import { canAccessDocumentation, canManageDocumentation, isPtoRole } from '../../auth/internalRoles';
 import { AppSidebar } from '../AppSidebar';
 import { ROUTE_PATHS, objectPath, workPath } from '../routePaths';
@@ -37,6 +38,12 @@ export function PackageDetailRoute() {
   const refetch = useRefetchSnapshot();
   const { session } = useCoreRuntime();
   const navigate = useNavigate();
+  // PILOT-W01 UI04 — the backend's PTO handoff read model for THIS package's Work (effective assignment only).
+  // Called before any early return (Rules of Hooks); fetched only for an ordinary PTO engineer, the one role
+  // whose package mutations the server gates on being the current effective assignee.
+  const packageWorkId =
+    state.status === 'Ready' ? (state.snapshot.documentationPackages ?? []).find((c) => c.id === packageId)?.objectWorkId : undefined;
+  const ptoAssignment = useWorkPtoAssignment(packageWorkId, !!session && session.user.role === 'PTO');
 
   if (state.status === 'Loading') return <RouteLoading />;
   if (state.status === 'Error') return <RouteError message={state.message} />;
@@ -73,24 +80,37 @@ export function PackageDetailRoute() {
     state.snapshot.documentationCustomerAcceptances ?? [],
   );
 
+  // PILOT-W01 UI04 — an ordinary PTO engineer gets mutation controls only while the server reports them as the
+  // CURRENT effective assignee of this Work (PBX-3A membership alone is read access). Until that read model has
+  // loaded — or if it failed — no controls are offered: never a client-side guess. PTO_HEAD/ADMIN are unchanged.
+  const mayMutate =
+    !!session &&
+    canManageDocumentation(session.user.role) &&
+    (session.user.role !== 'PTO' || (!!ptoAssignment.view?.assignment && ptoAssignment.view.assignment.assigneeUserId === session.user.id));
+  // Every mutation re-reads the handoff view too, so a handoff that went stale is reflected after the refresh.
+  const refetchAll = () => {
+    refetch();
+    ptoAssignment.reload();
+  };
+
   const actions: PackageDetailActionHandlers | undefined =
-    session && canManageDocumentation(session.user.role)
+    session && mayMutate
       ? {
           onAdvanceStatus: async (nextStatus, comment) => {
             await documentationApi.changeDocumentationPackageStatus(pkg.id, nextStatus, pkg.version, comment || undefined);
-            refetch();
+            refetchAll();
           },
           onLinkPortion: async (quantityPortionId) => {
             await documentationApi.linkDocumentationPackagePortion(pkg.id, quantityPortionId);
-            refetch();
+            refetchAll();
           },
           onCreateDocument: async (type) => {
             await documentationApi.createDocumentationDocument(pkg.id, type);
-            refetch();
+            refetchAll();
           },
           onCreateVersion: async (documentId, storageProvider, storageReference, comment) => {
             await documentationApi.createDocumentationVersion(documentId, storageProvider, storageReference, comment);
-            refetch();
+            refetchAll();
           },
           // F8.3-R01 corrective: registering customer acceptance and handing
           // off to SDO are PTO-only actions — the backend now refuses ADMIN
@@ -103,11 +123,11 @@ export function PackageDetailRoute() {
             ? {
                 onRegisterCustomerAcceptance: async (acceptedDate: string, reference: string | undefined, comment: string | undefined) => {
                   await documentationApi.registerDocumentationCustomerAcceptance(pkg.id, pkg.version, acceptedDate, reference, comment);
-                  refetch();
+                  refetchAll();
                 },
                 onHandoffToSdo: async (comment: string | undefined, idempotencyKey: string) => {
                   await documentationApi.handoffDocumentationPackageToSdo(pkg.id, pkg.version, comment, idempotencyKey);
-                  refetch();
+                  refetchAll();
                 },
                 // F8.3-17: "Вернуть на корректировку" — PTO's own,
                 // pre-handoff-only route back to CORRECTING. The backend
@@ -117,7 +137,7 @@ export function PackageDetailRoute() {
                 // as onRegisterCustomerAcceptance/onHandoffToSdo above.
                 onReturnToCorrection: async (comment: string | undefined) => {
                   await documentationApi.returnDocumentationPackageToCorrection(pkg.id, pkg.version, comment);
-                  refetch();
+                  refetchAll();
                 },
               }
             : {}),
