@@ -492,11 +492,14 @@ test('P01: the attention queue shows a RED reason + "К работе" (no packag
 
   const table = page.locator('table', { hasText: 'Очередь ПТО' });
   const rowNew = table.locator('tr', { hasText: 'Устройство кровли' });
+  // F11.4 (30196c4) replaced the literal 🔴/🟡 emoji with an aria-hidden dot carrying data-level; assert that marker instead.
+  await expect(rowNew.locator('[data-level="RED"]')).toHaveCount(1);
   await expect(rowNew).toContainText('Нет пакета ИД');
   await expect(rowNew.getByRole('button', { name: 'К работе' })).toBeVisible();
   await expect(rowNew.getByRole('button', { name: /Создать пакет/ })).toHaveCount(0);
 
   const rowDraft = table.locator('tr', { hasText: 'Штукатурка стен' });
+  await expect(rowDraft.locator('[data-level="YELLOW"]')).toHaveCount(1);
   await expect(rowDraft).toContainText('Документы формируются');
   await expect(rowDraft.getByRole('button', { name: 'Открыть' })).toBeVisible();
 });
