@@ -13,6 +13,12 @@ export class DictionariesController {
     async dictionaries(
     @Req()
     r: any) { const a = await authenticate(r); requirePermission(a, P.WORK_VIEW); return { categories: await rows(pool, 'SELECT * FROM work_categories WHERE tenant_id=$1', [a.tenantId]), workTypes: await rows(pool, 'SELECT * FROM work_types WHERE tenant_id=$1', [a.tenantId]) }; }
+    @Post('dictionaries/categories')
+    async addCategory(
+    @Req()
+    r: any,
+    @Body()
+    b: any) { const a = await authenticate(r); requirePermission(a, P.ADMIN_DICTIONARIES); const d = z.object({ name: V.text, code: V.text }).strict().parse(b); return insert(pool, 'work_categories', a.tenantId, d); }
     @Post('dictionaries/work-types')
     async addType(
     @Req()
