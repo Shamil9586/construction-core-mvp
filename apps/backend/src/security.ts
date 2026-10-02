@@ -189,9 +189,10 @@ export async function ensurePtoObjectScope(c: any, a: Actor, objectId: string, w
         throw new ForbiddenException(a.role === 'PTO_HEAD' ? 'Вы не являетесь текущим начальником ПТО этого объекта' : 'Вы не назначены на ПТО этого объекта');
 }
 /**
- * Work-level access (PILOT-W01). Every role other than PTO is exactly objectAccess(). A PTO engineer needs either generic
- * PBX-3A object membership (unchanged semantics) or to be the EFFECTIVE assignee of THIS exact work; an assignment on a
- * sibling work of the same object grants nothing here.
+ * Work-level GENERIC access (PILOT-W01) — what a role may open/read. Every role other than PTO is exactly objectAccess(). A PTO
+ * engineer needs either generic PBX-3A object membership (unchanged semantics) or to be the EFFECTIVE assignee of THIS exact
+ * work; an assignment on a sibling work of the same object grants nothing here. This is NOT package-operator authority: PBX-3A
+ * membership opens/reads the work, it never authorizes a PTO package mutation — see ensureEffectivePtoPackageOperator().
  */
 export async function workAccess(c: any, a: Actor, work: { id: string; objectId: string }, write = false) {
     if (a.role !== 'PTO')
@@ -200,6 +201,26 @@ export async function workAccess(c: any, a: Actor, work: { id: string; objectId:
     if ((await isCurrentPtoMember(c, a.tenantId, work.objectId, a.id)) || (await isEffectivePtoWorkAssignee(c, a.tenantId, work.id, a.id)))
         return o;
     throw new ForbiddenException('Вы не назначены на ПТО этой работы');
+}
+/**
+ * PILOT-W01 B3 — PTO PACKAGE MUTATION authority. Generic object access (PBX-3A membership) and package-operator authority are
+ * different things: an ordinary PTO engineer may change a documentation package of work W only while they are the CURRENT
+ * EFFECTIVE assignee of exactly W (active row + active PTO of the tenant + the object's current PTO_HEAD + still on that head's
+ * functional team, revalidated here at action time). Membership never substitutes, so a stale/superseded handoff leaves a
+ * retained member read-only. Every other role (PTO_HEAD, ADMIN, ...) keeps its existing authorization unchanged — this
+ * adds nothing for them.
+ */
+export async function ensureEffectivePtoPackageOperator(c: any, a: Actor, work: { id: string; objectId: string }) {
+    if (a.role !== 'PTO')
+        return;
+    if (!(await isEffectivePtoWorkAssignee(c, a.tenantId, work.id, a.id)))
+        throw new ForbiddenException('Менять пакет ИД может только сотрудник ПТО, назначенный на эту работу (действующая передача в работу)');
+}
+/** workAccess() for a package WRITE + the operator rule above. The one gate every documentation-package mutation goes through. */
+export async function packageMutationAccess(c: any, a: Actor, work: { id: string; objectId: string }) {
+    const o = await workAccess(c, a, work, true);
+    await ensureEffectivePtoPackageOperator(c, a, work);
+    return o;
 }
 // PBX-3A (PBX3-D08): a PTO responsible selected for an object's documentation
 // package must be active AND currently on that object's PTO team — a current
