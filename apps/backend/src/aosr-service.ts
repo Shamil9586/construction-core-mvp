@@ -59,9 +59,9 @@ export class AosrService {
     }
     private async readinessOf(c: any, a: Actor, aosr: any, work: any) {
         const b = await this.bundle(c, a.tenantId, aosr.id);
-        const wt = await one(c, 'SELECT name,requires_materials,requires_executive_docs FROM work_types WHERE tenant_id=$1 AND id=$2', [a.tenantId, work.workTypeId]);
+        const wt = await one(c, 'SELECT name,requires_materials FROM work_types WHERE tenant_id=$1 AND id=$2', [a.tenantId, work.workTypeId]);
         const parties = await this.parties(c, a.tenantId, aosr.objectId);
-        const readiness = resolveAosrReadiness({ content: aosr, parties, materials: b.materials, schemes: b.schemes, workTypeRequiresMaterials: !!wt?.requiresMaterials, workTypeRequiresExecutiveDocs: !!wt?.requiresExecutiveDocs, templateAvailable: aosrTemplateAvailable() });
+        const readiness = resolveAosrReadiness({ content: aosr, parties, materials: b.materials, schemes: b.schemes, workTypeRequiresMaterials: !!wt?.requiresMaterials, templateAvailable: aosrTemplateAvailable() });
         return { readiness, bundle: b, parties };
     }
     private summary(aosr: any, readiness: { ready: boolean; issues: any[] }) {

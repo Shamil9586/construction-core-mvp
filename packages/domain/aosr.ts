@@ -66,7 +66,6 @@ export function resolveAosrReadiness(input: {
     materials: AosrMaterialInput[];
     schemes: AosrSchemeInput[];
     workTypeRequiresMaterials: boolean;
-    workTypeRequiresExecutiveDocs: boolean;
     templateAvailable: boolean;
 }): AosrReadiness {
     const issues: AosrReadinessIssue[] = [];
@@ -94,7 +93,9 @@ export function resolveAosrReadiness(input: {
     if (blank(c.projectDocumentation)) add('PROJECT_DOCUMENTATION_MISSING', 'Не заполнена проектная/рабочая документация (пункт 2)');
     if (input.workTypeRequiresMaterials && !input.materials.length) add('MATERIALS_MISSING', 'Не выбраны материалы (пункт 3)');
     for (const m of input.materials) if (!m.qualityDocuments.length) add('MATERIAL_DOCS_MISSING', `У материала «${m.name}» нет документа о качестве`);
-    if (input.workTypeRequiresExecutiveDocs && !input.schemes.length && !input.materials.some(m => m.qualityDocuments.length)) add('SUPPORTING_DOCS_MISSING', 'Нет документов, подтверждающих соответствие работ (пункт 4)');
+    // Executive schemes and material quality documents are separate requirements: a passport/certificate never substitutes for a scheme.
+    // One scheme may cover several AOSRs, so the rule is "at least one linked scheme", never a unique scheme.
+    if (!input.schemes.length) add('EXECUTIVE_SCHEME_MISSING', 'АОСР не покрыт исполнительной схемой (пункт 4)');
     if (blank(c.normativeReferences)) add('NORMATIVE_MISSING', 'Не указаны нормативные документы (пункт 6)');
     if (blank(c.subsequentWork)) add('SUBSEQUENT_WORK_MISSING', 'Не указаны последующие работы (пункт 7)');
     return { ready: issues.length === 0, issues };

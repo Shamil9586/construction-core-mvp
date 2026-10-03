@@ -89,10 +89,10 @@ const PARTIES = [
 async function fillParties(req: any, pkgId: string) { for (const p of PARTIES) await req(`documentation-packages/${pkgId}/aosr-parties`, p); }
 
 /** Fills one AOSR so it is ready (materials with a quality document, dates, texts). */
-async function fillAosr(req: any, ctx: any, aosrId: string, material: any, opts: { point1?: string } = {}) {
+async function fillAosr(req: any, ctx: any, aosrId: string, material: any, opts: { point1?: string; schemeId?: string } = {}) {
   let a = await req(`aosr/${aosrId}`);
   a = (await req(`aosr/${aosrId}/edit`, { workDescription: opts.point1 ?? 'Устройство штукатурки стен в помещении санузлов по типу №1', startDate: dt(-3), endDate: dt(-1), actDate: dt(0), projectDocumentation: 'Рабочая документация, шифр АР-1, лист 5', normativeReferences: 'СП 71.13330.2017', subsequentWork: 'Шпатлёвка стен', version: a.version }, 201));
-  const linked = await req(`aosr/${aosrId}/links`, { materialRecordIds: [material.id], quantityPortionIds: [ctx.portion.id], version: a.version });
+  const linked = await req(`aosr/${aosrId}/links`, { materialRecordIds: [material.id], quantityPortionIds: [ctx.portion.id], ...(opts.schemeId ? { schemeDocumentIds: [opts.schemeId] } : {}), version: a.version });
   return linked;
 }
 
@@ -156,13 +156,22 @@ test('readiness blocks generation; quantity and a unique scheme per AOSR are not
   assert.equal((await req(`aosr/${aosr.id}`)).officialNumber, null);
   const noFile = await raw(`aosr/${aosr.id}/docx`);
   assert.equal(noFile.status, 404);
-  // Filled, with NO executive scheme at all: still ready (a scheme is not mandatory per AOSR).
+  // Fully filled with a material AND its quality document, but no executive scheme: still BLOCKED.
   await fillParties(req, ctx.pkg.id);
   const material = await req(`${base}/aosr-materials`, { name: 'Штукатурная смесь', qualityDocuments: [{ docType: 'CERTIFICATE', number: 'RU-1', docDate: dt(-30) }] });
   const linked = await fillAosr(req, ctx, aosr.id, material);
   const after = await req(`aosr/${aosr.id}`);
-  assert.equal(after.ready, true, JSON.stringify(after.readiness));
-  assert.equal(after.schemes.length, 0);
+  assert.equal(after.ready, false);
+  assert.deepEqual(after.readiness.issues.map((i: any) => i.code), ['EXECUTIVE_SCHEME_MISSING'], 'a quality document never substitutes for a scheme; material readiness is independent');
+  assert.equal((await raw(`aosr/${aosr.id}/generate`, { version: after.version })).status, 400);
+  // One scheme, no uniqueness requirement: linking it makes this AOSR ready…
+  const scheme = await req(`${base}/aosr-schemes`, { title: 'ES-001' });
+  await req(`aosr/${aosr.id}/links`, { schemeDocumentIds: [scheme.id], version: after.version });
+  assert.equal((await req(`aosr/${aosr.id}`)).ready, true);
+  // …and the SAME scheme also satisfies a second AOSR.
+  const second = await req(`${base}/aosr`, { title: 'Второй АОСР' });
+  await fillAosr(req, ctx, second.id, material, { schemeId: scheme.id });
+  assert.equal((await req(`aosr/${second.id}`)).ready, true);
   assert.equal(linked.officialNumber, null);
 });
 
@@ -174,8 +183,9 @@ test('first generation assigns the official number; draft AOSRs consume none; a 
   const material = await req(`${base}/aosr-materials`, { name: 'Штукатурная смесь' });
   await req(`${base}/aosr-materials/${material.id}/quality-documents`, { docType: 'PASSPORT', number: 'П-7', docDate: dt(-20), issuer: 'Завод' });
   const a1 = await req(`${base}/aosr`, { title: 'Грунтовка' }), a2 = await req(`${base}/aosr`, { title: 'Штукатурка' }), draft = await req(`${base}/aosr`, { title: 'Черновик' });
-  await fillAosr(req, ctx, a1.id, material);
-  await fillAosr(req, ctx, a2.id, material, { point1: 'Устройство штукатурки стен' });
+  const shared = await req(`${base}/aosr-schemes`, { title: 'ES-001' });
+  await fillAosr(req, ctx, a1.id, material, { schemeId: shared.id });
+  await fillAosr(req, ctx, a2.id, material, { point1: 'Устройство штукатурки стен', schemeId: shared.id });
   const g1 = await req(`aosr/${a1.id}/generate`, { version: (await req(`aosr/${a1.id}`)).version });
   assert.equal(g1.officialNumber, 1);
   const g2 = await req(`aosr/${a2.id}/generate`, { version: (await req(`aosr/${a2.id}`)).version });
@@ -365,8 +375,11 @@ test('domain: readiness, suggestions, current quantity, number slot helpers', ()
     { partyRole: 'DEVELOPER', organizationName: 'a' }, { partyRole: 'CONSTRUCTION_ENTITY', organizationName: 'b' }, { partyRole: 'WORK_EXECUTOR', organizationName: 'c' },
     ...(['DEVELOPER_SC_REP', 'CONSTRUCTION_REP', 'INTERNAL_SC'] as const).map(r => ({ partyRole: r, personName: 'И И', position: 'п', authorityDocument: 'д' })),
   ] as any[];
-  const base = { content, parties, materials: [], schemes: [], workTypeRequiresMaterials: false, workTypeRequiresExecutiveDocs: false, templateAvailable: true };
+  const base = { content, parties, materials: [], schemes: [{ id: 's', title: 'ES-001' }], workTypeRequiresMaterials: false, templateAvailable: true };
   assert.equal(resolveAosrReadiness(base).ready, true);
+  const docs = [{ name: 'м', qualityDocuments: [{ docType: 'CERTIFICATE' as const, number: '1' }] }];
+  assert.deepEqual(resolveAosrReadiness({ ...base, schemes: [], materials: docs }).issues.map(i => i.code), ['EXECUTIVE_SCHEME_MISSING'], 'quality document cannot replace a scheme');
+  assert.equal(resolveAosrReadiness({ ...base, materials: docs }).ready, true, 'one shared scheme suffices; nothing demands a unique scheme');
   assert.deepEqual(resolveAosrReadiness({ ...base, templateAvailable: false }).issues.map(i => i.code), ['TEMPLATE_UNAVAILABLE']);
   assert.ok(resolveAosrReadiness({ ...base, content: { ...content, endDate: '2025-01-01' } }).issues.some(i => i.code === 'DATES_ORDER'));
   assert.ok(resolveAosrReadiness({ ...base, workTypeRequiresMaterials: true }).issues.some(i => i.code === 'MATERIALS_MISSING'));

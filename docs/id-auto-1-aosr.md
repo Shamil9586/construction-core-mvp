@@ -23,7 +23,7 @@ the official form `АОСР_приказ_344(1).docx` (Приказ Минстр
 * Same gate as every package mutation (`packageMutationAccess`: effective PTO assignment) and the same freeze
   (`canMutateDocumentationPackageContent`): no AOSR change/generation once the package is PRESENTED/RETURNED/
   ACCEPTED_BY_CUSTOMER or SDO-locked. Parties/materials are object-level master data (access rule only).
-* Readiness (`resolveAosrReadiness`) blocks generation; quantity, scanned files and a per-AOSR scheme are not required.
+* Readiness (`resolveAosrReadiness`) blocks generation; quantity and scanned files are not required. Every AOSR needs at least one linked executive scheme (a quality document never substitutes), but one scheme may cover many AOSRs — no unique scheme per AOSR.
 * Customer-accepted quantity: PTO only, only for a PRESENTED/ACCEPTED_BY_CUSTOMER package that is not SDO-locked;
   idempotent per `idempotencyKey`.
 
