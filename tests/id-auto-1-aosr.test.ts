@@ -81,6 +81,7 @@ async function setUp() {
 const PARTIES = [
   { partyRole: 'DEVELOPER', organizationName: 'ООО «Заказчик»', organizationDetails: 'ОГРН 1, ИНН 2' },
   { partyRole: 'CONSTRUCTION_ENTITY', organizationName: 'ООО СЗ «Гор-Строй»', organizationDetails: 'ОГРН 3, ИНН 4' },
+  { partyRole: 'DESIGNER', organizationName: 'ООО «Проект»', organizationDetails: 'ОГРН 5, ИНН 6' },
   { partyRole: 'WORK_EXECUTOR', organizationName: 'ООО «Подрядчик»' },
   { partyRole: 'DEVELOPER_SC_REP', personName: 'Петров Пётр Петрович', position: 'Инженер СК', authorityDocument: 'Приказ № 1' },
   { partyRole: 'CONSTRUCTION_REP', personName: 'Сидоров Сидор Сидорович', position: 'Прораб', authorityDocument: 'Приказ № 2' },
@@ -243,7 +244,7 @@ test('the generated file is an editable DOCX built on the unchanged official tem
   t.forEach((text, i) => { if (text.replace(/ /g, '').trim()) assert.equal(o[i], text, `official text of paragraph ${i} unchanged`); });
   const filled = o.filter((text, i) => !t[i].replace(/ /g, '').trim() && text.trim());
   const flat = filled.join('|');
-  for (const expected of ['Жилой дом №1', 'Тестовая', 'ООО «Заказчик»', 'Устройство штукатурки стен в помещении санузлов', 'АР-1', 'Грунтовка (декларация № Д-9)', 'СП 71.13330.2017', 'Шпатлёвка стен', 'Исполнительная схема нанесения', 'Иванов И.И.', 'Петров П.П.', 'ООО «Подрядчик»']) assert.ok(flat.includes(expected), expected + ' in ' + flat);
+  for (const expected of ['Жилой дом №1', 'Тестовая', 'ООО «Заказчик»', 'Устройство штукатурки стен в помещении санузлов', 'АР-1', 'Грунтовка', 'декларация № Д-9', 'ООО «Проект»', 'СП 71.13330.2017', 'Шпатлёвка стен', 'Исполнительная схема нанесения', 'Иванов И.И.', 'Петров П.П.', 'ООО «Подрядчик»']) assert.ok(flat.includes(expected), expected + ' in ' + flat);
   assert.ok(o[36] === '1', 'official number in the number slot');
   for (const q of [RP, INTERNAL, CUSTOMER, '498', '500,1234']) assert.ok(!outXml.includes(q), 'quantity ' + q + ' must not be printed');
   const { pool } = await import('../apps/backend/src/db');
@@ -372,7 +373,7 @@ test('parties: object-level master data is editable, versioned, and every change
 test('domain: readiness, suggestions, current quantity, number slot helpers', () => {
   const content = { workDescription: 'x', startDate: '2026-01-01', endDate: '2026-01-02', actDate: '2026-01-03', projectDocumentation: 'p', normativeReferences: 'n', subsequentWork: 's' };
   const parties = [
-    { partyRole: 'DEVELOPER', organizationName: 'a' }, { partyRole: 'CONSTRUCTION_ENTITY', organizationName: 'b' }, { partyRole: 'WORK_EXECUTOR', organizationName: 'c' },
+    { partyRole: 'DEVELOPER', organizationName: 'a' }, { partyRole: 'CONSTRUCTION_ENTITY', organizationName: 'b' }, { partyRole: 'WORK_EXECUTOR', organizationName: 'c' }, { partyRole: 'DESIGNER', organizationName: 'д0' },
     ...(['DEVELOPER_SC_REP', 'CONSTRUCTION_REP', 'INTERNAL_SC'] as const).map(r => ({ partyRole: r, personName: 'И И', position: 'п', authorityDocument: 'д' })),
   ] as any[];
   const base = { content, parties, materials: [], schemes: [{ id: 's', title: 'ES-001' }], workTypeRequiresMaterials: false, templateAvailable: true };
@@ -384,7 +385,10 @@ test('domain: readiness, suggestions, current quantity, number slot helpers', ()
   assert.ok(resolveAosrReadiness({ ...base, content: { ...content, endDate: '2025-01-01' } }).issues.some(i => i.code === 'DATES_ORDER'));
   assert.ok(resolveAosrReadiness({ ...base, workTypeRequiresMaterials: true }).issues.some(i => i.code === 'MATERIALS_MISSING'));
   assert.ok(resolveAosrReadiness({ ...base, materials: [{ name: 'м', qualityDocuments: [] }] }).issues.some(i => i.code === 'MATERIAL_DOCS_MISSING'));
-  assert.ok(resolveAosrReadiness({ ...base, parties: [...parties, { partyRole: 'DESIGNER', organizationName: 'д' }] }).issues.some(i => i.code === 'PARTY_DESIGNER_REP'));
+  // Project-design organization master data is required for a generation-ready act; its representative is optional.
+  assert.ok(resolveAosrReadiness({ ...base, parties: parties.filter(p => p.partyRole !== 'DESIGNER') }).issues.some(i => i.code === 'PARTY_DESIGNER'));
+  assert.equal(resolveAosrReadiness({ ...base, parties: [...parties, { partyRole: 'DESIGNER', organizationName: 'д' }] }).ready, true);
+  assert.ok(resolveAosrReadiness({ ...base, parties: [...parties, { partyRole: 'DESIGNER', organizationName: 'д' }, { partyRole: 'DESIGNER_REP', personName: 'Н Н' }] }).issues.some(i => i.code === 'PARTY_DESIGNER_REP'));
   assert.deepEqual(suggestTypicalAosr('Штукатурка стен', { acceptedCodes: ['PLASTER.PRIMER'], dismissedCodes: [] }).map(s => s.suggestionCode), ['PLASTER.PLASTER']);
   assert.deepEqual(suggestTypicalAosr('Бурение', { acceptedCodes: [], dismissedCodes: [] }), []);
   const fig = (c: string | null, i: string | null, r: string | null) => ({ portionId: 'p', rpFact: r, internalSc: i, customerAccepted: c, unit: 'м²' });

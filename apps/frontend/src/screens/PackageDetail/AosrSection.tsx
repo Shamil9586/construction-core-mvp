@@ -26,7 +26,7 @@ const EDITABLE = ['DRAFT', 'PREPARING', 'READY_FOR_PRESENTATION', 'CORRECTING'];
 const PARTY_FIELDS: { role: AosrPartyRole; label: string; kind: 'org' | 'person'; required: boolean }[] = [
   { role: 'DEVELOPER', label: 'Застройщик, технический заказчик', kind: 'org', required: true },
   { role: 'CONSTRUCTION_ENTITY', label: 'Лицо, осуществляющее строительство', kind: 'org', required: true },
-  { role: 'DESIGNER', label: 'Лицо, осуществляющее подготовку проектной документации', kind: 'org', required: false },
+  { role: 'DESIGNER', label: 'Лицо, осуществляющее подготовку проектной документации', kind: 'org', required: true },
   { role: 'WORK_EXECUTOR', label: 'Лицо, выполнившее работы', kind: 'org', required: true },
   { role: 'DEVELOPER_SC_REP', label: 'Представитель застройщика по строительному контролю', kind: 'person', required: true },
   { role: 'CONSTRUCTION_REP', label: 'Представитель лица, осуществляющего строительство', kind: 'person', required: true },
@@ -160,11 +160,13 @@ function PartiesBlock({ packageId, view, onChanged }: { packageId: string; view:
           <span className={[styles.secondary, typeClass('body')].join(' ')}>Данные общие для всех АОСР объекта; изменения применяются к новым формированиям.</span>
           {PARTY_FIELDS.map((f) => {
             const fields = f.kind === 'org' ? ['organizationName', 'organizationDetails'] : ['personName', 'position', 'registryNumber', 'authorityDocument'];
-            const labels: Record<string, string> = { organizationName: 'Наименование', organizationDetails: 'Реквизиты (ОГРН, ИНН, адрес, СРО)', personName: 'ФИО', position: 'Должность', registryNumber: 'Номер в НРС', authorityDocument: 'Приказ / документ о полномочиях' };
+            const labels: Record<string, string> = { organizationName: 'Наименование', organizationDetails: 'Реквизиты (ОГРН, ИНН, адрес); СРО — со следующей строки', personName: 'ФИО', position: 'Должность', registryNumber: 'Номер в НРС', authorityDocument: 'Приказ / документ о полномочиях' };
             return (
               <div key={f.role} className={styles.inlineForm}>
                 <span className={typeClass('body-strong')}>{f.label}{f.required ? ' *' : ''}</span>
-                {fields.map((field) => (
+                {fields.map((field) => field === 'organizationDetails' ? (
+                  <textarea key={field} rows={2} className={styles.input} value={value(f.role, field)} onChange={(e) => set(f.role, field, e.target.value)} placeholder={labels[field]} aria-label={`${f.label}: ${labels[field]}`} />
+                ) : (
                   <input key={field} className={styles.input} value={value(f.role, field)} onChange={(e) => set(f.role, field, e.target.value)} placeholder={labels[field]} aria-label={`${f.label}: ${labels[field]}`} />
                 ))}
                 <button type="button" className={styles.actionButton} disabled={action.pending} onClick={() => void save(f.role, fields)}>Сохранить</button>

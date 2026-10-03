@@ -30,20 +30,33 @@ const NBSP = ' ';
 
 /** Paragraph index (document order) of each fill-in blank of the official form. */
 const SLOT = {
-    objectName: 5, objectAddress: 6, developer: 10, constructionEntity: 17, designer: 24,
+    objectName: 5, objectAddress: 6, developer: 10, developerSro: 12, constructionEntity: 17, constructionEntitySro: 21, designer: 24, designerSro: 28,
     actNumber: 36, actDay: 39, actMonth: 41, actYear: 43,
     developerScRep: 50, constructionRep: 55, internalScRep: 58, designerRep: 61, executorRep: 64, executorName: 69,
-    point1: 73, point2: 76, point3: 79, point4: 86,
+    point1: 73, point2: 76, point3Line1: 79, point3Line2: 82, point4Line1: 86, point4Line2: 89,
     startDay: 94, startMonth: 96, startYear: 98, endDay: 102, endMonth: 104, endYear: 106,
     point6: 110, point7: 115, additionalInfo: 118, copies: 121, appendices: 125,
     signDeveloperScRep: 130, signConstructionRep: 137, signInternalSc: 145, signDesignerRep: 152, signExecutorRep: 159,
 } as const;
 
-function fillParagraph(p: string, value: string): string {
+/** Widths (twips) of the narrow cells that receive a value, minus the table's 108+108 cell margins. */
+const MONTH_CELL_TWIPS = 972 - 216;
+/**
+ * The form's default text is 10pt. A value that would not fit its one-line cell gets a smaller run size so the word is never
+ * split ("сентябр/я"); the form itself (cell widths, labels, rows) is untouched. Returns half-points, or null to keep the default.
+ */
+export function fitHalfPoints(text: string, cellTwips: number, defaultHalfPoints = 20): number | null {
+    const widthPt = cellTwips / 20, em = 0.56; // bold-italic Times Cyrillic, conservative average advance
+    const half = Math.floor((widthPt / (text.length * em)) * 2);
+    return half >= defaultHalfPoints ? null : Math.max(half, 12);
+}
+
+function fillParagraph(p: string, value: string, halfPoints: number | null = null): string {
     const text = value.split('\n').map(esc).join('</w:t><w:br/><w:t xml:space="preserve">');
     const blankRun = /<w:t(?: [^>]*)?>[  ]<\/w:t>/;
     if (!blankRun.test(p)) throw new Error('AOSR template: expected blank fill-in run');
-    return p.replace(blankRun, `<w:t xml:space="preserve">${text}</w:t>`);
+    const out = p.replace(blankRun, `<w:t xml:space="preserve">${text}</w:t>`);
+    return halfPoints === null ? out : out.replace(/<w:rPr>((?:(?!<\/w:rPr>).)*)<\/w:rPr>(<w:t[ >])/, `<w:rPr>$1<w:sz w:val="${halfPoints}"/><w:szCs w:val="${halfPoints}"/></w:rPr>$2`);
 }
 
 export async function renderAosrDocx(model: AosrRenderModel): Promise<Buffer> {
@@ -58,13 +71,13 @@ export async function renderAosrDocx(model: AosrRenderModel): Promise<Buffer> {
     const values = new Map<number, string>();
     const set = (slot: number, v: string | null | undefined) => { if (v && v.trim()) values.set(slot, v.trim()); };
     set(SLOT.objectName, model.objectName); set(SLOT.objectAddress, model.objectAddress);
-    set(SLOT.developer, model.developer); set(SLOT.constructionEntity, model.constructionEntity); set(SLOT.designer, model.designer);
+    set(SLOT.developer, model.developer); set(SLOT.developerSro, model.developerSro); set(SLOT.constructionEntity, model.constructionEntity); set(SLOT.constructionEntitySro, model.constructionEntitySro); set(SLOT.designer, model.designer); set(SLOT.designerSro, model.designerSro);
     set(SLOT.actNumber, model.actNumber);
     const act = splitRuDate(model.actDate);
     if (act) { set(SLOT.actDay, act.day); set(SLOT.actMonth, act.month); set(SLOT.actYear, act.year); }
     set(SLOT.developerScRep, model.developerScRep); set(SLOT.constructionRep, model.constructionRep); set(SLOT.internalScRep, model.internalScRep);
     set(SLOT.designerRep, model.designerRep); set(SLOT.executorRep, model.executorRep); set(SLOT.executorName, model.executorName);
-    set(SLOT.point1, model.point1); set(SLOT.point2, model.point2); set(SLOT.point3, model.point3); set(SLOT.point4, model.point4);
+    set(SLOT.point1, model.point1); set(SLOT.point2, model.point2); set(SLOT.point3Line1, model.point3Line1); set(SLOT.point3Line2, model.point3Line2); set(SLOT.point4Line1, model.point4Line1); set(SLOT.point4Line2, model.point4Line2);
     const start = splitRuDate(model.startDate), end = splitRuDate(model.endDate);
     if (start) { set(SLOT.startDay, start.day); set(SLOT.startMonth, start.month); set(SLOT.startYear, start.year); }
     if (end) { set(SLOT.endDay, end.day); set(SLOT.endMonth, end.month); set(SLOT.endYear, end.year); }
@@ -74,7 +87,8 @@ export async function renderAosrDocx(model: AosrRenderModel): Promise<Buffer> {
     let out = '', cursor = 0;
     matches.forEach((m, i) => {
         out += body.slice(cursor, m.index!);
-        out += values.has(i) ? fillParagraph(m[0], values.get(i)!) : m[0];
+        const monthSlot = i === SLOT.actMonth || i === SLOT.startMonth || i === SLOT.endMonth;
+        out += values.has(i) ? fillParagraph(m[0], values.get(i)!, monthSlot ? fitHalfPoints(values.get(i)!, MONTH_CELL_TWIPS) : null) : m[0];
         cursor = m.index! + m[0].length;
     });
     out += body.slice(cursor);

@@ -74,16 +74,14 @@ export function resolveAosrReadiness(input: {
     const party = (r: AosrPartyRole) => input.parties.find(p => p.partyRole === r);
     if (!input.templateAvailable) add('TEMPLATE_UNAVAILABLE', 'Официальный шаблон АОСР недоступен');
     if (blank(c.workDescription)) add('POINT1_MISSING', 'Не заполнен пункт 1: предъявленные к освидетельствованию работы');
-    for (const r of ['DEVELOPER', 'CONSTRUCTION_ENTITY', 'WORK_EXECUTOR'] as AosrOrganizationRole[])
+    // DESIGNER (the header's «лицо, осуществляющее подготовку проектной документации») is organization master data and is required;
+    // only the project-designer's REPRESENTATIVE is optional.
+    for (const r of ['DEVELOPER', 'CONSTRUCTION_ENTITY', 'DESIGNER', 'WORK_EXECUTOR'] as AosrOrganizationRole[])
         if (!filled(party(r), 'organizationName')) add('PARTY_' + r, `Не заполнены данные: ${AOSR_PARTY_ROLE_LABELS[r]}`);
     for (const r of ['DEVELOPER_SC_REP', 'CONSTRUCTION_REP', 'INTERNAL_SC'] as AosrSignatoryRole[])
         if (!filled(party(r), 'personName', 'position', 'authorityDocument')) add('PARTY_' + r, `Не заполнен подписант (ФИО, должность, документ о полномочиях): ${AOSR_PARTY_ROLE_LABELS[r]}`);
-    // Designer and the third-party executor's representative are conditional on the form itself.
-    const designerTouched = !blank(party('DESIGNER')?.organizationName) || !blank(party('DESIGNER_REP')?.personName);
-    if (designerTouched) {
-        if (!filled(party('DESIGNER'), 'organizationName')) add('PARTY_DESIGNER', `Не заполнены данные: ${AOSR_PARTY_ROLE_LABELS.DESIGNER}`);
-        if (!filled(party('DESIGNER_REP'), 'personName', 'position', 'authorityDocument')) add('PARTY_DESIGNER_REP', `Не заполнен подписант (ФИО, должность, документ о полномочиях): ${AOSR_PARTY_ROLE_LABELS.DESIGNER_REP}`);
-    }
+    // Optional representatives: when a name is given, position and authority document are required too.
+    if (!blank(party('DESIGNER_REP')?.personName) && !filled(party('DESIGNER_REP'), 'position', 'authorityDocument')) add('PARTY_DESIGNER_REP', `Не заполнены должность и документ о полномочиях: ${AOSR_PARTY_ROLE_LABELS.DESIGNER_REP}`);
     if (!blank(party('EXECUTOR_REP')?.personName) && !filled(party('EXECUTOR_REP'), 'position', 'authorityDocument')) add('PARTY_EXECUTOR_REP', `Не заполнены должность и документ о полномочиях: ${AOSR_PARTY_ROLE_LABELS.EXECUTOR_REP}`);
     if (!c.startDate || !c.endDate || !c.actDate) add('DATES_MISSING', 'Не заполнены даты начала, окончания работ и акта');
     else {
