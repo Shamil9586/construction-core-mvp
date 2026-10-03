@@ -503,7 +503,7 @@ export type DocumentationPackageStatus =
 export type DocumentationDocumentType = 'AOSR' | 'ACT_CERTIFICATE' | 'EXECUTIVE_SCHEME';
 
 /** F8.2 Storage Reference layer — constrained by a CHECK on `documentation_document_versions.storage_provider`. BITRIX_DISK is future compatibility, not yet a legal value. */
-export type StorageProvider = 'NONE' | 'EXTERNAL_REFERENCE';
+export type StorageProvider = 'NONE' | 'EXTERNAL_REFERENCE' | 'CORE_FILE';
 
 /**
  * F8.2 PTO / Executive Documentation Foundation — a Documentation Package.

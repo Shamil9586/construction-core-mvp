@@ -81,7 +81,7 @@ function hasDocumentationDocumentTypeField(record: Record<string, unknown>, fiel
 }
 
 /** F8.2 — `StorageProvider`, closed and DB-enforced. BITRIX_DISK is future compatibility, not yet legal. */
-const STORAGE_PROVIDERS = new Set(['NONE', 'EXTERNAL_REFERENCE']);
+const STORAGE_PROVIDERS = new Set(['NONE', 'EXTERNAL_REFERENCE', 'CORE_FILE']);
 function hasStorageProviderField(record: Record<string, unknown>, field: string): boolean {
   return isString(record[field]) && STORAGE_PROVIDERS.has(record[field] as string);
 }

@@ -1,0 +1,385 @@
+import { test, after } from 'node:test';
+import assert from 'node:assert/strict';
+import JSZip from 'jszip';
+import { handoffWorkToPto } from './helpers/pbx3-fixtures';
+import { resolveAosrReadiness, suggestTypicalAosr, resolveCurrentAcceptedQuantity, splitRuDate } from '../packages/domain/aosr';
+import { buildAosrRenderModel, surnameInitials } from '../apps/backend/src/id-auto/aosr';
+import { readAosrTemplate } from '../apps/backend/src/id-auto/aosr-docx';
+
+/**
+ * ID-AUTO-1 — AOSR inside the existing Documentation Package. HTTP-level over the real backend
+ * (PGlite), same harness shape as the other documentation tests. One backend instance serves the
+ * whole file; every test builds its own object so nothing is shared.
+ */
+const PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aF9sAAAAASUVORK5CYII=';
+const dt = (delta: number) => new Date(Date.now() + delta * 86400000).toISOString().slice(0, 10);
+const RP = '500.1234', INTERNAL = '498.1234', CUSTOMER = '496.1234';
+
+let shared: Promise<any> | null = null;
+function harness() {
+  return (shared ??= (async () => {
+    if (!process.env.E2E_DATABASE_URL) delete process.env.DATABASE_URL;
+    process.env.AUTH_MODE = 'mock';
+    process.env.MOCK_LOGIN_KEY = 'aosr-key';
+    process.env.AUTH_RATE_LIMIT_MAX = '100000';
+    process.env.RATE_LIMIT_MAX = '1000000';
+    process.env.DB_MODE = process.env.E2E_DATABASE_URL ? 'postgres' : 'pglite';
+    process.env.PGLITE_DIR = 'memory://';
+    if (process.env.E2E_DATABASE_URL) process.env.DATABASE_URL = process.env.E2E_DATABASE_URL;
+    const { migrate } = await import('../scripts/migrate');
+    const { seed } = await import('../scripts/seed');
+    const { createApp } = await import('../apps/backend/src/main');
+    await migrate();
+    await seed();
+    const app = await createApp();
+    await app.listen(0, '127.0.0.1');
+    const base = `http://127.0.0.1:${app.getHttpServer().address().port}`;
+    let token = '';
+    async function raw(path: string, body?: any) {
+      return fetch(base + '/' + path, { method: body === undefined ? 'GET' : 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: body === undefined ? undefined : JSON.stringify(body) });
+    }
+    async function req(path: string, body?: any, expected = body === undefined ? 200 : 201) {
+      const r = await raw(path, body);
+      const data: any = await r.json();
+      if (path === 'objects' && body !== undefined && r.status === 201) await (await import('./helpers/pbx3-fixtures')).assignPtoToObject(data.id);
+      assert.equal(r.status, expected, path + ': ' + JSON.stringify(data));
+      return data;
+    }
+    async function login(role: string) { const d = await req('auth/mock', { role, key: 'aosr-key' }); token = d.token; return d.user; }
+    return { app, req, raw, login };
+  })());
+}
+after(async () => { if (shared) await (await shared).app.close(); });
+
+let counter = 0;
+/** Object + plastering Work + one Quantity Portion (RP 500.1234, Internal SC 498.1234) + a package covering it. Ends logged in as PTO. */
+async function setUp() {
+  const { req, login } = await harness();
+  const pm = await login('PROJECT_MANAGER');
+  const dict = await req('dictionaries');
+  const contractors = await req('contractors');
+  await login('DEPUTY_DIRECTOR');
+  const o = await req('objects', { externalCode: 'AOSR-' + Date.now() + '-' + ++counter, name: 'Жилой дом №1', address: 'г. Москва, ул. Тестовая, 1', organizationName: 'ООО СЗ «Гор-Строй»', customerName: 'ООО «Заказчик»', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] });
+  await login('PROJECT_MANAGER');
+  const plaster = dict.workTypes.find((w: any) => /штукатур/i.test(w.name)) ?? dict.workTypes[0];
+  const work = await req('works', { objectId: o.id, workTypeId: plaster.id, contractorId: contractors[0].id, responsibleUserId: pm.id, name: 'Устройство штукатурки стен', unit: 'м²', plannedQuantity: 500, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '100000' });
+  const unit = await req('execution-units', { objectWorkId: work.id, workTypeId: plaster.id, contractorId: contractors[0].id, unit: 'м²', plannedQuantity: RP, location: 'санузлы' });
+  const portion = await req(`execution-units/${unit.id}/portions`, { label: 'Секция A', plannedQuantity: RP });
+  await req(`portions/${portion.id}/fact`, { quantity: RP, version: portion.version });
+  const internal = await req(`portions/${portion.id}/inspection-request`, { inspectionType: 'INTERNAL_SC', version: portion.version + 1 });
+  await login('CONSTRUCTION_CONTROL');
+  const attachment = await req('attachments', { fileName: 'sc.png', mimeType: 'image/png', base64: PNG_BASE64 });
+  await req(`inspections/${internal.id}/photos`, { attachmentId: attachment.id });
+  await req(`inspections/${internal.id}/accept`, { version: internal.version, comment: 'Принято СК', quantity: INTERNAL });
+  const pto = await login('PTO');
+  await handoffWorkToPto(work.id);
+  const pkg = await req('documentation-packages', { objectWorkId: work.id, responsibleUserId: pto.id });
+  await req(`documentation-packages/${pkg.id}/portions`, { quantityPortionId: portion.id });
+  return { object: o, work, unit, portion, pkg, pto };
+}
+
+const PARTIES = [
+  { partyRole: 'DEVELOPER', organizationName: 'ООО «Заказчик»', organizationDetails: 'ОГРН 1, ИНН 2' },
+  { partyRole: 'CONSTRUCTION_ENTITY', organizationName: 'ООО СЗ «Гор-Строй»', organizationDetails: 'ОГРН 3, ИНН 4' },
+  { partyRole: 'WORK_EXECUTOR', organizationName: 'ООО «Подрядчик»' },
+  { partyRole: 'DEVELOPER_SC_REP', personName: 'Петров Пётр Петрович', position: 'Инженер СК', authorityDocument: 'Приказ № 1' },
+  { partyRole: 'CONSTRUCTION_REP', personName: 'Сидоров Сидор Сидорович', position: 'Прораб', authorityDocument: 'Приказ № 2' },
+  { partyRole: 'INTERNAL_SC', personName: 'Иванов Иван Иванович', position: 'Инженер СК', registryNumber: 'С-123', authorityDocument: 'Приказ № 3' },
+];
+async function fillParties(req: any, pkgId: string) { for (const p of PARTIES) await req(`documentation-packages/${pkgId}/aosr-parties`, p); }
+
+/** Fills one AOSR so it is ready (materials with a quality document, dates, texts). */
+async function fillAosr(req: any, ctx: any, aosrId: string, material: any, opts: { point1?: string } = {}) {
+  let a = await req(`aosr/${aosrId}`);
+  a = (await req(`aosr/${aosrId}/edit`, { workDescription: opts.point1 ?? 'Устройство штукатурки стен в помещении санузлов по типу №1', startDate: dt(-3), endDate: dt(-1), actDate: dt(0), projectDocumentation: 'Рабочая документация, шифр АР-1, лист 5', normativeReferences: 'СП 71.13330.2017', subsequentWork: 'Шпатлёвка стен', version: a.version }, 201));
+  const linked = await req(`aosr/${aosrId}/links`, { materialRecordIds: [material.id], quantityPortionIds: [ctx.portion.id], version: a.version });
+  return linked;
+}
+
+test('multiple AOSRs live in one Work/package; the same Quantity Portion backs several; no fake Work/WEU is created', async () => {
+  const { req, login } = await harness();
+  const ctx = await setUp();
+  const worksBefore = (await req('snapshot')).works.length, unitsBefore = (await req('snapshot')).executionUnits.length;
+  const view = await req(`documentation-packages/${ctx.pkg.id}/aosr`);
+  const primer = view.suggestions.find((s: any) => s.suggestionCode === 'PLASTER.PRIMER');
+  assert.ok(primer, 'typical suggestion for plastering is offered');
+  const a1 = await req(`documentation-packages/${ctx.pkg.id}/aosr`, { suggestionCode: 'PLASTER.PRIMER', quantityPortionIds: [ctx.portion.id] });
+  const a2 = await req(`documentation-packages/${ctx.pkg.id}/aosr`, { suggestionCode: 'PLASTER.PLASTER', quantityPortionIds: [ctx.portion.id] });
+  const a3 = await req(`documentation-packages/${ctx.pkg.id}/aosr`, { title: 'Скрытая операция по заданию ПТО' });
+  const after = await req(`documentation-packages/${ctx.pkg.id}/aosr`);
+  assert.equal(after.items.length, 3);
+  assert.deepEqual(after.items.map((i: any) => i.status), ['DRAFT', 'DRAFT', 'DRAFT']);
+  assert.equal(a1.workDescription, 'Грунтовка основания перед штукатуркой');
+  // The same production scope supports both AOSRs — a portion is not consumed.
+  const d1 = await req(`aosr/${a1.id}`), d2 = await req(`aosr/${a2.id}`);
+  assert.deepEqual(d1.portionIds, [ctx.portion.id]);
+  assert.deepEqual(d2.portionIds, [ctx.portion.id]);
+  // No production model was created for the AOSR-only operation.
+  const snap = await req('snapshot');
+  assert.equal(snap.works.length, worksBefore);
+  assert.equal(snap.executionUnits.length, unitsBefore);
+  assert.equal(a3.objectWorkId, ctx.work.id);
+  // Cross-work portion references are refused.
+  await login('PTO');
+});
+
+test('typical suggestions can be accepted, removed and extended manually; removing a draft frees its suggestion', async () => {
+  const { req } = await harness();
+  const ctx = await setUp();
+  const base = `documentation-packages/${ctx.pkg.id}`;
+  const codes = (v: any) => v.suggestions.map((s: any) => s.suggestionCode).filter((c: string) => c.startsWith('PLASTER.'));
+  assert.deepEqual(codes(await req(`${base}/aosr`)), ['PLASTER.PRIMER', 'PLASTER.PLASTER']);
+  const accepted = await req(`${base}/aosr`, { suggestionCode: 'PLASTER.PRIMER' });
+  assert.deepEqual(codes(await req(`${base}/aosr`)), ['PLASTER.PLASTER']);
+  await req(`${base}/aosr`, { suggestionCode: 'PLASTER.PRIMER' }, 400); // already accepted
+  await req(`${base}/aosr-suggestions/dismiss`, { suggestionCode: 'PLASTER.PLASTER' });
+  assert.deepEqual(codes(await req(`${base}/aosr`)), []);
+  await req(`${base}/aosr`, { suggestionCode: 'ROOF.WATERPROOF_L1' }, 400); // not a plastering suggestion
+  const manual = await req(`${base}/aosr`, { title: 'Ещё один АОСР', workDescription: 'Армирование стен фундамента' });
+  assert.equal(manual.suggestionCode, null);
+  await req(`aosr/${accepted.id}/delete`, {});
+  assert.deepEqual(codes(await req(`${base}/aosr`)), ['PLASTER.PRIMER']);
+  assert.equal((await req(`${base}/aosr`)).items.length, 1);
+});
+
+test('readiness blocks generation; quantity and a unique scheme per AOSR are not required; a draft consumes no number', async () => {
+  const { req, raw } = await harness();
+  const ctx = await setUp();
+  const base = `documentation-packages/${ctx.pkg.id}`;
+  const aosr = await req(`${base}/aosr`, { title: 'Пустой АОСР' });
+  const d = await req(`aosr/${aosr.id}`);
+  const codes = d.readiness.issues.map((i: any) => i.code);
+  for (const c of ['POINT1_MISSING', 'PARTY_DEVELOPER', 'PARTY_INTERNAL_SC', 'DATES_MISSING', 'PROJECT_DOCUMENTATION_MISSING', 'NORMATIVE_MISSING', 'SUBSEQUENT_WORK_MISSING']) assert.ok(codes.includes(c), c);
+  assert.ok(!codes.some((c: string) => /QUANT/i.test(c)), 'quantity is never a readiness requirement');
+  const blocked = await raw(`aosr/${aosr.id}/generate`, { version: d.version });
+  assert.equal(blocked.status, 400);
+  assert.equal((await req(`aosr/${aosr.id}`)).officialNumber, null);
+  const noFile = await raw(`aosr/${aosr.id}/docx`);
+  assert.equal(noFile.status, 404);
+  // Filled, with NO executive scheme at all: still ready (a scheme is not mandatory per AOSR).
+  await fillParties(req, ctx.pkg.id);
+  const material = await req(`${base}/aosr-materials`, { name: 'Штукатурная смесь', qualityDocuments: [{ docType: 'CERTIFICATE', number: 'RU-1', docDate: dt(-30) }] });
+  const linked = await fillAosr(req, ctx, aosr.id, material);
+  const after = await req(`aosr/${aosr.id}`);
+  assert.equal(after.ready, true, JSON.stringify(after.readiness));
+  assert.equal(after.schemes.length, 0);
+  assert.equal(linked.officialNumber, null);
+});
+
+test('first generation assigns the official number; draft AOSRs consume none; a correction keeps the same number and one current DOCX; materials are many-to-many', async () => {
+  const { req, raw } = await harness();
+  const ctx = await setUp();
+  const base = `documentation-packages/${ctx.pkg.id}`;
+  await fillParties(req, ctx.pkg.id);
+  const material = await req(`${base}/aosr-materials`, { name: 'Штукатурная смесь' });
+  await req(`${base}/aosr-materials/${material.id}/quality-documents`, { docType: 'PASSPORT', number: 'П-7', docDate: dt(-20), issuer: 'Завод' });
+  const a1 = await req(`${base}/aosr`, { title: 'Грунтовка' }), a2 = await req(`${base}/aosr`, { title: 'Штукатурка' }), draft = await req(`${base}/aosr`, { title: 'Черновик' });
+  await fillAosr(req, ctx, a1.id, material);
+  await fillAosr(req, ctx, a2.id, material, { point1: 'Устройство штукатурки стен' });
+  const g1 = await req(`aosr/${a1.id}/generate`, { version: (await req(`aosr/${a1.id}`)).version });
+  assert.equal(g1.officialNumber, 1);
+  const g2 = await req(`aosr/${a2.id}/generate`, { version: (await req(`aosr/${a2.id}`)).version });
+  assert.equal(g2.officialNumber, 2, 'sequence advances only for generated AOSRs');
+  assert.equal((await req(`aosr/${draft.id}`)).officialNumber, null);
+  // Correction: edit the wording and regenerate — the number never changes.
+  const cur = await req(`aosr/${a1.id}`);
+  assert.equal(cur.status, 'GENERATED');
+  const edited = await req(`aosr/${a1.id}/edit`, { workDescription: 'Грунтовка основания (уточнено)', version: cur.version }, 201);
+  assert.equal((await req(`aosr/${a1.id}`)).status, 'NEEDS_REGENERATION');
+  const g1b = await req(`aosr/${a1.id}/generate`, { version: edited.version });
+  assert.equal(g1b.officialNumber, 1);
+  assert.equal(g1b.revisionCount, 2);
+  const detail = await req(`aosr/${a1.id}`);
+  assert.deepEqual(detail.revisions.map((r: any) => [r.revisionNumber, r.officialNumber]), [[1, 1], [2, 1]]);
+  // Stored through the existing documentation layer: one AOSR document, versions 1 and 2, CORE_FILE.
+  const snap = await req('snapshot');
+  const doc = snap.documentationDocuments.find((x: any) => x.id === g1b.documentationDocumentId);
+  assert.equal(doc.type, 'AOSR');
+  const versions = snap.documentationVersions.filter((v: any) => v.documentationDocumentId === doc.id);
+  assert.deepEqual(versions.map((v: any) => [v.versionNumber, v.storageProvider]), [[1, 'CORE_FILE'], [2, 'CORE_FILE']]);
+  // Revisions are append-only.
+  const { pool } = await import('../apps/backend/src/db');
+  await assert.rejects(pool.query("UPDATE aosr_revisions SET official_number=99 WHERE aosr_id=$1", [a1.id]));
+  // The material and a second AOSR share records; a stale version is refused.
+  assert.equal((await req(`aosr/${a2.id}`)).materials[0].id, material.id);
+  assert.equal((await raw(`aosr/${a1.id}/generate`, { version: edited.version })).status, 409);
+});
+
+test('the generated file is an editable DOCX built on the unchanged official template; quantity is never printed', async () => {
+  const { req, raw } = await harness();
+  const ctx = await setUp();
+  const base = `documentation-packages/${ctx.pkg.id}`;
+  await fillParties(req, ctx.pkg.id);
+  const material = await req(`${base}/aosr-materials`, { name: 'Грунтовка', qualityDocuments: [{ docType: 'DECLARATION', number: 'Д-9' }] });
+  const scheme = await req(`${base}/aosr-schemes`, { title: 'Исполнительная схема нанесения штукатурки' });
+  const a = await req(`${base}/aosr`, { title: 'Штукатурка' });
+  await fillAosr(req, ctx, a.id, material);
+  const cur = await req(`aosr/${a.id}`);
+  await req(`aosr/${a.id}/links`, { schemeDocumentIds: [scheme.id], materialRecordIds: [material.id], quantityPortionIds: [ctx.portion.id], version: cur.version });
+  await req(`aosr/${a.id}/generate`, { version: (await req(`aosr/${a.id}`)).version });
+  const res = await raw(`aosr/${a.id}/docx`);
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('content-type') ?? '', /wordprocessingml\.document/);
+  const bytes = Buffer.from(await res.arrayBuffer());
+  const out = await JSZip.loadAsync(bytes);
+  const tpl = await JSZip.loadAsync(readAosrTemplate()!);
+  assert.deepEqual(Object.keys(out.files).sort(), Object.keys(tpl.files).sort(), 'same package parts as the official template');
+  const settings = await out.file('word/settings.xml')!.async('string');
+  assert.ok(!/documentProtection/.test(settings), 'not locked for editing');
+  const paragraphs = (xml: string) => [...xml.matchAll(/<w:p[ >].*?<\/w:p>/gs)].map(m => [...m[0].matchAll(/<w:t(?: [^>]*)?>([^<]*)<\/w:t>/g)].map(t => t[1]).join(''));
+  const outXml = await out.file('word/document.xml')!.async('string'), tplXml = await tpl.file('word/document.xml')!.async('string');
+  const o = paragraphs(outXml), t = paragraphs(tplXml);
+  assert.equal(o.length, t.length);
+  t.forEach((text, i) => { if (text.replace(/ /g, '').trim()) assert.equal(o[i], text, `official text of paragraph ${i} unchanged`); });
+  const filled = o.filter((text, i) => !t[i].replace(/ /g, '').trim() && text.trim());
+  const flat = filled.join('|');
+  for (const expected of ['Жилой дом №1', 'Тестовая', 'ООО «Заказчик»', 'Устройство штукатурки стен в помещении санузлов', 'АР-1', 'Грунтовка (декларация № Д-9)', 'СП 71.13330.2017', 'Шпатлёвка стен', 'Исполнительная схема нанесения', 'Иванов И.И.', 'Петров П.П.', 'ООО «Подрядчик»']) assert.ok(flat.includes(expected), expected + ' in ' + flat);
+  assert.ok(o[36] === '1', 'official number in the number slot');
+  for (const q of [RP, INTERNAL, CUSTOMER, '498', '500,1234']) assert.ok(!outXml.includes(q), 'quantity ' + q + ' must not be printed');
+  const { pool } = await import('../apps/backend/src/db');
+  const rev = (await pool.query('SELECT render_model FROM aosr_revisions WHERE aosr_id=$1', [a.id])).rows[0].render_model;
+  assert.ok(!/quantity|Quantity/.test(JSON.stringify(rev)) && !JSON.stringify(rev).includes('498'));
+});
+
+test('one executive scheme links to several AOSRs (many-to-many)', async () => {
+  const { req } = await harness();
+  const ctx = await setUp();
+  const base = `documentation-packages/${ctx.pkg.id}`;
+  const scheme = await req(`${base}/aosr-schemes`, { title: 'Общая исполнительная схема' });
+  const a1 = await req(`${base}/aosr`, { title: 'А1' }), a2 = await req(`${base}/aosr`, { title: 'А2' });
+  await req(`aosr/${a1.id}/links`, { schemeDocumentIds: [scheme.id], version: a1.version });
+  await req(`aosr/${a2.id}/links`, { schemeDocumentIds: [scheme.id], version: a2.version });
+  assert.deepEqual((await req(`aosr/${a1.id}`)).schemes.map((s: any) => s.id), [scheme.id]);
+  assert.deepEqual((await req(`aosr/${a2.id}`)).schemes.map((s: any) => s.id), [scheme.id]);
+  const { pool } = await import('../apps/backend/src/db');
+  assert.equal((await pool.query('SELECT count(*)::int AS n FROM aosr_scheme_links WHERE scheme_document_id=$1', [scheme.id])).rows[0].n, 2);
+  // A scheme of another package/type is refused.
+  const other = await setUp();
+  const foreign = await req(`documentation-packages/${other.pkg.id}/aosr-schemes`, { title: 'Чужая' });
+  await req(`aosr/${a1.id}/links`, { schemeDocumentIds: [foreign.id], version: (await req(`aosr/${a1.id}`)).version }, 400);
+});
+
+test('customer-accepted quantity is append-only, keeps RP_FACT/INTERNAL_SC intact and becomes the current quantity for SDO', async () => {
+  const { req, raw, login } = await harness();
+  const ctx = await setUp();
+  const base = `documentation-packages/${ctx.pkg.id}`;
+  // Before customer acceptance the PTO screen shows the internal figure only.
+  let q = await req(`${base}/quantity`);
+  assert.equal(q.current.quantity, '498.1234');
+  assert.equal(q.current.source, 'INTERNAL_SC');
+  // Not allowed before the documentation was presented.
+  await req(`${base}/customer-accepted-quantity`, { items: [{ quantityPortionId: ctx.portion.id, quantity: CUSTOMER }] }, 400);
+  const doc = await req(`${base}/documents`, { type: 'AOSR' });
+  await req(`documentation-documents/${doc.id}/versions`, { storageProvider: 'NONE' });
+  let p = await req(`${base}/status`, { status: 'PREPARING', version: ctx.pkg.version });
+  p = await req(`${base}/status`, { status: 'READY_FOR_PRESENTATION', version: p.version });
+  p = await req(`${base}/status`, { status: 'PRESENTED', version: p.version });
+  const key = crypto.randomUUID();
+  const rec = await req(`${base}/customer-accepted-quantity`, { items: [{ quantityPortionId: ctx.portion.id, quantity: CUSTOMER }], reference: 'Письмо заказчика №5', idempotencyKey: key });
+  assert.equal(rec.length, 1);
+  const replay = await req(`${base}/customer-accepted-quantity`, { items: [{ quantityPortionId: ctx.portion.id, quantity: CUSTOMER }], reference: 'Письмо заказчика №5', idempotencyKey: key });
+  assert.deepEqual(replay.map((r: any) => r.id), rec.map((r: any) => r.id), 'retry is idempotent');
+  q = await req(`${base}/quantity`);
+  assert.equal(q.current.quantity, CUSTOMER);
+  assert.equal(q.current.source, 'CUSTOMER_ACCEPTED');
+  const bySource = (s: string) => q.history.filter((h: any) => h.source === s).map((h: any) => h.quantity);
+  assert.deepEqual(bySource('RP_FACT'), [RP], 'RP_FACT is not overwritten');
+  assert.deepEqual(bySource('INTERNAL_SC'), [INTERNAL], 'INTERNAL_SC is not overwritten');
+  assert.deepEqual(bySource('CUSTOMER_SC'), [CUSTOMER]);
+  // A later correction appends; nothing is rewritten.
+  await req(`${base}/customer-accepted-quantity`, { items: [{ quantityPortionId: ctx.portion.id, quantity: '495.0000' }] });
+  q = await req(`${base}/quantity`);
+  assert.equal(q.current.quantity, '495.0000');
+  assert.deepEqual(bySource('CUSTOMER_SC').length, 2);
+  assert.equal(q.customerAcceptances.length, 3 - 1);
+  const { pool } = await import('../apps/backend/src/db');
+  await assert.rejects(pool.query('UPDATE documentation_customer_accepted_quantities SET quantity=1'));
+  await assert.rejects(pool.query('DELETE FROM documentation_customer_accepted_quantities'));
+  // Downstream: SDO's inputs (the snapshot) now carry the customer figure and handoff readiness is satisfied.
+  const acceptedPkg = await req(`${base}/customer-acceptance`, { version: (await req('snapshot')).documentationPackages.find((x: any) => x.id === ctx.pkg.id).version, acceptedDate: dt(0), reference: 'Акт' });
+  const snap = await req('snapshot');
+  assert.equal(snap.portions.find((x: any) => x.id === ctx.portion.id).customerScConfirmedQuantity, '495.0000');
+  assert.equal(snap.portions.find((x: any) => x.id === ctx.portion.id).rpFactQuantity, RP);
+  assert.equal(snap.sdoPackageReadiness.find((x: any) => x.documentationPackageId === ctx.pkg.id).ready, true);
+  await req(`${base}/handoff-to-sdo`, { version: acceptedPkg.version });
+  // After handoff the package is locked in SDO: quantity can no longer be appended.
+  await req(`${base}/customer-accepted-quantity`, { items: [{ quantityPortionId: ctx.portion.id, quantity: '1.0000' }] }, 400);
+  await login('PROJECT_MANAGER');
+  assert.equal((await raw(`${base}/customer-accepted-quantity`, { items: [{ quantityPortionId: ctx.portion.id, quantity: '1' }] })).status, 403);
+});
+
+test('existing package authorization and freeze rules are enforced for AOSR', async () => {
+  const { req, raw, login } = await harness();
+  const ctx = await setUp();
+  const base = `documentation-packages/${ctx.pkg.id}`;
+  const a = await req(`${base}/aosr`, { title: 'Для проверки доступа' });
+  // Other roles: no mutation, SDO has no documentation access at all.
+  await login('PROJECT_MANAGER');
+  assert.equal((await raw(`${base}/aosr`, { title: 'x' })).status, 403);
+  await login('SDO');
+  assert.equal((await raw(`${base}/aosr`)).status, 403);
+  assert.equal((await raw(`aosr/${a.id}`)).status, 403);
+  // An unassigned PTO engineer cannot touch the package (effective work assignment is required).
+  const { makeUser, tokenFor } = await import('./helpers/pbx3-fixtures');
+  const stranger = await makeUser('Чужой ПТО', 'PTO');
+  const strangerToken = await tokenFor(stranger);
+  const sr = await (await harness()).raw; void sr;
+  const r = await fetch(`http://127.0.0.1:${(await harness()).app.getHttpServer().address().port}/${base}/aosr`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + strangerToken }, body: JSON.stringify({ title: 'x' }) });
+  assert.ok([403, 404].includes(r.status), 'stranger PTO refused: ' + r.status);
+  // Freeze: once PRESENTED, AOSR content cannot change or be generated.
+  await login('PTO');
+  const doc = await req(`${base}/documents`, { type: 'AOSR' });
+  await req(`documentation-documents/${doc.id}/versions`, { storageProvider: 'NONE' });
+  let p = await req(`${base}/status`, { status: 'PREPARING', version: ctx.pkg.version });
+  p = await req(`${base}/status`, { status: 'READY_FOR_PRESENTATION', version: p.version });
+  p = await req(`${base}/status`, { status: 'PRESENTED', version: p.version });
+  const cur = await req(`aosr/${a.id}`);
+  assert.equal((await raw(`aosr/${a.id}/edit`, { title: 'Новое', version: cur.version })).status, 400);
+  assert.equal((await raw(`${base}/aosr`, { title: 'ещё' })).status, 400);
+  assert.equal((await raw(`aosr/${a.id}/generate`, { version: cur.version })).status, 400);
+  assert.equal((await raw(`aosr/${a.id}/delete`, {})).status, 400);
+});
+
+test('parties: object-level master data is editable, versioned, and every change leaves an immutable snapshot; INTERNAL_SC is the construction entity\'s own SC', async () => {
+  const { req, raw } = await harness();
+  const ctx = await setUp();
+  const base = `documentation-packages/${ctx.pkg.id}`;
+  const first = await req(`${base}/aosr-parties`, { partyRole: 'INTERNAL_SC', personName: 'Иванов Иван Иванович', position: 'Инженер СК', authorityDocument: 'Приказ № 3' });
+  assert.equal((await raw(`${base}/aosr-parties`, { partyRole: 'INTERNAL_SC', personName: 'Новый Н.Н.', position: 'Инженер', authorityDocument: 'Приказ № 4' })).status, 409, 'an existing record needs its version');
+  const second = await req(`${base}/aosr-parties`, { partyRole: 'INTERNAL_SC', personName: 'Новиков Николай Николаевич', position: 'Начальник СК', authorityDocument: 'Приказ № 4', version: first.version });
+  assert.equal(second.version, 2);
+  const { pool } = await import('../apps/backend/src/db');
+  const hist = (await pool.query("SELECT snapshot FROM aosr_party_record_history WHERE object_id=$1 AND party_role='INTERNAL_SC' ORDER BY changed_at,created_at", [ctx.object.id])).rows;
+  assert.equal(hist.length, 2);
+  assert.equal(hist[0].snapshot.personName ?? hist[0].snapshot.person_name, 'Иванов Иван Иванович');
+  await assert.rejects(pool.query('DELETE FROM aosr_party_record_history'));
+  const view = await req(`${base}/aosr`);
+  assert.equal(view.partySuggestions.CONSTRUCTION_ENTITY, 'ООО СЗ «Гор-Строй»');
+});
+
+/* ------------------------------ pure domain ------------------------------ */
+
+test('domain: readiness, suggestions, current quantity, number slot helpers', () => {
+  const content = { workDescription: 'x', startDate: '2026-01-01', endDate: '2026-01-02', actDate: '2026-01-03', projectDocumentation: 'p', normativeReferences: 'n', subsequentWork: 's' };
+  const parties = [
+    { partyRole: 'DEVELOPER', organizationName: 'a' }, { partyRole: 'CONSTRUCTION_ENTITY', organizationName: 'b' }, { partyRole: 'WORK_EXECUTOR', organizationName: 'c' },
+    ...(['DEVELOPER_SC_REP', 'CONSTRUCTION_REP', 'INTERNAL_SC'] as const).map(r => ({ partyRole: r, personName: 'И И', position: 'п', authorityDocument: 'д' })),
+  ] as any[];
+  const base = { content, parties, materials: [], schemes: [], workTypeRequiresMaterials: false, workTypeRequiresExecutiveDocs: false, templateAvailable: true };
+  assert.equal(resolveAosrReadiness(base).ready, true);
+  assert.deepEqual(resolveAosrReadiness({ ...base, templateAvailable: false }).issues.map(i => i.code), ['TEMPLATE_UNAVAILABLE']);
+  assert.ok(resolveAosrReadiness({ ...base, content: { ...content, endDate: '2025-01-01' } }).issues.some(i => i.code === 'DATES_ORDER'));
+  assert.ok(resolveAosrReadiness({ ...base, workTypeRequiresMaterials: true }).issues.some(i => i.code === 'MATERIALS_MISSING'));
+  assert.ok(resolveAosrReadiness({ ...base, materials: [{ name: 'м', qualityDocuments: [] }] }).issues.some(i => i.code === 'MATERIAL_DOCS_MISSING'));
+  assert.ok(resolveAosrReadiness({ ...base, parties: [...parties, { partyRole: 'DESIGNER', organizationName: 'д' }] }).issues.some(i => i.code === 'PARTY_DESIGNER_REP'));
+  assert.deepEqual(suggestTypicalAosr('Штукатурка стен', { acceptedCodes: ['PLASTER.PRIMER'], dismissedCodes: [] }).map(s => s.suggestionCode), ['PLASTER.PLASTER']);
+  assert.deepEqual(suggestTypicalAosr('Бурение', { acceptedCodes: [], dismissedCodes: [] }), []);
+  const fig = (c: string | null, i: string | null, r: string | null) => ({ portionId: 'p', rpFact: r, internalSc: i, customerAccepted: c, unit: 'м²' });
+  assert.deepEqual(resolveCurrentAcceptedQuantity([fig(null, '498', '500')]), { quantity: '498.0000', unit: 'м²', source: 'INTERNAL_SC' });
+  assert.deepEqual(resolveCurrentAcceptedQuantity([fig('496', '498', '500')]), { quantity: '496.0000', unit: 'м²', source: 'CUSTOMER_ACCEPTED' });
+  assert.equal(resolveCurrentAcceptedQuantity([]), null);
+  assert.deepEqual(splitRuDate('2026-10-03'), { day: '03', month: 'октября', year: '2026' });
+  assert.equal(surnameInitials('Иванов Иван Иванович'), 'Иванов И.И.');
+  const model = buildAosrRenderModel({ officialNumber: 7, objectName: 'о', objectAddress: 'а', content, parties, materials: [], schemes: [] });
+  assert.ok(!Object.keys(model).some(k => /quant/i.test(k)));
+});

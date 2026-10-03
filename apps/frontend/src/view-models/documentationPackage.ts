@@ -121,6 +121,8 @@ export function storageProviderLabel(provider: StorageProvider): string {
       return 'Без ссылки на хранилище';
     case 'EXTERNAL_REFERENCE':
       return 'Внешняя ссылка';
+    case 'CORE_FILE':
+      return 'Файл Core (DOCX)';
     default: {
       const exhaustive: never = provider;
       return exhaustive;

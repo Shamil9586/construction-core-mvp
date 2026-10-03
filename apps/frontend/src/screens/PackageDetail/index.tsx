@@ -72,6 +72,8 @@ export interface PackageDetailProps {
   onSelectWork: (objectId: string, objectWorkId: string) => void;
   /** Omitted (no session, or a role other than PTO/ADMIN) renders every section read-only. */
   actions?: PackageDetailActionHandlers;
+  /** ID-AUTO-1 — the АОСР / accepted-quantity sections, built by the route container (data chain stays out of this screen). */
+  aosrSection?: ReactNode;
   className?: string;
 }
 
@@ -456,6 +458,7 @@ export function PackageDetail({
   onSelectObject,
   onSelectWork,
   actions,
+  aosrSection,
   className,
 }: PackageDetailProps) {
   return (
@@ -507,6 +510,8 @@ export function PackageDetail({
           <LinkPortionForm availablePortions={viewModel.availablePortions} onSubmit={actions.onLinkPortion} />
         ) : null}
       </section>
+
+      {aosrSection}
 
       <section className={styles.section}>
         <span className={[styles.sectionLabel, typeClass('label')].join(' ')}>СДО / Закрытие</span>

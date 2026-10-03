@@ -6,6 +6,8 @@ import { useRefetchSnapshot, useSnapshot } from '../../data/SnapshotContext';
 import * as documentationApi from '../../data/documentationApi';
 import { useCoreRuntime } from '../CoreRuntimeContext';
 import { useWorkPtoAssignment } from '../useWorkPtoAssignment';
+import { useAosrSection } from '../useAosrSection';
+import { AosrSection } from '../../screens/PackageDetail/AosrSection';
 import { canAccessDocumentation, canManageDocumentation, isPtoRole } from '../../auth/internalRoles';
 import { AppSidebar } from '../AppSidebar';
 import { ROUTE_PATHS, objectPath, workPath } from '../routePaths';
@@ -44,6 +46,8 @@ export function PackageDetailRoute() {
   const routePackage =
     state.status === 'Ready' ? (state.snapshot.documentationPackages ?? []).find((c) => c.id === packageId) : undefined;
   const ptoAssignment = useWorkPtoAssignment(routePackage?.objectWorkId, !!session && session.user.role === 'PTO', routePackage?.objectId);
+
+  const aosr = useAosrSection(routePackage?.id, !!session && canManageDocumentation(session.user.role));
 
   if (state.status === 'Loading') return <RouteLoading />;
   if (state.status === 'Error') return <RouteError message={state.message} />;
@@ -94,6 +98,7 @@ export function PackageDetailRoute() {
   const refetchAll = () => {
     refetch();
     ptoAssignment.reload();
+    aosr.reload();
   };
 
   const actions: PackageDetailActionHandlers | undefined =
@@ -155,6 +160,18 @@ export function PackageDetailRoute() {
       onSelectObject={(id) => navigate(objectPath(id))}
       onSelectWork={(objectId, objectWorkId) => navigate(workPath(objectId, objectWorkId))}
       actions={actions}
+      aosrSection={
+        <AosrSection
+          packageId={pkg.id}
+          packageStatus={pkg.status}
+          view={aosr.view}
+          quantity={aosr.quantity}
+          error={aosr.error}
+          canEdit={mayMutate}
+          canRecordCustomerQuantity={mayMutate && !!session && isPtoRole(session.user.role)}
+          onChanged={refetchAll}
+        />
+      }
     />
   );
 }

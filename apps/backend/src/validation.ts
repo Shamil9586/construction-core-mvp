@@ -76,3 +76,19 @@ export const sdoClosingAllocationCancelDto = z.object({ version }).strict();
 // F8.3-17.2: PTO-only pre-handoff correction — same shape as sdoReturnToPtoDto
 // (SDO's own post-handoff "Вернуть в ПТО"), a separate dedicated operation.
 export const documentationPackageCorrectionDto = z.object({ version, comment: text.optional() }).strict();
+// ID-AUTO-1 AOSR.
+const longText = z.string().trim().min(1).max(4000);
+const nullableLongText = z.union([longText, z.null()]);
+const nullableDate = z.union([date, z.null()]);
+export const aosrCreateDto = z.object({ title: text.optional(), workDescription: longText.optional(), suggestionCode: text.optional(), quantityPortionIds: z.array(uuid).max(50).optional() }).strict().refine(d => !!d.title || !!d.suggestionCode, 'Укажите наименование АОСР или типовую позицию');
+export const aosrSuggestionDismissDto = z.object({ suggestionCode: text }).strict();
+export const aosrEditDto = z.object({ title: text.optional(), workDescription: nullableLongText.optional(), startDate: nullableDate.optional(), endDate: nullableDate.optional(), actDate: nullableDate.optional(), projectDocumentation: nullableLongText.optional(), normativeReferences: nullableLongText.optional(), subsequentWork: nullableLongText.optional(), additionalInfo: nullableLongText.optional(), copiesCount: z.union([z.number().int().positive().max(99), z.null()]).optional(), version }).strict();
+export const aosrLinksDto = z.object({ quantityPortionIds: z.array(uuid).max(50).optional(), materialRecordIds: z.array(uuid).max(100).optional(), schemeDocumentIds: z.array(uuid).max(100).optional(), version }).strict();
+export const aosrGenerateDto = z.object({ version }).strict();
+export const aosrSchemeDto = z.object({ title: text }).strict();
+const optText = longText.optional();
+export const aosrPartyDto = z.object({ partyRole: z.enum(['DEVELOPER', 'CONSTRUCTION_ENTITY', 'DESIGNER', 'WORK_EXECUTOR', 'DEVELOPER_SC_REP', 'CONSTRUCTION_REP', 'INTERNAL_SC', 'DESIGNER_REP', 'EXECUTOR_REP']), organizationName: optText, organizationDetails: optText, personName: optText, position: optText, registryNumber: optText, authorityDocument: optText, version: version.optional() }).strict();
+const qualityDoc = z.object({ docType: z.enum(['PASSPORT', 'CERTIFICATE', 'DECLARATION', 'OTHER']), number: text, docDate: date.optional(), issuer: text.optional() }).strict();
+export const aosrMaterialDto = z.object({ name: text, materialId: uuid.optional(), qualityDocuments: z.array(qualityDoc).max(20).optional() }).strict();
+export const aosrQualityDocumentDto = qualityDoc;
+export const customerAcceptedQuantityDto = z.object({ items: z.array(z.object({ quantityPortionId: uuid, quantity: qty }).strict()).min(1).max(50), reference: text.optional(), comment: text.optional(), idempotencyKey: uuid.optional() }).strict();

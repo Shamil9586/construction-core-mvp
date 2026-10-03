@@ -37,7 +37,9 @@ const tables = new Set(['users', 'contractors', 'objects', 'object_contractors',
     // PBX-3A object responsibility / team foundation (generic, function_code-scoped).
     'functional_team_memberships', 'object_function_lead_assignments', 'object_function_member_assignments', 'object_function_handovers',
     // PILOT-W01 UI03 PTO work handoff (pre-package assignment).
-    'pto_work_assignments']);
+    'pto_work_assignments',
+    // ID-AUTO-1 AOSR inside the Documentation Package.
+    'aosr_party_records', 'aosr_party_record_history', 'aosr_documents', 'aosr_revisions', 'aosr_portion_links', 'aosr_material_records', 'aosr_quality_documents', 'aosr_material_links', 'aosr_scheme_links', 'aosr_suggestion_dismissals', 'documentation_customer_accepted_quantities']);
 export async function insert(c: any, table: string, tenantId: string, data: any) { if (!tables.has(table))
     throw Error('Invalid table'); const d = { tenant_id: tenantId, ...Object.fromEntries(Object.entries(data).map(([k, v]) => [k.replace(/[A-Z]/g, x => '_' + x.toLowerCase()), v])) }; const keys = Object.keys(d); if (keys.some(k => !/^[a-z_]+$/.test(k)))
     throw Error('Invalid column'); return one(c, `INSERT INTO ${table} (${keys.join(',')}) VALUES (${keys.map((_, i) => '$' + (i + 1)).join(',')}) RETURNING *`, Object.values(d)); }

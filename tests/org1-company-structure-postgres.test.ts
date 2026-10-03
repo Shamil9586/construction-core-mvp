@@ -47,7 +47,7 @@ const active = async (member: string, fn: string) => (await ctx.db.pool.query("S
 test('A no ORG-1 migration: ORG-1 adds none (017 stays the last pre-PBX-5A file), and the existing table already admits every function code', async () => {
   const files = (await import('node:fs')).readdirSync('infra').filter((f) => /^\d+_.*\.sql$/.test(f)).sort();
   assert.equal(files[16], '017_remove_legacy_director_roles.sql');
-  assert.deepEqual(files.slice(17), ['018_bitrix_notification_outbox.sql', '019_pto_work_assignments.sql']); // 019: PILOT-W01 PTO work handoff
+  assert.deepEqual(files.slice(17), ['018_bitrix_notification_outbox.sql', '019_pto_work_assignments.sql', '020_aosr_foundation.sql']); // 019: PILOT-W01 PTO work handoff; 020: ID-AUTO-1 AOSR
   const c = await client();
   try {
     for (const fn of ['PTO', 'CONSTRUCTION_CONTROL', 'SDO', 'PROJECT_MANAGEMENT']) {
