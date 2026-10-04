@@ -62,6 +62,6 @@ PTO documentation                                 ├─→ file-backed executiv
   - `EXTERNAL` -> zero Core AOSRs / DOCX / numbers are valid;
   - both -> at least one file-backed executive scheme (one scheme may cover all AOSRs).
   Core AOSR readiness additionally needs a file-backed scheme linked to that AOSR.
-* Customer-accepted quantity depends on package state + evidence only — never on a Core AOSR existing, being ready or generated.
+* The customer-accepted quantity is entered only after real customer acceptance (package PRESENTED + the forward gate above); document generation never triggers it.
 * DOCX / scheme downloads: authenticated binary; `Content-Disposition` carries both an ASCII `filename` and `filename*`; `Cache-Control:
   private, no-store`. The UI fetches the DOCX when the card opens and renders a real `<a href=blob: download>` (native user click).
