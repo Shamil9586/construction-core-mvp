@@ -1,4 +1,5 @@
 import { Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
+import { packageSchemes, currentAosrMethod, schemeEvidenceViolation } from './documentation-evidence';
 import Decimal from 'decimal.js';
 import { pool, one, rows, insert, transaction } from './db';
 import { Actor, requirePermission, checkVersion, scoped, audit, ensure, workAccess, packageMutationAccess, claimIdempotentCommand, completeIdempotentCommand } from './security';
@@ -46,19 +47,21 @@ export class AosrService {
         return aosr;
     }
 
-    private async bundle(c: any, tenantId: string, aosrId: string) {
+    private async bundle(c: any, tenantId: string, aosr: any) {
+        const aosrId = aosr.id;
         const portionLinks = await rows(c, 'SELECT quantity_portion_id FROM aosr_portion_links WHERE tenant_id=$1 AND aosr_id=$2', [tenantId, aosrId]);
         const materialLinks = await rows(c, 'SELECT m.id,m.name,m.material_id FROM aosr_material_links l JOIN aosr_material_records m ON m.tenant_id=l.tenant_id AND m.id=l.material_record_id WHERE l.tenant_id=$1 AND l.aosr_id=$2 ORDER BY m.name', [tenantId, aosrId]);
         const docs = materialLinks.length ? await rows(c, 'SELECT * FROM aosr_quality_documents WHERE tenant_id=$1 AND material_record_id=ANY($2::uuid[]) ORDER BY created_at', [tenantId, materialLinks.map((m: any) => m.id)]) : [];
         const materials: (AosrMaterialInput & { id: string })[] = materialLinks.map((m: any) => ({ id: m.id, name: m.name, qualityDocuments: docs.filter((d: any) => d.materialRecordId === m.id).map((d: any) => ({ docType: d.docType as AosrQualityDocType, number: d.number, docDate: d.docDate, issuer: d.issuer })) }));
-        const schemes = await rows(c, "SELECT d.id,coalesce(d.title,'Исполнительная схема') AS title FROM aosr_scheme_links l JOIN documentation_documents d ON d.tenant_id=l.tenant_id AND d.id=l.scheme_document_id WHERE l.tenant_id=$1 AND l.aosr_id=$2 ORDER BY d.created_at", [tenantId, aosrId]);
-        return { portionIds: portionLinks.map((p: any) => p.quantityPortionId) as string[], materials, schemes: schemes as { id: string; title: string }[] };
+        const schemeIds = (await rows(c, 'SELECT scheme_document_id FROM aosr_scheme_links WHERE tenant_id=$1 AND aosr_id=$2', [tenantId, aosrId])).map((r: any) => r.schemeDocumentId);
+        const schemes = schemeIds.length ? await packageSchemes(c, tenantId, aosr.documentationPackageId, schemeIds) : [];
+        return { portionIds: portionLinks.map((p: any) => p.quantityPortionId) as string[], materials, schemes };
     }
     private async parties(c: any, tenantId: string, objectId: string): Promise<(AosrPartyRecord & { id: string; version: number })[]> {
         return rows(c, 'SELECT * FROM aosr_party_records WHERE tenant_id=$1 AND object_id=$2', [tenantId, objectId]);
     }
     private async readinessOf(c: any, a: Actor, aosr: any, work: any) {
-        const b = await this.bundle(c, a.tenantId, aosr.id);
+        const b = await this.bundle(c, a.tenantId, aosr);
         const wt = await one(c, 'SELECT name,requires_materials FROM work_types WHERE tenant_id=$1 AND id=$2', [a.tenantId, work.workTypeId]);
         const parties = await this.parties(c, a.tenantId, aosr.objectId);
         const readiness = resolveAosrReadiness({ content: aosr, parties, materials: b.materials, schemes: b.schemes, workTypeRequiresMaterials: !!wt?.requiresMaterials, templateAvailable: aosrTemplateAvailable() });
@@ -76,15 +79,17 @@ export class AosrService {
         for (const aosr of list) items.push(this.summary(aosr, (await this.readinessOf(pool, a, aosr, work)).readiness));
         const wt = await one(pool, 'SELECT name FROM work_types WHERE tenant_id=$1 AND id=$2', [a.tenantId, work.workTypeId]);
         const dismissed = (await rows(pool, 'SELECT suggestion_code FROM aosr_suggestion_dismissals WHERE tenant_id=$1 AND documentation_package_id=$2', [a.tenantId, packageId])).map((r: any) => r.suggestionCode);
-        const suggestions = suggestTypicalAosr(`${wt?.name ?? ''} ${work.name}`, { acceptedCodes: list.map((x: any) => x.suggestionCode).filter(Boolean), dismissedCodes: dismissed });
+        const method = await currentAosrMethod(pool, a.tenantId, packageId);
+        const suggestions = method?.method !== 'CORE' ? [] : suggestTypicalAosr(`${wt?.name ?? ''} ${work.name}`, { acceptedCodes: list.map((x: any) => x.suggestionCode).filter(Boolean), dismissedCodes: dismissed });
         const parties = await this.parties(pool, a.tenantId, pkg.objectId);
         const obj = await one(pool, 'SELECT name,address,customer_name,organization_name FROM objects WHERE tenant_id=$1 AND id=$2', [a.tenantId, pkg.objectId]);
         const contractor = await one(pool, 'SELECT name FROM contractors WHERE tenant_id=$1 AND id=$2', [a.tenantId, work.contractorId]);
-        const schemes = await rows(pool, "SELECT id,coalesce(title,'Исполнительная схема') AS title FROM documentation_documents WHERE tenant_id=$1 AND documentation_package_id=$2 AND type='EXECUTIVE_SCHEME' ORDER BY created_at", [a.tenantId, packageId]);
+        const schemes = await packageSchemes(pool, a.tenantId, packageId);
+        const methodHistory = await rows(pool, 'SELECT m.id,m.method,m.chosen_at,m.comment,u.name AS chosen_by FROM documentation_package_aosr_methods m JOIN users u ON u.tenant_id=m.tenant_id AND u.id=m.chosen_by WHERE m.tenant_id=$1 AND m.documentation_package_id=$2 ORDER BY m.chosen_at', [a.tenantId, packageId]);
         const materialRecords = await rows(pool, 'SELECT id,name FROM aosr_material_records WHERE tenant_id=$1 AND object_id=$2 ORDER BY name', [a.tenantId, pkg.objectId]);
         const qualityDocs = materialRecords.length ? await rows(pool, 'SELECT * FROM aosr_quality_documents WHERE tenant_id=$1 AND material_record_id=ANY($2::uuid[]) ORDER BY created_at', [a.tenantId, materialRecords.map((m: any) => m.id)]) : [];
         return {
-            packageId, objectId: pkg.objectId, templateAvailable: aosrTemplateAvailable(), items, suggestions,
+            packageId, objectId: pkg.objectId, templateAvailable: aosrTemplateAvailable(), method: method?.method ?? null, methodHistory, hasFileBackedScheme: schemes.some(x => x.hasFile), items, suggestions,
             parties, partySuggestions: { DEVELOPER: obj?.customerName ?? null, CONSTRUCTION_ENTITY: obj?.organizationName ?? null, WORK_EXECUTOR: contractor?.name ?? null },
             objectName: obj?.name, objectAddress: obj?.address, schemes,
             materials: materialRecords.map((m: any) => ({ id: m.id, name: m.name, qualityDocuments: qualityDocs.filter((d: any) => d.materialRecordId === m.id).map((d: any) => ({ id: d.id, docType: d.docType, number: d.number, docDate: d.docDate, issuer: d.issuer })) })),
@@ -101,9 +106,39 @@ export class AosrService {
         return { ...this.summary(aosr, readiness), aosr, packageId: pkg.id, readiness, portionIds: bundle.portionIds, materials: bundle.materials, schemes: bundle.schemes, revisions, point1Proposal: proposeAosrPoint1({ title: aosr.title, locations: [...new Set(units.map((u: any) => u.location).filter(Boolean))] as string[], finishType: units.find((u: any) => u.finishType)?.finishType }), packageStatus: pkg.status };
     }
 
+    /** The Core generator is an optional tool: its operations exist only for a package that explicitly chose «АОСР формируются в Core». */
+    private async requireCoreMethod(c: any, a: Actor, packageId: string) {
+        const m = await currentAosrMethod(c, a.tenantId, packageId);
+        ensure(!!m, 'Сначала выберите способ подготовки АОСР: «АОСР формируются в Core» или «АОСР формируются вне Core»');
+        ensure(m!.method === 'CORE', 'Для пакета выбрано «АОСР формируются вне Core»: АОСР в Core не создаются');
+    }
+
+    /**
+     * «АОСР формируются в Core» / «АОСР формируются вне Core» — an explicit, append-only declaration for the package.
+     * Choosing EXTERNAL creates nothing: no AOSR record, no document shell, no number. Leaving Core for EXTERNAL is refused while
+     * any Core AOSR exists (no silent data loss); EXTERNAL -> CORE is always safe. Same access gate as every package mutation.
+     */
+    async setMethod(a: Actor, packageId: string, d: { method: 'CORE' | 'EXTERNAL'; comment?: string }) {
+        return transaction(async (c) => {
+            const { pkg } = await this.writeContext(c, a, packageId, { content: false });
+            const sdoCase = await one(c, 'SELECT package_locked FROM sdo_closing_cases WHERE tenant_id=$1 AND documentation_package_id=$2', [a.tenantId, packageId]);
+            ensure(!sdoCase?.packageLocked, 'Пакет передан в СДО: способ подготовки АОСР изменить нельзя');
+            const current = await currentAosrMethod(c, a.tenantId, packageId);
+            if (current?.method === d.method) return current;
+            if (d.method === 'EXTERNAL') {
+                const existing = await one(c, 'SELECT count(*)::int AS n FROM aosr_documents WHERE tenant_id=$1 AND documentation_package_id=$2', [a.tenantId, packageId]);
+                ensure(existing.n === 0, 'В пакете уже есть АОСР, созданные в Core: удалите черновики или продолжайте формировать АОСР в Core');
+            }
+            const row = await insert(c, 'documentation_package_aosr_methods', a.tenantId, { documentationPackageId: pkg.id, method: d.method, chosenBy: a.id, comment: d.comment ?? null });
+            await audit(c, a, 'DocumentationPackageAosrMethod', row.id, 'CHOOSE', current ?? null, row);
+            return row;
+        });
+    }
+
     async create(a: Actor, packageId: string, d: any) {
         return transaction(async (c) => {
             const { pkg, work } = await this.writeContext(c, a, packageId, { content: true });
+            await this.requireCoreMethod(c, a, packageId);
             let title: string = d.title, point1: string | null = d.workDescription ?? null, normative: string | null = null, subsequent: string | null = null, code: string | null = null;
             if (d.suggestionCode) {
                 const wt = await one(c, 'SELECT name FROM work_types WHERE tenant_id=$1 AND id=$2', [a.tenantId, work.workTypeId]);
@@ -124,6 +159,7 @@ export class AosrService {
     async dismissSuggestion(a: Actor, packageId: string, suggestionCode: string) {
         return transaction(async (c) => {
             await this.writeContext(c, a, packageId, { content: true });
+            await this.requireCoreMethod(c, a, packageId);
             ensure(!!findTypicalItem(suggestionCode), 'Неизвестная типовая позиция');
             const existing = await one(c, 'SELECT * FROM aosr_suggestion_dismissals WHERE tenant_id=$1 AND documentation_package_id=$2 AND suggestion_code=$3', [a.tenantId, packageId, suggestionCode]);
             return existing ?? insert(c, 'aosr_suggestion_dismissals', a.tenantId, { documentationPackageId: packageId, suggestionCode, dismissedBy: a.id });
@@ -201,14 +237,55 @@ export class AosrService {
         });
     }
 
-    /** One executive scheme = one EXECUTIVE_SCHEME documentation document of the package; it can back many AOSRs. */
-    async createScheme(a: Actor, packageId: string, title: string) {
+    /**
+     * Executive schemes — shared by BOTH AOSR methods. A scheme is one EXECUTIVE_SCHEME documentation document of the package; it may
+     * back many AOSRs (Core) or simply belong to the package's documentary scope (outside Core). It counts as evidence only with a
+     * real file: the upload creates the document and its CORE_FILE version in one transaction, so no empty shell is ever left behind.
+     */
+    private decodeSchemeFile(d: { fileName: string; mimeType: 'application/pdf' | 'image/png' | 'image/jpeg'; base64: string }) {
+        const bytes = Buffer.from(d.base64, 'base64');
+        ensure(bytes.length > 0 && bytes.length <= 5 * 1024 * 1024, 'Файл схемы: максимум 5 МБ');
+        const ok = d.mimeType === 'application/pdf' ? bytes.subarray(0, 5).toString() === '%PDF-' : d.mimeType === 'image/png' ? bytes.subarray(0, 8).toString('hex') === '89504e470d0a1a0a' : bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255;
+        ensure(ok, 'Содержимое файла не соответствует типу');
+        return { bytes, fileName: d.fileName.replace(/[^\p{L}\p{N}_. -]/gu, '_') };
+    }
+    private async storeSchemeFile(c: any, a: Actor, documentId: string, d: any) {
+        const { bytes, fileName } = this.decodeSchemeFile(d);
+        const file = await insert(c, 'attachments', a.tenantId, { fileProvider: 'LOCAL', fileName, mimeType: d.mimeType, content: bytes, uploadedBy: a.id });
+        const max = await one(c, 'SELECT coalesce(max(version_number),0) AS n FROM documentation_document_versions WHERE tenant_id=$1 AND documentation_document_id=$2', [a.tenantId, documentId]);
+        const version = await insert(c, 'documentation_document_versions', a.tenantId, { documentationDocumentId: documentId, versionNumber: Number(max.n) + 1, storageProvider: 'CORE_FILE', storageReference: file.id, comment: fileName, createdBy: a.id });
+        await audit(c, a, 'DocumentationDocumentVersion', version.id, 'CREATE', null, version);
+        return version;
+    }
+    async createScheme(a: Actor, packageId: string, d: any) {
         return transaction(async (c) => {
             await this.writeContext(c, a, packageId, { content: true });
-            const doc = await insert(c, 'documentation_documents', a.tenantId, { documentationPackageId: packageId, type: 'EXECUTIVE_SCHEME', title, createdBy: a.id });
+            const doc = await insert(c, 'documentation_documents', a.tenantId, { documentationPackageId: packageId, type: 'EXECUTIVE_SCHEME', title: d.title, createdBy: a.id });
             await audit(c, a, 'DocumentationDocument', doc.id, 'CREATE', null, doc);
-            return doc;
+            await this.storeSchemeFile(c, a, doc.id, d);
+            return (await packageSchemes(c, a.tenantId, packageId, [doc.id]))[0];
         });
+    }
+    /** Attaches (or replaces — a new version) the file of an existing scheme, e.g. one that so far had metadata only. */
+    async attachSchemeFile(a: Actor, packageId: string, schemeId: string, d: any) {
+        return transaction(async (c) => {
+            await this.writeContext(c, a, packageId, { content: true });
+            const doc = await scoped(c, 'documentation_documents', schemeId, a, true);
+            ensure(doc.type === 'EXECUTIVE_SCHEME' && doc.documentationPackageId === packageId, 'Исполнительная схема не относится к пакету');
+            if (d.title) await c.query('UPDATE documentation_documents SET title=$3,version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2', [a.tenantId, schemeId, d.title]);
+            await this.storeSchemeFile(c, a, schemeId, d);
+            return (await packageSchemes(c, a.tenantId, packageId, [schemeId]))[0];
+        });
+    }
+    /** Authenticated binary download of a scheme's current file (same read gate as the AOSR section). */
+    async downloadSchemeFile(a: Actor, packageId: string, schemeId: string) {
+        await this.readContext(pool, a, packageId);
+        const doc = await scoped(pool, 'documentation_documents', schemeId, a);
+        if (doc.type !== 'EXECUTIVE_SCHEME' || doc.documentationPackageId !== packageId) throw new NotFoundException('Исполнительная схема не найдена');
+        const v = await one(pool, "SELECT storage_reference FROM documentation_document_versions WHERE tenant_id=$1 AND documentation_document_id=$2 AND storage_provider='CORE_FILE' ORDER BY version_number DESC LIMIT 1", [a.tenantId, schemeId]);
+        if (!v) throw new NotFoundException('Файл схемы не загружен');
+        const f = await scoped(pool, 'attachments', v.storageReference, a);
+        return { fileName: f.fileName as string, mimeType: f.mimeType as string, content: f.content as Buffer };
     }
 
     async saveParty(a: Actor, packageId: string, d: any) {
@@ -257,6 +334,7 @@ export class AosrService {
         return transaction(async (c) => {
             const aosr0 = await this.aosrOf(c, a, id);
             const { pkg, work } = await this.writeContext(c, a, aosr0.documentationPackageId, { content: true });
+            await this.requireCoreMethod(c, a, pkg.id);
             await c.query('SELECT 1 FROM aosr_documents WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [a.tenantId, id]);
             const aosr = await this.aosrOf(c, a, id);
             checkVersion(aosr, version);
@@ -265,7 +343,7 @@ export class AosrService {
             let number: number = aosr.officialNumber;
             if (number === null) number = (await one(c, 'INSERT INTO aosr_number_counters(tenant_id,object_id,last_number) VALUES($1,$2,1) ON CONFLICT (tenant_id,object_id) DO UPDATE SET last_number=aosr_number_counters.last_number+1 RETURNING last_number', [a.tenantId, aosr.objectId])).lastNumber;
             const obj = await scoped(c, 'objects', aosr.objectId, a);
-            const model = buildAosrRenderModel({ officialNumber: number, objectName: obj.name, objectAddress: obj.address, content: aosr, parties, materials: bundle.materials, schemes: bundle.schemes });
+            const model = buildAosrRenderModel({ officialNumber: number, objectName: obj.name, objectAddress: obj.address, content: aosr, parties, materials: bundle.materials, schemes: bundle.schemes.filter(x => x.hasFile) });
             const bytes = await renderAosrDocx(model);
             let documentId: string = aosr.documentationDocumentId;
             if (!documentId) documentId = (await insert(c, 'documentation_documents', a.tenantId, { documentationPackageId: pkg.id, type: 'AOSR', title: aosr.title, createdBy: a.id })).id;
@@ -321,6 +399,9 @@ export class AosrService {
             const sdoCase = await one(c, 'SELECT package_locked FROM sdo_closing_cases WHERE tenant_id=$1 AND documentation_package_id=$2', [a.tenantId, packageId]);
             ensure(!sdoCase?.packageLocked, 'Пакет передан в СДО: объём изменить нельзя');
             ensure(['PRESENTED', 'ACCEPTED_BY_CUSTOMER'].includes(pkg.status), 'Объём, принятый заказчиком, фиксируется после предъявления документации заказчику');
+            // Same evidence rule for both AOSR methods; nothing here depends on a Core-generated AOSR existing.
+            const missing = await schemeEvidenceViolation(c, a.tenantId, packageId);
+            ensure(!missing, missing!);
             const claim = await claimIdempotentCommand(c, a, 'CUSTOMER_ACCEPTED_QUANTITY', d.idempotencyKey, packageId, { items: d.items.map((i: any) => [i.quantityPortionId, new Decimal(i.quantity).toFixed(4)]), reference: d.reference ?? null, comment: d.comment ?? null });
             if (claim.replay) return claim.response;
             const out = [];

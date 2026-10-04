@@ -60,7 +60,7 @@ test('point 4: executive-scheme references use the continuation row; several sch
   const p = await render({ schemes });
   assert.equal(p[SLOT.point4a].text.trim(), '');
   assert.ok(p[SLOT.point4b].text.includes('ES-001') && p[SLOT.point4b].text.includes('ES-002'));
-  const one = await render({ schemes: [{ id: 'a', title: 'ES-001' }] });
+  const one = await render({ schemes: [{ id: 'a', title: 'ES-001', hasFile: true }] });
   assert.equal(one[SLOT.point4a].text, 'ES-001');
 });
 

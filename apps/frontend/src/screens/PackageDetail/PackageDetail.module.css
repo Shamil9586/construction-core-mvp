@@ -105,3 +105,10 @@
 .errorText {
   color: var(--cc-status-blocked-text);
 }
+
+/* A real anchor that looks like .actionButton: a native user click on <a href=blob download> is the most compatible way to save a file inside an embedded frame. */
+.linkButton {
+  composes: actionButton;
+  display: inline-block;
+  text-decoration: none;
+}

@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { StatusBadge, typeClass } from '../../design-system';
 import * as api from '../../data/aosrApi';
+import { readSchemeFile, SCHEME_FILE_ACCEPT } from '../../download/readSchemeFile';
 import type { AosrDetail, AosrListItem, AosrPackageView, AosrPartyRole, AosrQualityDocType, PackageQuantityView } from '../../data/aosrApi';
 import styles from './PackageDetail.module.css';
 
@@ -180,11 +181,112 @@ function PartiesBlock({ packageId, view, onChanged }: { packageId: string; view:
   );
 }
 
+/** «АОСР формируются в Core» / «АОСР формируются вне Core» — an explicit, audited choice; the Core generator is an optional tool. */
+function MethodBlock({ packageId, view, canEdit, onChanged }: { packageId: string; view: api.AosrPackageView; canEdit: boolean; onChanged: () => void }) {
+  const action = useAction();
+  const choose = (method: api.AosrMethod) => void action.run(async () => { await api.setAosrMethod(packageId, method); onChanged(); });
+  const last = view.methodHistory[view.methodHistory.length - 1];
+  return (
+    <div className={styles.documentCard}>
+      <span className={typeClass('label')}>Как готовятся АОСР по этому пакету</span>
+      {view.method === null ? (
+        <span className={typeClass('body')}>Генератор АОСР в Core — необязательный инструмент: можно готовить АОСР у себя на компьютере. Выберите способ — это фиксируется в истории пакета.</span>
+      ) : view.method === 'CORE' ? (
+        <span className={typeClass('body-strong')}>АОСР формируются в Core</span>
+      ) : (
+        <>
+          <span className={typeClass('body-strong')}>АОСР формируются вне Core</span>
+          <span className={[styles.secondary, typeClass('body')].join(' ')}>Core не требует ни записей АОСР, ни номера, ни DOCX. Загрузите исполнительную схему, предъявите документацию заказчику и после его приёмки зафиксируйте принятый объём.</span>
+        </>
+      )}
+      {canEdit && (view.method !== 'CORE' || view.items.length === 0) ? (
+        <div className={styles.inlineForm}>
+          {view.method !== 'CORE' ? <button type="button" className={styles.actionButton} disabled={action.pending} onClick={() => choose('CORE')}>{view.method === null ? 'АОСР формируются в Core' : 'Перейти к формированию АОСР в Core'}</button> : null}
+          {view.method !== 'EXTERNAL' ? <button type="button" className={styles.actionButton} disabled={action.pending} onClick={() => choose('EXTERNAL')}>АОСР формируются вне Core</button> : null}
+        </div>
+      ) : null}
+      {view.method === 'CORE' && view.items.length > 0 && canEdit ? <span className={[styles.secondary, typeClass('body')].join(' ')}>Переход на «вне Core» недоступен, пока в пакете есть АОСР, созданные в Core.</span> : null}
+      {last ? <span className={[styles.secondary, typeClass('body')].join(' ')}>Выбрано: {last.chosenAt.slice(0, 10)} · {last.chosenBy}</span> : null}
+      {action.error ? <span className={styles.errorText}>{action.error}</span> : null}
+    </div>
+  );
+}
+
+/** Title + file in one step: a scheme is created together with its file, never as an empty record. */
+function SchemeUploadForm({ packageId, onCreated }: { packageId: string; onCreated: (schemeId: string) => void | Promise<void> }) {
+  const [title, setTitle] = useState('');
+  const [file, setFile] = useState<File | null>(null);
+  const [inputKey, setInputKey] = useState(0);
+  const action = useAction();
+  return (
+    <form className={styles.inlineForm} onSubmit={(e) => { e.preventDefault(); if (!title.trim() || !file) return; void action.run(async () => { const payload = await readSchemeFile(file); const created = await api.createExecutiveScheme(packageId, title.trim(), payload); setTitle(''); setFile(null); setInputKey(inputKey + 1); await onCreated(created.id); }); }}>
+      <input className={styles.input} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Название схемы (например, ES-001)" aria-label="Название исполнительной схемы" />
+      <input key={inputKey} type="file" accept={SCHEME_FILE_ACCEPT} className={styles.input} aria-label="Файл исполнительной схемы" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+      <button type="submit" className={styles.actionButton} disabled={action.pending || !title.trim() || !file}>Загрузить схему</button>
+      {action.error ? <span className={styles.errorText}>{action.error}</span> : null}
+    </form>
+  );
+}
+
+/** Executive schemes — the same for both methods. Only a scheme with an uploaded file counts as documentary evidence. */
+function SchemesBlock({ packageId, view, editable, onChanged }: { packageId: string; view: api.AosrPackageView; editable: boolean; onChanged: () => void }) {
+  const action = useAction();
+  return (
+    <section className={styles.section}>
+      <span className={[styles.sectionLabel, typeClass('label')].join(' ')}>Исполнительные схемы</span>
+      {view.schemes.length ? (
+        <ul className={styles.plainList}>
+          {view.schemes.map((s) => (
+            <li key={s.id} className={typeClass('body')}>
+              <span className={typeClass('body-strong')}>{s.title}</span>{' '}
+              {s.hasFile ? <span className={styles.secondary}>— файл загружен: {s.fileName}</span> : <span className={styles.errorText}>— файл не загружен: схема без файла не считается подтверждающим документом</span>}{' '}
+              {s.hasFile ? <button type="button" className={styles.actionButton} disabled={action.pending} onClick={() => void action.run(() => api.downloadExecutiveSchemeFile(packageId, s.id, s.fileName ?? 'scheme'))}>Скачать</button> : null}
+              {editable ? (
+                <label className={typeClass('body')}>
+                  {' '}{s.hasFile ? 'Заменить файл: ' : 'Загрузить файл: '}
+                  <input type="file" accept={SCHEME_FILE_ACCEPT} aria-label={`Файл схемы «${s.title}»`} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (!f) return; void action.run(async () => { await api.attachExecutiveSchemeFile(packageId, s.id, await readSchemeFile(f)); onChanged(); }); }} />
+                </label>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <span className={[styles.empty, typeClass('body')].join(' ')}>Исполнительных схем ещё нет. Для предъявления документации заказчику нужна хотя бы одна схема с загруженным файлом.</span>
+      )}
+      {editable ? <SchemeUploadForm packageId={packageId} onCreated={onChanged} /> : null}
+      <span className={[styles.secondary, typeClass('body')].join(' ')}>Одна схема может относиться к нескольким АОСР. Паспорт, сертификат или декларация на материал схему не заменяют.</span>
+      {action.error ? <span className={styles.errorText}>{action.error}</span> : null}
+    </section>
+  );
+}
+
+/**
+ * The DOCX is fetched (authenticated) as soon as the card shows a generated act, and the button is a REAL anchor to that Blob:
+ * saving is then a native user click, not a programmatic click after an await — the form that works in embedded frames and WebViews
+ * (see download/saveBlobAsFile.ts). A fetch failure is shown instead of leaving a button that silently does nothing.
+ */
+function DocxDownload({ aosrId, version, fallbackName }: { aosrId: string; version: number; fallbackName: string }) {
+  const [file, setFile] = useState<{ url: string; name: string } | { error: string } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    let url: string | null = null;
+    setFile(null);
+    api.fetchAosrDocx(aosrId, fallbackName).then(({ blob, name }) => {
+      if (cancelled) return;
+      url = URL.createObjectURL(blob);
+      setFile({ url, name });
+    }, (e: unknown) => { if (!cancelled) setFile({ error: errorMessage(e) }); });
+    return () => { cancelled = true; if (url) URL.revokeObjectURL(url); };
+  }, [aosrId, version, fallbackName]);
+  if (!file) return <span className={[styles.secondary, typeClass('body')].join(' ')}>Подготовка файла…</span>;
+  if ('error' in file) return <span className={styles.errorText}>{file.error}</span>;
+  return <a className={styles.linkButton} href={file.url} download={file.name}>Скачать DOCX</a>;
+}
+
 function AosrCard({ item, packageId, view, canEdit, frozen, onChanged }: { item: AosrListItem; packageId: string; view: AosrPackageView; canEdit: boolean; frozen: boolean; onChanged: () => void }) {
   const [detail, setDetail] = useState<AosrDetail | null>(null);
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [newMaterial, setNewMaterial] = useState({ name: '', docType: 'CERTIFICATE' as AosrQualityDocType, number: '', docDate: '' });
-  const [newScheme, setNewScheme] = useState('');
   const action = useAction();
   const reload = () => api.getAosr(item.id).then((d) => { setDetail(d); setDraft({}); });
   useEffect(() => { void reload(); }, [item.id, item.version]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -256,24 +358,14 @@ function AosrCard({ item, packageId, view, canEdit, frozen, onChanged }: { item:
         </div>
       ) : null}
 
-      <span className={typeClass('label')}>Исполнительные схемы (одна схема может относиться к нескольким АОСР)</span>
+      <span className={typeClass('label')}>Исполнительные схемы (одна схема с файлом может относиться к нескольким АОСР)</span>
       {view.schemes.length ? view.schemes.map((s) => (
         <label key={s.id} className={typeClass('body')}>
           <input type="checkbox" disabled={!editable} checked={detail.schemes.some((x) => x.id === s.id)} onChange={() => void link('schemeDocumentIds', toggle(detail.schemes.map((x) => x.id), s.id))} /> {s.title}
+          <span className={s.hasFile ? styles.secondary : styles.errorText}> — {s.hasFile ? 'файл загружен' : 'нет файла'}</span>
         </label>
       )) : <span className={[styles.empty, typeClass('body')].join(' ')}>Схем ещё нет</span>}
-      {editable ? (
-        <div className={styles.inlineForm}>
-          <input className={styles.input} placeholder="Новая исполнительная схема" aria-label="Новая исполнительная схема" value={newScheme} onChange={(e) => setNewScheme(e.target.value)} />
-          <button type="button" className={styles.actionButton} disabled={action.pending || !newScheme.trim()} onClick={() => void action.run(async () => {
-            const created = await api.createAosrScheme(packageId, newScheme.trim());
-            await api.setAosrLinks(item.id, { schemeDocumentIds: [...detail.schemes.map((x) => x.id), created.id], version: a.version });
-            setNewScheme('');
-            onChanged();
-            await reload();
-          })}>Добавить схему</button>
-        </div>
-      ) : null}
+      {editable ? <SchemeUploadForm packageId={packageId} onCreated={async (schemeId) => { await api.setAosrLinks(item.id, { schemeDocumentIds: [...detail.schemes.map((x) => x.id), schemeId], version: a.version }); onChanged(); await reload(); }} /> : null}
 
       {view.workPortions.length ? (
         <>
@@ -298,7 +390,7 @@ function AosrCard({ item, packageId, view, canEdit, frozen, onChanged }: { item:
             {detail.officialNumber === null ? 'Сформировать DOCX' : 'Пересоздать DOCX'}
           </button>
         ) : null}
-        {detail.hasDocx ? <button type="button" className={styles.actionButton} onClick={() => void action.run(() => api.downloadAosrDocx(item.id, `АОСР_${detail.officialNumber}.docx`))}>Скачать DOCX</button> : null}
+        {detail.hasDocx ? <DocxDownload aosrId={item.id} version={a.version} fallbackName={`AOSR_${detail.officialNumber}.docx`} /> : null}
         {editable && detail.officialNumber === null ? <button type="button" className={styles.actionButton} disabled={action.pending} onClick={() => void action.run(async () => { await api.deleteAosr(item.id); onChanged(); })}>Удалить черновик</button> : null}
         {action.error ? <span className={styles.errorText}>{action.error}</span> : null}
       </div>
@@ -319,8 +411,9 @@ export function AosrSection({ packageId, packageStatus, view, quantity, error, c
       {quantity ? <QuantityBlock packageId={packageId} packageStatus={packageStatus} quantity={quantity} canRecord={canRecordCustomerQuantity} onChanged={onChanged} /> : null}
       <section className={styles.section}>
         <span className={[styles.sectionLabel, typeClass('label')].join(' ')}>АОСР</span>
-        {!view.templateAvailable ? <span className={styles.errorText}>Официальный шаблон АОСР недоступен</span> : null}
-        {view.items.length ? (
+        <MethodBlock packageId={packageId} view={view} canEdit={canEdit} onChanged={onChanged} />
+        {view.method === 'CORE' && !view.templateAvailable ? <span className={styles.errorText}>Официальный шаблон АОСР недоступен</span> : null}
+        {view.method !== 'CORE' ? null : view.items.length ? (
           <div className={styles.documentList}>
             {view.items.map((item) => (
               <div key={item.id} className={styles.documentCard}>
@@ -337,7 +430,7 @@ export function AosrSection({ packageId, packageStatus, view, quantity, error, c
         ) : (
           <span className={[styles.empty, typeClass('body')].join(' ')}>АОСР ещё не созданы</span>
         )}
-        {editable ? (
+        {view.method === 'CORE' && editable ? (
           <>
             {view.suggestions.length ? (
               <div className={styles.documentCard}>
@@ -357,11 +450,12 @@ export function AosrSection({ packageId, packageStatus, view, quantity, error, c
             </form>
             {action.error ? <span className={styles.errorText}>{action.error}</span> : null}
           </>
-        ) : frozen && canEdit ? (
+        ) : view.method === 'CORE' && frozen && canEdit ? (
           <span className={[styles.secondary, typeClass('body')].join(' ')}>Состав пакета заблокирован в текущем статусе — АОСР изменить нельзя.</span>
         ) : null}
-        {canEdit ? <PartiesBlock packageId={packageId} view={view} onChanged={onChanged} /> : null}
+        {view.method === 'CORE' && canEdit ? <PartiesBlock packageId={packageId} view={view} onChanged={onChanged} /> : null}
       </section>
+      <SchemesBlock packageId={packageId} view={view} editable={editable} onChanged={onChanged} />
     </>
   );
 }

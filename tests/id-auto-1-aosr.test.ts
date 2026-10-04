@@ -1,7 +1,7 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import JSZip from 'jszip';
-import { handoffWorkToPto } from './helpers/pbx3-fixtures';
+import { harness, closeHarness, setUp, fillParties, fillAosr, uploadScheme, SCHEME_FILE, PARTIES, dt, RP, INTERNAL, CUSTOMER } from './helpers/aosr-harness';
 import { resolveAosrReadiness, suggestTypicalAosr, resolveCurrentAcceptedQuantity, splitRuDate } from '../packages/domain/aosr';
 import { buildAosrRenderModel, surnameInitials } from '../apps/backend/src/id-auto/aosr';
 import { readAosrTemplate } from '../apps/backend/src/id-auto/aosr-docx';
@@ -11,92 +11,6 @@ import { readAosrTemplate } from '../apps/backend/src/id-auto/aosr-docx';
  * (PGlite), same harness shape as the other documentation tests. One backend instance serves the
  * whole file; every test builds its own object so nothing is shared.
  */
-const PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aF9sAAAAASUVORK5CYII=';
-const dt = (delta: number) => new Date(Date.now() + delta * 86400000).toISOString().slice(0, 10);
-const RP = '500.1234', INTERNAL = '498.1234', CUSTOMER = '496.1234';
-
-let shared: Promise<any> | null = null;
-function harness() {
-  return (shared ??= (async () => {
-    if (!process.env.E2E_DATABASE_URL) delete process.env.DATABASE_URL;
-    process.env.AUTH_MODE = 'mock';
-    process.env.MOCK_LOGIN_KEY = 'aosr-key';
-    process.env.AUTH_RATE_LIMIT_MAX = '100000';
-    process.env.RATE_LIMIT_MAX = '1000000';
-    process.env.DB_MODE = process.env.E2E_DATABASE_URL ? 'postgres' : 'pglite';
-    process.env.PGLITE_DIR = 'memory://';
-    if (process.env.E2E_DATABASE_URL) process.env.DATABASE_URL = process.env.E2E_DATABASE_URL;
-    const { migrate } = await import('../scripts/migrate');
-    const { seed } = await import('../scripts/seed');
-    const { createApp } = await import('../apps/backend/src/main');
-    await migrate();
-    await seed();
-    const app = await createApp();
-    await app.listen(0, '127.0.0.1');
-    const base = `http://127.0.0.1:${app.getHttpServer().address().port}`;
-    let token = '';
-    async function raw(path: string, body?: any) {
-      return fetch(base + '/' + path, { method: body === undefined ? 'GET' : 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: body === undefined ? undefined : JSON.stringify(body) });
-    }
-    async function req(path: string, body?: any, expected = body === undefined ? 200 : 201) {
-      const r = await raw(path, body);
-      const data: any = await r.json();
-      if (path === 'objects' && body !== undefined && r.status === 201) await (await import('./helpers/pbx3-fixtures')).assignPtoToObject(data.id);
-      assert.equal(r.status, expected, path + ': ' + JSON.stringify(data));
-      return data;
-    }
-    async function login(role: string) { const d = await req('auth/mock', { role, key: 'aosr-key' }); token = d.token; return d.user; }
-    return { app, req, raw, login };
-  })());
-}
-after(async () => { if (shared) await (await shared).app.close(); });
-
-let counter = 0;
-/** Object + plastering Work + one Quantity Portion (RP 500.1234, Internal SC 498.1234) + a package covering it. Ends logged in as PTO. */
-async function setUp() {
-  const { req, login } = await harness();
-  const pm = await login('PROJECT_MANAGER');
-  const dict = await req('dictionaries');
-  const contractors = await req('contractors');
-  await login('DEPUTY_DIRECTOR');
-  const o = await req('objects', { externalCode: 'AOSR-' + Date.now() + '-' + ++counter, name: 'Жилой дом №1', address: 'г. Москва, ул. Тестовая, 1', organizationName: 'ООО СЗ «Гор-Строй»', customerName: 'ООО «Заказчик»', projectManagerId: pm.id, startDate: dt(-5), plannedFinishDate: dt(60), contractValue: '1000000', contractorIds: [contractors[0].id] });
-  await login('PROJECT_MANAGER');
-  const plaster = dict.workTypes.find((w: any) => /штукатур/i.test(w.name)) ?? dict.workTypes[0];
-  const work = await req('works', { objectId: o.id, workTypeId: plaster.id, contractorId: contractors[0].id, responsibleUserId: pm.id, name: 'Устройство штукатурки стен', unit: 'м²', plannedQuantity: 500, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '100000' });
-  const unit = await req('execution-units', { objectWorkId: work.id, workTypeId: plaster.id, contractorId: contractors[0].id, unit: 'м²', plannedQuantity: RP, location: 'санузлы' });
-  const portion = await req(`execution-units/${unit.id}/portions`, { label: 'Секция A', plannedQuantity: RP });
-  await req(`portions/${portion.id}/fact`, { quantity: RP, version: portion.version });
-  const internal = await req(`portions/${portion.id}/inspection-request`, { inspectionType: 'INTERNAL_SC', version: portion.version + 1 });
-  await login('CONSTRUCTION_CONTROL');
-  const attachment = await req('attachments', { fileName: 'sc.png', mimeType: 'image/png', base64: PNG_BASE64 });
-  await req(`inspections/${internal.id}/photos`, { attachmentId: attachment.id });
-  await req(`inspections/${internal.id}/accept`, { version: internal.version, comment: 'Принято СК', quantity: INTERNAL });
-  const pto = await login('PTO');
-  await handoffWorkToPto(work.id);
-  const pkg = await req('documentation-packages', { objectWorkId: work.id, responsibleUserId: pto.id });
-  await req(`documentation-packages/${pkg.id}/portions`, { quantityPortionId: portion.id });
-  return { object: o, work, unit, portion, pkg, pto };
-}
-
-const PARTIES = [
-  { partyRole: 'DEVELOPER', organizationName: 'ООО «Заказчик»', organizationDetails: 'ОГРН 1, ИНН 2' },
-  { partyRole: 'CONSTRUCTION_ENTITY', organizationName: 'ООО СЗ «Гор-Строй»', organizationDetails: 'ОГРН 3, ИНН 4' },
-  { partyRole: 'DESIGNER', organizationName: 'ООО «Проект»', organizationDetails: 'ОГРН 5, ИНН 6' },
-  { partyRole: 'WORK_EXECUTOR', organizationName: 'ООО «Подрядчик»' },
-  { partyRole: 'DEVELOPER_SC_REP', personName: 'Петров Пётр Петрович', position: 'Инженер СК', authorityDocument: 'Приказ № 1' },
-  { partyRole: 'CONSTRUCTION_REP', personName: 'Сидоров Сидор Сидорович', position: 'Прораб', authorityDocument: 'Приказ № 2' },
-  { partyRole: 'INTERNAL_SC', personName: 'Иванов Иван Иванович', position: 'Инженер СК', registryNumber: 'С-123', authorityDocument: 'Приказ № 3' },
-];
-async function fillParties(req: any, pkgId: string) { for (const p of PARTIES) await req(`documentation-packages/${pkgId}/aosr-parties`, p); }
-
-/** Fills one AOSR so it is ready (materials with a quality document, dates, texts). */
-async function fillAosr(req: any, ctx: any, aosrId: string, material: any, opts: { point1?: string; schemeId?: string } = {}) {
-  let a = await req(`aosr/${aosrId}`);
-  a = (await req(`aosr/${aosrId}/edit`, { workDescription: opts.point1 ?? 'Устройство штукатурки стен в помещении санузлов по типу №1', startDate: dt(-3), endDate: dt(-1), actDate: dt(0), projectDocumentation: 'Рабочая документация, шифр АР-1, лист 5', normativeReferences: 'СП 71.13330.2017', subsequentWork: 'Шпатлёвка стен', version: a.version }, 201));
-  const linked = await req(`aosr/${aosrId}/links`, { materialRecordIds: [material.id], quantityPortionIds: [ctx.portion.id], ...(opts.schemeId ? { schemeDocumentIds: [opts.schemeId] } : {}), version: a.version });
-  return linked;
-}
-
 test('multiple AOSRs live in one Work/package; the same Quantity Portion backs several; no fake Work/WEU is created', async () => {
   const { req, login } = await harness();
   const ctx = await setUp();
@@ -165,13 +79,20 @@ test('readiness blocks generation; quantity and a unique scheme per AOSR are not
   assert.equal(after.ready, false);
   assert.deepEqual(after.readiness.issues.map((i: any) => i.code), ['EXECUTIVE_SCHEME_MISSING'], 'a quality document never substitutes for a scheme; material readiness is independent');
   assert.equal((await raw(`aosr/${aosr.id}/generate`, { version: after.version })).status, 400);
-  // One scheme, no uniqueness requirement: linking it makes this AOSR ready…
-  const scheme = await req(`${base}/aosr-schemes`, { title: 'ES-001' });
-  await req(`aosr/${aosr.id}/links`, { schemeDocumentIds: [scheme.id], version: after.version });
+  // A scheme RECORD without a file (metadata only) does not satisfy readiness either.
+  const shell = await req(`${base}/documents`, { type: 'EXECUTIVE_SCHEME' });
+  const metadataOnly = (await req(`aosr/${aosr.id}`));
+  await req(`aosr/${aosr.id}/links`, { schemeDocumentIds: [shell.id], version: metadataOnly.version });
+  const linkedShell = await req(`aosr/${aosr.id}`);
+  assert.equal(linkedShell.ready, false);
+  assert.deepEqual(linkedShell.readiness.issues.map((i: any) => i.code), ['EXECUTIVE_SCHEME_FILE_MISSING']);
+  assert.equal((await raw(`aosr/${aosr.id}/generate`, { version: linkedShell.version })).status, 400);
+  // The real file arrives for that same record -> ready. One file-backed scheme, no uniqueness requirement…
+  await req(`${base}/executive-schemes/${shell.id}/file`, { title: 'ES-001', ...SCHEME_FILE });
   assert.equal((await req(`aosr/${aosr.id}`)).ready, true);
   // …and the SAME scheme also satisfies a second AOSR.
   const second = await req(`${base}/aosr`, { title: 'Второй АОСР' });
-  await fillAosr(req, ctx, second.id, material, { schemeId: scheme.id });
+  await fillAosr(req, ctx, second.id, material, { schemeId: shell.id });
   assert.equal((await req(`aosr/${second.id}`)).ready, true);
   assert.equal(linked.officialNumber, null);
 });
@@ -184,7 +105,7 @@ test('first generation assigns the official number; draft AOSRs consume none; a 
   const material = await req(`${base}/aosr-materials`, { name: 'Штукатурная смесь' });
   await req(`${base}/aosr-materials/${material.id}/quality-documents`, { docType: 'PASSPORT', number: 'П-7', docDate: dt(-20), issuer: 'Завод' });
   const a1 = await req(`${base}/aosr`, { title: 'Грунтовка' }), a2 = await req(`${base}/aosr`, { title: 'Штукатурка' }), draft = await req(`${base}/aosr`, { title: 'Черновик' });
-  const shared = await req(`${base}/aosr-schemes`, { title: 'ES-001' });
+  const shared = await uploadScheme(req, ctx.pkg.id, 'ES-001');
   await fillAosr(req, ctx, a1.id, material, { schemeId: shared.id });
   await fillAosr(req, ctx, a2.id, material, { point1: 'Устройство штукатурки стен', schemeId: shared.id });
   const g1 = await req(`aosr/${a1.id}/generate`, { version: (await req(`aosr/${a1.id}`)).version });
@@ -222,7 +143,7 @@ test('the generated file is an editable DOCX built on the unchanged official tem
   const base = `documentation-packages/${ctx.pkg.id}`;
   await fillParties(req, ctx.pkg.id);
   const material = await req(`${base}/aosr-materials`, { name: 'Грунтовка', qualityDocuments: [{ docType: 'DECLARATION', number: 'Д-9' }] });
-  const scheme = await req(`${base}/aosr-schemes`, { title: 'Исполнительная схема нанесения штукатурки' });
+  const scheme = await uploadScheme(req, ctx.pkg.id, 'Исполнительная схема нанесения штукатурки');
   const a = await req(`${base}/aosr`, { title: 'Штукатурка' });
   await fillAosr(req, ctx, a.id, material);
   const cur = await req(`aosr/${a.id}`);
@@ -256,7 +177,7 @@ test('one executive scheme links to several AOSRs (many-to-many)', async () => {
   const { req } = await harness();
   const ctx = await setUp();
   const base = `documentation-packages/${ctx.pkg.id}`;
-  const scheme = await req(`${base}/aosr-schemes`, { title: 'Общая исполнительная схема' });
+  const scheme = await uploadScheme(req, ctx.pkg.id, 'Общая исполнительная схема');
   const a1 = await req(`${base}/aosr`, { title: 'А1' }), a2 = await req(`${base}/aosr`, { title: 'А2' });
   await req(`aosr/${a1.id}/links`, { schemeDocumentIds: [scheme.id], version: a1.version });
   await req(`aosr/${a2.id}/links`, { schemeDocumentIds: [scheme.id], version: a2.version });
@@ -266,7 +187,7 @@ test('one executive scheme links to several AOSRs (many-to-many)', async () => {
   assert.equal((await pool.query('SELECT count(*)::int AS n FROM aosr_scheme_links WHERE scheme_document_id=$1', [scheme.id])).rows[0].n, 2);
   // A scheme of another package/type is refused.
   const other = await setUp();
-  const foreign = await req(`documentation-packages/${other.pkg.id}/aosr-schemes`, { title: 'Чужая' });
+  const foreign = await uploadScheme(req, other.pkg.id, 'Чужая');
   await req(`aosr/${a1.id}/links`, { schemeDocumentIds: [foreign.id], version: (await req(`aosr/${a1.id}`)).version }, 400);
 });
 
@@ -280,6 +201,7 @@ test('customer-accepted quantity is append-only, keeps RP_FACT/INTERNAL_SC intac
   assert.equal(q.current.source, 'INTERNAL_SC');
   // Not allowed before the documentation was presented.
   await req(`${base}/customer-accepted-quantity`, { items: [{ quantityPortionId: ctx.portion.id, quantity: CUSTOMER }] }, 400);
+  await uploadScheme(req, ctx.pkg.id, 'ES-001'); // evidence: a file-backed executive scheme is needed to present
   const doc = await req(`${base}/documents`, { type: 'AOSR' });
   await req(`documentation-documents/${doc.id}/versions`, { storageProvider: 'NONE' });
   let p = await req(`${base}/status`, { status: 'PREPARING', version: ctx.pkg.version });
@@ -339,6 +261,7 @@ test('existing package authorization and freeze rules are enforced for AOSR', as
   assert.ok([403, 404].includes(r.status), 'stranger PTO refused: ' + r.status);
   // Freeze: once PRESENTED, AOSR content cannot change or be generated.
   await login('PTO');
+  await uploadScheme(req, ctx.pkg.id, 'ES-001'); // evidence: a file-backed executive scheme is needed to present
   const doc = await req(`${base}/documents`, { type: 'AOSR' });
   await req(`documentation-documents/${doc.id}/versions`, { storageProvider: 'NONE' });
   let p = await req(`${base}/status`, { status: 'PREPARING', version: ctx.pkg.version });
@@ -376,8 +299,10 @@ test('domain: readiness, suggestions, current quantity, number slot helpers', ()
     { partyRole: 'DEVELOPER', organizationName: 'a' }, { partyRole: 'CONSTRUCTION_ENTITY', organizationName: 'b' }, { partyRole: 'WORK_EXECUTOR', organizationName: 'c' }, { partyRole: 'DESIGNER', organizationName: 'д0' },
     ...(['DEVELOPER_SC_REP', 'CONSTRUCTION_REP', 'INTERNAL_SC'] as const).map(r => ({ partyRole: r, personName: 'И И', position: 'п', authorityDocument: 'д' })),
   ] as any[];
-  const base = { content, parties, materials: [], schemes: [{ id: 's', title: 'ES-001' }], workTypeRequiresMaterials: false, templateAvailable: true };
+  const base = { content, parties, materials: [], schemes: [{ id: 's', title: 'ES-001', hasFile: true }], workTypeRequiresMaterials: false, templateAvailable: true };
   assert.equal(resolveAosrReadiness(base).ready, true);
+  assert.deepEqual(resolveAosrReadiness({ ...base, schemes: [{ id: 's', title: 'ES-001', hasFile: false }] }).issues.map(i => i.code), ['EXECUTIVE_SCHEME_FILE_MISSING'], 'metadata-only scheme is not evidence');
+  assert.equal(resolveAosrReadiness({ ...base, schemes: [{ id: 's', title: 'ES-001', hasFile: false }, { id: 't', title: 'ES-002', hasFile: true }] }).ready, true, 'at least one file-backed scheme suffices');
   const docs = [{ name: 'м', qualityDocuments: [{ docType: 'CERTIFICATE' as const, number: '1' }] }];
   assert.deepEqual(resolveAosrReadiness({ ...base, schemes: [], materials: docs }).issues.map(i => i.code), ['EXECUTIVE_SCHEME_MISSING'], 'quality document cannot replace a scheme');
   assert.equal(resolveAosrReadiness({ ...base, materials: docs }).ready, true, 'one shared scheme suffices; nothing demands a unique scheme');
@@ -400,3 +325,5 @@ test('domain: readiness, suggestions, current quantity, number slot helpers', ()
   const model = buildAosrRenderModel({ officialNumber: 7, objectName: 'о', objectAddress: 'а', content, parties, materials: [], schemes: [] });
   assert.ok(!Object.keys(model).some(k => /quant/i.test(k)));
 });
+
+after(closeHarness);

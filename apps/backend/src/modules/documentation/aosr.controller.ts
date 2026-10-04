@@ -5,6 +5,20 @@ import { authenticate } from '../../security';
 import * as V from '../../validation';
 
 /**
+ * Authenticated binary download. Both `filename` (ASCII fallback, for clients that ignore RFC 5987) and `filename*` (the real
+ * Unicode name) are sent; the bytes go out as a Buffer with an explicit length, and nothing here is cacheable by a shared proxy.
+ */
+function sendFile(res: any, f: { fileName: string; mimeType: string; content: Buffer }) {
+    const bytes = Buffer.isBuffer(f.content) ? f.content : Buffer.from(f.content);
+    const ascii = f.fileName.replace(/[^\x20-\x7e]+/g, '_').replace(/["\\;]/g, '_') || 'file';
+    res.setHeader('Content-Type', f.mimeType);
+    res.setHeader('Content-Disposition', `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(f.fileName)}`);
+    res.setHeader('Content-Length', String(bytes.length));
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.send(bytes);
+}
+
+/**
  * ID-AUTO-1 — AOSR routes. They live inside the existing Documentation Package surface
  * (documentation-packages/:id/...) and use the same authentication and package access rules;
  * there is no separate authorization contour.
@@ -27,8 +41,17 @@ export class AosrController {
     async material(@Req() r: any, @Param('id') id: string, @Body() b: any) { return this.svc.createMaterial(await authenticate(r), V.uuid.parse(id), V.aosrMaterialDto.parse(b)); }
     @Post('documentation-packages/:id/aosr-materials/:materialId/quality-documents')
     async qualityDocument(@Req() r: any, @Param('id') id: string, @Param('materialId') materialId: string, @Body() b: any) { return this.svc.addQualityDocument(await authenticate(r), V.uuid.parse(id), V.uuid.parse(materialId), V.aosrQualityDocumentDto.parse(b)); }
-    @Post('documentation-packages/:id/aosr-schemes')
-    async scheme(@Req() r: any, @Param('id') id: string, @Body() b: any) { return this.svc.createScheme(await authenticate(r), V.uuid.parse(id), V.aosrSchemeDto.parse(b).title); }
+    @Post('documentation-packages/:id/aosr-method')
+    async method(@Req() r: any, @Param('id') id: string, @Body() b: any) { return this.svc.setMethod(await authenticate(r), V.uuid.parse(id), V.aosrMethodDto.parse(b)); }
+    @Post('documentation-packages/:id/executive-schemes')
+    async scheme(@Req() r: any, @Param('id') id: string, @Body() b: any) { return this.svc.createScheme(await authenticate(r), V.uuid.parse(id), V.aosrSchemeDto.parse(b)); }
+    @Post('documentation-packages/:id/executive-schemes/:schemeId/file')
+    async schemeFile(@Req() r: any, @Param('id') id: string, @Param('schemeId') schemeId: string, @Body() b: any) { return this.svc.attachSchemeFile(await authenticate(r), V.uuid.parse(id), V.uuid.parse(schemeId), V.aosrSchemeFileDto.parse(b)); }
+    @Get('documentation-packages/:id/executive-schemes/:schemeId/file')
+    async schemeFileDownload(@Req() r: any, @Res() res: any, @Param('id') id: string, @Param('schemeId') schemeId: string) {
+        const f = await this.svc.downloadSchemeFile(await authenticate(r), V.uuid.parse(id), V.uuid.parse(schemeId));
+        sendFile(res, f);
+    }
     @Get('documentation-packages/:id/quantity')
     async quantity(@Req() r: any, @Param('id') id: string) { return this.svc.quantityView(await authenticate(r), V.uuid.parse(id)); }
     @Post('documentation-packages/:id/customer-accepted-quantity')
@@ -47,8 +70,6 @@ export class AosrController {
     @Get('aosr/:id/docx')
     async docx(@Req() r: any, @Res() res: any, @Param('id') id: string) {
         const f = await this.svc.download(await authenticate(r), V.uuid.parse(id));
-        res.setHeader('Content-Type', f.mimeType);
-        res.setHeader('Content-Disposition', "attachment; filename*=UTF-8''" + encodeURIComponent(f.fileName));
-        res.send(f.content);
+        sendFile(res, f);
     }
 }

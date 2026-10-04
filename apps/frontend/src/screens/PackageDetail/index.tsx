@@ -74,6 +74,8 @@ export interface PackageDetailProps {
   actions?: PackageDetailActionHandlers;
   /** ID-AUTO-1 — the АОСР / accepted-quantity sections, built by the route container (data chain stays out of this screen). */
   aosrSection?: ReactNode;
+  /** Document types that have their own one-step flow (see CreateDocumentForm) and must not be offered as a bare shell. */
+  hiddenDocumentTypes?: DocumentationDocumentType[];
   className?: string;
 }
 
@@ -324,8 +326,14 @@ function ReturnToCorrectionControl({ onSubmit }: { onSubmit: (comment: string | 
   );
 }
 
-function CreateDocumentForm({ onSubmit }: { onSubmit: (type: DocumentationDocumentType) => Promise<void> }) {
-  const [type, setType] = useState<DocumentationDocumentType>('AOSR');
+/**
+ * A bare «Создать документ» makes a typed SHELL with no version (that is how an untitled, version-less AOSR record got into LIVE: the
+ * default option is the first type and nothing else is asked). Types that have their own one-step flow are therefore not offered here:
+ * a Core AOSR is created by the AOSR section / generation, an executive scheme only together with its file.
+ */
+function CreateDocumentForm({ onSubmit, hiddenTypes }: { onSubmit: (type: DocumentationDocumentType) => Promise<void>; hiddenTypes: DocumentationDocumentType[] }) {
+  const options = DOCUMENT_TYPES.filter((option) => !hiddenTypes.includes(option));
+  const [type, setType] = useState<DocumentationDocumentType>(options[0] ?? 'ACT_CERTIFICATE');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -351,7 +359,7 @@ function CreateDocumentForm({ onSubmit }: { onSubmit: (type: DocumentationDocume
         disabled={pending}
         aria-label="Тип документа"
       >
-        {DOCUMENT_TYPES.map((option) => (
+        {options.map((option) => (
           <option key={option} value={option}>
             {documentTypeLabel(option)}
           </option>
@@ -459,6 +467,7 @@ export function PackageDetail({
   onSelectWork,
   actions,
   aosrSection,
+  hiddenDocumentTypes,
   className,
 }: PackageDetailProps) {
   return (
@@ -574,7 +583,7 @@ export function PackageDetail({
         ) : (
           <span className={[styles.empty, typeClass('body')].join(' ')}>Документы ещё не созданы</span>
         )}
-        {actions && viewModel.contentEditable ? <CreateDocumentForm onSubmit={actions.onCreateDocument} /> : null}
+        {actions && viewModel.contentEditable ? <CreateDocumentForm onSubmit={actions.onCreateDocument} hiddenTypes={hiddenDocumentTypes ?? []} /> : null}
       </section>
 
       <section className={styles.section}>

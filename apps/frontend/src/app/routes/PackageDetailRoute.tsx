@@ -160,6 +160,8 @@ export function PackageDetailRoute() {
       onSelectObject={(id) => navigate(objectPath(id))}
       onSelectWork={(objectId, objectWorkId) => navigate(workPath(objectId, objectWorkId))}
       actions={actions}
+      // Once the AOSR method is known, executive schemes (file required) and Core AOSRs have their own flows; a method-less package keeps the old form.
+      hiddenDocumentTypes={aosr.view?.method === 'CORE' ? ['AOSR', 'EXECUTIVE_SCHEME'] : aosr.view?.method === 'EXTERNAL' ? ['EXECUTIVE_SCHEME'] : []}
       aosrSection={
         <AosrSection
           packageId={pkg.id}
