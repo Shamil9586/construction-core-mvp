@@ -1,7 +1,7 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import JSZip from 'jszip';
-import { harness, closeHarness, setUp, fillParties, fillAosr, uploadScheme, SCHEME_FILE, PARTIES, dt, RP, INTERNAL, CUSTOMER } from './helpers/aosr-harness';
+import { harness, closeHarness, setUp, fillParties, fillAosr, uploadScheme, generatedAosr, SCHEME_FILE, PARTIES, dt, RP, INTERNAL, CUSTOMER } from './helpers/aosr-harness';
 import { resolveAosrReadiness, suggestTypicalAosr, resolveCurrentAcceptedQuantity, splitRuDate } from '../packages/domain/aosr';
 import { buildAosrRenderModel, surnameInitials } from '../apps/backend/src/id-auto/aosr';
 import { readAosrTemplate } from '../apps/backend/src/id-auto/aosr-docx';
@@ -193,7 +193,7 @@ test('one executive scheme links to several AOSRs (many-to-many)', async () => {
 
 test('customer-accepted quantity is append-only, keeps RP_FACT/INTERNAL_SC intact and becomes the current quantity for SDO', async () => {
   const { req, raw, login } = await harness();
-  const ctx = await setUp();
+  const ctx = await setUp({ method: 'EXTERNAL' });
   const base = `documentation-packages/${ctx.pkg.id}`;
   // Before customer acceptance the PTO screen shows the internal figure only.
   let q = await req(`${base}/quantity`);
@@ -245,7 +245,7 @@ test('existing package authorization and freeze rules are enforced for AOSR', as
   const { req, raw, login } = await harness();
   const ctx = await setUp();
   const base = `documentation-packages/${ctx.pkg.id}`;
-  const a = await req(`${base}/aosr`, { title: 'Для проверки доступа' });
+  const { aosr: a } = await generatedAosr(req, ctx, 'Для проверки доступа'); // a Core package can only be presented once its AOSRs are generated
   // Other roles: no mutation, SDO has no documentation access at all.
   await login('PROJECT_MANAGER');
   assert.equal((await raw(`${base}/aosr`, { title: 'x' })).status, 403);

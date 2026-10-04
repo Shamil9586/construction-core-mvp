@@ -101,3 +101,25 @@ export async function fillAosr(req: any, ctx: any, aosrId: string, material: any
   return linked;
 }
 
+
+/** A fully filled Core AOSR with a file-backed scheme, GENERATED (official number assigned). Returns the pieces for further assertions. */
+export async function generatedAosr(req: any, ctx: any, title = 'Устройство штукатурки стен', shared: { schemeId?: string } = {}) {
+  const base = `documentation-packages/${ctx.pkg.id}`;
+  const view = await req(`${base}/aosr`);
+  if (!view.parties.length) await fillParties(req, ctx.pkg.id);
+  const material = view.materials[0] ?? await req(`${base}/aosr-materials`, { name: 'Смесь', qualityDocuments: [{ docType: 'CERTIFICATE', number: 'RU-1' }] });
+  const schemeId = shared.schemeId ?? view.schemes[0]?.id ?? (await uploadScheme(req, ctx.pkg.id, 'ES-001')).id;
+  const aosr = await req(`${base}/aosr`, { title });
+  await fillAosr(req, ctx, aosr.id, material, { schemeId });
+  await req(`aosr/${aosr.id}/generate`, { version: (await req(`aosr/${aosr.id}`)).version });
+  return { aosr, schemeId, material };
+}
+/** Presents a package through the normal status chain (the caller has already satisfied the gate). */
+export async function presentPackage(req: any, packageId: string, expectedLast = 201) {
+  const base = `documentation-packages/${packageId}`;
+  const cur = async () => (await req('snapshot')).documentationPackages.find((x: any) => x.id === packageId);
+  let p = await cur();
+  if (p.status === 'DRAFT') p = await req(`${base}/status`, { status: 'PREPARING', version: p.version });
+  if (p.status === 'PREPARING') p = await req(`${base}/status`, { status: 'READY_FOR_PRESENTATION', version: p.version });
+  return req(`${base}/status`, { status: 'PRESENTED', version: p.version }, expectedLast);
+}

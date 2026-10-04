@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { readyToPresent } from './helpers/present-ready';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { handoffWorkToPto } from './helpers/pbx3-fixtures';
@@ -84,6 +85,7 @@ test('F12-SDO-03: handoff/return/status-change are already retry-safe via Packag
     await req(`documentation-documents/${doc.id}/versions`, { storageProvider: 'NONE' });
     pkg = await req(`documentation-packages/${pkg.id}/status`, { status: 'PREPARING', version: pkg.version });
     pkg = await req(`documentation-packages/${pkg.id}/status`, { status: 'READY_FOR_PRESENTATION', version: pkg.version });
+    await readyToPresent(req, pkg.id);
     pkg = await req(`documentation-packages/${pkg.id}/status`, { status: 'PRESENTED', version: pkg.version });
     pkg = await req(`documentation-packages/${pkg.id}/customer-acceptance`, { version: pkg.version, acceptedDate: dt(0), reference: 'Акт-1' });
 
@@ -133,6 +135,7 @@ test('F12-SDO-03: handoff/return/status-change are already retry-safe via Packag
     await login('PTO');
     pkg = (await req('documentation-packages')).find((x: any) => x.id === pkg.id);
     assert.equal(pkg.status, 'CORRECTING');
+    await readyToPresent(req, pkg.id);
     pkg = await req(`documentation-packages/${pkg.id}/status`, { status: 'PRESENTED', version: pkg.version });
     pkg = await req(`documentation-packages/${pkg.id}/customer-acceptance`, { version: pkg.version, acceptedDate: dt(1), reference: 'Акт-2' });
     const sdoCase2 = await req(`documentation-packages/${pkg.id}/handoff-to-sdo`, { version: pkg.version, idempotencyKey: randomUUID() });

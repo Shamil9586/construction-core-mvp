@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { readyToPresent } from './helpers/present-ready';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { makeUser, tokenFor } from './helpers/pbx3-fixtures';
@@ -91,6 +92,7 @@ async function scenario() {
     if (until === 'editable') return { pkg, doc };
     let p = await h.req(`documentation-packages/${pkg.id}/status`, { status: 'PREPARING', version: pkg.version });
     p = await h.req(`documentation-packages/${pkg.id}/status`, { status: 'READY_FOR_PRESENTATION', version: p.version });
+    await readyToPresent(h.req, pkg.id);
     p = await h.req(`documentation-packages/${pkg.id}/status`, { status: 'PRESENTED', version: p.version });
     if (until === 'presented') return { pkg: p, doc };
     p = await h.req(`documentation-packages/${pkg.id}/customer-acceptance`, { version: p.version, acceptedDate: dt(0), reference: 'Акт-1' });

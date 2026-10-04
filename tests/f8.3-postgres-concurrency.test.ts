@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { readyToPresent } from './helpers/present-ready';
 import assert from 'node:assert/strict';
 import { Client } from 'pg';
 import { handoffWorkToPto } from './helpers/pbx3-fixtures';
@@ -157,6 +158,7 @@ async function setUpHandedOffCase(req: any, login: any, code: string, name: stri
   await req(`documentation-documents/${doc.id}/versions`, { storageProvider: 'NONE' }, ptoToken, 201);
   let p = (await req(`documentation-packages/${pkg0.id}/status`, { status: 'PREPARING', version: pkg0.version }, ptoToken, 201)).data;
   p = (await req(`documentation-packages/${p.id}/status`, { status: 'READY_FOR_PRESENTATION', version: p.version }, ptoToken, 201)).data;
+  await readyToPresent((path, body) => req(path, body, ptoToken, [200, 201]).then((r) => r.data), p.id);
   p = (await req(`documentation-packages/${p.id}/status`, { status: 'PRESENTED', version: p.version }, ptoToken, 201)).data;
   const accepted = (await req(`documentation-packages/${p.id}/customer-acceptance`, { version: p.version, acceptedDate: dt(0) }, ptoToken, 201)).data;
   const sdoCase = (await req(`documentation-packages/${accepted.id}/handoff-to-sdo`, { version: accepted.version }, ptoToken, 201)).data;
@@ -191,6 +193,7 @@ async function setUpAcceptedNotHandedOff(req: any, login: any, code: string, nam
   await req(`documentation-documents/${doc.id}/versions`, { storageProvider: 'NONE' }, ptoToken, 201);
   let p = (await req(`documentation-packages/${pkg0.id}/status`, { status: 'PREPARING', version: pkg0.version }, ptoToken, 201)).data;
   p = (await req(`documentation-packages/${p.id}/status`, { status: 'READY_FOR_PRESENTATION', version: p.version }, ptoToken, 201)).data;
+  await readyToPresent((path, body) => req(path, body, ptoToken, [200, 201]).then((r) => r.data), p.id);
   p = (await req(`documentation-packages/${p.id}/status`, { status: 'PRESENTED', version: p.version }, ptoToken, 201)).data;
   const accepted = (await req(`documentation-packages/${p.id}/customer-acceptance`, { version: p.version, acceptedDate: dt(0) }, ptoToken, 201)).data;
 
@@ -343,7 +346,7 @@ test('F8.3-18 (C): concurrent create-Document vs handoff on an ACCEPTED_BY_CUSTO
     assert.equal(cases[0].packageLocked, true);
 
     const documents = (snap.documentationDocuments ?? []).filter((d: any) => d.documentationPackageId === pkg.id);
-    assert.equal(documents.length, 1, 'exactly the original AOSR document — the racing ACT_CERTIFICATE never committed');
+    assert.equal(documents.length, 2, 'exactly the original AOSR document + the gate-required scheme — the racing ACT_CERTIFICATE never committed');
     assert.equal(documents[0].id, doc.id);
     assert.equal(documents[0].type, 'AOSR');
   } finally {
@@ -374,7 +377,8 @@ test('F8.3-18 (D): concurrent create-Version vs handoff on an ACCEPTED_BY_CUSTOM
 
     const versions = (snap.documentationVersions ?? []).filter((v: any) => v.documentationDocumentId === doc.id);
     assert.equal(versions.length, 1, 'exactly one version exists — the racing second version never committed');
-    const currentVersionIds = versions.map((v: any) => v.id).sort();
+    const packageDocIds = new Set((snap.documentationDocuments ?? []).filter((d: any) => d.documentationPackageId === pkg.id).map((d: any) => d.id));
+    const currentVersionIds = (snap.documentationVersions ?? []).filter((v: any) => packageDocIds.has(v.documentationDocumentId)).map((v: any) => v.id).sort(); // every package document (incl. the gate-required scheme)
 
     const acceptances = (snap.documentationCustomerAcceptances ?? []).filter((a: any) => a.documentationPackageId === pkg.id);
     assert.equal(acceptances.length, 1);
@@ -539,7 +543,7 @@ test('F8.3-18 (G): the full return -> correct -> re-present -> re-accept -> re-h
     const latestAcceptance = acceptances[acceptances.length - 1];
     assert.equal(latestAcceptance.reference, 'Акт повторного согласия', 'the latest acceptance really is the fresh one just registered, not the original');
     const documents = (snap.documentationDocuments ?? []).filter((d: any) => d.documentationPackageId === pkg.id);
-    assert.equal(documents.length, 2, 'the original AOSR plus the one ACT_CERTIFICATE added during correction — never a duplicate from the race');
+    assert.equal(documents.length, 3, 'the original AOSR + the gate-required scheme plus the one ACT_CERTIFICATE added during correction — never a duplicate from the race');
     const currentVersionIds = (snap.documentationVersions ?? [])
       .filter((v: any) => documents.some((d: any) => d.id === v.documentationDocumentId))
       .map((v: any) => v.id)

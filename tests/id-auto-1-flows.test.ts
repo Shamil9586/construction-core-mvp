@@ -1,7 +1,7 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { harness, closeHarness, setUp, fillParties, fillAosr, uploadScheme, SCHEME_FILE, dt, RP, INTERNAL, CUSTOMER } from './helpers/aosr-harness';
+import { harness, closeHarness, setUp, fillParties, fillAosr, uploadScheme, generatedAosr, presentPackage, SCHEME_FILE, dt, RP, INTERNAL, CUSTOMER } from './helpers/aosr-harness';
 import { makeUser, tokenFor } from './helpers/pbx3-fixtures';
 
 /**
@@ -171,6 +171,7 @@ test('FLOW B end to end: no Core AOSR at all -> file-backed scheme -> presented 
   const presented = await present(req, base, pkg);
   assert.equal(await count('SELECT count(*)::int AS n FROM aosr_documents WHERE documentation_package_id=$1', [ctx.pkg.id]), 0, 'no Core AOSR exists');
   assert.equal(await count("SELECT count(*)::int AS n FROM documentation_documents WHERE documentation_package_id=$1 AND type='AOSR'", [ctx.pkg.id]), 0, 'no AOSR document shell');
+  assert.equal(await count('SELECT count(*)::int AS n FROM aosr_number_counters WHERE object_id=$1', [ctx.object.id]), 0, 'no AOSR number was consumed anywhere in the external route');
   // Before customer acceptance the PTO screen shows the internal figure only.
   assert.equal((await req(`${base}/quantity`)).current.quantity, INTERNAL);
   await req(`${base}/customer-accepted-quantity`, { items: [{ quantityPortionId: ctx.portion.id, quantity: CUSTOMER }], reference: 'Акт приёмки' });
@@ -184,14 +185,13 @@ test('FLOW B end to end: no Core AOSR at all -> file-backed scheme -> presented 
   await req(`${base}/handoff-to-sdo`, { version: accepted.version });
 });
 
-test('both flows converge: the same downstream quantity and SDO readiness whether the AOSR was generated in Core or prepared outside; quantity never needs a Core AOSR', async () => {
+test('both flows converge: the same downstream quantity and SDO readiness whether the AOSR was generated in Core or prepared outside', async () => {
   const { req } = await harness();
-  // FLOW A — a Core AOSR exists but is only a DRAFT (never generated): the customer quantity must still be recordable.
+  // FLOW A — the AOSR is actually formed in Core (generated DOCX) + file-backed scheme.
   const a = await setUp({ method: 'CORE' });
   const baseA = `documentation-packages/${a.pkg.id}`;
-  await req(`${baseA}/aosr`, { title: 'Черновик, не сформирован' });
-  await uploadScheme(req, a.pkg.id, 'ES-A');
-  await present(req, baseA, (await req('snapshot')).documentationPackages.find((x: any) => x.id === a.pkg.id));
+  await generatedAosr(req, a);
+  await presentPackage(req, a.pkg.id);
   await req(`${baseA}/customer-accepted-quantity`, { items: [{ quantityPortionId: a.portion.id, quantity: CUSTOMER }] });
   await req(`${baseA}/customer-acceptance`, { version: (await req('snapshot')).documentationPackages.find((x: any) => x.id === a.pkg.id).version, acceptedDate: dt(0) });
   // FLOW B — AOSR prepared outside Core.
@@ -207,19 +207,95 @@ test('both flows converge: the same downstream quantity and SDO readiness whethe
   assert.deepEqual((await req(`${baseA}/quantity`)).current, (await req(`${baseB}/quantity`)).current);
 });
 
-test('the customer quantity needs the documentary evidence (a file-backed scheme) once a method is declared, and presentation — never a Core AOSR', async () => {
+test('the customer quantity needs the declared method, the Core AOSRs actually generated (CORE) and a file-backed scheme — checked again at the quantity action', async () => {
   const { req, raw } = await harness();
-  // Presented first (legacy path, no declaration), THEN a method is declared: still no file-backed scheme -> refused.
+  const { pool } = await import('../apps/backend/src/db');
+  const items = (ctx: any) => ({ items: [{ quantityPortionId: ctx.portion.id, quantity: CUSTOMER }] });
+  const noCustomer = (ctx: any) => count("SELECT count(*)::int AS n FROM portion_quantity_confirmations WHERE portion_id=$1 AND source='CUSTOMER_SC'", [ctx.portion.id]);
+  // A package forced to PRESENTED without the gate (what a historical package looks like): the gate is re-checked at the quantity action.
+  const forcePresented = (ctx: any) => pool.query("UPDATE documentation_packages SET status='PRESENTED' WHERE id=$1", [ctx.pkg.id]);
+  // (a) method never declared
+  const unset = await setUp({ method: null });
+  await forcePresented(unset);
+  let r = await raw(`documentation-packages/${unset.pkg.id}/customer-accepted-quantity`, items(unset));
+  assert.equal(r.status, 400);
+  assert.match((await r.json() as any).message, /Сначала выберите способ подготовки АОСР/);
+  assert.equal(await noCustomer(unset), 0);
+  // (b) EXTERNAL but no file-backed scheme
+  const noScheme = await setUp({ method: 'EXTERNAL' });
+  await forcePresented(noScheme);
+  r = await raw(`documentation-packages/${noScheme.pkg.id}/customer-accepted-quantity`, items(noScheme));
+  assert.match((await r.json() as any).message, /исполнительная схема с загруженным файлом/);
+  // (c) CORE with an un-generated (draft) Core AOSR, even with a file-backed scheme
+  const draft = await setUp({ method: 'CORE' });
+  await uploadScheme(req, draft.pkg.id, 'ES-001');
+  await req(`documentation-packages/${draft.pkg.id}/aosr`, { title: 'Черновик, не сформирован' });
+  await forcePresented(draft);
+  r = await raw(`documentation-packages/${draft.pkg.id}/customer-accepted-quantity`, items(draft));
+  assert.equal(r.status, 400);
+  assert.match((await r.json() as any).message, /Не сформирован актуальный DOCX у АОСР: «Черновик, не сформирован»/);
+  assert.equal(await noCustomer(draft), 0, 'nothing was appended');
+});
+
+test('METHOD_UNSET: the package stays readable and historically unchanged, but cannot be presented — no inference from "no AOSR"', async () => {
+  const { req, raw } = await harness();
   const ctx = await setUp({ method: null });
   const base = `documentation-packages/${ctx.pkg.id}`;
-  const doc = await req(`${base}/documents`, { type: 'ACT_CERTIFICATE' });
-  await req(`documentation-documents/${doc.id}/versions`, { storageProvider: 'NONE' });
-  await present(req, base, ctx.pkg);
-  await req(`${base}/aosr-method`, { method: 'EXTERNAL' });
-  const refused = await raw(`${base}/customer-accepted-quantity`, { items: [{ quantityPortionId: ctx.portion.id, quantity: CUSTOMER }] });
+  // readable
+  const view = await req(`${base}/aosr`);
+  assert.equal(view.method, null);
+  assert.equal((await req(`${base}/quantity`)).current.quantity, INTERNAL);
+  assert.ok((await req('snapshot')).documentationPackages.some((x: any) => x.id === ctx.pkg.id));
+  // even with a file-backed scheme, an undeclared package may not move to PRESENTED
+  await uploadScheme(req, ctx.pkg.id, 'ES-001');
+  let p = await req(`${base}/status`, { status: 'PREPARING', version: ctx.pkg.version });
+  p = await req(`${base}/status`, { status: 'READY_FOR_PRESENTATION', version: p.version });
+  const refused = await raw(`${base}/status`, { status: 'PRESENTED', version: p.version });
   assert.equal(refused.status, 400);
-  assert.match((await refused.json() as any).message, /исполнительная схема с загруженным файлом/);
-  assert.equal(await count("SELECT count(*)::int AS n FROM portion_quantity_confirmations WHERE portion_id=$1 AND source='CUSTOMER_SC'", [ctx.portion.id]), 0, 'nothing was appended');
+  assert.match((await refused.json() as any).message, /Сначала выберите способ подготовки АОСР.*«АОСР формируются в Core».*«АОСР формируются вне Core»/);
+  assert.equal((await req(`${base}/aosr`)).method, null, 'still undeclared — nothing was inferred or recorded');
+  // not PRESENTED, and the earlier states still work (backward moves / non-gated edits are not retroactively invalidated)
+  assert.equal((await req('snapshot')).documentationPackages.find((x: any) => x.id === ctx.pkg.id).status, 'READY_FOR_PRESENTATION');
+  // choosing a method unblocks it
+  await req(`${base}/aosr-method`, { method: 'EXTERNAL' });
+  assert.equal((await req(`${base}/status`, { status: 'PRESENTED', version: p.version })).status, 'PRESENTED');
+});
+
+test('CORE gate: at least one Core AOSR and EVERY Core AOSR generated (current DOCX) before PRESENTED; one scheme file may cover them all', async () => {
+  const { req, raw } = await harness();
+  const ctx = await setUp({ method: 'CORE' });
+  const base = `documentation-packages/${ctx.pkg.id}`;
+  const refuse = async (re: RegExp) => {
+    const cur = (await req('snapshot')).documentationPackages.find((x: any) => x.id === ctx.pkg.id);
+    let p = cur;
+    if (p.status === 'DRAFT') p = await req(`${base}/status`, { status: 'PREPARING', version: p.version });
+    if (p.status === 'PREPARING') p = await req(`${base}/status`, { status: 'READY_FOR_PRESENTATION', version: p.version });
+    const r = await raw(`${base}/status`, { status: 'PRESENTED', version: p.version });
+    assert.equal(r.status, 400);
+    assert.match((await r.json() as any).message, re);
+  };
+  // 1) CORE, no AOSR at all (even with a file-backed scheme)
+  const scheme = await uploadScheme(req, ctx.pkg.id, 'ES-001');
+  await refuse(/сформируйте хотя бы один АОСР в Core/);
+  // 2) CORE, one draft (never generated)
+  const draft = await req(`${base}/aosr`, { title: 'Грунтовка основания' });
+  await refuse(/Не сформирован актуальный DOCX у АОСР: «Грунтовка основания»/);
+  // 3) one generated + another draft -> still refused, naming only the unfinished one
+  const first = await generatedAosr(req, ctx, 'Устройство штукатурки стен', { schemeId: scheme.id });
+  await refuse(/«Грунтовка основания»/);
+  // 4) the draft gets generated too, but the first act is EDITED afterwards -> its DOCX is no longer current -> refused
+  const m = (await req(`${base}/aosr`)).materials[0];
+  await fillAosr(req, ctx, draft.id, m, { schemeId: scheme.id });
+  await req(`aosr/${draft.id}/generate`, { version: (await req(`aosr/${draft.id}`)).version });
+  await req(`aosr/${first.aosr.id}/edit`, { workDescription: 'Уточнено после формирования', version: (await req(`aosr/${first.aosr.id}`)).version });
+  await refuse(/Не сформирован актуальный DOCX у АОСР: «Устройство штукатурки стен»/);
+  // 5) regenerated -> every created Core AOSR has a current DOCX; ONE shared scheme file covers both -> allowed
+  await req(`aosr/${first.aosr.id}/generate`, { version: (await req(`aosr/${first.aosr.id}`)).version });
+  const view = await req(`${base}/aosr`);
+  assert.ok(view.items.every((i: any) => i.status === 'GENERATED') && view.items.length === 2);
+  assert.equal(view.schemes.length, 1, 'no unique scheme per AOSR');
+  const cur = (await req('snapshot')).documentationPackages.find((x: any) => x.id === ctx.pkg.id);
+  assert.equal((await req(`${base}/status`, { status: 'PRESENTED', version: cur.version })).status, 'PRESENTED');
 });
 
 test('generated DOCX download: authenticated, real binary DOCX bytes, safe headers (ASCII + RFC 5987 file name), not cacheable', async () => {

@@ -1,5 +1,5 @@
 import { Injectable, ForbiddenException, NotFoundException } from '@nestjs/common';
-import { packageSchemes, currentAosrMethod, schemeEvidenceViolation } from './documentation-evidence';
+import { packageSchemes, currentAosrMethod, forwardGateViolation } from './documentation-evidence';
 import Decimal from 'decimal.js';
 import { pool, one, rows, insert, transaction } from './db';
 import { Actor, requirePermission, checkVersion, scoped, audit, ensure, workAccess, packageMutationAccess, claimIdempotentCommand, completeIdempotentCommand } from './security';
@@ -399,8 +399,8 @@ export class AosrService {
             const sdoCase = await one(c, 'SELECT package_locked FROM sdo_closing_cases WHERE tenant_id=$1 AND documentation_package_id=$2', [a.tenantId, packageId]);
             ensure(!sdoCase?.packageLocked, 'Пакет передан в СДО: объём изменить нельзя');
             ensure(['PRESENTED', 'ACCEPTED_BY_CUSTOMER'].includes(pkg.status), 'Объём, принятый заказчиком, фиксируется после предъявления документации заказчику');
-            // Same evidence rule for both AOSR methods; nothing here depends on a Core-generated AOSR existing.
-            const missing = await schemeEvidenceViolation(c, a.tenantId, packageId);
+            // The same forward gate as PRESENTED: a declared method, the Core generator actually used when CORE, and a file-backed scheme.
+            const missing = await forwardGateViolation(c, a.tenantId, packageId);
             ensure(!missing, missing!);
             const claim = await claimIdempotentCommand(c, a, 'CUSTOMER_ACCEPTED_QUANTITY', d.idempotencyKey, packageId, { items: d.items.map((i: any) => [i.quantityPortionId, new Decimal(i.quantity).toFixed(4)]), reference: d.reference ?? null, comment: d.comment ?? null });
             if (claim.replay) return claim.response;

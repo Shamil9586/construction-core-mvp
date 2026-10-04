@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { readyToPresent } from './helpers/present-ready';
 import assert from 'node:assert/strict';
 import { handoffWorkToPto } from './helpers/pbx3-fixtures';
 
@@ -78,6 +79,7 @@ test('F8.2.1 HTTP: DRAFT -> PREPARING passes, DRAFT -> PRESENTED is refused (400
     // Explicitly forbidden first, before the allowed one — proves the DRAFT
     // row is untouched by the rejected attempt (checkVersion would fail on
     // the next call if the reject had silently bumped the version).
+    await readyToPresent(req, pkg.id);
     await req(`documentation-packages/${pkg.id}/status`, { status: 'PRESENTED', version: pkg.version }, 400);
     await req(`documentation-packages/${pkg.id}/status`, { status: 'ACCEPTED_BY_CUSTOMER', version: pkg.version }, 400);
 
@@ -100,6 +102,7 @@ test('F8.2.1 HTTP (Corrective F8.2.1-01): the full allowed chain succeeds end to
     assert.equal(pkg.status, 'PREPARING');
     pkg = await req(`documentation-packages/${pkg.id}/status`, { status: 'READY_FOR_PRESENTATION', version: pkg.version });
     assert.equal(pkg.status, 'READY_FOR_PRESENTATION');
+    await readyToPresent(req, pkg.id);
     pkg = await req(`documentation-packages/${pkg.id}/status`, { status: 'PRESENTED', version: pkg.version });
     assert.equal(pkg.status, 'PRESENTED');
     pkg = await req(`documentation-packages/${pkg.id}/status`, { status: 'RETURNED', version: pkg.version });
@@ -111,12 +114,14 @@ test('F8.2.1 HTTP (Corrective F8.2.1-01): the full allowed chain succeeds end to
     assert.equal(pkg.status, 'CORRECTING');
     // CORRECTING does not skip back to READY_FOR_PRESENTATION.
     await req(`documentation-packages/${pkg.id}/status`, { status: 'READY_FOR_PRESENTATION', version: pkg.version }, 400);
+    await readyToPresent(req, pkg.id);
     pkg = await req(`documentation-packages/${pkg.id}/status`, { status: 'PRESENTED', version: pkg.version });
     assert.equal(pkg.status, 'PRESENTED');
 
     // The loop can repeat: a second RETURNED -> CORRECTING -> PRESENTED pass.
     pkg = await req(`documentation-packages/${pkg.id}/status`, { status: 'RETURNED', version: pkg.version });
     pkg = await req(`documentation-packages/${pkg.id}/status`, { status: 'CORRECTING', version: pkg.version });
+    await readyToPresent(req, pkg.id);
     pkg = await req(`documentation-packages/${pkg.id}/status`, { status: 'PRESENTED', version: pkg.version });
     assert.equal(pkg.status, 'PRESENTED');
   } finally {
@@ -141,6 +146,8 @@ test('F8.2.1 HTTP (Corrective F8.2.1-01): CORRECTING is reachable only through R
 
     const ready = await req(`documentation-packages/${pkg.id}/status`, { status: 'READY_FOR_PRESENTATION', version: prepared.version });
     await req(`documentation-packages/${pkg.id}/status`, { status: 'CORRECTING', version: ready.version }, 400);
+
+    await readyToPresent(req, pkg.id);
 
     const presented = await req(`documentation-packages/${pkg.id}/status`, { status: 'PRESENTED', version: ready.version });
     // PRESENTED must go through RETURNED first, not straight to CORRECTING.

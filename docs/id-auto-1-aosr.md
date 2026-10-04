@@ -53,9 +53,15 @@ PTO documentation                                 ├─→ file-backed executiv
 * Executive scheme = `documentation_documents(type=EXECUTIVE_SCHEME)` **with a file**: a `CORE_FILE` version pointing at an `attachments`
   row with content (`documentation-evidence.ts`). Created together with its file (no empty shell); a metadata-only record can have its
   file attached later. A material quality document never replaces a scheme; one scheme still backs many AOSRs.
-* Evidence rule (both methods): once a method is declared, moving a package to PRESENTED and recording the customer-accepted quantity
-  need at least one file-backed scheme. Core AOSR readiness additionally needs a file-backed scheme linked to the AOSR.
-  Packages that never declared a method keep their earlier behaviour.
+* Forward gate (`forwardGateViolation`, documentation-evidence.ts) for the two PTO actions that depend on the documentation route — moving a
+  package to PRESENTED and recording the customer-accepted quantity:
+  - no declared method -> refused with a business message asking the engineer to choose (never inferred from "no AOSR"); the package stays
+    readable, historical packages are not retroactively invalidated;
+  - `CORE` -> at least one Core AOSR AND every Core AOSR has a successfully generated CURRENT DOCX (a draft, or an act edited after its
+    generation, blocks); the engineer who does not want the generator chooses «вне Core» instead of leaving unfinished Core AOSRs;
+  - `EXTERNAL` -> zero Core AOSRs / DOCX / numbers are valid;
+  - both -> at least one file-backed executive scheme (one scheme may cover all AOSRs).
+  Core AOSR readiness additionally needs a file-backed scheme linked to that AOSR.
 * Customer-accepted quantity depends on package state + evidence only — never on a Core AOSR existing, being ready or generated.
 * DOCX / scheme downloads: authenticated binary; `Content-Disposition` carries both an ASCII `filename` and `filename*`; `Cache-Control:
   private, no-store`. The UI fetches the DOCX when the card opens and renders a real `<a href=blob: download>` (native user click).

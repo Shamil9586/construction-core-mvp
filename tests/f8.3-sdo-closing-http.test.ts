@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { readyToPresent } from './helpers/present-ready';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { handoffWorkToPto } from './helpers/pbx3-fixtures';
@@ -94,6 +95,7 @@ async function setUpPresentedPackage(req: any, login: any, code: string, name: s
   }
   let p = await req(`documentation-packages/${pkg.id}/status`, { status: 'PREPARING', version: pkg.version });
   p = await req(`documentation-packages/${pkg.id}/status`, { status: 'READY_FOR_PRESENTATION', version: p.version });
+  await readyToPresent(req, pkg.id);
   p = await req(`documentation-packages/${pkg.id}/status`, { status: 'PRESENTED', version: p.version });
 
   return { pm, pto, cc, object: o, work, unit, portion, pkg: p, doc, extraDocs };
@@ -432,6 +434,7 @@ test('F8.3 HTTP (3): readiness is false when the Customer SC quantity confirmati
     await req(`documentation-documents/${doc.id}/versions`, { storageProvider: 'NONE' });
     pkg = await req(`documentation-packages/${pkg.id}/status`, { status: 'PREPARING', version: pkg.version });
     pkg = await req(`documentation-packages/${pkg.id}/status`, { status: 'READY_FOR_PRESENTATION', version: pkg.version });
+    await readyToPresent(req, pkg.id);
     pkg = await req(`documentation-packages/${pkg.id}/status`, { status: 'PRESENTED', version: pkg.version });
     pkg = await req(`documentation-packages/${pkg.id}/customer-acceptance`, { version: pkg.version, acceptedDate: dt(0) });
     assert.equal(pkg.status, 'ACCEPTED_BY_CUSTOMER');
@@ -535,8 +538,8 @@ test('F8.3-R02 (1): customer-acceptance snapshots the actual documentation_docum
     const acceptanceRecord = snap.documentationCustomerAcceptances.find((a: any) => a.documentationPackageId === accepted.id);
     assert.ok(acceptanceRecord, 'sanity check: the acceptance record itself exists');
     const versionLinks = snap.documentationCustomerAcceptanceVersions.filter((v: any) => v.customerAcceptanceId === acceptanceRecord.id);
-    assert.equal(versionLinks.length, 1, 'one snapshot row for the package\'s one document');
-    assert.equal(versionLinks[0].documentationDocumentVersionId, actualVersion.id, 'the snapshot records the real documentation_document_versions id — not documentation_packages.version, a package-row optimistic-lock counter in an entirely different id space');
+    assert.equal(versionLinks.length, 2, 'one snapshot row per document: the package\'s document + the gate-required scheme');
+    assert.ok(versionLinks.some((l: any) => l.documentationDocumentVersionId === actualVersion.id), 'the snapshot records the real documentation_document_versions id — not documentation_packages.version, a package-row optimistic-lock counter in an entirely different id space');
   } finally {
     await app.close();
   }
@@ -576,6 +579,7 @@ test('F8.3-R02 (3): a new presentation/acceptance cycle creates a new immutable 
 
     await login('PTO');
     await req(`documentation-documents/${doc.id}/versions`, { storageProvider: 'EXTERNAL_REFERENCE', storageReference: 'https://example.test/corrected' });
+    await readyToPresent(req, pkg.id);
     const p = await req(`documentation-packages/${pkg.id}/status`, { status: 'PRESENTED', version: pkg.version + 1 });
     const reaccepted = await req(`documentation-packages/${p.id}/customer-acceptance`, { version: p.version, acceptedDate: dt(0), reference: 'Акт-2' });
 
@@ -587,12 +591,13 @@ test('F8.3-R02 (3): a new presentation/acceptance cycle creates a new immutable 
 
     const originalLinks = snap.documentationCustomerAcceptanceVersions.filter((v: any) => v.customerAcceptanceId === original.id);
     const latestLinks = snap.documentationCustomerAcceptanceVersions.filter((v: any) => v.customerAcceptanceId === latest.id);
-    assert.equal(originalLinks.length, 1);
-    assert.equal(latestLinks.length, 1);
-    assert.notEqual(originalLinks[0].documentationDocumentVersionId, latestLinks[0].documentationDocumentVersionId, 'the new snapshot points at the corrected version, distinct from the original snapshot — neither row was edited in place');
+    assert.equal(originalLinks.length, 2);
+    assert.equal(latestLinks.length, 2);
+    const link = (links: any[]) => links.find((l: any) => snap.documentationVersions.find((v: any) => v.id === l.documentationDocumentVersionId)?.documentationDocumentId === doc.id);
+    assert.notEqual(link(originalLinks).documentationDocumentVersionId, link(latestLinks).documentationDocumentVersionId, 'the new snapshot points at the corrected version, distinct from the original snapshot — neither row was edited in place');
 
     const currentVersion = snap.documentationVersions.filter((v: any) => v.documentationDocumentId === doc.id).slice(-1)[0];
-    assert.equal(latestLinks[0].documentationDocumentVersionId, currentVersion.id);
+    assert.equal(link(latestLinks).documentationDocumentVersionId, currentVersion.id);
 
     const item = snap.sdoPackageReadiness.find((x: any) => x.documentationPackageId === pkg.id);
     assert.equal(item.ready, true, 'readiness now uses the new, current snapshot');
@@ -617,12 +622,12 @@ test('F8.3-R02 (4): a Package with multiple Documentation Documents records ever
     const snap = await req('snapshot');
     const acceptanceRecord = snap.documentationCustomerAcceptances.find((a: any) => a.documentationPackageId === accepted.id);
     const versionLinks = snap.documentationCustomerAcceptanceVersions.filter((v: any) => v.customerAcceptanceId === acceptanceRecord.id);
-    assert.equal(versionLinks.length, 2, 'one snapshot row per Documentation Document in the Package');
+    assert.equal(versionLinks.length, 3, 'one snapshot row per Documentation Document in the Package (two + the gate-required scheme)');
 
     const doc1Version = snap.documentationVersions.find((v: any) => v.documentationDocumentId === doc.id);
     const doc2Version = snap.documentationVersions.find((v: any) => v.documentationDocumentId === doc2.id);
     const linkedIds = versionLinks.map((v: any) => v.documentationDocumentVersionId).sort();
-    assert.deepEqual(linkedIds, [doc1Version.id, doc2Version.id].sort());
+    assert.ok(linkedIds.includes(doc1Version.id) && linkedIds.includes(doc2Version.id), 'both named documents are in the snapshot (the gate-required scheme is the third)');
   } finally {
     await app.close();
   }
@@ -650,7 +655,9 @@ test('F8.3-R02b (1): customer-acceptance is refused when a Documentation Documen
     await req(`documentation-packages/${pkg.id}/documents`, { type: 'AOSR' });
     let p = await req(`documentation-packages/${pkg.id}/status`, { status: 'PREPARING', version: pkg.version });
     p = await req(`documentation-packages/${p.id}/status`, { status: 'READY_FOR_PRESENTATION', version: p.version });
-    p = await req(`documentation-packages/${p.id}/status`, { status: 'PRESENTED', version: p.version });
+    // The PRESENTED gate now needs a file-backed scheme document, so "zero documents" can only be a LEGACY package: flip the status directly.
+    const { pool } = await import('../apps/backend/src/db');
+    await pool.query("UPDATE documentation_packages SET status='PRESENTED' WHERE id=$1", [p.id]);
 
     await req(`documentation-packages/${p.id}/customer-acceptance`, { version: p.version, acceptedDate: dt(0) }, 400);
   } finally {
@@ -673,7 +680,9 @@ test('F8.3-R02b (2): customer-acceptance is refused when the Package has zero Do
     const pkg = await req('documentation-packages', { objectWorkId: work.id, responsibleUserId: pto.id });
     let p = await req(`documentation-packages/${pkg.id}/status`, { status: 'PREPARING', version: pkg.version });
     p = await req(`documentation-packages/${p.id}/status`, { status: 'READY_FOR_PRESENTATION', version: p.version });
-    p = await req(`documentation-packages/${p.id}/status`, { status: 'PRESENTED', version: p.version });
+    // The PRESENTED gate now needs a file-backed scheme document, so "zero documents" can only be a LEGACY package: flip the status directly.
+    const { pool } = await import('../apps/backend/src/db');
+    await pool.query("UPDATE documentation_packages SET status='PRESENTED' WHERE id=$1", [p.id]);
 
     await req(`documentation-packages/${p.id}/customer-acceptance`, { version: p.version, acceptedDate: dt(0) }, 400);
   } finally {
@@ -729,6 +738,7 @@ test('F8.3-17/F8.3-R02b: content is frozen after handoff — adding a Document r
 
     // Re-present (content freezes again) and confirm handoff is still
     // refused before the fresh acceptance exists.
+    await readyToPresent(req, pkg.id);
     const p = await req(`documentation-packages/${pkg.id}/status`, { status: 'PRESENTED', version: pkg.version + 1 });
     await req(`documentation-packages/${p.id}/handoff-to-sdo`, { version: p.version }, 400);
 
@@ -738,10 +748,12 @@ test('F8.3-17/F8.3-R02b: content is frozen after handoff — adding a Document r
     snap = await req('snapshot');
     const acceptanceRecord = snap.documentationCustomerAcceptances.find((a: any) => a.documentationPackageId === pkg.id && a.reference === 'Акт-Полное-Покрытие');
     const versionLinks = snap.documentationCustomerAcceptanceVersions.filter((v: any) => v.customerAcceptanceId === acceptanceRecord.id);
-    const docAVersion = snap.documentationDocuments.find((d: any) => d.documentationPackageId === pkg.id && d.id !== docB.id);
+    const docAVersion = snap.documentationDocuments.find((d: any) => d.documentationPackageId === pkg.id && d.id !== docB.id && d.type !== 'EXECUTIVE_SCHEME');
+    const schemeDoc = snap.documentationDocuments.find((d: any) => d.documentationPackageId === pkg.id && d.type === 'EXECUTIVE_SCHEME');
     const aVersion = snap.documentationVersions.find((v: any) => v.documentationDocumentId === docAVersion.id);
     const bVersion = snap.documentationVersions.find((v: any) => v.documentationDocumentId === docB.id);
-    assert.deepEqual(versionLinks.map((v: any) => v.documentationDocumentVersionId).sort(), [aVersion.id, bVersion.id].sort(), '(6) the new snapshot names both A-v1 and B-v1');
+    const sVersion = snap.documentationVersions.find((v: any) => v.documentationDocumentId === schemeDoc.id);
+    assert.deepEqual(versionLinks.map((v: any) => v.documentationDocumentVersionId).sort(), [aVersion.id, bVersion.id, sVersion.id].sort(), '(6) the new snapshot names both A-v1 and B-v1');
 
     item = snap.sdoPackageReadiness.find((x: any) => x.documentationPackageId === pkg.id);
     assert.equal(item.ready, true, '(6) readiness is true once the fresh acceptance covers every current document');
@@ -824,9 +836,9 @@ test('F8.3-17.2 (8,9,10,11): PTO-only pre-handoff correction — ACCEPTED_BY_CUS
     const acceptanceRecord = snap.documentationCustomerAcceptances.find((a: any) => a.documentationPackageId === pkg.id);
     assert.equal(acceptanceRecord.reference, 'Акт-До-Передачи');
     const versionLinks = snap.documentationCustomerAcceptanceVersions.filter((v: any) => v.customerAcceptanceId === acceptanceRecord.id);
-    assert.equal(versionLinks.length, 1);
+    assert.equal(versionLinks.length, 2);
     const docVersion = snap.documentationVersions.find((v: any) => v.documentationDocumentId === doc.id);
-    assert.equal(versionLinks[0].documentationDocumentVersionId, docVersion.id);
+    assert.ok(versionLinks.some((l: any) => l.documentationDocumentVersionId === docVersion.id));
 
     const history = snap.documentationStatusHistory.filter((h: any) => h.documentationPackageId === pkg.id);
     assert.ok(history.some((h: any) => h.fromStatus === 'ACCEPTED_BY_CUSTOMER' && h.toStatus === 'CORRECTING'));
@@ -849,6 +861,7 @@ test('F8.3-17 (12,13,14): CORRECTING (via pre-handoff correction) allows content
     assert.equal(version2.versionNumber, 2);
 
     // (13) re-present, register a new acceptance.
+    await readyToPresent(req, corrected.id);
     const presented = await req(`documentation-packages/${corrected.id}/status`, { status: 'PRESENTED', version: corrected.version });
     const reaccepted = await req(`documentation-packages/${presented.id}/customer-acceptance`, { version: presented.version, acceptedDate: dt(0), reference: 'Акт-2' });
 
@@ -857,8 +870,8 @@ test('F8.3-17 (12,13,14): CORRECTING (via pre-handoff correction) allows content
     assert.equal(acceptances.length, 2, 'the earlier acceptance is preserved, a new independent one is created');
     const latestAcceptance = acceptances[acceptances.length - 1];
     const latestLinks = snap.documentationCustomerAcceptanceVersions.filter((v: any) => v.customerAcceptanceId === latestAcceptance.id);
-    assert.equal(latestLinks.length, 1);
-    assert.equal(latestLinks[0].documentationDocumentVersionId, version2.id, 'the new snapshot names the corrected version');
+    assert.equal(latestLinks.length, 2);
+    assert.ok(latestLinks.some((l: any) => l.documentationDocumentVersionId === version2.id), 'the new snapshot names the corrected version');
 
     // (14) readiness is valid again.
     const item = snap.sdoPackageReadiness.find((x: any) => x.documentationPackageId === pkg.id);
@@ -1210,6 +1223,7 @@ test('F8.3 HTTP (13): re-handoff relocks the Package and resumes the same Case, 
     // by returnSdoCaseToPto's own status change) — PTO re-presents and
     // re-registers customer acceptance exactly as the first time.
     await login('PTO');
+    await readyToPresent(req, pkg.id);
     let p = await req(`documentation-packages/${pkg.id}/status`, { status: 'PRESENTED', version: pkg.version + 1 });
     p = await req(`documentation-packages/${p.id}/customer-acceptance`, { version: p.version, acceptedDate: dt(0) });
 
@@ -1241,6 +1255,7 @@ test('F8.3-R03: while custody is with PTO (package_locked=false), status/amount/
     // — the same Case resumes and relocks (F8.3 HTTP (13) already proves "same
     // Case"; this proves the paused operations are available again).
     await login('PTO');
+    await readyToPresent(req, pkg.id);
     let p = await req(`documentation-packages/${pkg.id}/status`, { status: 'PRESENTED', version: pkg.version + 1 });
     p = await req(`documentation-packages/${p.id}/customer-acceptance`, { version: p.version, acceptedDate: dt(0), reference: 'Акт-2' });
     const relocked = await req(`documentation-packages/${p.id}/handoff-to-sdo`, { version: p.version });

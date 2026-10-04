@@ -27,13 +27,25 @@ export async function currentAosrMethod(c: any, tenantId: string, packageId: str
 }
 
 export const SCHEME_FILE_REQUIRED_MESSAGE = 'Для предъявления заказчику нужна хотя бы одна исполнительная схема с загруженным файлом';
+export const METHOD_REQUIRED_MESSAGE = 'Сначала выберите способ подготовки АОСР по пакету: «АОСР формируются в Core» или «АОСР формируются вне Core»';
 
 /**
- * The one evidence rule, identical for both AOSR methods: once a package has declared how its AOSRs are prepared,
- * presenting it to the customer (and recording the customer-accepted quantity) needs at least one FILE-BACKED
- * executive scheme. Packages that never declared a method keep their earlier behaviour.
+ * The forward gate for the two PTO actions that depend on the documentation route — moving a package to PRESENTED and recording the
+ * customer-accepted quantity. One process, an optional tool:
+ *   - no declared method  -> blocked (never inferred: "no AOSR" does not mean "outside Core"); the package stays readable;
+ *   - CORE                -> at least one Core AOSR, and EVERY Core AOSR has a successfully generated CURRENT DOCX;
+ *   - EXTERNAL            -> zero Core AOSRs / DOCX are fine;
+ *   - both                -> at least one FILE-BACKED executive scheme.
+ * Returns a business message, or null when the action may proceed.
  */
-export async function schemeEvidenceViolation(c: any, tenantId: string, packageId: string): Promise<string | null> {
-    if (!(await currentAosrMethod(c, tenantId, packageId))) return null;
-    return (await packageSchemes(c, tenantId, packageId)).some(s => s.hasFile) ? null : SCHEME_FILE_REQUIRED_MESSAGE;
+export async function forwardGateViolation(c: any, tenantId: string, packageId: string): Promise<string | null> {
+    const declared = await currentAosrMethod(c, tenantId, packageId);
+    if (!declared) return METHOD_REQUIRED_MESSAGE;
+    if (declared.method === 'CORE') {
+        const list = await rows(c, 'SELECT title,official_number,revision_count,generated_at_version,version FROM aosr_documents WHERE tenant_id=$1 AND documentation_package_id=$2 ORDER BY created_at', [tenantId, packageId]);
+        if (!list.length) return 'Выбрано «АОСР формируются в Core»: сформируйте хотя бы один АОСР в Core';
+        const unfinished = list.filter((x: any) => x.officialNumber === null || x.revisionCount < 1 || x.generatedAtVersion !== x.version);
+        if (unfinished.length) return `Не сформирован актуальный DOCX у АОСР: ${unfinished.map((x: any) => `«${x.title}»`).join(', ')}. Сформируйте его (или удалите черновик, если АОСР в Core не нужен)`;
+    }
+    return (await packageSchemes(c, tenantId, packageId)).some(x => x.hasFile) ? null : SCHEME_FILE_REQUIRED_MESSAGE;
 }

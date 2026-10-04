@@ -190,7 +190,7 @@ function MethodBlock({ packageId, view, canEdit, onChanged }: { packageId: strin
     <div className={styles.documentCard}>
       <span className={typeClass('label')}>Как готовятся АОСР по этому пакету</span>
       {view.method === null ? (
-        <span className={typeClass('body')}>Генератор АОСР в Core — необязательный инструмент: можно готовить АОСР у себя на компьютере. Выберите способ — это фиксируется в истории пакета.</span>
+        <span className={typeClass('body')}>Генератор АОСР в Core — необязательный инструмент: можно готовить АОСР у себя на компьютере. Выберите способ — это фиксируется в истории пакета; без выбора пакет нельзя предъявить заказчику.</span>
       ) : view.method === 'CORE' ? (
         <span className={typeClass('body-strong')}>АОСР формируются в Core</span>
       ) : (
@@ -412,6 +412,8 @@ export function AosrSection({ packageId, packageStatus, view, quantity, error, c
       <section className={styles.section}>
         <span className={[styles.sectionLabel, typeClass('label')].join(' ')}>АОСР</span>
         <MethodBlock packageId={packageId} view={view} canEdit={canEdit} onChanged={onChanged} />
+        {view.method === 'CORE' && view.items.some((i) => i.status !== 'GENERATED') ? <span className={[styles.secondary, typeClass('body')].join(' ')}>Перед предъявлением заказчику у каждого АОСР должен быть сформирован актуальный DOCX; ненужные черновики можно удалить.</span> : null}
+        {view.method === 'CORE' && view.items.length === 0 ? <span className={[styles.secondary, typeClass('body')].join(' ')}>При выборе «в Core» перед предъявлением нужно сформировать хотя бы один АОСР.</span> : null}
         {view.method === 'CORE' && !view.templateAvailable ? <span className={styles.errorText}>Официальный шаблон АОСР недоступен</span> : null}
         {view.method !== 'CORE' ? null : view.items.length ? (
           <div className={styles.documentList}>
