@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { scopePortionFor } from './helpers/package-scope';
 import { readyToPresent } from './helpers/present-ready';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -79,8 +80,7 @@ test('F12-SDO-03: handoff/return/status-change are already retry-safe via Packag
 
     const pto = await login('PTO');
     await handoffWorkToPto(work.id);
-    let pkg = await req('documentation-packages', { objectWorkId: work.id, responsibleUserId: pto.id });
-    await req(`documentation-packages/${pkg.id}/portions`, { quantityPortionId: portion.id });
+    let pkg = await req('documentation-packages', { objectWorkId: work.id, quantityPortionIds: [portion.id], responsibleUserId: pto.id });
     const doc = await req(`documentation-packages/${pkg.id}/documents`, { type: 'AOSR' });
     await req(`documentation-documents/${doc.id}/versions`, { storageProvider: 'NONE' });
     pkg = await req(`documentation-packages/${pkg.id}/status`, { status: 'PREPARING', version: pkg.version });

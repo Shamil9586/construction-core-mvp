@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { scopePortionFor } from './helpers/package-scope';
 import assert from 'node:assert/strict';
 import { handoffWorkToPto } from './helpers/pbx3-fixtures';
 
@@ -63,7 +64,7 @@ test('F8.2: Documentation Package / Document / Version / status history — crea
   );
 
   // --- create: happy path ---
-  const pkg = await service.createDocumentationPackage(pto, { objectWorkId: work.id, responsibleUserId: pto.id });
+  const pkg = await service.createDocumentationPackage(pto, { objectWorkId: work.id, quantityPortionIds: [await scopePortionFor(work.id)], responsibleUserId: pto.id });
   assert.equal(pkg.objectWorkId, work.id);
   assert.equal(pkg.responsibleUserId, pto.id);
   assert.equal(pkg.status, 'DRAFT', 'a new package starts DRAFT');

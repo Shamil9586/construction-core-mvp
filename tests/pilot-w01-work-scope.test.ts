@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { scopePortionFor } from './helpers/package-scope';
 import assert from 'node:assert/strict';
 import { makeUser, tokenFor } from './helpers/pbx3-fixtures';
 
@@ -62,7 +63,7 @@ async function scenario() {
   };
   const W01 = await mkWork('W01'), W02 = await mkWork('W02'), W03 = await mkWork('W03'), W04 = await mkWork('W04');
   const handoff = async (w: any, who: any, expected = 201) => { await h.as(headA); return h.req(`works/${w.work.id}/pto-assignment`, { assigneeUserId: who.id }, expected); };
-  const create = (w: any, who: any, responsible?: string) => h.as(who).then(() => h.raw('documentation-packages', { objectWorkId: w.work.id, ...(responsible ? { responsibleUserId: responsible } : {}) }));
+  const create = (w: any, who: any, responsible?: string) => h.as(who).then(async () => h.raw('documentation-packages', { objectWorkId: w.work.id, quantityPortionIds: [await scopePortionFor(w.work.id)], ...(responsible ? { responsibleUserId: responsible } : {}) }));
   const view = (w: any, who: any) => h.as(who).then(() => h.raw(`works/${w.work.id}/pto-assignment`));
   const leaveTeam = async (who: any) => {
     const cur = await db.one(db.pool, 'SELECT id,version FROM functional_team_memberships WHERE member_user_id=$1 AND ended_at IS NULL', [who.id]);
@@ -78,7 +79,6 @@ test('A/F: W01 vs W02 on the same object — exact-work scope for every read, sn
     const { h } = s;
     await s.handoff(s.W01, s.A1); await s.handoff(s.W02, s.A2);
     const p2 = (await s.create(s.W02, s.A2)).data; assert.equal(p2.responsibleUserId, s.A2.id);
-    await h.req(`documentation-packages/${p2.id}/portions`, { quantityPortionId: s.W02.portion.id });
     const doc2 = await h.req(`documentation-packages/${p2.id}/documents`, { type: 'AOSR' });
     const p1r = await s.create(s.W01, s.A1); assert.equal(p1r.status, 201); const p1 = p1r.data;
     assert.equal(p1.responsibleUserId, s.A1.id);
@@ -87,7 +87,6 @@ test('A/F: W01 vs W02 on the same object — exact-work scope for every read, sn
     await h.as(s.A1);
     assert.equal((await s.view(s.W01, s.A1)).status, 200);
     assert.equal((await h.raw(`works/${s.W01.work.id}`)).status, 200);
-    await h.req(`documentation-packages/${p1.id}/portions`, { quantityPortionId: s.W01.portion.id });
     await h.req(`documentation-packages/${p1.id}/documents`, { type: 'AOSR' });
     assert.equal((await h.raw(`documentation-packages/${p1.id}/status`, { status: 'PREPARING', version: p1.version })).status, 201);
 

@@ -99,6 +99,10 @@ function basePackage(overrides: Partial<DocumentationPackage> = {}): Documentati
     responsibleUserId: 'pto-1',
     responsible: 'Ольга Морозова',
     createdBy: 'pto-1',
+    workName: 'Штукатурка стен',
+    createdByName: 'Ольга Морозова',
+    aosrMethod: null,
+    scope: { hasScope: true, portions: [], zoneSummary: '1 этаж', currentQuantity: null },
     ...overrides,
   };
 }

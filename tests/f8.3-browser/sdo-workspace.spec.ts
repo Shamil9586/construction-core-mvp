@@ -54,7 +54,18 @@ interface FakePackage {
   responsibleUserId: string;
   responsible: string;
   version: number;
+  workName: string | null;
+  createdByName: string | null;
+  aosrMethod: null;
+  scope: { hasScope: boolean; portions: unknown[]; zoneSummary: string | null; currentQuantity: null };
 }
+/** The package identity read model the backend attaches to every package (validateSnapshot requires it). */
+const IDENTITY = {
+  workName: null,
+  createdByName: null,
+  aosrMethod: null,
+  scope: { hasScope: false, portions: [] as unknown[], zoneSummary: null, currentQuantity: null },
+} as const;
 interface FakePortion {
   id: string;
   label: string;
@@ -120,8 +131,8 @@ interface State {
 function makeState(): State {
   return {
     packages: [
-      { id: PACKAGE_READY, objectId: OBJECT_A, objectWorkId: WORK_READY, status: 'ACCEPTED_BY_CUSTOMER', responsibleUserId: PTO.id, responsible: PTO.name, version: 5 },
-      { id: PACKAGE_NOT_READY, objectId: OBJECT_A, objectWorkId: WORK_NOT_READY, status: 'PRESENTED', responsibleUserId: PTO.id, responsible: PTO.name, version: 3 },
+      { id: PACKAGE_READY, objectId: OBJECT_A, objectWorkId: WORK_READY, status: 'ACCEPTED_BY_CUSTOMER', responsibleUserId: PTO.id, responsible: PTO.name, version: 5, ...IDENTITY },
+      { id: PACKAGE_NOT_READY, objectId: OBJECT_A, objectWorkId: WORK_NOT_READY, status: 'PRESENTED', responsibleUserId: PTO.id, responsible: PTO.name, version: 3, ...IDENTITY },
     ],
     packagePortions: [
       { documentationPackageId: PACKAGE_READY, quantityPortionId: PORTION_READY },
@@ -254,6 +265,7 @@ function handleApi(state: State, actor: Actor, method: string, path: string, req
       body: {
         objectWorkId: assignmentMatch[1], objectId: OBJECT_A, head: null, eligible: [], packageCount: 1, canAssign: false, canReassign: false,
         canCreatePackage: actor.id === PTO.id,
+        packageScope: { totalPortions: 1, eligiblePortions: [] },
         assignment: { id: 'assignment-1', assigneeUserId: PTO.id, assigneeName: PTO.name, assignedByName: '', assignedAt: '2026-10-01T00:00:00Z', version: 1 },
       },
     };

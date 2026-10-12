@@ -57,6 +57,20 @@ const WORK_DRAFT = 'work-draft';
 const UNIT_NEW = 'unit-new';
 const PORTION_NEW = 'portion-new';
 
+/** What each Work's production scope is made of (the backend's own `packageScope` read model is derived from this shape). */
+const PORTION_DRAFT_1 = 'portion-draft-1';
+const PORTION_DRAFT_2 = 'portion-draft-2';
+const portionFixture = (id: string, zone: string, quantity: string) => ({ id, label: zone, zone, unit: 'м²', plannedQuantity: '500.0000', currentQuantity: quantity, quantitySource: 'INTERNAL_SC' });
+const WORK_PORTIONS: Record<string, ReturnType<typeof portionFixture>[]> = {
+  [WORK_NEW]: [portionFixture(PORTION_NEW, 'Участок 1', '80.0000')],
+  [WORK_DRAFT]: [portionFixture(PORTION_DRAFT_1, '1 этаж', '498.0000'), portionFixture(PORTION_DRAFT_2, '2 этаж', '300.0000')],
+};
+const scopeOf = (workId: string, ids: string[]) => {
+  const own = (WORK_PORTIONS[workId] ?? []).filter((p) => ids.includes(p.id));
+  const total = own.reduce((sum, p) => sum + Number(p.currentQuantity), 0);
+  return { hasScope: own.length > 0, portions: own, zoneSummary: own.length ? own.map((p) => p.zone).join(', ') : null, currentQuantity: own.length ? { quantity: total.toFixed(4), unit: 'м²', source: 'INTERNAL_SC' } : null };
+};
+
 type AttentionLevel = 'RED' | 'YELLOW' | 'NONE';
 
 // Mirrors resolveDocumentationAttention() (packages/domain) — this file owns
@@ -87,6 +101,12 @@ interface FakePackage {
   responsible: string;
   createdBy: string;
   version: number;
+  // Package identity read model (backend-derived in production).
+  workName: string | null;
+  createdByName: string | null;
+  aosrMethod: 'CORE' | 'EXTERNAL' | null;
+  scope: { hasScope: boolean; portions: unknown[]; zoneSummary: string | null; currentQuantity: { quantity: string; unit: string; source: string } | null };
+  createdAt: string;
 }
 interface FakeLink {
   id: string;
@@ -147,7 +167,8 @@ function makeState(actor: Actor, initialPackages: FakePackage[] = [], assignment
     lastCreateBody: null,
     actor,
     packages: initialPackages,
-    packagePortions: [],
+    // the pre-existing draft package already claims the first floor of its work
+    packagePortions: initialPackages.filter((p) => p.id === 'package-draft').map((p) => ({ id: 'link-draft', documentationPackageId: p.id, quantityPortionId: PORTION_DRAFT_1 })),
     documents: [],
     versions: [],
     statusHistory: [],
@@ -361,6 +382,7 @@ function handleApi(
           canAssign,
           canReassign: canAssign && !!assignee && !state.packages.some((p) => p.objectWorkId === workId),
           canCreatePackage: !!assignee && (role === 'ADMIN' || (role === 'PTO' && state.actor.id === assigneeId)),
+          packageScope: { totalPortions: (WORK_PORTIONS[workId] ?? []).length, eligiblePortions: (WORK_PORTIONS[workId] ?? []).filter((p) => !state.packagePortions.some((l) => l.quantityPortionId === p.id)) },
         },
       };
     }
@@ -372,13 +394,16 @@ function handleApi(
   }
 
   if (method === 'POST' && path === '/api/documentation-packages') {
-    const body = request.postDataJSON() as { objectWorkId: string; responsibleUserId?: string };
+    const body = request.postDataJSON() as { objectWorkId: string; responsibleUserId?: string; quantityPortionIds?: string[]; idempotencyKey?: string };
     state.lastCreateBody = body;
     const assigneeId = state.assignments[body.objectWorkId];
     const allowed = !!assigneeId && (state.actor.role === 'ADMIN' || (state.actor.role === 'PTO' && state.actor.id === assigneeId));
     if (!allowed) return { status: 403, body: { message: 'Пакет ИД может создать только сотрудник ПТО, назначенный на эту работу' } };
     if (body.responsibleUserId !== undefined && body.responsibleUserId !== assigneeId) return { status: 403, body: { message: 'Ответственным за пакет является назначенный сотрудник ПТО' } };
     const responsibleUser = ALL_USERS.find((u) => u.id === assigneeId)!;
+    const ids = body.quantityPortionIds ?? [];
+    if (ids.length === 0) return { status: 400, body: { message: 'Выберите участок производства для пакета ИД: пакет без участка не создаётся.' } };
+    if (ids.some((id) => state.packagePortions.some((l) => l.quantityPortionId === id))) return { status: 400, body: { message: 'Этот участок уже включён в активный пакет исполнительной документации.' } };
     const pkg: FakePackage = {
       id: nextId(state, 'package'),
       objectId: OBJECT_A,
@@ -388,8 +413,15 @@ function handleApi(
       responsible: responsibleUser.name,
       createdBy: state.actor.id,
       version: 1,
+      workName: null,
+      createdByName: state.actor.name,
+      aosrMethod: null,
+      scope: scopeOf(body.objectWorkId, ids),
+      createdAt: '2026-10-03T11:05:00Z',
     };
+    pkg.workName = WORKS.find((w) => w.id === body.objectWorkId)?.name ?? null;
     state.packages.push(pkg);
+    for (const quantityPortionId of ids) state.packagePortions.push({ id: nextId(state, 'link'), documentationPackageId: pkg.id, quantityPortionId });
     return { status: 201, body: pkg };
   }
 
@@ -477,6 +509,11 @@ function draftPackage(): FakePackage {
     responsible: PTO.name,
     createdBy: PTO.id,
     version: 1,
+    workName: 'Штукатурка стен',
+    createdByName: PTO.name,
+    aosrMethod: null,
+    scope: scopeOf(WORK_DRAFT, [PORTION_DRAFT_1]),
+    createdAt: '2026-10-03T11:05:00Z',
   };
 }
 
@@ -516,13 +553,13 @@ test('P01 → W01 → package detail: open the work, the assigned engineer creat
   await table.locator('tr', { hasText: 'Устройство кровли' }).getByRole('button', { name: 'К работе' }).click();
   const section = page.locator('section', { hasText: 'Исполнительная документация' });
   await section.getByRole('button', { name: 'Создать пакет ИД' }).click();
+  await section.getByRole('button', { name: 'Создать пакет', exact: true }).click();
 
   await expect(page.getByRole('heading', { level: 1, name: 'Устройство кровли' })).toBeVisible();
   await expect(page.getByText('Черновик')).toBeVisible();
 
-  await page.getByLabel('Участок для привязки').selectOption({ label: 'Участок 1' });
-  await page.getByRole('button', { name: 'Привязать участок' }).click();
-  await expect(page.getByText('Участки ещё не привязаны')).toHaveCount(0);
+  // the scope was persisted WITH the package — no separate link step; the package states what it covers
+  await expect(page.getByText('Участок не выбран')).toHaveCount(0);
   await expect(page.getByRole('listitem').filter({ hasText: 'Участок 1' })).toBeVisible();
 
   await page.getByLabel('Тип документа').selectOption({ label: 'АОСР' });
@@ -552,10 +589,13 @@ test('W01: the assigned engineer sees "Создать пакет ИД"; it creat
   await expect(section.getByText('Пакет исполнительной документации ещё не создан')).toBeVisible();
   await expect(section.getByText('Передано в работу')).toBeVisible();
   await section.getByRole('button', { name: 'Создать пакет ИД' }).click();
+  // a single eligible portion is preselected — but the scope is still sent explicitly
+  await expect(section.getByRole('checkbox', { name: /Участок 1/ })).toBeChecked();
+  await section.getByRole('button', { name: 'Создать пакет', exact: true }).click();
 
   await expect(page.getByRole('heading', { level: 1, name: 'Устройство кровли' })).toBeVisible();
   await expect(page.getByText('Черновик')).toBeVisible();
-  expect(state.lastCreateBody).toEqual({ objectWorkId: WORK_NEW });
+  expect(state.lastCreateBody).toEqual({ objectWorkId: WORK_NEW, quantityPortionIds: [PORTION_NEW], idempotencyKey: expect.any(String) });
   expect(state.packages[0]!.responsibleUserId).toBe(PTO.id);
 });
 
@@ -651,6 +691,7 @@ test('W01 (Corrective F8.2.1-03): a work with an existing package still offers "
   const section = page.locator('section', { hasText: 'Исполнительная документация' });
   await expect(section.getByRole('button', { name: 'Открыть пакет' })).toBeVisible();
   await section.getByRole('button', { name: 'Создать ещё один пакет' }).click();
+  await section.getByRole('button', { name: 'Создать пакет', exact: true }).click(); // 2 этаж is the only unclaimed portion — preselected
 
   await expect(page.getByRole('heading', { level: 1, name: 'Штукатурка стен' })).toBeVisible();
   await expect(page.getByText('Черновик', { exact: true })).toBeVisible();
@@ -675,6 +716,7 @@ test('ADMIN (PILOT-W01 UI03): P01 has no responsible picker and no package creat
   await page.goto(`/app.html/object/${OBJECT_A}/work/${WORK_NEW}`);
   const section = page.locator('section', { hasText: 'Исполнительная документация' });
   await section.getByRole('button', { name: 'Создать пакет ИД' }).click();
+  await section.getByRole('button', { name: 'Создать пакет', exact: true }).click();
   await expect(page.getByRole('heading', { level: 1, name: 'Устройство кровли' })).toBeVisible();
   expect(state.packages.length).toBe(1);
   expect(state.packages[0]!.responsibleUserId).toBe(PTO_USER_2.id);
@@ -840,6 +882,7 @@ function validAssignmentView(assigneeUserId: string, overrides: Record<string, u
     canAssign: false,
     canReassign: false,
     canCreatePackage: true,
+    packageScope: { totalPortions: 0, eligiblePortions: [] },
     ...overrides,
   };
 }
@@ -894,4 +937,44 @@ test('Package detail (UI04-F01): a fully valid assignment for ANOTHER user expos
 test('Package detail (UI04-F01): non-object / empty successful bodies expose no mutation controls and do not crash', async ({ page }) => {
   await openWithAssignmentResponse(page, 'f01-g', {});
   await expectMutationControls(page, false);
+});
+
+
+test('W01 package card (scope corrective): the card answers WHAT / FOR WHICH scope / current quantity / AOSR method / WHO — and METHOD_UNSET is explicit', async ({ page }) => {
+  const state = makeState(PTO, [draftPackage()], { [WORK_DRAFT]: PTO.id });
+  await seedSession(page, 'f8-2-1-browser-token-card');
+  await mockApi(page, state);
+  await page.goto(`/app.html/object/${OBJECT_A}/work/${WORK_DRAFT}`);
+  const card = page.locator('section', { hasText: 'Исполнительная документация' }).locator('div', { hasText: 'Штукатурка стен' }).filter({ hasText: 'Открыть пакет' }).last();
+  await expect(card.getByText('Штукатурка стен').first()).toBeVisible();
+  await expect(card.getByText('1 этаж')).toBeVisible();
+  await expect(card.getByText(/498\s*м²/)).toBeVisible(); // the CURRENT quantity only
+  await expect(card.getByText('Способ подготовки АОСР не выбран')).toBeVisible(); // never inferred as «вне Core»
+  await expect(card.getByText(PTO.name).first()).toBeVisible();
+  await expect(card.getByText(/^Создан: Ольга Морозова, 03\.10\.2026/)).toBeVisible();
+  await expect(card.getByText('Покрыто участков')).toHaveCount(0);
+});
+
+test('W01 create package (scope corrective): several eligible portions need an explicit choice; with every portion claimed no package can be created and the reason is shown', async ({ page }) => {
+  const state = makeState(PTO, [], { [WORK_DRAFT]: PTO.id });
+  await seedSession(page, 'f8-2-1-browser-token-scope-choice');
+  await mockApi(page, state);
+  await page.goto(`/app.html/object/${OBJECT_A}/work/${WORK_DRAFT}`);
+  const section = page.locator('section', { hasText: 'Исполнительная документация' });
+  await section.getByRole('button', { name: 'Создать пакет ИД' }).click();
+  const create = section.getByRole('button', { name: 'Создать пакет', exact: true });
+  await expect(section.getByRole('checkbox')).toHaveCount(2);
+  await expect(create).toBeDisabled(); // two eligible portions: nothing is guessed
+  await section.getByRole('checkbox', { name: /1 этаж/ }).check();
+  await section.getByRole('checkbox', { name: /2 этаж/ }).check();
+  await create.click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Штукатурка стен' })).toBeVisible();
+  expect(state.lastCreateBody).toEqual({ objectWorkId: WORK_DRAFT, quantityPortionIds: [PORTION_DRAFT_1, PORTION_DRAFT_2], idempotencyKey: expect.any(String) });
+  expect(state.packages.length).toBe(1);
+
+  // every available portion is now claimed
+  await page.goto(`/app.html/object/${OBJECT_A}/work/${WORK_DRAFT}`);
+  const again = page.locator('section', { hasText: 'Исполнительная документация' });
+  await expect(again.getByText('Все доступные участки уже включены в активные пакеты ИД.')).toBeVisible();
+  await expect(again.getByRole('button', { name: /Создать/ })).toHaveCount(0);
 });

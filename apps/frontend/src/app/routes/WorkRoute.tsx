@@ -96,8 +96,8 @@ export function WorkRoute() {
       ? {
           // PILOT-W01 UI03 — no responsible id is sent: the backend derives it from the
           // authenticated engineer + the persisted PTO work assignment.
-          onCreatePackage: async () => {
-            const pkg = await documentationApi.createDocumentationPackage(work.id);
+          onCreatePackage: async (quantityPortionIds, idempotencyKey) => {
+            const pkg = await documentationApi.createDocumentationPackage(work.id, quantityPortionIds, idempotencyKey);
             refetch();
             navigate(packagePath(pkg.id));
           },

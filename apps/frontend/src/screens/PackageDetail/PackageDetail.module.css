@@ -112,3 +112,16 @@
   display: inline-block;
   text-decoration: none;
 }
+
+.identityGrid {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--cc-p-space-24);
+}
+
+.identityRow {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-4);
+}

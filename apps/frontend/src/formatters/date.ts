@@ -22,6 +22,14 @@ const fullFormat = new Intl.DateTimeFormat('ru-RU', {
   year: 'numeric',
 });
 
+const dateTimeFormat = new Intl.DateTimeFormat('ru-RU', {
+  day: '2-digit',
+  month: '2-digit',
+  year: 'numeric',
+  hour: '2-digit',
+  minute: '2-digit',
+});
+
 const dayMonthFormat = new Intl.DateTimeFormat('ru-RU', {
   day: '2-digit',
   month: '2-digit',
@@ -62,4 +70,13 @@ export function formatDayMonth(
 ): string {
   const date = toDate(value);
   return date === null ? absent : dayMonthFormat.format(date);
+}
+
+/** Full date and time of a moment (a timestamp), e.g. "03.10.2026, 14:05". */
+export function formatDateTime(
+  value: string | Date | null | undefined,
+  absent: string = NO_DATA_DASH,
+): string {
+  const date = toDate(value);
+  return date === null ? absent : dateTimeFormat.format(date);
 }

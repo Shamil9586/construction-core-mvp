@@ -183,6 +183,14 @@ const works = [
   }),
 ];
 
+/** Package identity read model (backend-derived); validateSnapshot requires it on every package. */
+const PACKAGE_IDENTITY = {
+  workName: null,
+  createdByName: null,
+  aosrMethod: null,
+  scope: { hasScope: false, portions: [], zoneSummary: null, currentQuantity: null },
+};
+
 const documentationPackages = [
   versioned('pkg-1', {
     objectId: 'obj-1',
@@ -191,6 +199,7 @@ const documentationPackages = [
     responsibleUserId: 'u-pto',
     responsible: 'Ольга Морозова',
     createdBy: 'u-pto',
+    ...PACKAGE_IDENTITY,
   }),
   versioned('pkg-2', {
     objectId: 'obj-1',
@@ -199,6 +208,7 @@ const documentationPackages = [
     responsibleUserId: 'u-pto',
     responsible: 'Ольга Морозова',
     createdBy: 'u-pto',
+    ...PACKAGE_IDENTITY,
   }),
 ];
 

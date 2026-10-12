@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { scopePortionFor } from './helpers/package-scope';
 import assert from 'node:assert/strict';
 import { makeUser, tokenFor } from './helpers/pbx3-fixtures';
 
@@ -174,7 +175,7 @@ test('UI03 work-scoped access: team engineer with NO object membership is handed
     assert.ok(snap.works.some((w: any) => w.id === s.A.work.id));
     assert.ok(!snap.works.some((w: any) => w.id === s.B.work.id), 'no other object is exposed');
     assert.equal((await s.h.raw(`objects/${s.B.o.id}`)).status, 403);
-    const made = await s.h.raw('documentation-packages', { objectWorkId: s.A.work.id });
+    const made = await s.h.raw('documentation-packages', { objectWorkId: s.A.work.id, quantityPortionIds: [await scopePortionFor(s.A.work.id)] });
     assert.equal(made.status, 201, JSON.stringify(made.data));
     assert.equal(made.data.responsibleUserId, s.A1.id);
     // the package-detail operations work for the assignee too (same object-scope check)
@@ -194,7 +195,7 @@ test('UI03 package responsible integrity: fixed at creation; no arbitrary change
     await s.h.as(s.headA);
     assert.equal((await s.handoff(s.A.work, s.A1)).status, 201);
     await s.h.as(s.A1);
-    const made = await s.h.raw('documentation-packages', { objectWorkId: s.A.work.id });
+    const made = await s.h.raw('documentation-packages', { objectWorkId: s.A.work.id, quantityPortionIds: [await scopePortionFor(s.A.work.id)] });
     assert.equal(made.status, 201);
     const pkg = made.data; assert.equal(pkg.responsibleUserId, s.A1.id);
     const edit = (responsibleUserId: string, version: number) => s.h.raw(`documentation-packages/${pkg.id}/edit`, { responsibleUserId, version });
@@ -238,7 +239,7 @@ test('UI03 hard acceptance: handoff persists an assignment but creates NO packag
 test('UI03 package creation is enforced on the backend by the persisted assignment', async () => {
   const s = await scenario();
   try {
-    const create = (work: any, responsibleUserId?: string) => s.h.raw('documentation-packages', { objectWorkId: work.id, ...(responsibleUserId ? { responsibleUserId } : {}) });
+    const create = async (work: any, responsibleUserId?: string) => s.h.raw('documentation-packages', { objectWorkId: work.id, quantityPortionIds: [await scopePortionFor(work.id)], ...(responsibleUserId ? { responsibleUserId } : {}) });
     // no assignment yet: nobody on the engineer path can create
     await s.h.as(s.A1);
     assert.equal((await create(s.A.work, s.A1.id)).status, 403, 'unassigned work: even a team member is refused');
@@ -282,7 +283,7 @@ async function scenarioReassign(s: any) {
   const contractors = await s.h.req('contractors');
   const pm = await s.h.login('PROJECT_MANAGER');
   const w = await s.h.req('works', { objectId: s.A.o.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: pm.id, name: 'Вторая работа', unit: 'м²', plannedQuantity: 10, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '1' });
-  const create = (who: any) => s.h.as(who).then(() => s.h.raw('documentation-packages', { objectWorkId: w.id }));
+  const create = (who: any) => s.h.as(who).then(async () => s.h.raw('documentation-packages', { objectWorkId: w.id, quantityPortionIds: [await scopePortionFor(w.id)] }));
   await s.h.as(s.headA);
   assert.equal((await s.handoff(w, s.A1)).status, 201);
   assert.equal((await s.handoff(w, s.A2)).status, 201);

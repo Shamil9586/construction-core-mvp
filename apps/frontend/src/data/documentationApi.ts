@@ -5,6 +5,7 @@ import type {
   DocumentationPackagePortion,
   DocumentationPackageStatus,
   DocumentationVersion,
+  PackageScopePortion,
   SdoClosingCase,
   StorageProvider,
   Uuid,
@@ -41,6 +42,8 @@ export interface PtoWorkAssignmentView {
   canAssign: boolean;
   canReassign: boolean;
   canCreatePackage: boolean;
+  /** What a NEW package may be created on: the Work's portions that no package claims yet (the backend re-checks at creation). */
+  packageScope: { totalPortions: number; eligiblePortions: PackageScopePortion[] };
 }
 async function post<T>(path: string, body: unknown): Promise<T> {
   const token = readSessionToken();
@@ -68,14 +71,18 @@ export function assignPtoWork(objectWorkId: Uuid, assigneeUserId: Uuid): Promise
 }
 
 /**
- * The assigned engineer's action. `responsibleUserId` is optional: the backend derives the
- * responsible from the authenticated actor and the persisted assignment, and rejects any other id.
+ * The assigned engineer's action: a package is created WITH its production scope (one or more Quantity Portions of the Work) — never
+ * as an empty shell. `responsibleUserId` is optional: the backend derives the responsible from the authenticated actor and the persisted
+ * assignment, and rejects any other id. `idempotencyKey` is minted once per logical attempt, so a double click or retry returns the same
+ * package instead of a second one.
  */
 export function createDocumentationPackage(
   objectWorkId: Uuid,
+  quantityPortionIds: Uuid[],
+  idempotencyKey: string,
   responsibleUserId?: Uuid,
 ): Promise<DocumentationPackage> {
-  return post('documentation-packages', { objectWorkId, ...(responsibleUserId ? { responsibleUserId } : {}) });
+  return post('documentation-packages', { objectWorkId, quantityPortionIds, idempotencyKey, ...(responsibleUserId ? { responsibleUserId } : {}) });
 }
 
 export function editDocumentationPackage(

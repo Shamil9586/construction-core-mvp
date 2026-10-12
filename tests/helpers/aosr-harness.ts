@@ -54,7 +54,7 @@ export async function closeHarness() { if (shared) await (await shared).app.clos
 
 let counter = 0;
 /** Object + plastering Work + one Quantity Portion (RP 500.1234, Internal SC 498.1234) + a package covering it. Ends logged in as PTO. */
-export async function setUp(opts: { method?: 'CORE' | 'EXTERNAL' | null } = {}) {
+export async function setUp(opts: { method?: 'CORE' | 'EXTERNAL' | null; noPackage?: boolean; secondPortion?: boolean; labels?: [string, string]; location?: string | null } = {}) {
   const { req, login } = await harness();
   const pm = await login('PROJECT_MANAGER');
   const dict = await req('dictionaries');
@@ -64,8 +64,9 @@ export async function setUp(opts: { method?: 'CORE' | 'EXTERNAL' | null } = {}) 
   await login('PROJECT_MANAGER');
   const plaster = dict.workTypes.find((w: any) => /штукатур/i.test(w.name)) ?? dict.workTypes[0];
   const work = await req('works', { objectId: o.id, workTypeId: plaster.id, contractorId: contractors[0].id, responsibleUserId: pm.id, name: 'Устройство штукатурки стен', unit: 'м²', plannedQuantity: 500, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '100000' });
-  const unit = await req('execution-units', { objectWorkId: work.id, workTypeId: plaster.id, contractorId: contractors[0].id, unit: 'м²', plannedQuantity: RP, location: 'санузлы' });
-  const portion = await req(`execution-units/${unit.id}/portions`, { label: 'Секция A', plannedQuantity: RP });
+  const unit = await req('execution-units', { objectWorkId: work.id, workTypeId: plaster.id, contractorId: contractors[0].id, unit: 'м²', plannedQuantity: opts.secondPortion ? '1000.2468' : RP, ...(opts.location === null ? {} : { location: opts.location ?? 'санузлы' }) });
+  const portion = await req(`execution-units/${unit.id}/portions`, { label: opts.labels?.[0] ?? 'Секция A', plannedQuantity: RP });
+  const portion2 = opts.secondPortion ? await req(`execution-units/${unit.id}/portions`, { label: opts.labels?.[1] ?? 'Секция B', plannedQuantity: RP }) : null;
   await req(`portions/${portion.id}/fact`, { quantity: RP, version: portion.version });
   const internal = await req(`portions/${portion.id}/inspection-request`, { inspectionType: 'INTERNAL_SC', version: portion.version + 1 });
   await login('CONSTRUCTION_CONTROL');
@@ -74,12 +75,12 @@ export async function setUp(opts: { method?: 'CORE' | 'EXTERNAL' | null } = {}) 
   await req(`inspections/${internal.id}/accept`, { version: internal.version, comment: 'Принято СК', quantity: INTERNAL });
   const pto = await login('PTO');
   await handoffWorkToPto(work.id);
-  const pkg = await req('documentation-packages', { objectWorkId: work.id, responsibleUserId: pto.id });
-  await req(`documentation-packages/${pkg.id}/portions`, { quantityPortionId: portion.id });
+  // `noPackage`: the Work is handed off but no package exists yet (package-scope suites create their own).
+  const pkg = opts.noPackage ? null : await req('documentation-packages', { objectWorkId: work.id, responsibleUserId: pto.id, quantityPortionIds: [portion.id] });
   // The Core generator is optional: tests declare the method explicitly (default Core); `method: null` leaves it undeclared.
   const method = opts.method === undefined ? 'CORE' : opts.method;
-  if (method) await req(`documentation-packages/${pkg.id}/aosr-method`, { method });
-  return { object: o, work, unit, portion, pkg, pto };
+  if (method && pkg) await req(`documentation-packages/${pkg.id}/aosr-method`, { method });
+  return { object: o, work, unit, portion, portion2, pkg, pto };
 }
 
 export const PARTIES = [

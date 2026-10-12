@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { scopePortionFor } from './helpers/package-scope';
 import { readyToPresent } from './helpers/present-ready';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -80,8 +81,7 @@ async function setUpPresentedPackage(req: any, login: any, code: string, name: s
 
   const pto = await login('PTO');
   await handoffWorkToPto(work.id);
-  const pkg = await req('documentation-packages', { objectWorkId: work.id, responsibleUserId: pto.id });
-  await req(`documentation-packages/${pkg.id}/portions`, { quantityPortionId: portion.id });
+  const pkg = await req('documentation-packages', { objectWorkId: work.id, quantityPortionIds: [portion.id], responsibleUserId: pto.id });
   const doc = await req(`documentation-packages/${pkg.id}/documents`, { type: 'AOSR' });
   await req(`documentation-documents/${doc.id}/versions`, { storageProvider: 'NONE' });
   // F8.3-17: any further document must be added here, before PRESENTED —
@@ -384,7 +384,7 @@ test('F8.3 HTTP (1): an upcoming package is visible to SDO before it is ready �
     const work = await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: pm.id, name: 'Работа', unit: 'м²', plannedQuantity: 100, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '20000' });
     const pto = await login('PTO');
     await handoffWorkToPto(work.id);
-    const pkg = await req('documentation-packages', { objectWorkId: work.id, responsibleUserId: pto.id });
+    const pkg = await req('documentation-packages', { objectWorkId: work.id, quantityPortionIds: [await scopePortionFor(work.id)], responsibleUserId: pto.id });
 
     await login('SDO');
     const snapshot = await req('snapshot');
@@ -428,8 +428,7 @@ test('F8.3 HTTP (3): readiness is false when the Customer SC quantity confirmati
     // No Customer SC confirmation recorded for this portion at all.
     const pto = await login('PTO');
     await handoffWorkToPto(work.id);
-    let pkg = await req('documentation-packages', { objectWorkId: work.id, responsibleUserId: pto.id });
-    await req(`documentation-packages/${pkg.id}/portions`, { quantityPortionId: portion.id });
+    let pkg = await req('documentation-packages', { objectWorkId: work.id, quantityPortionIds: [portion.id], responsibleUserId: pto.id });
     const doc = await req(`documentation-packages/${pkg.id}/documents`, { type: 'AOSR' });
     await req(`documentation-documents/${doc.id}/versions`, { storageProvider: 'NONE' });
     pkg = await req(`documentation-packages/${pkg.id}/status`, { status: 'PREPARING', version: pkg.version });
@@ -649,7 +648,7 @@ test('F8.3-R02b (1): customer-acceptance is refused when a Documentation Documen
     const work = await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: pm.id, name: 'Работа', unit: 'м²', plannedQuantity: 100, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '20000' });
     const pto = await login('PTO');
     await handoffWorkToPto(work.id);
-    const pkg = await req('documentation-packages', { objectWorkId: work.id, responsibleUserId: pto.id });
+    const pkg = await req('documentation-packages', { objectWorkId: work.id, quantityPortionIds: [await scopePortionFor(work.id)], responsibleUserId: pto.id });
     // Document A is created but never given a version — the exact Case A
     // from the corrective report.
     await req(`documentation-packages/${pkg.id}/documents`, { type: 'AOSR' });
@@ -677,7 +676,7 @@ test('F8.3-R02b (2): customer-acceptance is refused when the Package has zero Do
     const work = await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: pm.id, name: 'Работа', unit: 'м²', plannedQuantity: 100, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '20000' });
     const pto = await login('PTO');
     await handoffWorkToPto(work.id);
-    const pkg = await req('documentation-packages', { objectWorkId: work.id, responsibleUserId: pto.id });
+    const pkg = await req('documentation-packages', { objectWorkId: work.id, quantityPortionIds: [await scopePortionFor(work.id)], responsibleUserId: pto.id });
     let p = await req(`documentation-packages/${pkg.id}/status`, { status: 'PREPARING', version: pkg.version });
     p = await req(`documentation-packages/${p.id}/status`, { status: 'READY_FOR_PRESENTATION', version: p.version });
     // The PRESENTED gate now needs a file-backed scheme document, so "zero documents" can only be a LEGACY package: flip the status directly.
@@ -976,7 +975,7 @@ test('F8.3 HTTP: customer-acceptance is refused before PRESENTED (still an ordin
     const work = await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: pm.id, name: 'Работа', unit: 'м²', plannedQuantity: 100, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '20000' });
     const pto = await login('PTO');
     await handoffWorkToPto(work.id);
-    const pkg = await req('documentation-packages', { objectWorkId: work.id, responsibleUserId: pto.id });
+    const pkg = await req('documentation-packages', { objectWorkId: work.id, quantityPortionIds: [await scopePortionFor(work.id)], responsibleUserId: pto.id });
     await req(`documentation-packages/${pkg.id}/customer-acceptance`, { version: pkg.version, acceptedDate: dt(0) }, 400);
   } finally {
     await app.close();

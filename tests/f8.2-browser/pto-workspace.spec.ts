@@ -148,6 +148,11 @@ function documentationPackage(
     responsibleUserId: 'pto-1',
     responsible,
     createdBy: 'pto-1',
+    // Package identity read model (backend-derived) — required by validateSnapshot.
+    workName: null,
+    createdByName: null,
+    aosrMethod: null,
+    scope: { hasScope: false, portions: [], zoneSummary: null, currentQuantity: null },
   };
 }
 

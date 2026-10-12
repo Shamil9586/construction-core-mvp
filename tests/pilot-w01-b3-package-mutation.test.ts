@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { scopePortionFor, newPortionFor } from './helpers/package-scope';
 import { readyToPresent } from './helpers/present-ready';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
@@ -84,9 +85,8 @@ async function scenario() {
   /** A1 (effective assignee AND object member) builds a package through the real routes, up to the requested state. */
   const build = async (until: 'editable' | 'presented' | 'accepted') => {
     await h.as(A1);
-    const pkg = await h.req('documentation-packages', { objectWorkId: work.id });
+    const pkg = await h.req('documentation-packages', { objectWorkId: work.id, quantityPortionIds: [await newPortionFor(work.id, 'Участок', A1.id)] });
     assert.equal(pkg.responsibleUserId, A1.id);
-    await h.req(`documentation-packages/${pkg.id}/portions`, { quantityPortionId: PA.id });
     const doc = await h.req(`documentation-packages/${pkg.id}/documents`, { type: 'AOSR' });
     await h.req(`documentation-documents/${doc.id}/versions`, { storageProvider: 'NONE' });
     if (until === 'editable') return { pkg, doc };
@@ -162,8 +162,8 @@ test('B3-02 reviewer scenario: A1 (PBX-3A member + assigned W01, owns existing p
     const before = { fp: await s.footprint(), E: await s.row(E.pkg.id), P: await s.row(P.pkg.id), C: await s.row(C.pkg.id), H: await s.row(H.pkg.id) };
     const post = (path: string, body: any) => h.raw(path, body).then((r) => r.status);
     const denied: Record<string, number> = {
-      create: await post('documentation-packages', { objectWorkId: s.work.id }),
-      createNamingSelf: await post('documentation-packages', { objectWorkId: s.work.id, responsibleUserId: A1.id }),
+      create: await post('documentation-packages', { objectWorkId: s.work.id, quantityPortionIds: [await scopePortionFor(s.work.id)] }),
+      createNamingSelf: await post('documentation-packages', { objectWorkId: s.work.id, quantityPortionIds: [await scopePortionFor(s.work.id)], responsibleUserId: A1.id }),
       edit: await post(`documentation-packages/${E.pkg.id}/edit`, { responsibleUserId: A1.id, version: before.E.version }),
       status: await post(`documentation-packages/${E.pkg.id}/status`, { status: 'READY_FOR_PRESENTATION', version: before.E.version }),
       portionLink: await post(`documentation-packages/${E.pkg.id}/portions`, { quantityPortionId: s.PC.id }),

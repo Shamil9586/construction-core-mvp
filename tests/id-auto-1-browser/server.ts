@@ -54,9 +54,8 @@ const PDF = Buffer.from('%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF').toStr
   const pto = await login('PTO');
   await fx.handoffWorkToPto(A.work.id);
   await fx.handoffWorkToPto(B.work.id);
-  const pkgA = await req('documentation-packages', { objectWorkId: A.work.id, responsibleUserId: pto.id });
-  const pkgB = await req('documentation-packages', { objectWorkId: B.work.id, responsibleUserId: pto.id });
-  await req(`documentation-packages/${pkgA.id}/portions`, { quantityPortionId: A.portion.id });
+  const pkgA = await req('documentation-packages', { objectWorkId: A.work.id, responsibleUserId: pto.id, quantityPortionIds: [A.portion.id] });
+  const pkgB = await req('documentation-packages', { objectWorkId: B.work.id, responsibleUserId: pto.id, quantityPortionIds: [B.portion.id] });
   const base = `documentation-packages/${pkgA.id}`;
   await req(`${base}/aosr-method`, { method: 'CORE' });
   for (const p of [{ partyRole: 'DEVELOPER', organizationName: 'ООО «Заказчик»' }, { partyRole: 'CONSTRUCTION_ENTITY', organizationName: 'ООО СЗ «Гор-Строй»' }, { partyRole: 'DESIGNER', organizationName: 'ООО «Проект»' }, { partyRole: 'WORK_EXECUTOR', organizationName: 'ООО «Подрядчик»' }, { partyRole: 'DEVELOPER_SC_REP', personName: 'Петров Пётр Петрович', position: 'Инженер СК', authorityDocument: 'Приказ 1' }, { partyRole: 'CONSTRUCTION_REP', personName: 'Сидоров Сидор Сидорович', position: 'Прораб', authorityDocument: 'Приказ 2' }, { partyRole: 'INTERNAL_SC', personName: 'Иванов Иван Иванович', position: 'Инженер СК', authorityDocument: 'Приказ 3' }]) await req(`${base}/aosr-parties`, p);

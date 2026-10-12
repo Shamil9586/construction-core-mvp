@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { scopePortionFor } from './helpers/package-scope';
 import { readyToPresent } from './helpers/present-ready';
 import assert from 'node:assert/strict';
 import { Client } from 'pg';
@@ -152,8 +153,7 @@ async function setUpHandedOffCase(req: any, login: any, code: string, name: stri
   const ptoToken = await login('PTO');
   const ptoUser = (await req('me', undefined, ptoToken, 200)).data;
   await handoffWorkToPto(work.id);
-  const pkg0 = (await req('documentation-packages', { objectWorkId: work.id, responsibleUserId: ptoUser.id }, ptoToken, 201)).data;
-  await req(`documentation-packages/${pkg0.id}/portions`, { quantityPortionId: portion.id }, ptoToken, 201);
+  const pkg0 = (await req('documentation-packages', { objectWorkId: work.id, quantityPortionIds: [portion.id], responsibleUserId: ptoUser.id }, ptoToken, 201)).data;
   const doc = (await req(`documentation-packages/${pkg0.id}/documents`, { type: 'AOSR' }, ptoToken, 201)).data;
   await req(`documentation-documents/${doc.id}/versions`, { storageProvider: 'NONE' }, ptoToken, 201);
   let p = (await req(`documentation-packages/${pkg0.id}/status`, { status: 'PREPARING', version: pkg0.version }, ptoToken, 201)).data;
@@ -187,8 +187,7 @@ async function setUpAcceptedNotHandedOff(req: any, login: any, code: string, nam
 
   const ptoUser = (await req('me', undefined, ptoToken, 200)).data;
   await handoffWorkToPto(work.id);
-  const pkg0 = (await req('documentation-packages', { objectWorkId: work.id, responsibleUserId: ptoUser.id }, ptoToken, 201)).data;
-  await req(`documentation-packages/${pkg0.id}/portions`, { quantityPortionId: portion.id }, ptoToken, 201);
+  const pkg0 = (await req('documentation-packages', { objectWorkId: work.id, quantityPortionIds: [portion.id], responsibleUserId: ptoUser.id }, ptoToken, 201)).data;
   const doc = (await req(`documentation-packages/${pkg0.id}/documents`, { type: 'AOSR' }, ptoToken, 201)).data;
   await req(`documentation-documents/${doc.id}/versions`, { storageProvider: 'NONE' }, ptoToken, 201);
   let p = (await req(`documentation-packages/${pkg0.id}/status`, { status: 'PREPARING', version: pkg0.version }, ptoToken, 201)).data;

@@ -25,7 +25,8 @@ import type {
   Work,
   WorkExecutionUnit,
 } from '../types/api';
-import { formatDate } from '../formatters';
+import { formatDate, formatQuantityWithUnit } from '../formatters';
+import { buildPackageIdentity, type PackageIdentityViewModel } from './packageIdentity';
 import { documentationPackageStatusPresentation, type StatusPresentation } from './status';
 
 /**
@@ -149,7 +150,10 @@ export interface PackageDetailDocumentViewModel {
 
 export interface PackageDetailPortionViewModel {
   id: string;
+  /** The meaningful zone name when the backend provided one ("1 этаж"), else the portion's own label. */
   label: string;
+  /** The portion's CURRENT quantity ("498 м²"), when something is confirmed; never the RP/SC history. */
+  quantityText?: string | null;
 }
 
 export interface PackageDetailHistoryItemViewModel {
@@ -203,8 +207,10 @@ export interface PackageDetailViewModel {
   rawStatus: DocumentationPackageStatus;
   responsible: string;
   portions: PackageDetailPortionViewModel[];
-  /** This work's portions (via its execution units) not yet linked to this package — the "link portion" picker's own options, never a portion already linked elsewhere excluded (F8.2: many-to-many, no uniqueness). */
+  /** This work's portions (via its execution units) that NO package claims yet — the "link portion" picker's options. A portion already claimed by another package is never offered (two packages may not overlap); the backend refuses it regardless. */
   availablePortions: PackageDetailPortionViewModel[];
+  /** What the package is: Work, scope, current quantity, AOSR method, responsible, creator (see packageIdentity.ts). */
+  identity: PackageIdentityViewModel;
   documents: PackageDetailDocumentViewModel[];
   history: PackageDetailHistoryItemViewModel[];
   nextStatus: DocumentationPackageStatus | null;
@@ -230,6 +236,7 @@ export function buildPackageDetailViewModel(
   const ownPortionIds = new Set(
     packagePortions.filter((link) => link.documentationPackageId === pkg.id).map((link) => link.quantityPortionId),
   );
+  const claimedByAnyPackage = new Set(packagePortions.map((link) => link.quantityPortionId));
   const ownDocuments = documents.filter((doc) => doc.documentationPackageId === pkg.id);
   const ownHistory = statusHistory
     .filter((entry) => entry.documentationPackageId === pkg.id)
@@ -259,11 +266,19 @@ export function buildPackageDetailViewModel(
     status: documentationPackageStatusPresentation(pkg.status),
     rawStatus: pkg.status,
     responsible: pkg.responsible,
+    identity: buildPackageIdentity(pkg, work?.name),
     portions: workPortions
       .filter((portion) => ownPortionIds.has(portion.id))
-      .map((portion) => ({ id: portion.id, label: portion.label })),
+      .map((portion) => {
+        const scoped = pkg.scope.portions.find((candidate) => candidate.id === portion.id);
+        return {
+          id: portion.id,
+          label: scoped?.zone ?? portion.label,
+          quantityText: scoped?.currentQuantity ? formatQuantityWithUnit(scoped.currentQuantity, scoped.unit) : null,
+        };
+      }),
     availablePortions: workPortions
-      .filter((portion) => !ownPortionIds.has(portion.id))
+      .filter((portion) => !claimedByAnyPackage.has(portion.id))
       .map((portion) => ({ id: portion.id, label: portion.label })),
     documents: ownDocuments.map((doc) => ({
       id: doc.id,

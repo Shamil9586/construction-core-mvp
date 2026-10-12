@@ -1,4 +1,5 @@
 import { one, rows } from './db';
+import { SCOPE_NOT_SELECTED_MESSAGE } from '../../../packages/domain/package-scope';
 
 /**
  * ID-AUTO-1 final corrective — documentary evidence of a Documentation Package.
@@ -30,6 +31,7 @@ export const SCHEME_FILE_REQUIRED_MESSAGE = 'Для предъявления з�
 export const METHOD_REQUIRED_MESSAGE = 'Сначала выберите способ подготовки АОСР по пакету: «АОСР формируются в Core» или «АОСР формируются вне Core»';
 
 /**
+ * (First rule: the package must have an explicit production scope.)
  * The forward gate for the two PTO actions that depend on the documentation route — moving a package to PRESENTED and recording the
  * customer-accepted quantity. One process, an optional tool:
  *   - no declared method  -> blocked (never inferred: "no AOSR" does not mean "outside Core"); the package stays readable;
@@ -39,6 +41,7 @@ export const METHOD_REQUIRED_MESSAGE = 'Сначала выберите спос
  * Returns a business message, or null when the action may proceed.
  */
 export async function forwardGateViolation(c: any, tenantId: string, packageId: string): Promise<string | null> {
+    if (!(await one(c, 'SELECT 1 AS x FROM documentation_package_portions WHERE tenant_id=$1 AND documentation_package_id=$2 LIMIT 1', [tenantId, packageId]))) return SCOPE_NOT_SELECTED_MESSAGE; // an unscoped package never goes forward
     const declared = await currentAosrMethod(c, tenantId, packageId);
     if (!declared) return METHOD_REQUIRED_MESSAGE;
     if (declared.method === 'CORE') {

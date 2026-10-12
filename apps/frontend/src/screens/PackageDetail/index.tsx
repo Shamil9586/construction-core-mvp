@@ -139,7 +139,8 @@ function LinkPortionForm({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  if (availablePortions.length === 0) return null;
+  if (availablePortions.length === 0)
+    return <span className={[styles.empty, typeClass('body')].join(' ')}>Нет свободных участков: все доступные участки уже включены в активные пакеты ИД.</span>;
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -502,6 +503,40 @@ export function PackageDetail({
         }
       />
 
+      <section className={styles.section} aria-label="Пакет">
+        <dl className={styles.identityGrid}>
+          <div className={styles.identityRow}>
+            <dt className={[styles.sectionLabel, typeClass('label')].join(' ')}>Работа</dt>
+            <dd className={typeClass('body-strong')}>{viewModel.identity.workName}</dd>
+          </div>
+          <div className={styles.identityRow}>
+            <dt className={[styles.sectionLabel, typeClass('label')].join(' ')}>Участок</dt>
+            <dd className={[viewModel.identity.scopeMissing ? styles.errorText : '', typeClass('body-strong')].join(' ')}>{viewModel.identity.scopeText}</dd>
+          </div>
+          <div className={styles.identityRow}>
+            <dt className={[styles.sectionLabel, typeClass('label')].join(' ')}>Текущий объём</dt>
+            <dd className={typeClass('body-strong')}>
+              {viewModel.identity.quantityText ?? '—'}
+              {viewModel.identity.quantitySourceText ? <span className={[styles.secondary, typeClass('body')].join(' ')}> · {viewModel.identity.quantitySourceText}</span> : null}
+            </dd>
+          </div>
+          <div className={styles.identityRow}>
+            <dt className={[styles.sectionLabel, typeClass('label')].join(' ')}>АОСР</dt>
+            <dd className={typeClass('body-strong')}>{viewModel.identity.methodText}</dd>
+          </div>
+          <div className={styles.identityRow}>
+            <dt className={[styles.sectionLabel, typeClass('label')].join(' ')}>Ответственный ПТО</dt>
+            <dd className={typeClass('body-strong')}>{viewModel.identity.responsible}</dd>
+          </div>
+        </dl>
+        <span className={[styles.secondary, typeClass('label')].join(' ')}>{viewModel.identity.createdText}</span>
+        {viewModel.identity.scopeMissing ? (
+          <span className={[styles.errorText, typeClass('body')].join(' ')}>
+            Участок не выбран: пакет нельзя продвигать дальше, пока не выбран участок производства (его можно добавить ниже).
+          </span>
+        ) : null}
+      </section>
+
       <section className={styles.section}>
         <span className={[styles.sectionLabel, typeClass('label')].join(' ')}>Участки</span>
         {viewModel.portions.length > 0 ? (
@@ -509,11 +544,12 @@ export function PackageDetail({
             {viewModel.portions.map((portion) => (
               <li key={portion.id} className={typeClass('body')}>
                 {portion.label}
+                {portion.quantityText ? <span className={styles.secondary}> · {portion.quantityText}</span> : null}
               </li>
             ))}
           </ul>
         ) : (
-          <span className={[styles.empty, typeClass('body')].join(' ')}>Участки ещё не привязаны</span>
+          <span className={[styles.empty, typeClass('body')].join(' ')}>Участок не выбран</span>
         )}
         {actions && viewModel.contentEditable ? (
           <LinkPortionForm availablePortions={viewModel.availablePortions} onSubmit={actions.onLinkPortion} />

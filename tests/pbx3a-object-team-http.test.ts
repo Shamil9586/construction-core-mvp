@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { scopePortionFor } from './helpers/package-scope';
 import assert from 'node:assert/strict';
 import { makeUser, tokenFor, orgExpectation } from './helpers/pbx3-fixtures';
 
@@ -88,7 +89,7 @@ test('PBX-3A acceptance: Kuznetsov leaves; lead replacement alone keeps members;
     // PILOT-W01 UI03: the head hands the work off; the assigned engineer creates the package.
     await h.req(`works/${objs[2].work.id}/pto-assignment`, { assigneeUserId: akhmetov.id });
     await h.as(akhmetov);
-    const pkgBefore = await h.req('documentation-packages', { objectWorkId: objs[2].work.id, responsibleUserId: akhmetov.id });
+    const pkgBefore = await h.req('documentation-packages', { objectWorkId: objs[2].work.id, quantityPortionIds: [await scopePortionFor(objs[2].work.id)], responsibleUserId: akhmetov.id });
     assert.equal(pkgBefore.responsibleUserId, akhmetov.id);
 
     // ---- Kuznetsov leaves: lead replacement ALONE ----
@@ -380,7 +381,7 @@ test('PBX-3A PTO object scope: PTO/PTO_HEAD operate only on assigned objects; pa
     await h.req(`objects/${A.o.id}/function-team/pto/lead`, { leadUserId: head.id });
     await h.req(`objects/${B.o.id}/function-team/pto/lead`, { leadUserId: notLead.id });
     await h.req('function-teams/pto/redistribute', { reason: 'seed', memberAdds: [{ objectId: A.o.id, memberUserId: eng.id }] });
-    const pkg = (_: string, work: any, resp: any) => h.raw('documentation-packages', { objectWorkId: work.id, responsibleUserId: resp.id });
+    const pkg = async (_: string, work: any, resp: any) => h.raw('documentation-packages', { objectWorkId: work.id, quantityPortionIds: [await scopePortionFor(work.id)], responsibleUserId: resp.id });
     const handoff = (work: any, who: any) => h.raw(`works/${work.id}/pto-assignment`, { assigneeUserId: who.id });
     // head: leads A only (PILOT-W01 UI03: the head hands off, the assigned engineer creates the package)
     await h.as(head);
@@ -390,7 +391,7 @@ test('PBX-3A PTO object scope: PTO/PTO_HEAD operate only on assigned objects; pa
     assert.equal((await pkg('', A.work, eng)).status, 403, 'PTO_HEAD does not use the engineer create-package path');
     // engineer: member of A only
     await h.as(eng);
-    const p = await h.req('documentation-packages', { objectWorkId: A.work.id, responsibleUserId: eng.id });
+    const p = await h.req('documentation-packages', { objectWorkId: A.work.id, quantityPortionIds: [await scopePortionFor(A.work.id)], responsibleUserId: eng.id });
     assert.equal((await pkg('', B.work, eng)).status, 403);
     assert.equal((await h.raw(`documentation-packages/${p.id}/status`, { status: 'PREPARING', version: p.version })).status, 201);
     await h.as(stranger);
@@ -409,7 +410,7 @@ test('PBX-3A PTO object scope: PTO/PTO_HEAD operate only on assigned objects; pa
     assert.equal((await h.raw('documentation-packages', { objectWorkId: B.work.id, responsibleUserId: eng.id })).status, 403);
     assert.equal((await h.raw('documentation-packages', { objectWorkId: B.work.id, responsibleUserId: notLead.id })).status, 403);
     assert.equal((await h.raw('documentation-packages', { objectWorkId: A.work.id, responsibleUserId: stranger.id })).status, 403);
-    assert.equal((await h.raw('documentation-packages', { objectWorkId: A.work.id, responsibleUserId: eng.id })).status, 201);
+    assert.equal((await h.raw('documentation-packages', { objectWorkId: A.work.id, quantityPortionIds: [await scopePortionFor(A.work.id)], responsibleUserId: eng.id })).status, 201);
     // Edit responsible on an existing package: new responsible must also be current on the team
     await h.as(head);
     const edited = (r: any) => h.raw(`documentation-packages/${p.id}/edit`, r);

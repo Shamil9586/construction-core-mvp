@@ -65,3 +65,33 @@ PTO documentation                                 ├─→ file-backed executiv
 * The customer-accepted quantity is entered only after real customer acceptance (package PRESENTED + the forward gate above); document generation never triggers it.
 * DOCX / scheme downloads: authenticated binary; `Content-Disposition` carries both an ASCII `filename` and `filename*`; `Cache-Control:
   private, no-store`. The UI fetches the DOCX when the card opens and renders a real `<a href=blob: download>` (native user click).
+
+## Package scope, duplicate prevention and card clarity (migration 022)
+
+A Documentation Package states **which production scope it documents**: its Work plus at least one Quantity Portion of that Work
+(`documentation_package_portions`). Nothing is inferred and nothing is faked — no synthetic Work, execution unit or portion.
+
+* **Explicit scope.** `POST /documentation-packages` requires `quantityPortionIds` (≥ 1) and an `idempotencyKey`. A single eligible portion may be
+  preselected by the UI but is still sent and persisted. Authorization/404 checks run first; the scope check follows (`service.ts`).
+* **No overlap.** A portion may belong to at most ONE package; a Work may have several packages as long as their portions differ. The lifecycle has
+  no cancelled/archived status, so every package is active; the day an archive state exists it is excluded in `isPackageActive`
+  (`packages/domain/package-scope.ts`) and in the trigger's `EXISTS`. Refusal text: «Этот участок уже включён в активный пакет исполнительной документации.»
+  Three layers: the service check (`overlappingClaims`), a `FOR UPDATE` lock on the Work row that serialises create/link, and the
+  `documentation_package_portions_no_overlap` trigger (per-portion advisory lock) as the database backstop for writers that bypass the service.
+  The trigger fires on INSERT only — historical rows that already overlap are neither rewritten nor invalidated.
+  Reusing one portion across several AOSRs *inside* one package (`aosr_portion_links`) is a different relation and stays allowed.
+* **Idempotency.** `DOC_PACKAGE_CREATE` is claimed per `(user, idempotencyKey)` with the sorted portion ids as payload: a double click / retry returns the
+  same package; the same key with a different scope is refused; six parallel creations of one portion create exactly one package.
+* **Historical unscoped packages** stay readable and are shown as «Участок не выбран». They cannot move to PREPARING / READY_FOR_PRESENTATION / PRESENTED,
+  register customer acceptance or record the customer quantity (`forwardGateViolation` starts with the scope check) until a portion is linked. Completed
+  history (ACCEPTED_BY_CUSTOMER) is not touched; the way back (RETURNED → CORRECTING) and the link endpoint remain available.
+* **Card.** The snapshot's `documentationPackages` rows carry a backend-derived identity: `workName`, `createdByName`, `aosrMethod` (null = «Способ подготовки
+  АОСР не выбран», never read as external) and `scope` (zone summary + the CURRENT quantity following the existing provenance: customer-accepted → Internal SC →
+  RP fact; no history is rendered). Absent creator → «Создатель не зафиксирован».
+* **Create form.** Offers only portions no package claims; with none left: «Все доступные участки уже включены в активные пакеты ИД.»
+
+### Read-only inspection of a Work's packages
+
+`DATABASE_URL=… npx tsx scripts/inspect-work-packages.ts --work-id <uuid>` (or `--object-code … --work-name …`, `--empty-documents`) opens one
+`BEGIN READ ONLY` transaction and classifies packages: A main, B external verification, C unscoped DRAFT leftover (nothing built on it), D unexpected,
+plus document shells without title and version. It decides nothing and changes nothing.

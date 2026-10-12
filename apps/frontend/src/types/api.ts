@@ -522,6 +522,37 @@ export interface DocumentationPackage extends Versioned {
   /** Joined display name for `responsibleUserId` — there is no `users` collection on `Snapshot` to resolve it against client-side. */
   responsible: string;
   createdBy: Uuid;
+  /**
+   * Package identity for its card — all derived by the backend from the existing model, never client-side: the Work's business name,
+   * who created the package, how its AOSRs are prepared (null = never declared; NOT the same as outside Core) and its production scope.
+   */
+  workName: string | null;
+  createdByName: string | null;
+  aosrMethod: DocumentationAosrMethod | null;
+  scope: PackageScope;
+}
+
+/** `«АОСР формируются в Core»` / `«АОСР формируются вне Core»` as persisted for the package. */
+export type DocumentationAosrMethod = 'CORE' | 'EXTERNAL';
+export type PackageQuantitySource = 'CUSTOMER_ACCEPTED' | 'INTERNAL_SC' | 'RP_FACT';
+
+/** One Quantity Portion a package covers, with its meaningful zone name and CURRENT quantity (never the RP/SC/customer history). */
+export interface PackageScopePortion {
+  id: Uuid;
+  label: string;
+  zone: string;
+  unit: string;
+  plannedQuantity: Numeric | null;
+  currentQuantity: Numeric | null;
+  quantitySource: PackageQuantitySource | null;
+}
+
+/** The production scope of a package: its portions, a concise zone summary and the current business quantity of the scope. */
+export interface PackageScope {
+  hasScope: boolean;
+  portions: PackageScopePortion[];
+  zoneSummary: string | null;
+  currentQuantity: { quantity: Numeric; unit: string; source: PackageQuantitySource } | null;
 }
 
 /** F8.2 — Package <-> Quantity Portion relation. Many-to-many: a package may cover several portions, and nothing forbids a portion being referenced by more than one package. */

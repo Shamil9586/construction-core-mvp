@@ -40,7 +40,8 @@ export const portionInspectionRequestDto = z.object({ inspectionType: z.enum(['I
 export const inspectionAcceptDto = z.object({ version, comment: text, quantity: qty.optional() }).strict();
 // F8.2 PTO / Executive Documentation Foundation.
 // PILOT-W01 UI03: responsibleUserId is optional — the responsible engineer is derived server-side from the persisted PTO work assignment; a client-sent value must match it exactly.
-export const documentationPackageDto = z.object({ objectWorkId: uuid, responsibleUserId: uuid.optional() }).strict();
+// quantityPortionIds / idempotencyKey: scope is validated by the service AFTER authorization (so a forbidden caller still gets 403, not a 400 about scope).
+export const documentationPackageDto = z.object({ objectWorkId: uuid, responsibleUserId: uuid.optional(), quantityPortionIds: z.array(uuid).max(50).optional(), idempotencyKey: uuid.optional() }).strict();
 export const ptoWorkAssignmentDto = z.object({ assigneeUserId: uuid }).strict();
 export const documentationPackageEditDto = z.object({ responsibleUserId: uuid, version }).strict();
 export const documentationPackagePortionDto = z.object({ quantityPortionId: uuid }).strict();

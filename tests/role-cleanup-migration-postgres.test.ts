@@ -165,7 +165,7 @@ test('017 via the real runner on a fresh database: full chain applies and re-run
   try {
     await migrate();
     await migrate();
-    assert.equal((await client.query('SELECT max(version)::int v FROM schema_migrations')).rows[0].v, 21); // head is now 021 (ID-AUTO-1 AOSR method, after 020 AOSR foundation); 017's effects are asserted below
+    assert.equal((await client.query('SELECT max(version)::int v FROM schema_migrations')).rows[0].v, 22); // head is now 022 (package scope no-overlap, after 021 AOSR method / 020 AOSR foundation); 017's effects are asserted below
     const cols = await riskColumns(client);
     assert.ok(cols.includes('escalate_deputy_days'));
     assert.equal(cols.includes('escalate_technical_days'), false);

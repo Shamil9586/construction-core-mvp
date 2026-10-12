@@ -1,4 +1,5 @@
 import { test } from 'node:test';
+import { scopePortionFor } from './helpers/package-scope';
 import assert from 'node:assert/strict';
 import { handoffWorkToPto } from './helpers/pbx3-fixtures';
 
@@ -78,11 +79,12 @@ test('F8.2 HTTP: full round trip — PTO creates a package, links portions, crea
 
     const pto = await login('PTO');
     await handoffWorkToPto(work.id);
-    const pkg = await req('documentation-packages', { objectWorkId: work.id, responsibleUserId: pto.id });
+    const pkg = await req('documentation-packages', { objectWorkId: work.id, quantityPortionIds: [portion.id], responsibleUserId: pto.id });
     assert.equal(pkg.status, 'DRAFT');
     assert.equal(pkg.objectWorkId, work.id);
 
-    const link = await req(`documentation-packages/${pkg.id}/portions`, { quantityPortionId: portion.id });
+    // The scope is persisted with the package itself (no separate link call is needed for the creation scope).
+    const link = (await req('snapshot')).documentationPackagePortions.find((l: any) => l.documentationPackageId === pkg.id);
     assert.equal(link.quantityPortionId, portion.id);
 
     const doc = await req(`documentation-packages/${pkg.id}/documents`, { type: 'AOSR' });
@@ -138,7 +140,7 @@ test('F8.2 HTTP: SDO has no F8.2 access at all — snapshot omits it, the dedica
     const work = await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: pm.id, name: 'Работа', unit: 'м²', plannedQuantity: 100, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '20000' });
     const pto = await login('PTO');
     await handoffWorkToPto(work.id);
-    await req('documentation-packages', { objectWorkId: work.id, responsibleUserId: pto.id });
+    await req('documentation-packages', { objectWorkId: work.id, quantityPortionIds: [await scopePortionFor(work.id)], responsibleUserId: pto.id });
 
     await login('SDO');
     const snapshot = await req('snapshot');
@@ -174,7 +176,7 @@ test('F8.2 HTTP: an invalid document type is rejected by the DTO, before it ever
     const work = await req('works', { objectId: o.id, workTypeId: dict.workTypes[0].id, contractorId: contractors[0].id, responsibleUserId: pm.id, name: 'Работа', unit: 'м²', plannedQuantity: 100, plannedStartDate: dt(-5), plannedFinishDate: dt(10), estimatedCost: '20000' });
     const pto = await login('PTO');
     await handoffWorkToPto(work.id);
-    const pkg = await req('documentation-packages', { objectWorkId: work.id, responsibleUserId: pto.id });
+    const pkg = await req('documentation-packages', { objectWorkId: work.id, quantityPortionIds: [await scopePortionFor(work.id)], responsibleUserId: pto.id });
     await req(`documentation-packages/${pkg.id}/documents`, { type: 'GENERAL_WORK_LOG' }, 400);
   } finally {
     await app.close();

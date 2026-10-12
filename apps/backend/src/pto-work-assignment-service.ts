@@ -3,6 +3,7 @@ import { pool, transaction, one, rows, insert } from './db';
 import { Actor, requirePermission, scoped, objectAccess, workAccess, effectivePtoWorkAssignment, audit, ensure } from './security';
 import { Permission as P, canAccessDocumentation } from '../../../packages/domain';
 import { lockTeamScope } from './team-service';
+import { eligiblePortions } from './documentation-scope';
 
 /**
  * PILOT-W01 UI03 — PTO work handoff («Передать в работу»).
@@ -45,6 +46,8 @@ export class PtoWorkAssignmentService {
         const pkgs = await one(pool, 'SELECT count(*)::int AS n FROM documentation_packages WHERE tenant_id=$1 AND object_work_id=$2', [a.tenantId, workId]);
         const canAssign = this.canAssign(a, elig.head?.id ?? null);
         const packageCount: number = pkgs.n;
+        // What a NEW package may be created on: the Work's portions that no package claims yet (the backend re-checks at creation).
+        const free = await eligiblePortions(pool, a.tenantId, workId);
         return {
             objectWorkId: workId,
             objectId: w.objectId,
@@ -56,6 +59,7 @@ export class PtoWorkAssignmentService {
             // Reassignment is only offered before any package exists (see assign()).
             canReassign: canAssign && !!current && packageCount === 0,
             canCreatePackage: !!current && (a.role === 'ADMIN' || (a.role === 'PTO' && current.assigneeUserId === a.id)),
+            packageScope: { totalPortions: free.totalPortions, eligiblePortions: free.eligible },
         };
     }
 

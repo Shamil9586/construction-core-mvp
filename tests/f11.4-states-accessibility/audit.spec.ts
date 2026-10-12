@@ -61,8 +61,16 @@ const works = [
   versioned('work-2', { ...workBase, objectId: 'obj-1', workTypeId: 'wt-3', name: LONG_WORK_NAME, unit: 'м³', plannedQuantity: '340.0000', actualQuantity: '180.0000', plannedStartDate: '2025-02-01', plannedFinishDate: '2025-05-01', actualStartDate: '2025-02-02', actualFinishDate: null, status: 'ACTIVE', categoryId: 'cat-1', lastReportedAt: '2025-04-28T09:00:00.000Z', plannedProgress: 100, actualProgress: 53, variance: -47, delayDays: 8, scheduleStatus: 'RED', accepted: false, blockers: ['Не подтверждена поставка материала'], stale: false }),
 ];
 
-const pkg1 = versioned('pkg-1', { objectId: 'obj-1', objectWorkId: 'work-2', status: 'PREPARING', responsibleUserId: 'u-pto', responsible: 'Ольга Морозова', createdBy: 'u-pto' });
-const pkg2 = versioned('pkg-2', { objectId: 'obj-1', objectWorkId: 'work-1', status: 'PREPARING', responsibleUserId: 'u-pto', responsible: 'Ольга Морозова', createdBy: 'u-pto' });
+/** Package identity read model (backend-derived); validateSnapshot requires it on every package. */
+const PACKAGE_IDENTITY = {
+  workName: null,
+  createdByName: null,
+  aosrMethod: null,
+  scope: { hasScope: false, portions: [], zoneSummary: null, currentQuantity: null },
+};
+
+const pkg1 = versioned('pkg-1', { objectId: 'obj-1', objectWorkId: 'work-2', status: 'PREPARING', responsibleUserId: 'u-pto', responsible: 'Ольга Морозова', createdBy: 'u-pto', ...PACKAGE_IDENTITY });
+const pkg2 = versioned('pkg-2', { objectId: 'obj-1', objectWorkId: 'work-1', status: 'PREPARING', responsibleUserId: 'u-pto', responsible: 'Ольга Морозова', createdBy: 'u-pto', ...PACKAGE_IDENTITY });
 
 const documentationAttentionQueue = [
   { objectId: 'obj-1', objectName: LONG_OBJECT_NAME, objectWorkId: 'work-2', workName: LONG_WORK_NAME, level: 'RED' as const, reason: RED_REASON, responsible: 'Ольга Морозова', packageId: 'pkg-1' },

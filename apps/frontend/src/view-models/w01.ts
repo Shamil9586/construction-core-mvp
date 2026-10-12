@@ -75,6 +75,7 @@ import {
   workStatusPresentation,
   type StatusPresentation,
 } from './status';
+import { buildPackageIdentity, type PackageIdentityViewModel } from './packageIdentity';
 
 export type WorkConfirmation =
   | { kind: 'NotSubmitted' }
@@ -338,6 +339,8 @@ export interface W01DocumentationPackageViewModel {
   status: StatusPresentation;
   responsible: string;
   coveredPortionCount: number;
+  /** The package card's own answers: Work, scope, current quantity, AOSR method, responsible, creator (see packageIdentity.ts). */
+  identity: PackageIdentityViewModel;
 }
 
 function buildW01DocumentationPackages(
@@ -352,6 +355,7 @@ function buildW01DocumentationPackages(
       status: documentationPackageStatusPresentation(pkg.status),
       responsible: pkg.responsible,
       coveredPortionCount: documentationPackagePortions.filter((link) => link.documentationPackageId === pkg.id).length,
+      identity: buildPackageIdentity(pkg, work.name),
     }));
 }
 

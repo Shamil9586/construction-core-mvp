@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { buildPackageScope } from '../../../packages/domain/package-scope';
 import Decimal from 'decimal.js';
 import { pool, rows, one } from './db';
 import { Actor, requirePermission, objectAccess, effectivePtoAssignedWork } from './security';
@@ -340,6 +341,14 @@ export class ReadService {
             return { objects: objectList.map(({ contractValue, closed, potential, ...o }) => o), works: enriched.map(({ estimatedCost, closed, financial, ...w }) => w), contractors, dependencies: dependencies.filter(d => allowed.has(d.successorWorkId) && allowed.has(d.predecessorWorkId)) };
         }
         const documentationVisible = canAccessDocumentation(a.role);
+        // Package identity for the cards (what / for which scope / how much / how AOSR is prepared / who created it), read from the existing
+        // model: the Work, the package's Quantity Portions with their accepted-quantity provenance, the persisted AOSR method, created_by.
+        const aosrMethodRows = documentationVisible && documentationPackageIds.length ? await rows(pool, 'SELECT DISTINCT ON (documentation_package_id) documentation_package_id,method FROM documentation_package_aosr_methods WHERE tenant_id=$1 AND documentation_package_id=ANY($2::uuid[]) ORDER BY documentation_package_id,chosen_at DESC', [t, documentationPackageIds]) : [];
+        const creatorRows = documentationVisible && documentationPackages.length ? await rows(pool, 'SELECT id,name FROM users WHERE tenant_id=$1 AND id=ANY($2::uuid[])', [t, [...new Set(documentationPackages.map(p => p.createdBy))]]) : [];
+        const documentationPackagesView = documentationVisible ? documentationPackages.map(p => {
+            const scope = buildPackageScope(documentationPackagePortions.filter(l => l.documentationPackageId === p.id).flatMap(l => { const portion = portionsWithStatus.find(x => x.id === l.quantityPortionId); const unit = portion && executionUnitsWithTotals.find(u => u.id === portion.executionUnitId); return portion && unit ? [{ id: portion.id, label: portion.label, location: unit.location, unit: unit.unit, plannedQuantity: portion.plannedQuantity, rpFact: portion.rpFactQuantity, internalSc: portion.internalScConfirmedQuantity, customerAccepted: portion.customerScConfirmedQuantity }] : []; }));
+            return { ...p, workName: works.find(w => w.id === p.objectWorkId)?.name ?? null, createdByName: creatorRows.find(u => u.id === p.createdBy)?.name ?? null, aosrMethod: aosrMethodRows.find(m => m.documentationPackageId === p.id)?.method ?? null, scope };
+        }) : undefined;
         // F8.3: SDO Case state is read-only outside /sdo for every internal
         // role reaching this point, including SDO itself (which still has
         // no F8.2 access — documentationVisible stays false for it) and PTO
@@ -349,6 +358,6 @@ export class ReadService {
         // — every remaining role sees it unconditionally. Full operational
         // actions stay SDO/ADMIN-only (SDO_CASE_MANAGE, service.ts)
         // regardless of this read visibility.
-        return { objects: objectList, works: enriched, inspections, issues, packages, documents, sdo, closings, contractors, dependencies, dashboard, monthlyPlans: monthly, risk, photos, executionUnits: executionUnitsWithTotals, executionUnitLayers, portions: portionsWithStatus, portionConfirmations, documentationPackages: documentationVisible ? documentationPackages : undefined, documentationPackagePortions: documentationVisible ? documentationPackagePortions : undefined, documentationDocuments: documentationVisible ? documentationDocuments : undefined, documentationVersions: documentationVisible ? documentationVersions : undefined, documentationStatusHistory: documentationVisible ? documentationStatusHistory : undefined, documentationAttentionQueue: documentationVisible ? documentationAttentionQueue : undefined, documentationCustomerAcceptances: documentationVisible ? documentationCustomerAcceptances : undefined, documentationCustomerAcceptanceVersions: documentationVisible ? documentationCustomerAcceptanceVersions : undefined, sdoClosingCases, sdoClosingStatusHistory, sdoClosingHandoffHistory, sdoClosingAmountHistory, sdoClosingPortionAllocations, sdoClosingPortionAllocationHistory, sdoPackageReadiness };
+        return { objects: objectList, works: enriched, inspections, issues, packages, documents, sdo, closings, contractors, dependencies, dashboard, monthlyPlans: monthly, risk, photos, executionUnits: executionUnitsWithTotals, executionUnitLayers, portions: portionsWithStatus, portionConfirmations, documentationPackages: documentationPackagesView, documentationPackagePortions: documentationVisible ? documentationPackagePortions : undefined, documentationDocuments: documentationVisible ? documentationDocuments : undefined, documentationVersions: documentationVisible ? documentationVersions : undefined, documentationStatusHistory: documentationVisible ? documentationStatusHistory : undefined, documentationAttentionQueue: documentationVisible ? documentationAttentionQueue : undefined, documentationCustomerAcceptances: documentationVisible ? documentationCustomerAcceptances : undefined, documentationCustomerAcceptanceVersions: documentationVisible ? documentationCustomerAcceptanceVersions : undefined, sdoClosingCases, sdoClosingStatusHistory, sdoClosingHandoffHistory, sdoClosingAmountHistory, sdoClosingPortionAllocations, sdoClosingPortionAllocationHistory, sdoPackageReadiness };
     }
 }

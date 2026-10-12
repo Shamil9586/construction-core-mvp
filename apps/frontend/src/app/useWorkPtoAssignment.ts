@@ -23,6 +23,9 @@ export function isPtoWorkAssignmentView(value: unknown, expectedWorkId: string, 
   if (!Array.isArray(v.eligible) || !v.eligible.every(isIdName)) return false;
   if (typeof v.canAssign !== 'boolean' || typeof v.canReassign !== 'boolean' || typeof v.canCreatePackage !== 'boolean') return false;
   if (typeof v.packageCount !== 'number' || !Number.isInteger(v.packageCount) || v.packageCount < 0) return false;
+  const scope = v.packageScope as Record<string, unknown> | undefined;
+  if (typeof scope !== 'object' || scope === null || !Array.isArray(scope.eligiblePortions) || typeof scope.totalPortions !== 'number') return false;
+  if (!scope.eligiblePortions.every((p) => typeof p === 'object' && p !== null && isNonEmptyString((p as Record<string, unknown>).id) && typeof (p as Record<string, unknown>).zone === 'string')) return false;
   if (!('head' in v) || (v.head !== null && !isIdName(v.head))) return false;
   if (!('assignment' in v)) return false;
   if (v.assignment !== null) {

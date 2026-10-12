@@ -60,6 +60,10 @@ function validSnapshot(): any {
         status: 'DRAFT',
         responsibleUserId: 'pto-1',
         responsible: 'Ольга Морозова',
+        workName: 'Штукатурка стен',
+        createdByName: 'Ольга Морозова',
+        aosrMethod: null,
+        scope: { hasScope: true, portions: [], zoneSummary: '1 этаж', currentQuantity: null },
       },
     ],
     documentationPackagePortions: [
@@ -212,4 +216,16 @@ test('validateSnapshot: all five F8.2 collections entirely absent from the respo
   delete snapshot.documentationVersions;
   delete snapshot.documentationStatusHistory;
   assert.doesNotThrow(() => validateSnapshot(snapshot));
+});
+
+test('validateSnapshot: a package without its scope read model, or with an invented AOSR method, is rejected — the card never guesses', () => {
+  const missingScope = validSnapshot();
+  delete missingScope.documentationPackages[0].scope;
+  assert.throws(() => validateSnapshot(missingScope));
+  const badMethod = validSnapshot();
+  badMethod.documentationPackages[0].aosrMethod = 'MANUAL';
+  assert.throws(() => validateSnapshot(badMethod));
+  const unset = validSnapshot();
+  unset.documentationPackages[0].aosrMethod = null; // METHOD_UNSET is a legitimate, explicit state
+  assert.doesNotThrow(() => validateSnapshot(unset));
 });

@@ -289,6 +289,10 @@ export function validateSnapshot(value: unknown): Snapshot {
       if (!hasStringField(pkg, 'responsibleUserId')) fail();
       if (!hasStringField(pkg, 'responsible')) fail();
       if (!hasDocumentationPackageStatusField(pkg, 'status')) fail();
+      // Package identity read model (backend-derived): a present package carries its scope; a missing/odd shape is not rendered as a guess.
+      const scope = pkg.scope as Record<string, unknown> | undefined;
+      if (typeof scope !== 'object' || scope === null || typeof scope.hasScope !== 'boolean' || !Array.isArray(scope.portions)) fail();
+      if (pkg.aosrMethod !== null && pkg.aosrMethod !== 'CORE' && pkg.aosrMethod !== 'EXTERNAL') fail();
     }
   }
 

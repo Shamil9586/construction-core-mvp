@@ -130,7 +130,7 @@ test('HTTP (mock auth): heads behave like their department role; legacy POST /us
       // PILOT-W01 UI03: the head hands the work off; only the assigned engineer creates the package (the head's own create attempt is refused).
       await (await import('./helpers/pbx3-fixtures')).handoffWorkToPto(work.id);
       assert.equal((await call('POST', 'documentation-packages', tokens.PTO_HEAD, { objectWorkId: work.id, responsibleUserId: users.PTO_HEAD.id })).status, 403, 'PTO_HEAD is not the engineer create path');
-      const pkg = await call('POST', 'documentation-packages', tokens.PTO, { objectWorkId: work.id, responsibleUserId: users.PTO.id });
+      const pkg = await call('POST', 'documentation-packages', tokens.PTO, { objectWorkId: work.id, quantityPortionIds: [await (await import('./helpers/package-scope')).scopePortionFor(work.id)], responsibleUserId: users.PTO.id });
       assert.equal(pkg.status, 201, role + ' package (created by the assigned engineer): ' + JSON.stringify(pkg.data));
       const doc = await call('POST', `documentation-packages/${pkg.data.id}/documents`, tokens[role], { type: 'AOSR' });
       assert.equal(doc.status, 201, role);
