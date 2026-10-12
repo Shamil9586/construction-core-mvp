@@ -81,7 +81,7 @@ test('F12-SDO-03: handoff/return/status-change are already retry-safe via Packag
     const pto = await login('PTO');
     await handoffWorkToPto(work.id);
     let pkg = await req('documentation-packages', { objectWorkId: work.id, quantityPortionIds: [portion.id], responsibleUserId: pto.id });
-    const doc = await req(`documentation-packages/${pkg.id}/documents`, { type: 'AOSR' });
+    const doc = await req(`documentation-packages/${pkg.id}/documents`, { type: 'ACT_CERTIFICATE' });
     await req(`documentation-documents/${doc.id}/versions`, { storageProvider: 'NONE' });
     pkg = await req(`documentation-packages/${pkg.id}/status`, { status: 'PREPARING', version: pkg.version });
     pkg = await req(`documentation-packages/${pkg.id}/status`, { status: 'READY_FOR_PRESENTATION', version: pkg.version });

@@ -343,6 +343,20 @@ export interface W01DocumentationPackageViewModel {
   identity: PackageIdentityViewModel;
 }
 
+/** An archived package as W01's explicit «Показать архивные» list shows it — identity only, never an action. */
+export interface W01ArchivedPackageViewModel {
+  id: string;
+  /** The status the package had when it was archived (kept as history; archive is not a status). */
+  status: StatusPresentation;
+  identity: PackageIdentityViewModel;
+}
+
+function buildW01ArchivedPackages(work: Work, archived: DocumentationPackage[]): W01ArchivedPackageViewModel[] {
+  return archived
+    .filter((pkg) => pkg.objectWorkId === work.id)
+    .map((pkg) => ({ id: pkg.id, status: documentationPackageStatusPresentation(pkg.status), identity: buildPackageIdentity(pkg, work.name) }));
+}
+
 function buildW01DocumentationPackages(
   work: Work,
   documentationPackages: DocumentationPackage[],
@@ -423,6 +437,8 @@ export interface W01ViewModel {
   executionUnits: W01ExecutionUnitViewModel[];
   /** F8.2 — every Documentation Package covering this work; empty when none has been created yet. */
   documentationPackages: W01DocumentationPackageViewModel[];
+  /** Soft-archived packages of this work (secondary, explicit view only; never mixed into `documentationPackages`). */
+  archivedPackages: W01ArchivedPackageViewModel[];
   /** F8.3 — every SDO Case covering a Documentation Package of this work; empty when none has been handed off yet. Read-only (see `W01SdoCaseViewModel`'s own comment). */
   sdoClosingCases: W01SdoCaseViewModel[];
 }
@@ -436,6 +452,7 @@ export function buildW01ViewModel(
   documentationPackages: DocumentationPackage[] = [],
   documentationPackagePortions: DocumentationPackagePortion[] = [],
   sdoClosingCases: SdoClosingCase[] = [],
+  archivedDocumentationPackages: DocumentationPackage[] = [],
 ): W01ViewModel {
   const factReported = work.lastReportedAt !== null;
 
@@ -499,6 +516,7 @@ export function buildW01ViewModel(
     },
     executionUnits: buildW01ExecutionUnits(work, executionUnits, portions, inspections),
     documentationPackages: buildW01DocumentationPackages(work, documentationPackages, documentationPackagePortions),
+    archivedPackages: buildW01ArchivedPackages(work, archivedDocumentationPackages),
     sdoClosingCases: buildW01SdoCases(work, sdoClosingCases),
   };
 }

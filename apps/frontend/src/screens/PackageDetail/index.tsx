@@ -24,7 +24,12 @@ import styles from './PackageDetail.module.css';
  * (Decision 3).
  */
 
-const DOCUMENT_TYPES: DocumentationDocumentType[] = ['AOSR', 'ACT_CERTIFICATE', 'EXECUTIVE_SCHEME'];
+/**
+ * Types the generic «Создать документ» form may create as a bare slot. АОСР and executive schemes have dedicated flows (a generated
+ * Core AOSR; a scheme uploaded WITH its file) and are never offered as an empty shell — the backend refuses them too.
+ */
+export const GENERIC_DOCUMENT_TYPES: DocumentationDocumentType[] = ['ACT_CERTIFICATE'];
+export const DEDICATED_DOCUMENT_FLOWS_TEXT = 'АОСР формируются, а исполнительные схемы загружаются в своих блоках выше — отдельно как пустой документ они не создаются.';
 const STORAGE_PROVIDERS: StorageProvider[] = ['NONE', 'EXTERNAL_REFERENCE'];
 
 export interface PackageDetailActionHandlers {
@@ -61,6 +66,11 @@ export interface PackageDetailActionHandlers {
    * is true; the backend re-checks (status, no SDO Case, role) regardless.
    */
   onReturnToCorrection?: (comment: string | undefined) => Promise<void>;
+  /**
+   * Soft archive — an obsolete / test package leaves the working set (never a delete, never a status). Offered only when the server says the
+   * package may be archived right now (`viewModel.identity.canArchive`) AND the actor may do it (the route omits this for anyone else).
+   */
+  onArchive?: (reason: string) => Promise<void>;
 }
 
 export interface PackageDetailProps {
@@ -74,8 +84,6 @@ export interface PackageDetailProps {
   actions?: PackageDetailActionHandlers;
   /** ID-AUTO-1 — the АОСР / accepted-quantity sections, built by the route container (data chain stays out of this screen). */
   aosrSection?: ReactNode;
-  /** Document types that have their own one-step flow (see CreateDocumentForm) and must not be offered as a bare shell. */
-  hiddenDocumentTypes?: DocumentationDocumentType[];
   className?: string;
 }
 
@@ -332,8 +340,8 @@ function ReturnToCorrectionControl({ onSubmit }: { onSubmit: (comment: string | 
  * default option is the first type and nothing else is asked). Types that have their own one-step flow are therefore not offered here:
  * a Core AOSR is created by the AOSR section / generation, an executive scheme only together with its file.
  */
-function CreateDocumentForm({ onSubmit, hiddenTypes }: { onSubmit: (type: DocumentationDocumentType) => Promise<void>; hiddenTypes: DocumentationDocumentType[] }) {
-  const options = DOCUMENT_TYPES.filter((option) => !hiddenTypes.includes(option));
+function CreateDocumentForm({ onSubmit }: { onSubmit: (type: DocumentationDocumentType) => Promise<void> }) {
+  const options = GENERIC_DOCUMENT_TYPES;
   const [type, setType] = useState<DocumentationDocumentType>(options[0] ?? 'ACT_CERTIFICATE');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -353,23 +361,28 @@ function CreateDocumentForm({ onSubmit, hiddenTypes }: { onSubmit: (type: Docume
 
   return (
     <form className={styles.inlineForm} onSubmit={handleSubmit}>
-      <select
-        className={styles.input}
-        value={type}
-        onChange={(event) => setType(event.target.value as DocumentationDocumentType)}
-        disabled={pending}
-        aria-label="Тип документа"
-      >
-        {options.map((option) => (
-          <option key={option} value={option}>
-            {documentTypeLabel(option)}
-          </option>
-        ))}
-      </select>
+      {options.length > 1 ? (
+        <select
+          className={styles.input}
+          value={type}
+          onChange={(event) => setType(event.target.value as DocumentationDocumentType)}
+          disabled={pending}
+          aria-label="Тип документа"
+        >
+          {options.map((option) => (
+            <option key={option} value={option}>
+              {documentTypeLabel(option)}
+            </option>
+          ))}
+        </select>
+      ) : (
+        <span className={typeClass('body')}>{documentTypeLabel(options[0] ?? 'ACT_CERTIFICATE')}</span>
+      )}
       <button type="submit" className={styles.actionButton} disabled={pending}>
         {pending ? 'Создание…' : 'Создать документ'}
       </button>
       {error ? <span className={styles.errorText}>{error}</span> : null}
+      <span className={[styles.secondary, typeClass('body')].join(' ')}>{DEDICATED_DOCUMENT_FLOWS_TEXT}</span>
     </form>
   );
 }
@@ -459,6 +472,137 @@ function CreateVersionForm({
   );
 }
 
+/** The package card's answers (Work, scope, current quantity, AOSR method, responsible, creator) plus — for an archived package — who/when/why. */
+function PackageIdentitySection({ viewModel }: { viewModel: PackageDetailViewModel }) {
+  const { identity } = viewModel;
+  return (
+    <section className={styles.section} aria-label="Пакет">
+      {identity.archive ? (
+        <div className={styles.archivedBanner} role="note">
+          <span className={typeClass('body-strong')}>{identity.archive.badgeText}</span>
+          <span className={typeClass('body')}>{identity.archive.byText}</span>
+          <span className={typeClass('body')}>{identity.archive.reasonText}</span>
+          <span className={[styles.secondary, typeClass('body')].join(' ')}>
+            Пакет сохранён для аудита вместе с документами, способом АОСР, участками и историей. Новые действия по нему недоступны.
+          </span>
+        </div>
+      ) : null}
+      <dl className={styles.identityGrid}>
+        <div className={styles.identityRow}>
+          <dt className={[styles.sectionLabel, typeClass('label')].join(' ')}>Работа</dt>
+          <dd className={typeClass('body-strong')}>{identity.workName}</dd>
+        </div>
+        <div className={styles.identityRow}>
+          <dt className={[styles.sectionLabel, typeClass('label')].join(' ')}>Участок</dt>
+          <dd className={[identity.scopeMissing ? styles.errorText : '', typeClass('body-strong')].join(' ')}>{identity.scopeText}</dd>
+        </div>
+        <div className={styles.identityRow}>
+          <dt className={[styles.sectionLabel, typeClass('label')].join(' ')}>Текущий объём</dt>
+          <dd className={typeClass('body-strong')}>
+            {identity.quantityText ?? '—'}
+            {identity.quantitySourceText ? <span className={[styles.secondary, typeClass('body')].join(' ')}> · {identity.quantitySourceText}</span> : null}
+          </dd>
+        </div>
+        <div className={styles.identityRow}>
+          <dt className={[styles.sectionLabel, typeClass('label')].join(' ')}>АОСР</dt>
+          <dd className={typeClass('body-strong')}>{identity.methodText}</dd>
+        </div>
+        <div className={styles.identityRow}>
+          <dt className={[styles.sectionLabel, typeClass('label')].join(' ')}>Ответственный ПТО</dt>
+          <dd className={typeClass('body-strong')}>{identity.responsible}</dd>
+        </div>
+      </dl>
+      <span className={[styles.secondary, typeClass('label')].join(' ')}>{identity.createdText}</span>
+      {identity.scopeMissing && !identity.archive ? (
+        <span className={[styles.errorText, typeClass('body')].join(' ')}>
+          Участок не выбран: пакет нельзя продвигать дальше, пока не выбран участок производства (его можно добавить ниже).
+        </span>
+      ) : null}
+    </section>
+  );
+}
+
+export const ARCHIVE_REASON_PRESETS = ['Тестовый пакет', 'Создан ошибочно', 'Пакет больше не используется'] as const;
+
+/** «Архивировать пакет» — restrained: collapsed by default, a mandatory reason, and an explicit confirmation before anything happens. */
+function ArchivePackageControl({ onSubmit }: { onSubmit: (reason: string) => Promise<void> }) {
+  const [step, setStep] = useState<'closed' | 'form' | 'confirm'>('closed');
+  const [reason, setReason] = useState('');
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const trimmed = reason.trim();
+
+  async function handleConfirm() {
+    setPending(true);
+    setError(null);
+    try {
+      await onSubmit(trimmed);
+    } catch (submitError) {
+      setError(errorMessage(submitError));
+      setStep('form');
+    } finally {
+      setPending(false);
+    }
+  }
+
+  if (step === 'closed') {
+    return (
+      <button type="button" className={styles.archiveLink} onClick={() => setStep('form')}>
+        Архивировать пакет
+      </button>
+    );
+  }
+  return (
+    <div className={styles.archiveBox} role="group" aria-label="Архивирование пакета">
+      <span className={[styles.secondary, typeClass('body')].join(' ')}>
+        Пакет будет скрыт из рабочего списка и перестанет занимать участки. Удалить пакет нельзя: он и его история сохраняются.
+      </span>
+      {step === 'form' ? (
+        <>
+          <label className={typeClass('label')} htmlFor="archive-reason">Причина архивирования</label>
+          <input
+            id="archive-reason"
+            className={styles.input}
+            value={reason}
+            maxLength={500}
+            onChange={(event) => setReason(event.target.value)}
+            disabled={pending}
+            placeholder="Например: Тестовый пакет"
+          />
+          <div className={styles.inlineForm}>
+            {ARCHIVE_REASON_PRESETS.map((preset) => (
+              <button key={preset} type="button" className={styles.chipButton} onClick={() => setReason(preset)}>
+                {preset}
+              </button>
+            ))}
+          </div>
+          <div className={styles.inlineForm}>
+            <button type="button" className={styles.actionButton} disabled={trimmed.length === 0} onClick={() => setStep('confirm')}>
+              Продолжить
+            </button>
+            <button type="button" className={styles.chipButton} onClick={() => { setStep('closed'); setReason(''); setError(null); }}>
+              Отмена
+            </button>
+          </div>
+        </>
+      ) : (
+        <>
+          <span className={typeClass('body-strong')}>Архивировать пакет? Причина: «{trimmed}»</span>
+          <div className={styles.inlineForm}>
+            <button type="button" className={styles.actionButton} disabled={pending} onClick={handleConfirm}>
+              {pending ? 'Архивирование…' : 'Да, архивировать'}
+            </button>
+            <button type="button" className={styles.chipButton} disabled={pending} onClick={() => setStep('form')}>
+              Назад
+            </button>
+          </div>
+        </>
+      )}
+      {error ? <span className={styles.errorText}>{error}</span> : null}
+    </div>
+  );
+}
+
 export function PackageDetail({
   viewModel,
   sidebar,
@@ -468,7 +612,6 @@ export function PackageDetail({
   onSelectWork,
   actions,
   aosrSection,
-  hiddenDocumentTypes,
   className,
 }: PackageDetailProps) {
   return (
@@ -492,7 +635,8 @@ export function PackageDetail({
         actions={
           <div className={styles.headerActions}>
             <StatusBadge variant={viewModel.status.variant}>{viewModel.status.label}</StatusBadge>
-            {actions && viewModel.nextStatus && viewModel.nextStatusLabel ? (
+            {viewModel.identity.archive ? <StatusBadge variant="Neutral">{viewModel.identity.archive.badgeText}</StatusBadge> : null}
+            {actions && !viewModel.identity.archive && viewModel.nextStatus && viewModel.nextStatusLabel ? (
               <AdvanceStatusControl
                 nextStatus={viewModel.nextStatus}
                 nextStatusLabel={viewModel.nextStatusLabel}
@@ -503,39 +647,7 @@ export function PackageDetail({
         }
       />
 
-      <section className={styles.section} aria-label="Пакет">
-        <dl className={styles.identityGrid}>
-          <div className={styles.identityRow}>
-            <dt className={[styles.sectionLabel, typeClass('label')].join(' ')}>Работа</dt>
-            <dd className={typeClass('body-strong')}>{viewModel.identity.workName}</dd>
-          </div>
-          <div className={styles.identityRow}>
-            <dt className={[styles.sectionLabel, typeClass('label')].join(' ')}>Участок</dt>
-            <dd className={[viewModel.identity.scopeMissing ? styles.errorText : '', typeClass('body-strong')].join(' ')}>{viewModel.identity.scopeText}</dd>
-          </div>
-          <div className={styles.identityRow}>
-            <dt className={[styles.sectionLabel, typeClass('label')].join(' ')}>Текущий объём</dt>
-            <dd className={typeClass('body-strong')}>
-              {viewModel.identity.quantityText ?? '—'}
-              {viewModel.identity.quantitySourceText ? <span className={[styles.secondary, typeClass('body')].join(' ')}> · {viewModel.identity.quantitySourceText}</span> : null}
-            </dd>
-          </div>
-          <div className={styles.identityRow}>
-            <dt className={[styles.sectionLabel, typeClass('label')].join(' ')}>АОСР</dt>
-            <dd className={typeClass('body-strong')}>{viewModel.identity.methodText}</dd>
-          </div>
-          <div className={styles.identityRow}>
-            <dt className={[styles.sectionLabel, typeClass('label')].join(' ')}>Ответственный ПТО</dt>
-            <dd className={typeClass('body-strong')}>{viewModel.identity.responsible}</dd>
-          </div>
-        </dl>
-        <span className={[styles.secondary, typeClass('label')].join(' ')}>{viewModel.identity.createdText}</span>
-        {viewModel.identity.scopeMissing ? (
-          <span className={[styles.errorText, typeClass('body')].join(' ')}>
-            Участок не выбран: пакет нельзя продвигать дальше, пока не выбран участок производства (его можно добавить ниже).
-          </span>
-        ) : null}
-      </section>
+      <PackageIdentitySection viewModel={viewModel} />
 
       <section className={styles.section}>
         <span className={[styles.sectionLabel, typeClass('label')].join(' ')}>Участки</span>
@@ -551,94 +663,104 @@ export function PackageDetail({
         ) : (
           <span className={[styles.empty, typeClass('body')].join(' ')}>Участок не выбран</span>
         )}
-        {actions && viewModel.contentEditable ? (
+        {actions && viewModel.contentEditable && !viewModel.identity.archive ? (
           <LinkPortionForm availablePortions={viewModel.availablePortions} onSubmit={actions.onLinkPortion} />
         ) : null}
       </section>
 
-      {aosrSection}
+      {viewModel.identity.archive ? null : (
+        <>
+        {aosrSection}
 
-      <section className={styles.section}>
-        <span className={[styles.sectionLabel, typeClass('label')].join(' ')}>СДО / Закрытие</span>
-        <StatusBadge variant={viewModel.sdo.packageLocked ? 'Blocked' : viewModel.sdo.ready ? 'OnTrack' : 'Neutral'}>
-          {viewModel.sdo.packageLocked
-            ? 'Состав пакета заблокирован: передан в СДО'
-            : viewModel.sdo.ready
-              ? 'Готов к передаче в СДО'
-              : 'Не готов к передаче в СДО'}
-        </StatusBadge>
-        {!viewModel.sdo.ready && viewModel.sdo.missingReasons.length > 0 ? (
-          <ul className={styles.plainList}>
-            {viewModel.sdo.missingReasons.map((reason) => (
-              <li key={reason} className={typeClass('body')}>
-                {reason}
-              </li>
-            ))}
-          </ul>
-        ) : null}
-        {viewModel.sdo.customerAcceptance ? (
-          <span className={typeClass('body')}>
-            Согласие заказчика зарегистрировано {viewModel.sdo.customerAcceptance.acceptedDate}
-            {viewModel.sdo.customerAcceptance.reference ? ` · ${viewModel.sdo.customerAcceptance.reference}` : ''}
-          </span>
-        ) : null}
-        {actions?.onRegisterCustomerAcceptance && viewModel.sdo.canRegisterCustomerAcceptance ? (
-          <CustomerAcceptanceForm onSubmit={actions.onRegisterCustomerAcceptance} />
-        ) : null}
-        {actions?.onHandoffToSdo && viewModel.sdo.canHandoffToSdo ? <HandoffToSdoControl onSubmit={actions.onHandoffToSdo} /> : null}
-        {actions?.onReturnToCorrection && viewModel.sdo.canReturnToCorrection ? (
-          <ReturnToCorrectionControl onSubmit={actions.onReturnToCorrection} />
-        ) : null}
-      </section>
+        <section className={styles.section}>
+          <span className={[styles.sectionLabel, typeClass('label')].join(' ')}>СДО / Закрытие</span>
+          <StatusBadge variant={viewModel.sdo.packageLocked ? 'Blocked' : viewModel.sdo.ready ? 'OnTrack' : 'Neutral'}>
+            {viewModel.sdo.packageLocked
+              ? 'Состав пакета заблокирован: передан в СДО'
+              : viewModel.sdo.ready
+                ? 'Готов к передаче в СДО'
+                : 'Не готов к передаче в СДО'}
+          </StatusBadge>
+          {!viewModel.sdo.ready && viewModel.sdo.missingReasons.length > 0 ? (
+            <ul className={styles.plainList}>
+              {viewModel.sdo.missingReasons.map((reason) => (
+                <li key={reason} className={typeClass('body')}>
+                  {reason}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {viewModel.sdo.customerAcceptance ? (
+            <span className={typeClass('body')}>
+              Согласие заказчика зарегистрировано {viewModel.sdo.customerAcceptance.acceptedDate}
+              {viewModel.sdo.customerAcceptance.reference ? ` · ${viewModel.sdo.customerAcceptance.reference}` : ''}
+            </span>
+          ) : null}
+          {actions?.onRegisterCustomerAcceptance && viewModel.sdo.canRegisterCustomerAcceptance ? (
+            <CustomerAcceptanceForm onSubmit={actions.onRegisterCustomerAcceptance} />
+          ) : null}
+          {actions?.onHandoffToSdo && viewModel.sdo.canHandoffToSdo ? <HandoffToSdoControl onSubmit={actions.onHandoffToSdo} /> : null}
+          {actions?.onReturnToCorrection && viewModel.sdo.canReturnToCorrection ? (
+            <ReturnToCorrectionControl onSubmit={actions.onReturnToCorrection} />
+          ) : null}
+        </section>
 
-      <section className={styles.section}>
-        <span className={[styles.sectionLabel, typeClass('label')].join(' ')}>Документы</span>
-        {viewModel.documents.length > 0 ? (
-          <div className={styles.documentList}>
-            {viewModel.documents.map((doc) => (
-              <div key={doc.id} className={styles.documentCard}>
-                <span className={typeClass('body-strong')}>{doc.typeLabel}</span>
-                {doc.versions.length > 0 ? (
-                  <ul className={styles.plainList}>
-                    {doc.versions.map((version) => (
-                      <li key={version.id} className={typeClass('body')}>
-                        <span className={typeClass('body-strong')}>v{version.versionNumber}</span>{' '}
-                        <span className={styles.secondary}>{version.storageProviderLabel}</span>
-                        {version.storageReference ? ` · ${version.storageReference}` : ''}
-                        {version.comment ? ` · ${version.comment}` : ''}
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <span className={[styles.empty, typeClass('body')].join(' ')}>Версий ещё нет</span>
-                )}
-                {actions && viewModel.contentEditable ? <CreateVersionForm documentId={doc.id} onSubmit={actions.onCreateVersion} /> : null}
-              </div>
-            ))}
-          </div>
-        ) : (
-          <span className={[styles.empty, typeClass('body')].join(' ')}>Документы ещё не созданы</span>
-        )}
-        {actions && viewModel.contentEditable ? <CreateDocumentForm onSubmit={actions.onCreateDocument} hiddenTypes={hiddenDocumentTypes ?? []} /> : null}
-      </section>
+        <section className={styles.section}>
+          <span className={[styles.sectionLabel, typeClass('label')].join(' ')}>Документы</span>
+          {viewModel.documents.length > 0 ? (
+            <div className={styles.documentList}>
+              {viewModel.documents.map((doc) => (
+                <div key={doc.id} className={styles.documentCard}>
+                  <span className={typeClass('body-strong')}>{doc.typeLabel}</span>
+                  {doc.versions.length > 0 ? (
+                    <ul className={styles.plainList}>
+                      {doc.versions.map((version) => (
+                        <li key={version.id} className={typeClass('body')}>
+                          <span className={typeClass('body-strong')}>v{version.versionNumber}</span>{' '}
+                          <span className={styles.secondary}>{version.storageProviderLabel}</span>
+                          {version.storageReference ? ` · ${version.storageReference}` : ''}
+                          {version.comment ? ` · ${version.comment}` : ''}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <span className={[styles.empty, typeClass('body')].join(' ')}>Версий ещё нет</span>
+                  )}
+                  {actions && viewModel.contentEditable ? <CreateVersionForm documentId={doc.id} onSubmit={actions.onCreateVersion} /> : null}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <span className={[styles.empty, typeClass('body')].join(' ')}>Документы ещё не созданы</span>
+          )}
+          {actions && viewModel.contentEditable ? <CreateDocumentForm onSubmit={actions.onCreateDocument} /> : null}
+        </section>
 
-      <section className={styles.section}>
-        <span className={[styles.sectionLabel, typeClass('label')].join(' ')}>История статусов</span>
-        {viewModel.history.length > 0 ? (
-          <ul className={styles.plainList}>
-            {viewModel.history.map((entry) => (
-              <li key={entry.id} className={typeClass('body')}>
-                <span className={styles.secondary}>{entry.changedAt}</span> ·{' '}
-                {documentationPackageStatusPresentation(entry.fromStatus).label} →{' '}
-                {documentationPackageStatusPresentation(entry.toStatus).label}
-                {entry.comment ? ` · ${entry.comment}` : ''}
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <span className={[styles.empty, typeClass('body')].join(' ')}>Изменений статуса ещё не было</span>
-        )}
-      </section>
+        <section className={styles.section}>
+          <span className={[styles.sectionLabel, typeClass('label')].join(' ')}>История статусов</span>
+          {viewModel.history.length > 0 ? (
+            <ul className={styles.plainList}>
+              {viewModel.history.map((entry) => (
+                <li key={entry.id} className={typeClass('body')}>
+                  <span className={styles.secondary}>{entry.changedAt}</span> ·{' '}
+                  {documentationPackageStatusPresentation(entry.fromStatus).label} →{' '}
+                  {documentationPackageStatusPresentation(entry.toStatus).label}
+                  {entry.comment ? ` · ${entry.comment}` : ''}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <span className={[styles.empty, typeClass('body')].join(' ')}>Изменений статуса ещё не было</span>
+          )}
+        </section>
+
+          {actions?.onArchive && viewModel.identity.canArchive ? (
+            <section className={styles.section} aria-label="Архив">
+              <ArchivePackageControl onSubmit={actions.onArchive} />
+            </section>
+          ) : null}
+        </>
+      )}
     </AppShell>
   );
 }

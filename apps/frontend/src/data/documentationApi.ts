@@ -85,6 +85,14 @@ export function createDocumentationPackage(
   return post('documentation-packages', { objectWorkId, quantityPortionIds, idempotencyKey, ...(responsibleUserId ? { responsibleUserId } : {}) });
 }
 
+/**
+ * Soft archive (not a delete, not a status): takes an obsolete / test package out of the working set. The reason is mandatory; the
+ * backend decides whether the package may be archived at all and who may do it.
+ */
+export function archiveDocumentationPackage(packageId: Uuid, version: number, reason: string): Promise<DocumentationPackage> {
+  return post(`documentation-packages/${packageId}/archive`, { version, reason });
+}
+
 export function editDocumentationPackage(
   packageId: Uuid,
   responsibleUserId: Uuid,

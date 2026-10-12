@@ -179,7 +179,7 @@ test('UI03 work-scoped access: team engineer with NO object membership is handed
     assert.equal(made.status, 201, JSON.stringify(made.data));
     assert.equal(made.data.responsibleUserId, s.A1.id);
     // the package-detail operations work for the assignee too (same object-scope check)
-    assert.equal((await s.h.raw(`documentation-packages/${made.data.id}/documents`, { type: 'AOSR' })).status, 201);
+    assert.equal((await s.h.raw(`documentation-packages/${made.data.id}/documents`, { type: 'ACT_CERTIFICATE' })).status, 201);
     // others: unrelated team engineer A2 (not assigned), B1, cross-tenant X — no access, no handoff
     for (const who of [s.A2, s.B1]) { await s.h.as(who); assert.equal((await s.h.raw(`objects/${s.A.o.id}`)).status, 403, who.name); assert.deepEqual(await s.h.req('objects'), []); }
     await s.h.as(s.headA);

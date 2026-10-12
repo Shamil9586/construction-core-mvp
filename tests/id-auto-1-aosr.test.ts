@@ -1,7 +1,7 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import JSZip from 'jszip';
-import { harness, closeHarness, setUp, fillParties, fillAosr, uploadScheme, generatedAosr, SCHEME_FILE, PARTIES, dt, RP, INTERNAL, CUSTOMER } from './helpers/aosr-harness';
+import { harness, closeHarness, setUp, fillParties, fillAosr, uploadScheme, legacyDocumentShell, generatedAosr, SCHEME_FILE, PARTIES, dt, RP, INTERNAL, CUSTOMER } from './helpers/aosr-harness';
 import { resolveAosrReadiness, suggestTypicalAosr, resolveCurrentAcceptedQuantity, splitRuDate } from '../packages/domain/aosr';
 import { buildAosrRenderModel, surnameInitials } from '../apps/backend/src/id-auto/aosr';
 import { readAosrTemplate } from '../apps/backend/src/id-auto/aosr-docx';
@@ -80,7 +80,7 @@ test('readiness blocks generation; quantity and a unique scheme per AOSR are not
   assert.deepEqual(after.readiness.issues.map((i: any) => i.code), ['EXECUTIVE_SCHEME_MISSING'], 'a quality document never substitutes for a scheme; material readiness is independent');
   assert.equal((await raw(`aosr/${aosr.id}/generate`, { version: after.version })).status, 400);
   // A scheme RECORD without a file (metadata only) does not satisfy readiness either.
-  const shell = await req(`${base}/documents`, { type: 'EXECUTIVE_SCHEME' });
+  const shell = await legacyDocumentShell(ctx.pkg.id, 'EXECUTIVE_SCHEME');
   const metadataOnly = (await req(`aosr/${aosr.id}`));
   await req(`aosr/${aosr.id}/links`, { schemeDocumentIds: [shell.id], version: metadataOnly.version });
   const linkedShell = await req(`aosr/${aosr.id}`);
@@ -202,7 +202,7 @@ test('customer-accepted quantity is append-only, keeps RP_FACT/INTERNAL_SC intac
   // Not allowed before the documentation was presented.
   await req(`${base}/customer-accepted-quantity`, { items: [{ quantityPortionId: ctx.portion.id, quantity: CUSTOMER }] }, 400);
   await uploadScheme(req, ctx.pkg.id, 'ES-001'); // evidence: a file-backed executive scheme is needed to present
-  const doc = await req(`${base}/documents`, { type: 'AOSR' });
+  const doc = await req(`${base}/documents`, { type: 'ACT_CERTIFICATE' });
   await req(`documentation-documents/${doc.id}/versions`, { storageProvider: 'NONE' });
   let p = await req(`${base}/status`, { status: 'PREPARING', version: ctx.pkg.version });
   p = await req(`${base}/status`, { status: 'READY_FOR_PRESENTATION', version: p.version });
@@ -262,7 +262,7 @@ test('existing package authorization and freeze rules are enforced for AOSR', as
   // Freeze: once PRESENTED, AOSR content cannot change or be generated.
   await login('PTO');
   await uploadScheme(req, ctx.pkg.id, 'ES-001'); // evidence: a file-backed executive scheme is needed to present
-  const doc = await req(`${base}/documents`, { type: 'AOSR' });
+  const doc = await req(`${base}/documents`, { type: 'ACT_CERTIFICATE' });
   await req(`documentation-documents/${doc.id}/versions`, { storageProvider: 'NONE' });
   let p = await req(`${base}/status`, { status: 'PREPARING', version: ctx.pkg.version });
   p = await req(`${base}/status`, { status: 'READY_FOR_PRESENTATION', version: p.version });

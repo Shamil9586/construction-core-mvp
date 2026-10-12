@@ -33,6 +33,8 @@ test('current quantity of the scope follows the accepted provenance: customer-ac
   assert.equal(buildPackageScope([portion('a', 'x', { rpFact: null, internalSc: null })]).currentQuantity, null);
 });
 
-test('every existing package is active — the lifecycle has no archived/cancelled state', () => {
-  for (const status of ['DRAFT', 'PREPARING', 'READY_FOR_PRESENTATION', 'PRESENTED', 'RETURNED', 'CORRECTING', 'ACCEPTED_BY_CUSTOMER']) assert.equal(isPackageActive(status), true);
+test('a package is active until it is soft-archived — the PTO lifecycle status never decides it', () => {
+  assert.equal(isPackageActive({ archivedAt: null }), true);
+  assert.equal(isPackageActive({}), true);
+  assert.equal(isPackageActive({ archivedAt: new Date('2026-10-12T10:00:00Z') }), false);
 });

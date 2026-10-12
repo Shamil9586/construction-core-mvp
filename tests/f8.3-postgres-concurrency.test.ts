@@ -154,7 +154,7 @@ async function setUpHandedOffCase(req: any, login: any, code: string, name: stri
   const ptoUser = (await req('me', undefined, ptoToken, 200)).data;
   await handoffWorkToPto(work.id);
   const pkg0 = (await req('documentation-packages', { objectWorkId: work.id, quantityPortionIds: [portion.id], responsibleUserId: ptoUser.id }, ptoToken, 201)).data;
-  const doc = (await req(`documentation-packages/${pkg0.id}/documents`, { type: 'AOSR' }, ptoToken, 201)).data;
+  const doc = (await req(`documentation-packages/${pkg0.id}/documents`, { type: 'ACT_CERTIFICATE' }, ptoToken, 201)).data;
   await req(`documentation-documents/${doc.id}/versions`, { storageProvider: 'NONE' }, ptoToken, 201);
   let p = (await req(`documentation-packages/${pkg0.id}/status`, { status: 'PREPARING', version: pkg0.version }, ptoToken, 201)).data;
   p = (await req(`documentation-packages/${p.id}/status`, { status: 'READY_FOR_PRESENTATION', version: p.version }, ptoToken, 201)).data;
@@ -188,7 +188,7 @@ async function setUpAcceptedNotHandedOff(req: any, login: any, code: string, nam
   const ptoUser = (await req('me', undefined, ptoToken, 200)).data;
   await handoffWorkToPto(work.id);
   const pkg0 = (await req('documentation-packages', { objectWorkId: work.id, quantityPortionIds: [portion.id], responsibleUserId: ptoUser.id }, ptoToken, 201)).data;
-  const doc = (await req(`documentation-packages/${pkg0.id}/documents`, { type: 'AOSR' }, ptoToken, 201)).data;
+  const doc = (await req(`documentation-packages/${pkg0.id}/documents`, { type: 'ACT_CERTIFICATE' }, ptoToken, 201)).data;
   await req(`documentation-documents/${doc.id}/versions`, { storageProvider: 'NONE' }, ptoToken, 201);
   let p = (await req(`documentation-packages/${pkg0.id}/status`, { status: 'PREPARING', version: pkg0.version }, ptoToken, 201)).data;
   p = (await req(`documentation-packages/${p.id}/status`, { status: 'READY_FOR_PRESENTATION', version: p.version }, ptoToken, 201)).data;
@@ -347,7 +347,7 @@ test('F8.3-18 (C): concurrent create-Document vs handoff on an ACCEPTED_BY_CUSTO
     const documents = (snap.documentationDocuments ?? []).filter((d: any) => d.documentationPackageId === pkg.id);
     assert.equal(documents.length, 2, 'exactly the original AOSR document + the gate-required scheme — the racing ACT_CERTIFICATE never committed');
     assert.equal(documents[0].id, doc.id);
-    assert.equal(documents[0].type, 'AOSR');
+    assert.equal(documents[0].type, 'ACT_CERTIFICATE');
   } finally {
     await app.close();
   }

@@ -73,9 +73,9 @@ A Documentation Package states **which production scope it documents**: its Work
 
 * **Explicit scope.** `POST /documentation-packages` requires `quantityPortionIds` (≥ 1) and an `idempotencyKey`. A single eligible portion may be
   preselected by the UI but is still sent and persisted. Authorization/404 checks run first; the scope check follows (`service.ts`).
-* **No overlap.** A portion may belong to at most ONE package; a Work may have several packages as long as their portions differ. The lifecycle has
-  no cancelled/archived status, so every package is active; the day an archive state exists it is excluded in `isPackageActive`
-  (`packages/domain/package-scope.ts`) and in the trigger's `EXISTS`. Refusal text: «Этот участок уже включён в активный пакет исполнительной документации.»
+* **No overlap.** A portion may belong to at most ONE ACTIVE package; a Work may have several packages as long as their portions differ. The PTO
+  lifecycle has no cancelled status: every package is active until it is soft-archived (see below), and only then does it stop reserving its
+  portions (`isPackageActive`, `packages/domain/package-scope.ts`, restated in the trigger's `EXISTS` by migration 023). Refusal text: «Этот участок уже включён в активный пакет исполнительной документации.»
   Three layers: the service check (`overlappingClaims`), a `FOR UPDATE` lock on the Work row that serialises create/link, and the
   `documentation_package_portions_no_overlap` trigger (per-portion advisory lock) as the database backstop for writers that bypass the service.
   The trigger fires on INSERT only — historical rows that already overlap are neither rewritten nor invalidated.
@@ -95,3 +95,30 @@ A Documentation Package states **which production scope it documents**: its Work
 `DATABASE_URL=… npx tsx scripts/inspect-work-packages.ts --work-id <uuid>` (or `--object-code … --work-name …`, `--empty-documents`) opens one
 `BEGIN READ ONLY` transaction and classifies packages: A main, B external verification, C unscoped DRAFT leftover (nothing built on it), D unexpected,
 plus document shells without title and version. It decides nothing and changes nothing.
+
+## Soft archive of obsolete / test packages (migration 023)
+
+An obsolete or test package must be able to leave the working list **without** being deleted and **without** a new business status.
+
+* **Orthogonal metadata, not a status.** `documentation_packages.archived_at / archived_by / archive_reason` (all three together, a non-blank reason,
+  enforced by a CHECK). `status` keeps its PTO meaning (DRAFT … ACCEPTED_BY_CUSTOMER); an archived DRAFT is still a DRAFT that is archived.
+* **Retained and immutable.** The row, its documents, versions, method, scope and history stay. A trigger makes an archived row unchangeable (no
+  un-archive, no forward status change) and undeletable. There is no delete API.
+* **Safe archive rule** (`packages/domain/package-archive.ts`, enforced by `POST /documentation-packages/:id/archive`): status DRAFT or PREPARING, and
+  no customer acceptance, no accepted-quantity history, no SDO case, never presented, no GENERATED Core AOSR (official number consumed / DOCX
+  document created). A declared AOSR method, a file-backed scheme, external references and draft (unnumbered) AOSR records do **not** block —
+  a disposable test package legitimately carries them and archiving keeps all of it. Anything else fails closed with a business message.
+  The same rule is exposed to the UI per package as `archiveBlocker` (null = may be archived now) — the client never guesses.
+* **Who.** The package-mutation gate every package action uses (PTO engineer: the effective assignee; PTO_HEAD: the object's lead; ADMIN), and an
+  ordinary PTO engineer only for a package they are responsible for / created. A reason is mandatory; the version is checked.
+* **Active-scope semantics.** An archived package reserves nothing: the service overlap check, the eligible-portion query (create form), the
+  database trigger and the PTO-handoff package count all look at `archived_at IS NULL`. Concurrency is unchanged (works-row lock + per-portion
+  advisory lock): archiving can only make a portion MORE available, so no interleaving yields two active claims.
+* **Forward mutations are blocked** on an archived package everywhere (`ensurePackageNotArchived`: status, correction, scope link, documents,
+  versions, edit, acceptance, handoff, and — through the AOSR write context — AOSR/scheme/method/quantity actions).
+* **Read model / UI.** `snapshot.documentationPackages` is the WORKING SET (archived excluded, so lists, queues and readiness follow);
+  archived packages travel in `snapshot.archivedDocumentationPackages` with who/when/why. W01 shows them only behind «Показать архивные»; the
+  archived package detail is read-only and says «Архивирован».
+* **Bare document shells.** AOSR and EXECUTIVE_SCHEME have dedicated flows (a generated Core AOSR; a scheme uploaded WITH its file), so the generic
+  `POST /documentation-packages/:id/documents` refuses them (business message) and the generic form offers only ACT_CERTIFICATE. Historical
+  shells already in a database stay readable; nothing deletes them.

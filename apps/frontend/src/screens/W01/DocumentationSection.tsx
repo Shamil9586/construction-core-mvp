@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { StatusBadge, typeClass } from '../../design-system';
-import type { W01DocumentationPackageViewModel } from '../../view-models/w01';
+import type { W01ArchivedPackageViewModel, W01DocumentationPackageViewModel } from '../../view-models/w01';
 import type { PtoWorkAssignmentView } from '../../data/documentationApi';
 import { formatQuantityWithUnit } from '../../formatters';
 import styles from './DocumentationSection.module.css';
@@ -44,6 +44,8 @@ export interface DocumentationHandoff {
 
 export interface DocumentationSectionProps {
   documentationPackages: W01DocumentationPackageViewModel[];
+  /** Soft-archived packages of the work — shown only behind the explicit «Показать архивные» toggle, never in the working list. */
+  archivedPackages?: W01ArchivedPackageViewModel[];
   actions?: DocumentationSectionActionHandlers;
   handoff?: DocumentationHandoff;
   /**
@@ -289,7 +291,50 @@ function PackageCard({
   );
 }
 
-export function DocumentationSection({ documentationPackages, actions, handoff, visible = true }: DocumentationSectionProps) {
+export const SHOW_ARCHIVED_TEXT = 'Показать архивные';
+export const HIDE_ARCHIVED_TEXT = 'Скрыть архивные';
+
+/** Secondary and collapsed by default: obsolete / test packages must not clutter the work's current documentation. */
+function ArchivedPackages({ packages, onOpenPackage }: { packages: W01ArchivedPackageViewModel[]; onOpenPackage?: (packageId: string) => void }) {
+  const [open, setOpen] = useState(false);
+  if (packages.length === 0) return null;
+  return (
+    <div className={styles.archivedBlock}>
+      <button type="button" className={styles.archivedToggle} aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+        {open ? HIDE_ARCHIVED_TEXT : `${SHOW_ARCHIVED_TEXT} (${packages.length})`}
+      </button>
+      {open ? (
+        <ul className={styles.archivedList} aria-label="Архивные пакеты">
+          {packages.map((pkg) => (
+            <li key={pkg.id} className={styles.archivedItem}>
+              <div className={styles.packageHeader}>
+                <span className={[styles.packageTitle, typeClass('body-strong')].join(' ')}>
+                  {pkg.identity.workName} · {pkg.identity.scopeText}
+                </span>
+                <StatusBadge variant="Neutral">{pkg.identity.archive?.badgeText ?? 'Архивирован'}</StatusBadge>
+              </div>
+              <span className={[styles.detailLabel, typeClass('body')].join(' ')}>
+                {pkg.identity.methodText} · {pkg.identity.responsible} · статус на момент архивирования: {pkg.status.label}
+              </span>
+              {pkg.identity.archive ? (
+                <span className={[styles.detailLabel, typeClass('body')].join(' ')}>
+                  {pkg.identity.archive.byText}. {pkg.identity.archive.reasonText}
+                </span>
+              ) : null}
+              {onOpenPackage ? (
+                <button type="button" className={styles.actionButtonSecondary} onClick={() => onOpenPackage(pkg.id)}>
+                  Открыть архивный пакет
+                </button>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
+  );
+}
+
+export function DocumentationSection({ documentationPackages, archivedPackages = [], actions, handoff, visible = true }: DocumentationSectionProps) {
   const canCreate = !!actions && !!handoff?.view.canCreatePackage;
   return (
     <section className={styles.section}>
@@ -309,6 +354,7 @@ export function DocumentationSection({ documentationPackages, actions, handoff, 
             ))}
           </div>
           {canCreate ? <CreatePackageForm scope={handoff!.view.packageScope} onCreate={actions!.onCreatePackage} label="Создать ещё один пакет" /> : null}
+          <ArchivedPackages packages={archivedPackages} onOpenPackage={actions?.onOpenPackage} />
         </>
       ) : (
         <>
@@ -317,6 +363,7 @@ export function DocumentationSection({ documentationPackages, actions, handoff, 
           </span>
           {handoff ? <HandoffBlock handoff={handoff} /> : null}
           {canCreate ? <CreatePackageForm scope={handoff!.view.packageScope} onCreate={actions!.onCreatePackage} /> : null}
+          <ArchivedPackages packages={archivedPackages} onOpenPackage={actions?.onOpenPackage} />
         </>
       )}
     </section>

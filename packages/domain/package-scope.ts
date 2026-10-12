@@ -15,12 +15,13 @@ export const ALL_SCOPE_COVERED_MESSAGE = 'Все доступные участк
 export const NO_PORTIONS_MESSAGE = 'У работы нет участков производства: пакет ИД создаётся на участок (создайте его на карточке работы).';
 
 /**
- * Whether a package still claims its scope. The lifecycle has no cancelled/archived state, so every existing package is active: a
- * portion stays claimed from creation through acceptance and SDO. (If an archive state is ever added, it is excluded here — and
- * in the database trigger of migration 022 — and nowhere else.)
+ * Whether a package still claims its scope. The PTO lifecycle has no cancelled state: every package is active from creation through
+ * acceptance and SDO — a portion stays claimed. The ONLY way out of the working set is the orthogonal soft archive
+ * (documentation_packages.archived_at, packages/domain/package-archive.ts): an archived package reserves nothing. This is the one predicate
+ * behind the service overlap check, the eligible-scope query, and (restated in SQL) the database trigger of migration 023.
  */
-export function isPackageActive(_status: string): boolean {
-    return true;
+export function isPackageActive(pkg: { archivedAt?: unknown | null }): boolean {
+    return !pkg.archivedAt;
 }
 
 export interface ScopePortionInput {

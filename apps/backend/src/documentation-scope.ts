@@ -31,17 +31,17 @@ export async function packageHasScope(c: any, tenantId: string, packageId: strin
     return !!(await one(c, 'SELECT 1 AS x FROM documentation_package_portions WHERE tenant_id=$1 AND documentation_package_id=$2 LIMIT 1', [tenantId, packageId]));
 }
 
-/** Packages of the same Work (other than `exceptPackageId`) that already claim any of the portions. */
+/** ACTIVE (not archived) packages of the same Work (other than `exceptPackageId`) that already claim any of the portions. */
 export async function overlappingClaims(c: any, tenantId: string, workId: string, portionIds: string[], exceptPackageId?: string): Promise<{ portionId: string; packageId: string }[]> {
     if (!portionIds.length) return [];
-    const found = await rows(c, 'SELECT l.quantity_portion_id,l.documentation_package_id FROM documentation_package_portions l JOIN documentation_packages p ON p.tenant_id=l.tenant_id AND p.id=l.documentation_package_id WHERE l.tenant_id=$1 AND p.object_work_id=$2 AND l.quantity_portion_id=ANY($3::uuid[]) AND ($4::uuid IS NULL OR l.documentation_package_id<>$4)', [tenantId, workId, portionIds, exceptPackageId ?? null]);
+    const found = await rows(c, 'SELECT l.quantity_portion_id,l.documentation_package_id FROM documentation_package_portions l JOIN documentation_packages p ON p.tenant_id=l.tenant_id AND p.id=l.documentation_package_id WHERE l.tenant_id=$1 AND p.object_work_id=$2 AND p.archived_at IS NULL AND l.quantity_portion_id=ANY($3::uuid[]) AND ($4::uuid IS NULL OR l.documentation_package_id<>$4)', [tenantId, workId, portionIds, exceptPackageId ?? null]);
     return found.map((r: any) => ({ portionId: r.quantityPortionId, packageId: r.documentationPackageId }));
 }
 
-/** The Work's portions that no package claims yet — what a NEW package may be created on. */
+/** The Work's portions that no ACTIVE package claims — what a NEW package may be created on (a portion released by an archive is eligible again). */
 export async function eligiblePortions(c: any, tenantId: string, workId: string) {
     const all = await rows(c, 'SELECT p.id FROM quantity_portions p JOIN work_execution_units u ON u.tenant_id=p.tenant_id AND u.id=p.execution_unit_id WHERE p.tenant_id=$1 AND u.object_work_id=$2', [tenantId, workId]);
-    const claimed = new Set((await rows(c, 'SELECT l.quantity_portion_id FROM documentation_package_portions l JOIN documentation_packages p ON p.tenant_id=l.tenant_id AND p.id=l.documentation_package_id WHERE l.tenant_id=$1 AND p.object_work_id=$2', [tenantId, workId])).map((r: any) => r.quantityPortionId));
+    const claimed = new Set((await rows(c, 'SELECT l.quantity_portion_id FROM documentation_package_portions l JOIN documentation_packages p ON p.tenant_id=l.tenant_id AND p.id=l.documentation_package_id WHERE l.tenant_id=$1 AND p.object_work_id=$2 AND p.archived_at IS NULL', [tenantId, workId])).map((r: any) => r.quantityPortionId));
     const free = all.map((r: any) => r.id).filter((id: string) => !claimed.has(id));
     const inputs = await scopePortionInputs(c, tenantId, free);
     return { totalPortions: all.length, eligible: buildPackageScope(inputs).portions };

@@ -43,7 +43,7 @@ export class PtoWorkAssignmentService {
         const current = await effectivePtoWorkAssignment(pool, a.tenantId, workId);
         const user = current ? await one(pool, 'SELECT name FROM users WHERE tenant_id=$1 AND id=$2', [a.tenantId, current.assigneeUserId]) : null;
         const by = current ? await one(pool, 'SELECT name FROM users WHERE tenant_id=$1 AND id=$2', [a.tenantId, current.assignedBy]) : null;
-        const pkgs = await one(pool, 'SELECT count(*)::int AS n FROM documentation_packages WHERE tenant_id=$1 AND object_work_id=$2', [a.tenantId, workId]);
+        const pkgs = await one(pool, 'SELECT count(*)::int AS n FROM documentation_packages WHERE tenant_id=$1 AND object_work_id=$2 AND archived_at IS NULL', [a.tenantId, workId]);
         const canAssign = this.canAssign(a, elig.head?.id ?? null);
         const packageCount: number = pkgs.n;
         // What a NEW package may be created on: the Work's portions that no package claims yet (the backend re-checks at creation).
@@ -78,7 +78,7 @@ export class PtoWorkAssignmentService {
             if (current && current.assigneeUserId === d.assigneeUserId)
                 return current; // idempotent: same engineer, nothing changes
             if (current) {
-                const pkg = await one(c, 'SELECT 1 AS x FROM documentation_packages WHERE tenant_id=$1 AND object_work_id=$2 LIMIT 1', [a.tenantId, workId]);
+                const pkg = await one(c, 'SELECT 1 AS x FROM documentation_packages WHERE tenant_id=$1 AND object_work_id=$2 AND archived_at IS NULL LIMIT 1', [a.tenantId, workId]);
                 ensure(!pkg, 'Пакет ИД уже создан: смена ответственного ПТО здесь не поддерживается');
                 await c.query("UPDATE pto_work_assignments SET ended_at=clock_timestamp(),ended_by=$3,end_reason='REASSIGNED',version=version+1 WHERE tenant_id=$1 AND id=$2 AND ended_at IS NULL", [a.tenantId, current.id, a.id]);
             }

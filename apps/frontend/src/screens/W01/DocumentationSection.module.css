@@ -143,3 +143,47 @@
 .errorText {
   color: var(--cc-status-blocked-text);
 }
+
+.archivedBlock {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-8);
+}
+
+.archivedToggle {
+  align-self: flex-start;
+  padding: var(--cc-p-space-4) 0;
+  border: 0;
+  background: transparent;
+  color: var(--cc-text-secondary);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.archivedToggle:hover {
+  color: var(--cc-text-primary);
+}
+
+.archivedToggle:focus-visible {
+  outline: var(--cc-focus-ring-width) solid var(--cc-focus-ring);
+  outline-offset: var(--cc-focus-ring-offset);
+}
+
+.archivedList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-12);
+}
+
+.archivedItem {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-8);
+  padding: var(--cc-p-space-12);
+  border: var(--cc-border-width) dashed var(--cc-border-default);
+  border-radius: var(--cc-card-radius);
+}

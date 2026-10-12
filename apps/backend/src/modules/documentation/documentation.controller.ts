@@ -80,6 +80,13 @@ export class DocumentationController {
         return this.service.createDocumentationVersion(await authenticate(r), V.uuid.parse(id), d);
     }
 
+    /** Soft archive (migration 023): takes an obsolete / test package out of the working set. Never a delete; see ProductionService.archiveDocumentationPackage. */
+    @Post('documentation-packages/:id/archive')
+    async archivePackage(@Req() r: any, @Param('id') id: string, @Body() b: any) {
+        const d = V.documentationPackageArchiveDto.parse(b);
+        return this.service.archiveDocumentationPackage(await authenticate(r), V.uuid.parse(id), d);
+    }
+
     @Post('documentation-packages/:id/status')
     async changeStatus(@Req() r: any, @Param('id') id: string, @Body() b: any) {
         const d = V.documentationPackageStatusDto.parse(b);

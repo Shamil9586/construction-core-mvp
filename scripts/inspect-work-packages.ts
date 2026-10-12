@@ -4,10 +4,13 @@
  *   DATABASE_URL=postgres://… npx tsx scripts/inspect-work-packages.ts --work-id <uuid> [--main <uuid>] [--external <uuid>] [--json]
  *   DATABASE_URL=postgres://… npx tsx scripts/inspect-work-packages.ts --object-code <code> --work-name "Штукатурка стен"
  *   DATABASE_URL=postgres://… npx tsx scripts/inspect-work-packages.ts --empty-documents      (every package of the tenant)
+ *   … --assume-pre-023   evaluate as a database that has not been migrated to 023 yet (archive columns are auto-detected anyway)
  *
  * It opens ONE `BEGIN READ ONLY` transaction (the database itself refuses any write), never migrates, never seeds, and prints a
- * classification — it does not decide anything. Nothing is archived, cancelled or deleted: the lifecycle has no such state, and a hard
- * delete of a package that ever carried history is not an auditable clean-up.
+ * classification — it does not decide anything. Nothing is archived or deleted by this script. Clean-up is the supported, audited soft
+ * archive (POST /documentation-packages/:id/archive, migration 023): the script only says which packages the archive rule WOULD accept
+ * (the very same pure rule the backend enforces) and with which reason. It works on a database that has not been migrated to 023 yet
+ * (archive columns absent): then no package is archived and the rule is evaluated from the facts alone.
  *
  * Classes:
  *   A MAIN             the package named by --main (default: the pilot's main package)
@@ -16,6 +19,7 @@
  *   D UNEXPECTED       everything else — a person must look at it
  */
 import { Client } from 'pg';
+import { archiveViolation } from '../packages/domain/package-archive';
 
 const MAIN_DEFAULT = 'bebcf645-40ae-4266-92d1-96f04c6f50f8';
 const EXTERNAL_DEFAULT = 'bd482e68-5e79-43c8-98eb-df012a7d4e4e';
@@ -42,7 +46,46 @@ interface PackageFacts {
   aosrRecords: number;
   statusChanges: number;
   customerAcceptances: number;
+  customerAcceptedQuantities: number;
+  /** A status-history edge touching PRESENTED / ACCEPTED_BY_CUSTOMER: the package was shown to the customer at some point. */
+  everPresented: boolean;
+  /** Core AOSRs that were generated (an official number consumed and/or a document created). */
+  generatedAosrs: number;
   sdoCase: string | null;
+  archivedAt: string | null;
+  archiveReason: string | null;
+  archivedBy: string | null;
+}
+
+/** The backend's own archive rule, applied to what the database holds: null = the audited archive action would accept this package. */
+export function archiveBlocker(f: PackageFacts): string | null {
+  return archiveViolation({
+    status: f.status,
+    archivedAt: f.archivedAt,
+    everPresented: f.everPresented,
+    customerAcceptances: f.customerAcceptances,
+    customerAcceptedQuantities: f.customerAcceptedQuantities,
+    hasSdoCase: !!f.sdoCase,
+    generatedAosrs: f.generatedAosrs,
+  });
+}
+
+const SUGGESTED_REASON: Record<PackageClass, string | null> = {
+  A_MAIN: null,
+  B_EXTERNAL_VERIFICATION: 'Тестовый пакет EXTERNAL-маршрута',
+  C_UNSCOPED_DRAFT: 'Старый тестовый пакет',
+  D_UNEXPECTED: null,
+};
+
+/** What a person should do next with the package — a recommendation only; the script never changes anything. */
+export function recommendation(f: PackageFacts, cls: PackageClass): { action: string; suggestedReason: string | null; blocker: string | null } {
+  const blocker = archiveBlocker(f);
+  if (cls === 'A_MAIN') return { action: 'KEEP_ACTIVE', suggestedReason: null, blocker };
+  if (f.archivedAt) return { action: 'ALREADY_ARCHIVED', suggestedReason: null, blocker };
+  if (blocker) return { action: 'KEEP_AS_HISTORY', suggestedReason: null, blocker };
+  return cls === 'D_UNEXPECTED'
+    ? { action: 'REVIEW_THEN_ARCHIVE', suggestedReason: null, blocker }
+    : { action: 'ARCHIVE', suggestedReason: SUGGESTED_REASON[cls], blocker };
 }
 
 /** A package is "unused" when nothing downstream was ever built on it — the only kind a soft archive could safely retire. */
@@ -84,7 +127,9 @@ async function main() {
     }
     workIds = [...new Set(workIds)];
 
-    const report: Record<string, unknown> = { readOnly: true, generatedAt: new Date().toISOString(), works: [] as unknown[] };
+    // Auto-detected; `--assume-pre-023` forces the legacy path (archive columns ignored) so it can be rehearsed on a migrated copy.
+    const hasArchive = !flag('assume-pre-023') && (await client.query("SELECT 1 FROM information_schema.columns WHERE table_name='documentation_packages' AND column_name='archived_at'")).rows.length > 0;
+    const report: Record<string, unknown> = { readOnly: true, archiveColumns: hasArchive, generatedAt: new Date().toISOString(), works: [] as unknown[] };
 
     for (const workId of workIds) {
       const work = (await client.query(
@@ -93,8 +138,8 @@ async function main() {
       )).rows[0];
       const portions = (await client.query(
         `SELECT p.id,p.label,u.location,
-                (SELECT l.documentation_package_id FROM documentation_package_portions l WHERE l.tenant_id=p.tenant_id AND l.quantity_portion_id=p.id LIMIT 1) AS held_by,
-                (SELECT count(*)::int FROM documentation_package_portions l WHERE l.tenant_id=p.tenant_id AND l.quantity_portion_id=p.id) AS holders
+                (SELECT l.documentation_package_id FROM documentation_package_portions l JOIN documentation_packages dp ON dp.tenant_id=l.tenant_id AND dp.id=l.documentation_package_id WHERE l.tenant_id=p.tenant_id AND l.quantity_portion_id=p.id ${hasArchive ? 'AND dp.archived_at IS NULL' : ''} LIMIT 1) AS held_by,
+                (SELECT count(*)::int FROM documentation_package_portions l JOIN documentation_packages dp ON dp.tenant_id=l.tenant_id AND dp.id=l.documentation_package_id WHERE l.tenant_id=p.tenant_id AND l.quantity_portion_id=p.id ${hasArchive ? 'AND dp.archived_at IS NULL' : ''}) AS holders
            FROM quantity_portions p JOIN work_execution_units u ON u.tenant_id=p.tenant_id AND u.id=p.execution_unit_id
           WHERE u.object_work_id=$1 ORDER BY u.location, p.label`,
         [workId],
@@ -104,10 +149,12 @@ async function main() {
       const facts: PackageFacts[] = [];
       for (const { id } of packages) {
         const p = (await client.query(
-          `SELECT p.id,p.status,p.version,p.created_at,cu.name AS created_by,ru.name AS responsible
+          `SELECT p.id,p.status,p.version,p.created_at,cu.name AS created_by,ru.name AS responsible,
+                  ${hasArchive ? 'p.archived_at,p.archive_reason,au.name AS archived_by' : 'NULL::timestamptz AS archived_at,NULL::text AS archive_reason,NULL::text AS archived_by'}
              FROM documentation_packages p
              LEFT JOIN users cu ON cu.tenant_id=p.tenant_id AND cu.id=p.created_by
              LEFT JOIN users ru ON ru.tenant_id=p.tenant_id AND ru.id=p.responsible_user_id
+             ${hasArchive ? 'LEFT JOIN users au ON au.tenant_id=p.tenant_id AND au.id=p.archived_by' : ''}
             WHERE p.id=$1`, [id])).rows[0];
         const scalar = async (sql: string) => Number((await client.query(sql, [id])).rows[0].n);
         facts.push({
@@ -128,6 +175,12 @@ async function main() {
           aosrRecords: await scalar('SELECT count(*) AS n FROM aosr_documents WHERE documentation_package_id=$1'),
           statusChanges: await scalar('SELECT count(*) AS n FROM documentation_package_status_history WHERE documentation_package_id=$1'),
           customerAcceptances: await scalar('SELECT count(*) AS n FROM documentation_customer_acceptances WHERE documentation_package_id=$1'),
+          customerAcceptedQuantities: await scalar('SELECT count(*) AS n FROM documentation_customer_accepted_quantities WHERE documentation_package_id=$1'),
+          everPresented: (await scalar("SELECT count(*) AS n FROM documentation_package_status_history WHERE documentation_package_id=$1 AND (to_status IN ('PRESENTED','ACCEPTED_BY_CUSTOMER') OR from_status IN ('PRESENTED','ACCEPTED_BY_CUSTOMER'))")) > 0,
+          generatedAosrs: await scalar('SELECT count(*) AS n FROM aosr_documents WHERE documentation_package_id=$1 AND (official_number IS NOT NULL OR documentation_document_id IS NOT NULL)'),
+          archivedAt: p.archived_at ? new Date(p.archived_at).toISOString() : null,
+          archiveReason: p.archive_reason ?? null,
+          archivedBy: p.archived_by ?? null,
           sdoCase: (await client.query('SELECT status FROM sdo_closing_cases WHERE documentation_package_id=$1', [id])).rows[0]?.status ?? null,
         });
       }
@@ -135,13 +188,10 @@ async function main() {
       (report.works as unknown[]).push({
         work,
         portions,
-        packages: facts.map((f) => ({
-          ...f,
-          class: classify(f, mainId, externalId),
-          unused: isUnused(f),
-          // Recommendation only. There is no archive/cancel state: a clean-up needs a NEW, audited soft-archive operation (see the report).
-          cleanup: classify(f, mainId, externalId) === 'A_MAIN' ? 'KEEP' : isUnused(f) ? 'SOFT_ARCHIVE_CANDIDATE' : 'KEEP_AS_HISTORY',
-        })),
+        packages: facts.map((f) => {
+          const cls = classify(f, mainId, externalId);
+          return { ...f, class: cls, unused: isUnused(f), ...recommendation(f, cls) };
+        }),
         overlappingPortions: portions.filter((p) => p.holders > 1).map((p) => ({ id: p.id, label: p.label, holders: p.holders })),
       });
     }
@@ -168,8 +218,9 @@ async function main() {
       console.log(`   portions: ${w.portions.map((p: any) => `${p.location ? `${p.location} · ` : ''}${p.label} (held by ${p.holders})`).join('; ') || '—'}`);
       if (w.overlappingPortions.length) console.log(`   !! portions held by more than one package (historical overlap): ${JSON.stringify(w.overlappingPortions)}`);
       for (const p of w.packages) {
-        console.log(`-- ${p.class}  ${p.id}  ${p.status} v${p.version}  created ${p.createdAt} by ${p.createdBy ?? '—'}  responsible ${p.responsible ?? '—'}`);
-        console.log(`     scope: ${p.portions.join(', ') || 'Участок не выбран'}  method: ${p.aosrMethod ?? 'METHOD_UNSET'}  docs ${p.documents}/versions ${p.documentVersions}/AOSR ${p.aosrRecords}  status changes ${p.statusChanges}  acceptances ${p.customerAcceptances}  SDO ${p.sdoCase ?? '—'}  => ${p.cleanup}`);
+        console.log(`-- ${p.class}  ${p.id}  ${p.status} v${p.version}${p.archivedAt ? '  [ARCHIVED ' + p.archivedAt + ': ' + p.archiveReason + ']' : ''}  created ${p.createdAt} by ${p.createdBy ?? '—'}  responsible ${p.responsible ?? '—'}`);
+        console.log(`     scope: ${p.portions.join(', ') || 'Участок не выбран'}  method: ${p.aosrMethod ?? 'METHOD_UNSET'}  docs ${p.documents}/versions ${p.documentVersions}/AOSR ${p.aosrRecords} (generated ${p.generatedAosrs})  status changes ${p.statusChanges}  acceptances ${p.customerAcceptances}  SDO ${p.sdoCase ?? '—'}`);
+        console.log(`     => ${p.action}${p.suggestedReason ? '  reason: «' + p.suggestedReason + '»' : ''}${p.blocker && p.action !== 'ALREADY_ARCHIVED' && p.action !== 'KEEP_ACTIVE' ? '  (cannot archive: ' + p.blocker + ')' : ''}`);
       }
     }
     console.log(`\n== empty document shells (no title, no version, no AOSR record): ${(report.emptyDocuments as any[]).length}`);

@@ -79,7 +79,7 @@ test('A/F: W01 vs W02 on the same object — exact-work scope for every read, sn
     const { h } = s;
     await s.handoff(s.W01, s.A1); await s.handoff(s.W02, s.A2);
     const p2 = (await s.create(s.W02, s.A2)).data; assert.equal(p2.responsibleUserId, s.A2.id);
-    const doc2 = await h.req(`documentation-packages/${p2.id}/documents`, { type: 'AOSR' });
+    const doc2 = await h.req(`documentation-packages/${p2.id}/documents`, { type: 'ACT_CERTIFICATE' });
     const p1r = await s.create(s.W01, s.A1); assert.equal(p1r.status, 201); const p1 = p1r.data;
     assert.equal(p1.responsibleUserId, s.A1.id);
 
@@ -87,7 +87,7 @@ test('A/F: W01 vs W02 on the same object — exact-work scope for every read, sn
     await h.as(s.A1);
     assert.equal((await s.view(s.W01, s.A1)).status, 200);
     assert.equal((await h.raw(`works/${s.W01.work.id}`)).status, 200);
-    await h.req(`documentation-packages/${p1.id}/documents`, { type: 'AOSR' });
+    await h.req(`documentation-packages/${p1.id}/documents`, { type: 'ACT_CERTIFICATE' });
     assert.equal((await h.raw(`documentation-packages/${p1.id}/status`, { status: 'PREPARING', version: p1.version })).status, 201);
 
     // ... and nothing of W02 (read endpoints)
@@ -157,7 +157,7 @@ test('B: reassignment W01 A1 -> A2 — A1 loses access immediately (read, create
     await db.pool.query('INSERT INTO pto_work_assignments(tenant_id,object_id,object_work_id,assignee_user_id,assigned_by) SELECT tenant_id,object_id,$1,$2,assigned_by FROM pto_work_assignments WHERE object_work_id=$1 LIMIT 1', [s.W03.work.id, s.A3.id]);
     await h.as(s.A2);
     assert.equal((await h.raw(`documentation-packages/${made.data.id}/status`, { status: 'PREPARING', version: made.data.version })).status, 403, 'old assignee cannot mutate');
-    assert.equal((await h.raw(`documentation-packages/${made.data.id}/documents`, { type: 'AOSR' })).status, 403);
+    assert.equal((await h.raw(`documentation-packages/${made.data.id}/documents`, { type: 'ACT_CERTIFICATE' })).status, 403);
     await h.as(s.A3);
     assert.equal((await h.raw(`documentation-packages/${made.data.id}/status`, { status: 'PREPARING', version: made.data.version })).status, 201, 'new effective assignee can');
   } finally { await s.h.app.close(); }
@@ -177,7 +177,7 @@ test('C/E: assigned A1 leaves the head\'s team — every handoff-derived power e
     assert.equal((await s.view(s.W01, s.A1)).status, 403);
     assert.deepEqual((await h.req('snapshot')).objects, []);
     assert.equal((await s.create(s.W01, s.A1)).status, 403, 'package creation denied');
-    assert.equal((await h.raw(`documentation-packages/${p.id}/documents`, { type: 'AOSR' })).status, 403, 'package mutation denied');
+    assert.equal((await h.raw(`documentation-packages/${p.id}/documents`, { type: 'ACT_CERTIFICATE' })).status, 403, 'package mutation denied');
     assert.equal((await h.raw(`documentation-packages/${p.id}/status`, { status: 'READY_FOR_PRESENTATION', version: p.version + 1 })).status, 403);
     assert.equal((await h.raw(`documentation-packages/${p.id}/edit`, { responsibleUserId: s.A1.id, version: p.version + 1 })).status, 403);
     // the read model no longer reports A1 as a valid assignee (head, admin, deputy views)

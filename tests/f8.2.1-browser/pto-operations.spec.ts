@@ -53,6 +53,7 @@ const ALL_USERS = [
 
 const OBJECT_A = 'object-a';
 const WORK_NEW = 'work-new';
+const DEDICATED_DOCUMENT_FLOWS_TEXT = 'АОСР формируются, а исполнительные схемы загружаются в своих блоках выше — отдельно как пустой документ они не создаются.';
 const WORK_DRAFT = 'work-draft';
 const UNIT_NEW = 'unit-new';
 const PORTION_NEW = 'portion-new';
@@ -107,6 +108,11 @@ interface FakePackage {
   aosrMethod: 'CORE' | 'EXTERNAL' | null;
   scope: { hasScope: boolean; portions: unknown[]; zoneSummary: string | null; currentQuantity: { quantity: string; unit: string; source: string } | null };
   createdAt: string;
+  // Soft archive (backend-derived in production): archive facts, set once; the server also decides `archiveBlocker` for active packages.
+  archivedAt?: string | null;
+  archivedBy?: string | null;
+  archiveReason?: string | null;
+  archivedByName?: string | null;
 }
 interface FakeLink {
   id: string;
@@ -153,6 +159,9 @@ interface State {
   versions: FakeVersion[];
   statusHistory: FakeHistoryEntry[];
   counter: number;
+  /** Soft-archived packages: out of `packages` (the working set) exactly as the backend serves them. */
+  archived: FakePackage[];
+  lastArchiveBody: { version: number; reason: string } | null;
   /** PILOT-W01 UI03 — persisted PTO work assignments: workId -> assigned engineer id. */
   assignments: Record<string, string>;
   /** `false` models an object with no assigned PTO_HEAD. */
@@ -173,6 +182,8 @@ function makeState(actor: Actor, initialPackages: FakePackage[] = [], assignment
     versions: [],
     statusHistory: [],
     counter: 0,
+    archived: [],
+    lastArchiveBody: null,
   };
 }
 
@@ -329,6 +340,13 @@ function buildAttentionQueue(state: State) {
 // (canAccessDocumentation), mirrored here so the frontend's own access
 // guards (PtoRoute, PackageDetailRoute, DocumentationSection) are exercised
 // exactly as they would be against the real backend.
+/** Mirrors packages/domain archiveViolation() for the statuses this fake can reach: only DRAFT / PREPARING may be archived. */
+function archiveBlockerOf(pkg: FakePackage): string | null {
+  return pkg.status === 'DRAFT' || pkg.status === 'PREPARING'
+    ? null
+    : 'Архивировать можно только пакет в статусе «Черновик» или «Подготовка». Этот пакет уже в документообороте — его нельзя скрыть архивом.';
+}
+
 function buildSnapshot(state: State) {
   const visible = state.actor.role !== 'SDO';
   return {
@@ -339,7 +357,8 @@ function buildSnapshot(state: State) {
     inspections: [],
     executionUnits: [executionUnit(UNIT_NEW, WORK_NEW)],
     portions: [quantityPortion(PORTION_NEW, UNIT_NEW, 'Участок 1')],
-    documentationPackages: visible ? state.packages : undefined,
+    documentationPackages: visible ? state.packages.map((p) => ({ ...p, archiveBlocker: archiveBlockerOf(p) })) : undefined,
+    archivedDocumentationPackages: visible ? state.archived : undefined,
     documentationPackagePortions: visible ? state.packagePortions : undefined,
     documentationDocuments: visible ? state.documents : undefined,
     documentationVersions: visible ? state.versions : undefined,
@@ -422,6 +441,28 @@ function handleApi(
     pkg.workName = WORKS.find((w) => w.id === body.objectWorkId)?.name ?? null;
     state.packages.push(pkg);
     for (const quantityPortionId of ids) state.packagePortions.push({ id: nextId(state, 'link'), documentationPackageId: pkg.id, quantityPortionId });
+    return { status: 201, body: pkg };
+  }
+
+  const archiveMatch = path.match(/^\/api\/documentation-packages\/([^/]+)\/archive$/);
+  if (method === 'POST' && archiveMatch) {
+    const id = archiveMatch[1]!;
+    const body = request.postDataJSON() as { version: number; reason: string };
+    state.lastArchiveBody = body;
+    const pkg = state.packages.find((p) => p.id === id);
+    if (!pkg) return { status: 404, body: { message: 'Пакет не найден' } };
+    if (!body.reason || !body.reason.trim()) return { status: 400, body: { message: 'Укажите причину архивирования пакета.' } };
+    const blocker = archiveBlockerOf(pkg);
+    if (blocker) return { status: 400, body: { message: blocker } };
+    pkg.archivedAt = '2026-10-12T09:30:00Z';
+    pkg.archivedBy = state.actor.id;
+    pkg.archivedByName = state.actor.name;
+    pkg.archiveReason = body.reason.trim();
+    pkg.version += 1;
+    // like the backend: the package leaves the working set and stops claiming its portions
+    state.packages = state.packages.filter((p) => p.id !== id);
+    state.packagePortions = state.packagePortions.filter((l) => l.documentationPackageId !== id);
+    state.archived.push(pkg);
     return { status: 201, body: pkg };
   }
 
@@ -562,9 +603,11 @@ test('P01 → W01 → package detail: open the work, the assigned engineer creat
   await expect(page.getByText('Участок не выбран')).toHaveCount(0);
   await expect(page.getByRole('listitem').filter({ hasText: 'Участок 1' })).toBeVisible();
 
-  await page.getByLabel('Тип документа').selectOption({ label: 'АОСР' });
+  // the generic form offers only a document WITHOUT a dedicated flow (АОСР and executive schemes are never created as bare shells)
+  await expect(page.getByLabel('Тип документа')).toHaveCount(0);
+  await expect(page.getByText(DEDICATED_DOCUMENT_FLOWS_TEXT)).toBeVisible();
   await page.getByRole('button', { name: 'Создать документ' }).click();
-  await expect(page.locator('span').filter({ hasText: 'АОСР' })).toBeVisible();
+  await expect(page.locator('span').filter({ hasText: 'Акт / сертификат' })).toBeVisible();
 
   await page.getByRole('button', { name: 'Добавить версию' }).click();
   await expect(page.getByRole('listitem').filter({ hasText: 'v1' })).toBeVisible();
@@ -798,7 +841,7 @@ async function expectMutationControls(page: Page, present: boolean) {
   for (const name of PACKAGE_MUTATION_CONTROLS) {
     await expect(page.getByRole('button', { name }), name).toHaveCount(present ? 1 : 0);
   }
-  await expect(page.getByLabel('Тип документа')).toHaveCount(present ? 1 : 0);
+  await expect(page.getByText(DEDICATED_DOCUMENT_FLOWS_TEXT)).toHaveCount(present ? 1 : 0);
 }
 
 test('Package detail (UI04): the CURRENT effective assignee keeps the package mutation controls', async ({ page }) => {
@@ -977,4 +1020,96 @@ test('W01 create package (scope corrective): several eligible portions need an e
   const again = page.locator('section', { hasText: 'Исполнительная документация' });
   await expect(again.getByText('Все доступные участки уже включены в активные пакеты ИД.')).toBeVisible();
   await expect(again.getByRole('button', { name: /Создать/ })).toHaveCount(0);
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// Soft archive: an obsolete / test package leaves the working set (never a delete, never a status)
+// ---------------------------------------------------------------------------------------------------------------
+test('Package archive: an eligible package needs a reason and a confirmation; it then leaves the work\'s list, releases its portion, and is reachable only behind «Показать архивные»', async ({ page }) => {
+  const state = makeState(PTO, [draftPackage()], { [WORK_DRAFT]: PTO.id });
+  await seedSession(page, 'f8-2-1-browser-token-archive');
+  await mockApi(page, state);
+
+  await page.goto(`/app.html/pto/package/${draftPackage().id}`);
+  await expect(page.getByRole('heading', { level: 1, name: 'Штукатурка стен' })).toBeVisible();
+  await page.getByRole('button', { name: 'Архивировать пакет' }).click();
+  // restrained: nothing is possible without a reason
+  const proceed = page.getByRole('button', { name: 'Продолжить' });
+  await expect(proceed).toBeDisabled();
+  await page.getByRole('button', { name: 'Тестовый пакет' }).click(); // a reason preset fills the field
+  await expect(page.getByLabel('Причина архивирования')).toHaveValue('Тестовый пакет');
+  await proceed.click();
+  // an explicit confirmation precedes the request
+  await expect(page.getByText('Архивировать пакет? Причина: «Тестовый пакет»')).toBeVisible();
+  expect(state.lastArchiveBody).toBeNull();
+  await page.getByRole('button', { name: 'Да, архивировать' }).click();
+
+  // back on the work: the package is gone from the working list and its portion is free again
+  await expect(page.getByRole('heading', { level: 1, name: 'Штукатурка стен' })).toBeVisible();
+  expect(state.lastArchiveBody).toEqual({ version: 1, reason: 'Тестовый пакет' });
+  const section = page.locator('section', { hasText: 'Исполнительная документация' });
+  await expect(section.getByText('Пакет исполнительной документации ещё не создан')).toBeVisible();
+  await expect(section.getByText('Открыть пакет')).toHaveCount(0);
+  await section.getByRole('button', { name: 'Создать пакет ИД' }).click();
+  await expect(section.getByRole('checkbox')).toHaveCount(2); // 1 этаж (released by the archive) and 2 этаж
+  await expect(section.getByRole('checkbox', { name: /1 этаж/ })).toBeVisible();
+
+  // the archive is a secondary, explicit view
+  await expect(section.getByText('Архивирован')).toHaveCount(0);
+  await section.getByRole('button', { name: 'Показать архивные (1)' }).click();
+  const archived = section.getByRole('list', { name: 'Архивные пакеты' });
+  await expect(archived.getByText('Архивирован', { exact: true })).toBeVisible();
+  await expect(archived.getByText(`Архивировал: ${PTO.name}, 12.10.2026`)).toBeVisible();
+  await expect(archived.getByText('Причина: Тестовый пакет')).toBeVisible();
+
+  // the archived detail is read-only: it says «Архивирован» (who / when / why) and offers no action at all
+  await archived.getByRole('button', { name: 'Открыть архивный пакет' }).click();
+  await expect(page.getByRole('heading', { level: 1, name: 'Штукатурка стен' })).toBeVisible();
+  const banner = page.getByRole('note');
+  await expect(banner.getByText('Архивирован', { exact: true })).toBeVisible();
+  await expect(banner.getByText(`Архивировал: ${PTO.name}, 12.10.2026`)).toBeVisible();
+  await expect(banner.getByText('Причина: Тестовый пакет')).toBeVisible();
+  await expect(page.getByText('1 этаж').first()).toBeVisible(); // its scope is retained
+  for (const name of ['Начать подготовку', 'Создать документ', 'Архивировать пакет', 'Добавить версию']) {
+    await expect(page.getByRole('button', { name }), name).toHaveCount(0);
+  }
+});
+
+test('Package archive: a package that is no longer in preparation offers no archive action; a refusal from the backend is shown, not swallowed', async ({ page }) => {
+  const presented: FakePackage = { ...draftPackage(), status: 'PRESENTED' };
+  const state = makeState(PTO, [presented], { [WORK_DRAFT]: PTO.id });
+  await seedSession(page, 'f8-2-1-browser-token-archive-blocked');
+  await mockApi(page, state);
+  await page.goto(`/app.html/pto/package/${presented.id}`);
+  await expect(page.getByRole('heading', { level: 1, name: 'Штукатурка стен' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Архивировать пакет' })).toHaveCount(0);
+
+  // an eligible-looking package that the server then refuses: the business message reaches the user and nothing changes
+  const draft = draftPackage();
+  const state2 = makeState(PTO, [draft], { [WORK_DRAFT]: PTO.id });
+  await mockApi(page, state2);
+  await page.goto(`/app.html/pto/package/${draft.id}`);
+  await page.getByRole('button', { name: 'Архивировать пакет' }).click();
+  await page.getByLabel('Причина архивирования').fill('Создан ошибочно');
+  state2.packages[0]!.status = 'PRESENTED'; // it moved on in the meantime
+  await page.getByRole('button', { name: 'Продолжить' }).click();
+  await page.getByRole('button', { name: 'Да, архивировать' }).click();
+  await expect(page.getByText(/уже в документообороте/)).toBeVisible();
+  expect(state2.archived.length).toBe(0);
+});
+
+test('Package archive: another engineer\'s package offers no archive action to an ordinary PTO engineer; the PTO head / admin keep it', async ({ page }) => {
+  const others: FakePackage = { ...draftPackage(), responsibleUserId: PTO_USER_2.id, responsible: PTO_USER_2.name, createdBy: PTO_USER_2.id };
+  const asEngineer = makeState(PTO, [others], { [WORK_DRAFT]: PTO.id });
+  await seedSession(page, 'f8-2-1-browser-token-archive-owner');
+  await mockApi(page, asEngineer);
+  await page.goto(`/app.html/pto/package/${others.id}`);
+  await expect(page.getByRole('heading', { level: 1, name: 'Штукатурка стен' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Архивировать пакет' })).toHaveCount(0);
+
+  const asHead = makeState(HEAD, [others]);
+  await seedSession(page, 'f8-2-1-browser-token-archive-head');
+  await mockApi(page, asHead);
+  await page.goto(`/app.html/pto/package/${others.id}`);
+  await expect(page.getByRole('button', { name: 'Архивировать пакет' })).toBeVisible();
 });

@@ -530,6 +530,19 @@ export interface DocumentationPackage extends Versioned {
   createdByName: string | null;
   aosrMethod: DocumentationAosrMethod | null;
   scope: PackageScope;
+  /**
+   * Soft archive (not a lifecycle status — `status` keeps its PTO meaning). `archivedAt === null` (or absent) = active, part of the working set.
+   * Archived packages never appear in `Snapshot.documentationPackages`; they travel in `Snapshot.archivedDocumentationPackages`.
+   */
+  archivedAt?: string | null;
+  archivedBy?: Uuid | null;
+  archiveReason?: string | null;
+  archivedByName?: string | null;
+  /**
+   * Server-decided, for ACTIVE packages: `null` = the package may be archived now; a string = the business reason it may not.
+   * Absent (older payload) = the action is not offered — the client never guesses eligibility.
+   */
+  archiveBlocker?: string | null;
 }
 
 /** `«АОСР формируются в Core»` / `«АОСР формируются вне Core»` as persisted for the package. */
@@ -891,6 +904,8 @@ export interface Snapshot {
    * per-role visibility and this optionality cannot silently drift apart.
    */
   documentationPackages?: DocumentationPackage[];
+  /** Soft-archived packages of the visible works (explicit archive view / detail only — never part of the working lists). Same visibility as `documentationPackages`. */
+  archivedDocumentationPackages?: DocumentationPackage[];
   documentationPackagePortions?: DocumentationPackagePortion[];
   documentationDocuments?: DocumentationDocument[];
   documentationVersions?: DocumentationVersion[];

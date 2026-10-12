@@ -1,3 +1,5 @@
+import { packageArchiveFacts } from './documentation-archive';
+import { archiveViolation } from '../../../packages/domain/package-archive';
 import { Injectable } from '@nestjs/common';
 import { buildPackageScope } from '../../../packages/domain/package-scope';
 import Decimal from 'decimal.js';
@@ -91,7 +93,11 @@ export class ReadService {
         // ("SDO: No F8.2 access"), and CONTRACTOR_VIEWER already gets none of
         // F8.1 either, via its own early return further down.
         // `responsible` is a JOINed display name, the same treatment works.responsible/objects.responsible already get — P01/W01 render a name, not a raw responsibleUserId.
-        const documentationPackages = await rows(pool, 'SELECT dp.*,u.name AS responsible FROM documentation_packages dp JOIN users u ON u.id=dp.responsible_user_id AND u.tenant_id=dp.tenant_id WHERE dp.tenant_id=$1 AND dp.object_work_id=ANY($2::uuid[])', [t, workIds]);
+        const documentationPackages = await rows(pool, 'SELECT dp.*,u.name AS responsible FROM documentation_packages dp JOIN users u ON u.id=dp.responsible_user_id AND u.tenant_id=dp.tenant_id WHERE dp.tenant_id=$1 AND dp.object_work_id=ANY($2::uuid[]) AND dp.archived_at IS NULL', [t, workIds]);
+        // Soft archive (migration 023): `documentationPackages` is the WORKING SET — archived packages are excluded here, so every list, queue,
+        // readiness row and "has a package" signal below follows without a second filter. Archived packages travel separately
+        // (`archivedDocumentationPackages`) for the explicit archive view / detail.
+        const archivedPackages = await rows(pool, 'SELECT dp.*,u.name AS responsible FROM documentation_packages dp JOIN users u ON u.id=dp.responsible_user_id AND u.tenant_id=dp.tenant_id WHERE dp.tenant_id=$1 AND dp.object_work_id=ANY($2::uuid[]) AND dp.archived_at IS NOT NULL ORDER BY dp.archived_at DESC', [t, workIds]);
         const documentationPackageIds = documentationPackages.map(p => p.id);
         const documentationPackagePortions = await rows(pool, 'SELECT * FROM documentation_package_portions WHERE tenant_id=$1 AND documentation_package_id=ANY($2::uuid[])', [t, documentationPackageIds]);
         const documentationDocuments = await rows(pool, 'SELECT * FROM documentation_documents WHERE tenant_id=$1 AND documentation_package_id=ANY($2::uuid[])', [t, documentationPackageIds]);
@@ -343,12 +349,19 @@ export class ReadService {
         const documentationVisible = canAccessDocumentation(a.role);
         // Package identity for the cards (what / for which scope / how much / how AOSR is prepared / who created it), read from the existing
         // model: the Work, the package's Quantity Portions with their accepted-quantity provenance, the persisted AOSR method, created_by.
-        const aosrMethodRows = documentationVisible && documentationPackageIds.length ? await rows(pool, 'SELECT DISTINCT ON (documentation_package_id) documentation_package_id,method FROM documentation_package_aosr_methods WHERE tenant_id=$1 AND documentation_package_id=ANY($2::uuid[]) ORDER BY documentation_package_id,chosen_at DESC', [t, documentationPackageIds]) : [];
-        const creatorRows = documentationVisible && documentationPackages.length ? await rows(pool, 'SELECT id,name FROM users WHERE tenant_id=$1 AND id=ANY($2::uuid[])', [t, [...new Set(documentationPackages.map(p => p.createdBy))]]) : [];
-        const documentationPackagesView = documentationVisible ? documentationPackages.map(p => {
-            const scope = buildPackageScope(documentationPackagePortions.filter(l => l.documentationPackageId === p.id).flatMap(l => { const portion = portionsWithStatus.find(x => x.id === l.quantityPortionId); const unit = portion && executionUnitsWithTotals.find(u => u.id === portion.executionUnitId); return portion && unit ? [{ id: portion.id, label: portion.label, location: unit.location, unit: unit.unit, plannedQuantity: portion.plannedQuantity, rpFact: portion.rpFactQuantity, internalSc: portion.internalScConfirmedQuantity, customerAccepted: portion.customerScConfirmedQuantity }] : []; }));
-            return { ...p, workName: works.find(w => w.id === p.objectWorkId)?.name ?? null, createdByName: creatorRows.find(u => u.id === p.createdBy)?.name ?? null, aosrMethod: aosrMethodRows.find(m => m.documentationPackageId === p.id)?.method ?? null, scope };
-        }) : undefined;
+        const identityPackageIds = [...documentationPackageIds, ...archivedPackages.map(p => p.id)];
+        const aosrMethodRows = documentationVisible && identityPackageIds.length ? await rows(pool, 'SELECT DISTINCT ON (documentation_package_id) documentation_package_id,method FROM documentation_package_aosr_methods WHERE tenant_id=$1 AND documentation_package_id=ANY($2::uuid[]) ORDER BY documentation_package_id,chosen_at DESC', [t, identityPackageIds]) : [];
+        const identityUserIds = [...new Set([...documentationPackages, ...archivedPackages].flatMap(p => [p.createdBy, p.archivedBy].filter(Boolean)))];
+        const creatorRows = documentationVisible && identityUserIds.length ? await rows(pool, 'SELECT id,name FROM users WHERE tenant_id=$1 AND id=ANY($2::uuid[])', [t, identityUserIds]) : [];
+        const archivedLinks = documentationVisible && archivedPackages.length ? await rows(pool, 'SELECT * FROM documentation_package_portions WHERE tenant_id=$1 AND documentation_package_id=ANY($2::uuid[])', [t, archivedPackages.map(p => p.id)]) : [];
+        const identityOf = (p: any, links: any[]) => {
+            const scope = buildPackageScope(links.filter(l => l.documentationPackageId === p.id).flatMap(l => { const portion = portionsWithStatus.find(x => x.id === l.quantityPortionId); const unit = portion && executionUnitsWithTotals.find(u => u.id === portion.executionUnitId); return portion && unit ? [{ id: portion.id, label: portion.label, location: unit.location, unit: unit.unit, plannedQuantity: portion.plannedQuantity, rpFact: portion.rpFactQuantity, internalSc: portion.internalScConfirmedQuantity, customerAccepted: portion.customerScConfirmedQuantity }] : []; }));
+            return { ...p, workName: works.find(w => w.id === p.objectWorkId)?.name ?? null, createdByName: creatorRows.find(u => u.id === p.createdBy)?.name ?? null, archivedByName: p.archivedBy ? creatorRows.find(u => u.id === p.archivedBy)?.name ?? null : null, aosrMethod: aosrMethodRows.find(m => m.documentationPackageId === p.id)?.method ?? null, scope };
+        };
+        // Server-decided "may this package be archived NOW" (the same rule the archive action enforces): null = yes, otherwise the business reason.
+        const archiveFacts = documentationVisible && documentationPackages.length ? await packageArchiveFacts(pool, t, documentationPackages) : new Map();
+        const documentationPackagesView = documentationVisible ? documentationPackages.map(p => ({ ...identityOf(p, documentationPackagePortions), archiveBlocker: archiveViolation(archiveFacts.get(p.id)!) })) : undefined;
+        const archivedDocumentationPackagesView = documentationVisible ? archivedPackages.map(p => identityOf(p, archivedLinks)) : undefined;
         // F8.3: SDO Case state is read-only outside /sdo for every internal
         // role reaching this point, including SDO itself (which still has
         // no F8.2 access — documentationVisible stays false for it) and PTO
@@ -358,6 +371,6 @@ export class ReadService {
         // — every remaining role sees it unconditionally. Full operational
         // actions stay SDO/ADMIN-only (SDO_CASE_MANAGE, service.ts)
         // regardless of this read visibility.
-        return { objects: objectList, works: enriched, inspections, issues, packages, documents, sdo, closings, contractors, dependencies, dashboard, monthlyPlans: monthly, risk, photos, executionUnits: executionUnitsWithTotals, executionUnitLayers, portions: portionsWithStatus, portionConfirmations, documentationPackages: documentationPackagesView, documentationPackagePortions: documentationVisible ? documentationPackagePortions : undefined, documentationDocuments: documentationVisible ? documentationDocuments : undefined, documentationVersions: documentationVisible ? documentationVersions : undefined, documentationStatusHistory: documentationVisible ? documentationStatusHistory : undefined, documentationAttentionQueue: documentationVisible ? documentationAttentionQueue : undefined, documentationCustomerAcceptances: documentationVisible ? documentationCustomerAcceptances : undefined, documentationCustomerAcceptanceVersions: documentationVisible ? documentationCustomerAcceptanceVersions : undefined, sdoClosingCases, sdoClosingStatusHistory, sdoClosingHandoffHistory, sdoClosingAmountHistory, sdoClosingPortionAllocations, sdoClosingPortionAllocationHistory, sdoPackageReadiness };
+        return { objects: objectList, works: enriched, inspections, issues, packages, documents, sdo, closings, contractors, dependencies, dashboard, monthlyPlans: monthly, risk, photos, executionUnits: executionUnitsWithTotals, executionUnitLayers, portions: portionsWithStatus, portionConfirmations, documentationPackages: documentationPackagesView, archivedDocumentationPackages: archivedDocumentationPackagesView, documentationPackagePortions: documentationVisible ? documentationPackagePortions : undefined, documentationDocuments: documentationVisible ? documentationDocuments : undefined, documentationVersions: documentationVisible ? documentationVersions : undefined, documentationStatusHistory: documentationVisible ? documentationStatusHistory : undefined, documentationAttentionQueue: documentationVisible ? documentationAttentionQueue : undefined, documentationCustomerAcceptances: documentationVisible ? documentationCustomerAcceptances : undefined, documentationCustomerAcceptanceVersions: documentationVisible ? documentationCustomerAcceptanceVersions : undefined, sdoClosingCases, sdoClosingStatusHistory, sdoClosingHandoffHistory, sdoClosingAmountHistory, sdoClosingPortionAllocations, sdoClosingPortionAllocationHistory, sdoPackageReadiness };
     }
 }

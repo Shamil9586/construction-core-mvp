@@ -132,7 +132,7 @@ test('HTTP (mock auth): heads behave like their department role; legacy POST /us
       assert.equal((await call('POST', 'documentation-packages', tokens.PTO_HEAD, { objectWorkId: work.id, responsibleUserId: users.PTO_HEAD.id })).status, 403, 'PTO_HEAD is not the engineer create path');
       const pkg = await call('POST', 'documentation-packages', tokens.PTO, { objectWorkId: work.id, quantityPortionIds: [await (await import('./helpers/package-scope')).scopePortionFor(work.id)], responsibleUserId: users.PTO.id });
       assert.equal(pkg.status, 201, role + ' package (created by the assigned engineer): ' + JSON.stringify(pkg.data));
-      const doc = await call('POST', `documentation-packages/${pkg.data.id}/documents`, tokens[role], { type: 'AOSR' });
+      const doc = await call('POST', `documentation-packages/${pkg.data.id}/documents`, tokens[role], { type: 'ACT_CERTIFICATE' });
       assert.equal(doc.status, 201, role);
       assert.equal((await call('POST', `documentation-documents/${doc.data.id}/versions`, tokens[role], { storageProvider: 'NONE' })).status, 201, role);
       assert.equal((await call('POST', `documentation-packages/${pkg.data.id}/status`, tokens[role], { status: 'PREPARING', version: pkg.data.version })).status, 201, role);

@@ -13,6 +13,8 @@ import { formatDateTime, formatQuantityWithUnit } from '../formatters';
 export const SCOPE_NOT_SELECTED_TEXT = 'Участок не выбран';
 export const AOSR_METHOD_UNSET_TEXT = 'Способ подготовки АОСР не выбран';
 export const CREATOR_UNKNOWN_TEXT = 'Создатель не зафиксирован';
+export const ARCHIVED_BADGE_TEXT = 'Архивирован';
+export const ARCHIVER_UNKNOWN_TEXT = 'Архивировал: не зафиксировано';
 
 const METHOD_TEXT = { CORE: 'Формируются в Core', EXTERNAL: 'Формируются вне Core' } as const;
 const SOURCE_TEXT: Record<PackageQuantitySource, string> = {
@@ -33,6 +35,16 @@ export interface PackageIdentityViewModel {
   methodDeclared: boolean;
   responsible: string;
   createdText: string;
+  /** Soft archive facts (who / when / why) when the package is archived; null for an active package. Archive is NOT a status. */
+  archive: PackageArchiveViewModel | null;
+  /** The server says this ACTIVE package may be archived right now (`archiveBlocker === null`). Absent/unknown = false: never guessed. */
+  canArchive: boolean;
+}
+
+export interface PackageArchiveViewModel {
+  badgeText: string;
+  byText: string;
+  reasonText: string;
 }
 
 export function buildPackageIdentity(pkg: DocumentationPackage, fallbackWorkName = 'Работа'): PackageIdentityViewModel {
@@ -47,5 +59,13 @@ export function buildPackageIdentity(pkg: DocumentationPackage, fallbackWorkName
     methodDeclared: pkg.aosrMethod !== null,
     responsible: pkg.responsible,
     createdText: pkg.createdByName ? `Создан: ${pkg.createdByName}, ${formatDateTime(pkg.createdAt)}` : CREATOR_UNKNOWN_TEXT,
+    archive: pkg.archivedAt
+      ? {
+          badgeText: ARCHIVED_BADGE_TEXT,
+          byText: pkg.archivedByName ? `Архивировал: ${pkg.archivedByName}, ${formatDateTime(pkg.archivedAt)}` : `${ARCHIVER_UNKNOWN_TEXT}, ${formatDateTime(pkg.archivedAt)}`,
+          reasonText: pkg.archiveReason ? `Причина: ${pkg.archiveReason}` : 'Причина не указана',
+        }
+      : null,
+    canArchive: !pkg.archivedAt && pkg.archiveBlocker === null,
   };
 }

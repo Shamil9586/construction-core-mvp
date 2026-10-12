@@ -87,7 +87,7 @@ async function scenario() {
     await h.as(A1);
     const pkg = await h.req('documentation-packages', { objectWorkId: work.id, quantityPortionIds: [await newPortionFor(work.id, 'Участок', A1.id)] });
     assert.equal(pkg.responsibleUserId, A1.id);
-    const doc = await h.req(`documentation-packages/${pkg.id}/documents`, { type: 'AOSR' });
+    const doc = await h.req(`documentation-packages/${pkg.id}/documents`, { type: 'ACT_CERTIFICATE' });
     await h.req(`documentation-documents/${doc.id}/versions`, { storageProvider: 'NONE' });
     if (until === 'editable') return { pkg, doc };
     let p = await h.req(`documentation-packages/${pkg.id}/status`, { status: 'PREPARING', version: pkg.version });
@@ -167,7 +167,7 @@ test('B3-02 reviewer scenario: A1 (PBX-3A member + assigned W01, owns existing p
       edit: await post(`documentation-packages/${E.pkg.id}/edit`, { responsibleUserId: A1.id, version: before.E.version }),
       status: await post(`documentation-packages/${E.pkg.id}/status`, { status: 'READY_FOR_PRESENTATION', version: before.E.version }),
       portionLink: await post(`documentation-packages/${E.pkg.id}/portions`, { quantityPortionId: s.PC.id }),
-      documentCreate: await post(`documentation-packages/${E.pkg.id}/documents`, { type: 'EXECUTIVE_SCHEME' }),
+      documentCreate: await post(`documentation-packages/${E.pkg.id}/documents`, { type: 'ACT_CERTIFICATE' }),
       versionCreate: await post(`documentation-documents/${E.doc.id}/versions`, { storageProvider: 'NONE' }),
       customerAcceptance: await post(`documentation-packages/${P.pkg.id}/customer-acceptance`, { version: before.P.version, acceptedDate: dt(0), reference: 'Акт-2' }),
       correction: await post(`documentation-packages/${C.pkg.id}/correction`, { version: before.C.version }),

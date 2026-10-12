@@ -12,6 +12,15 @@ export const SCHEME_FILE = { fileName: 'scheme.pdf', mimeType: 'application/pdf'
 export async function uploadScheme(req: any, pkgId: string, title: string) {
   return req(`documentation-packages/${pkgId}/executive-schemes`, { title, ...SCHEME_FILE });
 }
+/**
+ * A LEGACY bare document shell (type only, no title, no version) — what older LIVE data may contain. The generic endpoint refuses to create
+ * these now (AOSR / EXECUTIVE_SCHEME have dedicated flows), so tests that must prove how such a historical record behaves insert it directly.
+ */
+export async function legacyDocumentShell(packageId: string, type: 'AOSR' | 'EXECUTIVE_SCHEME') {
+  const { pool, one, insert } = await import('../../apps/backend/src/db');
+  const pkg = await one(pool, 'SELECT * FROM documentation_packages WHERE id=$1', [packageId]);
+  return insert(pool, 'documentation_documents', pkg.tenantId, { documentationPackageId: packageId, type, createdBy: pkg.createdBy });
+}
 export const PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aF9sAAAAASUVORK5CYII=';
 export const dt = (delta: number) => new Date(Date.now() + delta * 86400000).toISOString().slice(0, 10);
 export const RP = '500.1234', INTERNAL = '498.1234', CUSTOMER = '496.1234';

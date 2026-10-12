@@ -243,6 +243,7 @@ export function WorkCard({
 
       <DocumentationSection
         documentationPackages={viewModel.documentationPackages}
+        archivedPackages={viewModel.archivedPackages}
         actions={documentationActions}
         handoff={documentationHandoff}
         visible={documentationVisible}

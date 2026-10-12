@@ -191,6 +191,28 @@ function fail(): never {
  * example the corrective task names. These are now hard-checked wherever
  * they appear, same as `blockers`/`customerName` above.
  */
+/** Identity/status/type fields of a Documentation Package (active or archived) — the fields P01/W01/Package Detail render or switch on. */
+function checkDocumentationPackage(pkg: Record<string, unknown>, archived: boolean): void {
+  if (!hasStringField(pkg, 'id')) fail();
+  if (!hasStringField(pkg, 'objectId')) fail();
+  if (!hasStringField(pkg, 'objectWorkId')) fail();
+  if (!hasStringField(pkg, 'responsibleUserId')) fail();
+  if (!hasStringField(pkg, 'responsible')) fail();
+  if (!hasDocumentationPackageStatusField(pkg, 'status')) fail();
+  // Package identity read model (backend-derived): a present package carries its scope; a missing/odd shape is not rendered as a guess.
+  const scope = pkg.scope as Record<string, unknown> | undefined;
+  if (typeof scope !== 'object' || scope === null || typeof scope.hasScope !== 'boolean' || !Array.isArray(scope.portions)) fail();
+  if (pkg.aosrMethod !== null && pkg.aosrMethod !== 'CORE' && pkg.aosrMethod !== 'EXTERNAL') fail();
+  if (archived) {
+    // An archived package must say when and why — otherwise it is not rendered as archived at all.
+    if (!hasStringField(pkg, 'archivedAt') || !hasStringField(pkg, 'archiveReason')) fail();
+  } else {
+    // An active package is never archived; archiveBlocker is a business reason, or null/absent.
+    if (pkg.archivedAt !== undefined && pkg.archivedAt !== null) fail();
+    if (pkg.archiveBlocker !== undefined && pkg.archiveBlocker !== null && typeof pkg.archiveBlocker !== 'string') fail();
+  }
+}
+
 export function validateSnapshot(value: unknown): Snapshot {
   if (!isPlainObject(value)) fail();
 
@@ -282,18 +304,12 @@ export function validateSnapshot(value: unknown): Snapshot {
   // W01's documentation block render directly as JSX or switch on.
   if (value.documentationPackages !== undefined) {
     if (!isObjectArray(value.documentationPackages)) fail();
-    for (const pkg of value.documentationPackages) {
-      if (!hasStringField(pkg, 'id')) fail();
-      if (!hasStringField(pkg, 'objectId')) fail();
-      if (!hasStringField(pkg, 'objectWorkId')) fail();
-      if (!hasStringField(pkg, 'responsibleUserId')) fail();
-      if (!hasStringField(pkg, 'responsible')) fail();
-      if (!hasDocumentationPackageStatusField(pkg, 'status')) fail();
-      // Package identity read model (backend-derived): a present package carries its scope; a missing/odd shape is not rendered as a guess.
-      const scope = pkg.scope as Record<string, unknown> | undefined;
-      if (typeof scope !== 'object' || scope === null || typeof scope.hasScope !== 'boolean' || !Array.isArray(scope.portions)) fail();
-      if (pkg.aosrMethod !== null && pkg.aosrMethod !== 'CORE' && pkg.aosrMethod !== 'EXTERNAL') fail();
-    }
+    for (const pkg of value.documentationPackages) checkDocumentationPackage(pkg, false);
+  }
+  // Soft-archived packages (separate, explicit archive view): the same identity shape plus the archive facts.
+  if (value.archivedDocumentationPackages !== undefined) {
+    if (!isObjectArray(value.archivedDocumentationPackages)) fail();
+    for (const pkg of value.archivedDocumentationPackages) checkDocumentationPackage(pkg, true);
   }
 
   if (value.documentationPackagePortions !== undefined) {

@@ -2,6 +2,7 @@ import { Injectable, ForbiddenException, NotFoundException } from '@nestjs/commo
 import { packageSchemes, currentAosrMethod, forwardGateViolation } from './documentation-evidence';
 import Decimal from 'decimal.js';
 import { pool, one, rows, insert, transaction } from './db';
+import { ensurePackageNotArchived } from './documentation-archive';
 import { Actor, requirePermission, checkVersion, scoped, audit, ensure, workAccess, packageMutationAccess, claimIdempotentCommand, completeIdempotentCommand } from './security';
 import { Permission as P, isPtoRole, canAccessDocumentation, canMutateDocumentationPackageContent, resolveCustomerScLatestGroup } from '../../../packages/domain';
 import { AosrPartyRecord, AosrMaterialInput, AosrQualityDocType, resolveAosrReadiness, suggestTypicalAosr, findTypicalItem, proposeAosrPoint1, resolveCurrentAcceptedQuantity, PortionQuantityFigures } from '../../../packages/domain/aosr';
@@ -33,6 +34,7 @@ export class AosrService {
         const pkg = await scoped(c, 'documentation_packages', packageId, a, true);
         const work = await scoped(c, 'works', pkg.objectWorkId, a);
         await packageMutationAccess(c, a, work);
+        ensurePackageNotArchived(pkg); // an archived package takes no new AOSR / scheme / method / quantity action
         if (opts.content) {
             const sdoCase = await one(c, 'SELECT package_locked FROM sdo_closing_cases WHERE tenant_id=$1 AND documentation_package_id=$2', [a.tenantId, packageId]);
             const policy = canMutateDocumentationPackageContent({ packageStatus: pkg.status, sdoCaseExists: !!sdoCase, sdoCasePackageLocked: !!sdoCase?.packageLocked });

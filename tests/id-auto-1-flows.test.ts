@@ -1,7 +1,7 @@
 import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { harness, closeHarness, setUp, fillParties, fillAosr, uploadScheme, generatedAosr, presentPackage, SCHEME_FILE, dt, RP, INTERNAL, CUSTOMER } from './helpers/aosr-harness';
+import { harness, closeHarness, setUp, fillParties, fillAosr, uploadScheme, legacyDocumentShell, generatedAosr, presentPackage, SCHEME_FILE, dt, RP, INTERNAL, CUSTOMER } from './helpers/aosr-harness';
 import { makeUser, tokenFor } from './helpers/pbx3-fixtures';
 
 /**
@@ -120,7 +120,7 @@ test('executive scheme evidence (both flows): a metadata-only scheme is not evid
   const ctx = await setUp({ method: 'EXTERNAL' });
   const base = `documentation-packages/${ctx.pkg.id}`;
   // A scheme record without a file (what an old LIVE record looks like).
-  const shell = await req(`${base}/documents`, { type: 'EXECUTIVE_SCHEME' });
+  const shell = await legacyDocumentShell(ctx.pkg.id, 'EXECUTIVE_SCHEME');
   let view = await req(`${base}/aosr`);
   assert.equal(view.schemes.find((s: any) => s.id === shell.id).hasFile, false);
   assert.equal(view.hasFileBackedScheme, false);

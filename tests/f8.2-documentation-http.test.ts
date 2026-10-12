@@ -87,8 +87,8 @@ test('F8.2 HTTP: full round trip — PTO creates a package, links portions, crea
     const link = (await req('snapshot')).documentationPackagePortions.find((l: any) => l.documentationPackageId === pkg.id);
     assert.equal(link.quantityPortionId, portion.id);
 
-    const doc = await req(`documentation-packages/${pkg.id}/documents`, { type: 'AOSR' });
-    assert.equal(doc.type, 'AOSR');
+    const doc = await req(`documentation-packages/${pkg.id}/documents`, { type: 'ACT_CERTIFICATE' });
+    assert.equal(doc.type, 'ACT_CERTIFICATE');
 
     const v1 = await req(`documentation-documents/${doc.id}/versions`, { storageProvider: 'NONE' });
     assert.equal(v1.versionNumber, 1);

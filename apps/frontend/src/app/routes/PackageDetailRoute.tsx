@@ -2,6 +2,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { PackageDetail } from '../../screens/PackageDetail';
 import type { PackageDetailActionHandlers } from '../../screens/PackageDetail';
 import { buildPackageDetailViewModel } from '../../view-models/documentationPackage';
+import type { DocumentationPackagePortion } from '../../types/api';
 import { useRefetchSnapshot, useSnapshot } from '../../data/SnapshotContext';
 import * as documentationApi from '../../data/documentationApi';
 import { useCoreRuntime } from '../CoreRuntimeContext';
@@ -65,7 +66,33 @@ export function PackageDetailRoute() {
   }
 
   const pkg = (state.snapshot.documentationPackages ?? []).find((candidate) => candidate.id === packageId);
-  if (!pkg) return <RouteNotFound label="Пакет исполнительной документации не найден" />;
+  if (!pkg) {
+    // Soft-archived packages are not in the working set; the explicit archive link still opens them — read-only, never with an action.
+    const archived = (state.snapshot.archivedDocumentationPackages ?? []).find((candidate) => candidate.id === packageId);
+    if (!archived) return <RouteNotFound label="Пакет исполнительной документации не найден" />;
+    const archivedViewModel = buildPackageDetailViewModel(
+      archived,
+      state.snapshot.objects.find((candidate) => candidate.id === archived.objectId),
+      state.snapshot.works.find((candidate) => candidate.id === archived.objectWorkId),
+      state.snapshot.executionUnits ?? [],
+      archived.scope.portions.map((portion) => ({ documentationPackageId: archived.id, quantityPortionId: portion.id })) as DocumentationPackagePortion[],
+      state.snapshot.portions ?? [],
+      [],
+      [],
+      [],
+      [],
+      [],
+    );
+    return (
+      <PackageDetail
+        viewModel={archivedViewModel}
+        sidebar={<AppSidebar />}
+        onNavigateHome={() => navigate(ROUTE_PATHS.company)}
+        onSelectObject={(id) => navigate(objectPath(id))}
+        onSelectWork={(objectId, objectWorkId) => navigate(workPath(objectId, objectWorkId))}
+      />
+    );
+  }
 
   const object = state.snapshot.objects.find((candidate) => candidate.id === pkg.objectId);
   const work = state.snapshot.works.find((candidate) => candidate.id === pkg.objectWorkId);
@@ -104,6 +131,16 @@ export function PackageDetailRoute() {
   const actions: PackageDetailActionHandlers | undefined =
     session && mayMutate
       ? {
+          // Soft archive: the backend is authoritative (who, and whether the package is unused); this only avoids offering a control it would refuse.
+          ...(session.user.role !== 'PTO' || pkg.responsibleUserId === session.user.id || pkg.createdBy === session.user.id
+            ? {
+                onArchive: async (reason: string) => {
+                  await documentationApi.archiveDocumentationPackage(pkg.id, pkg.version, reason);
+                  refetchAll();
+                  navigate(workPath(pkg.objectId, pkg.objectWorkId));
+                },
+              }
+            : {}),
           onAdvanceStatus: async (nextStatus, comment) => {
             await documentationApi.changeDocumentationPackageStatus(pkg.id, nextStatus, pkg.version, comment || undefined);
             refetchAll();
@@ -160,8 +197,6 @@ export function PackageDetailRoute() {
       onSelectObject={(id) => navigate(objectPath(id))}
       onSelectWork={(objectId, objectWorkId) => navigate(workPath(objectId, objectWorkId))}
       actions={actions}
-      // Once the AOSR method is known, executive schemes (file required) and Core AOSRs have their own flows; a method-less package keeps the old form.
-      hiddenDocumentTypes={aosr.view?.method === 'CORE' ? ['AOSR', 'EXECUTIVE_SCHEME'] : aosr.view?.method === 'EXTERNAL' ? ['EXECUTIVE_SCHEME'] : []}
       aosrSection={
         <AosrSection
           packageId={pkg.id}

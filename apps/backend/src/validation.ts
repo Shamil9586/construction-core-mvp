@@ -76,6 +76,7 @@ export const sdoClosingAllocationDto = z.object({ quantityPortionId: uuid, amoun
 export const sdoClosingAllocationCancelDto = z.object({ version }).strict();
 // F8.3-17.2: PTO-only pre-handoff correction — same shape as sdoReturnToPtoDto
 // (SDO's own post-handoff "Вернуть в ПТО"), a separate dedicated operation.
+export const documentationPackageArchiveDto = z.object({ reason: text, version }).strict();
 export const documentationPackageCorrectionDto = z.object({ version, comment: text.optional() }).strict();
 // ID-AUTO-1 AOSR.
 const longText = z.string().trim().min(1).max(4000);

@@ -125,3 +125,64 @@
   flex-direction: column;
   gap: var(--cc-p-space-4);
 }
+
+.archivedBanner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-4);
+  padding: var(--cc-p-space-12) var(--cc-p-space-16);
+  border: var(--cc-border-width) solid var(--cc-border-default);
+  border-left-width: var(--cc-p-space-4);
+  border-radius: var(--cc-card-radius);
+  background: var(--cc-background-surface);
+}
+
+.archiveLink {
+  align-self: flex-start;
+  padding: var(--cc-p-space-4) 0;
+  border: 0;
+  background: transparent;
+  color: var(--cc-text-secondary);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.archiveLink:hover {
+  color: var(--cc-text-primary);
+}
+
+.archiveLink:focus-visible {
+  outline: var(--cc-focus-ring-width) solid var(--cc-focus-ring);
+  outline-offset: var(--cc-focus-ring-offset);
+}
+
+.archiveBox {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-8);
+  max-width: 640px;
+  padding: var(--cc-p-space-12) var(--cc-p-space-16);
+  border: var(--cc-border-width) solid var(--cc-border-default);
+  border-radius: var(--cc-card-radius);
+}
+
+.chipButton {
+  box-sizing: border-box;
+  padding: var(--cc-p-space-4) var(--cc-p-space-12);
+  border: var(--cc-border-width) solid var(--cc-border-interactive);
+  border-radius: var(--cc-button-radius);
+  background: var(--cc-background-surface);
+  color: var(--cc-text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.chipButton:hover:not(:disabled) {
+  background: var(--cc-action-surface-hover);
+}
+
+.chipButton:focus-visible {
+  outline: var(--cc-focus-ring-width) solid var(--cc-focus-ring);
+  outline-offset: var(--cc-focus-ring-offset);
+}

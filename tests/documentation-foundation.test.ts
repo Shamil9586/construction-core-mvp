@@ -150,9 +150,9 @@ test('F8.2: Documentation Package / Document / Version / status history — crea
   );
 
   // --- Documentation Document + Documentation Version (storage reference layer) ---
-  const doc = await service.createDocumentationDocument(pto, pkg.id, { type: 'AOSR' });
+  const doc = await service.createDocumentationDocument(pto, pkg.id, { type: 'ACT_CERTIFICATE' });
   assert.equal(doc.documentationPackageId, pkg.id);
-  assert.equal(doc.type, 'AOSR');
+  assert.equal(doc.type, 'ACT_CERTIFICATE');
 
   await assert.rejects(
     () => service.createDocumentationDocument(pto, pkg.id, { type: 'GENERAL_WORK_LOG' }),

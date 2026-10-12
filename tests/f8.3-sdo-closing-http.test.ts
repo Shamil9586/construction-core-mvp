@@ -82,7 +82,7 @@ async function setUpPresentedPackage(req: any, login: any, code: string, name: s
   const pto = await login('PTO');
   await handoffWorkToPto(work.id);
   const pkg = await req('documentation-packages', { objectWorkId: work.id, quantityPortionIds: [portion.id], responsibleUserId: pto.id });
-  const doc = await req(`documentation-packages/${pkg.id}/documents`, { type: 'AOSR' });
+  const doc = await req(`documentation-packages/${pkg.id}/documents`, { type: 'ACT_CERTIFICATE' });
   await req(`documentation-documents/${doc.id}/versions`, { storageProvider: 'NONE' });
   // F8.3-17: any further document must be added here, before PRESENTED —
   // content is frozen from PRESENTED onward, so a caller wanting more than
@@ -429,7 +429,7 @@ test('F8.3 HTTP (3): readiness is false when the Customer SC quantity confirmati
     const pto = await login('PTO');
     await handoffWorkToPto(work.id);
     let pkg = await req('documentation-packages', { objectWorkId: work.id, quantityPortionIds: [portion.id], responsibleUserId: pto.id });
-    const doc = await req(`documentation-packages/${pkg.id}/documents`, { type: 'AOSR' });
+    const doc = await req(`documentation-packages/${pkg.id}/documents`, { type: 'ACT_CERTIFICATE' });
     await req(`documentation-documents/${doc.id}/versions`, { storageProvider: 'NONE' });
     pkg = await req(`documentation-packages/${pkg.id}/status`, { status: 'PREPARING', version: pkg.version });
     pkg = await req(`documentation-packages/${pkg.id}/status`, { status: 'READY_FOR_PRESENTATION', version: pkg.version });
@@ -651,7 +651,7 @@ test('F8.3-R02b (1): customer-acceptance is refused when a Documentation Documen
     const pkg = await req('documentation-packages', { objectWorkId: work.id, quantityPortionIds: [await scopePortionFor(work.id)], responsibleUserId: pto.id });
     // Document A is created but never given a version — the exact Case A
     // from the corrective report.
-    await req(`documentation-packages/${pkg.id}/documents`, { type: 'AOSR' });
+    await req(`documentation-packages/${pkg.id}/documents`, { type: 'ACT_CERTIFICATE' });
     let p = await req(`documentation-packages/${pkg.id}/status`, { status: 'PREPARING', version: pkg.version });
     p = await req(`documentation-packages/${p.id}/status`, { status: 'READY_FOR_PRESENTATION', version: p.version });
     // The PRESENTED gate now needs a file-backed scheme document, so "zero documents" can only be a LEGACY package: flip the status directly.
