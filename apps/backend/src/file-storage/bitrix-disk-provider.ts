@@ -74,7 +74,7 @@ export class BitrixDiskProvider implements StorageProvider {
         try { uploaded = await this.uploadOnce(tenantId, folderId, name, bytes, input); }
         catch (first) {
             // The folder mapped in Core may have been deleted in Disk by a human: heal once, then retry the upload once.
-            if (await this.folders.dropMissing(input.db, tenantId, input.placement).catch(() => false)) {
+            if (!(first instanceof StorageError && first.code === 'STORAGE_AUTH') && await this.folders.dropMissing(input.db, tenantId, input.placement).catch(() => false)) {
                 folderId = await this.folders.resolve(input.db, tenantId, input.placement);
                 uploaded = await this.uploadOnce(tenantId, folderId, name, bytes, input);
             } else throw first;
@@ -96,7 +96,10 @@ export class BitrixDiskProvider implements StorageProvider {
         catch (e) {
             const { error, ambiguous } = classifyDiskError(e);
             if (ambiguous) {
-                const stored = await this.client.children(tenantId, folderId, { NAME: name }).then(list => list.find(o => o.type === 'file' && !o.deleted && o.name === name && o.sizeBytes === bytes.length), () => undefined);
+                let lookupFailed = false;
+                const stored = await this.client.children(tenantId, folderId, { NAME: name }).then(list => list.find(o => o.type === 'file' && !o.deleted && o.name === name && o.sizeBytes === bytes.length), () => { lookupFailed = true; return undefined; });
+                // The write may have landed and we could not even look: the outcome is unknown, so say so loudly (the Disk name carries the Core file id).
+                if (!stored && lookupFailed) storageLog('error', 'storage.orphan_possible', { provider: this.code, operation: 'put-outcome-unknown', tenantId, fileId: input.fileId, externalFolderId: folderId, ...input.log, ...describeError(e) });
                 if (stored) {
                     storageLog('warn', 'storage.put.adopted', { provider: this.code, operation: 'put', tenantId, fileId: input.fileId, externalFileId: stored.id, externalFolderId: folderId, ...input.log, ...describeError(e) });
                     return stored;

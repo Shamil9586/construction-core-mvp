@@ -44,6 +44,24 @@ export class FileUnitOfWork {
     }
 }
 
+/**
+ * Bounded concurrency for transactions that call an external store. Such a transaction holds one database connection while
+ * RealBitrixAdapter.installedCall needs a SECOND one (installation lookup / token refresh); unbounded, enough simultaneous uploads
+ * could hold every pooled connection while each waits for another. Waiting happens BEFORE a connection is taken.
+ */
+export class Gate {
+    private active = 0;
+    private waiting: (() => void)[] = [];
+    constructor(readonly limit: number) {}
+    async run<T>(fn: () => Promise<T>): Promise<T> {
+        if (this.active < this.limit) this.active++;
+        else await new Promise<void>(resolve => this.waiting.push(resolve)); // the finishing task hands its slot over
+        try { return await fn(); }
+        finally { const next = this.waiting.shift(); if (next) next(); else this.active--; }
+    }
+}
+export const EXTERNAL_WRITE_CONCURRENCY = 4;
+
 export interface PutFileInput { fileName: string; mimeType: string; bytes: Buffer; placement: FilePlacement; log?: FileLogContext }
 export interface ReadFile { fileName: string; mimeType: string; content: Buffer; sizeBytes: number; provider: string }
 
@@ -71,9 +89,11 @@ export class FileStore {
     /** Provider that NEW files go to (deployment configuration). */
     get writeProvider(): StorageProviderCode { return this.config().provider; }
 
+    private readonly gate = new Gate(EXTERNAL_WRITE_CONCURRENCY);
     async transaction<T>(fn: (c: any, files: FileUnitOfWork) => Promise<T>): Promise<T> {
         const files = new FileUnitOfWork(this);
-        try { return await transaction((c) => fn(c, files)); }
+        const run = () => transaction((c) => fn(c, files));
+        try { return await (this.writeProvider === STORAGE_LOCAL ? run() : this.gate.run(run)); }
         catch (e) { await files.compensate(); throw e; }
     }
 

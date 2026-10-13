@@ -1,10 +1,12 @@
 -- BITRIX-DISK-1 — file storage foundation (Bitrix24 Disk as a storage provider).
 --
--- !! PROVISIONAL MIGRATION NUMBER !!
--- "900" is a sentinel, NOT a production migration number. The integration coordinator MUST rename this file to the next free
--- number (e.g. 0NN_bitrix_disk_1_file_storage.sql) when it is integrated, after every parallel migration is placed. Nothing
--- in the code depends on the number. The statements are idempotent (IF NOT EXISTS / guarded constraints), so the file is safe
--- even if it is ever applied once under each name.
+-- !! NO MIGRATION NUMBER IS CLAIMED !!
+-- This file lives in infra/pending/ on purpose: parallel feature branches may need migrations too, and a number picked here
+-- could collide with theirs. scripts/migrate.ts applies infra/pending/*.sql AFTER the numbered chain (tracked by file name in
+-- schema_pending_migrations), so the branch is testable and deployable on its own. At integration the coordinator MUST
+-- `git mv` it to the next free number, e.g. infra/0NN_bitrix_disk_1_file_storage.sql, once every parallel migration is placed.
+-- Nothing in the code depends on the number. The statements are idempotent (IF NOT EXISTS / guarded constraints), so the file
+-- is also safe if a database ever applies it under both names.
 --
 -- Additive only. No existing row is rewritten, no document-version table is touched (documentation_document_versions keeps
 -- storage_provider='CORE_FILE'; its CHECK and immutability trigger are unchanged), nothing is backfilled or migrated to Disk.

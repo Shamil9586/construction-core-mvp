@@ -70,6 +70,7 @@ test('configuration fails closed: a misspelled or incomplete provider never sile
   assert.throws(() => assertFileStorageConfig({ FILE_STORAGE_PROVIDER: 'BITRIX_DISK', AUTH_MODE: 'mock', BITRIX_PORTAL: MOCK_PORTAL } as any), /AUTH_MODE=bitrix/);
   assert.throws(() => assertFileStorageConfig({ FILE_STORAGE_PROVIDER: 'BITRIX_DISK', AUTH_MODE: 'bitrix' } as any), /BITRIX_PORTAL/);
   assert.doesNotThrow(() => assertFileStorageConfig({ FILE_STORAGE_PROVIDER: 'BITRIX_DISK', AUTH_MODE: 'bitrix', BITRIX_PORTAL: MOCK_PORTAL } as any));
+  assert.throws(() => assertFileStorageConfig({ FILE_STORAGE_PROVIDER: 'BITRIX_DISK', AUTH_MODE: 'bitrix', BITRIX_PORTAL: MOCK_PORTAL, DB_MODE: 'pglite' } as any), /PGlite/, 'a Disk call inside a PGlite transaction would hang');
   assert.doesNotThrow(() => assertFileStorageConfig({ FILE_STORAGE_PROVIDER: 'LOCAL', AUTH_MODE: 'mock' } as any));
 });
 
@@ -248,13 +249,25 @@ test('retry/idempotency: an upload whose answer was lost (timeout after the port
   assert.ok(logs.events().some(e => e.event === 'storage.put.adopted' && e.fileId === row.id && e.externalFileId === row.externalFileId));
   assert.equal((await store().read(ctx.tenant.id, row.id)).content.equals(PDF), true);
 
+  // The answer was lost AND the follow-up lookup fails too: nothing can be adopted, the upload is refused, and the unknown outcome is logged as a possible orphan.
+  disk.reset();
+  disk.fail('disk.folder.uploadfile', Object.assign(new Error('aborted'), { name: 'TimeoutError' }), { applyFirst: true });
+  disk.fail('disk.folder.getchildren', new Error('ECONNRESET'), { match: p => String(p.filter?.NAME ?? '').includes('scheme [') });
+  const before = await attachmentCount();
+  await rejectsWith(put(), 'STORAGE_UNAVAILABLE');
+  assert.equal(await attachmentCount(), before, 'no Core record for an upload that could not be confirmed');
+  const unknown = logs.events().find(e => e.event === 'storage.orphan_possible' && e.operation === 'put-outcome-unknown');
+  assert.ok(unknown && unknown.fileId && unknown.externalFolderId, 'unknown outcome is surfaced with the ids needed to find the file');
+  assert.ok(disk.files().some(f => disk.pathOf(f.id).includes(`[${id8(unknown.fileId)}]`)), 'and the file really is there, findable by the id8 in its name');
+
   // Same bytes submitted twice by a user: two Core file records, two distinct Disk files, nothing overwritten.
   disk.reset();
+  const filesBefore = disk.files().length;
   const one = await put(), two = await put();
   assert.notEqual(one.id, two.id);
   assert.notEqual(one.externalFileId, two.externalFileId);
   assert.notEqual(disk.pathOf(one.externalFileId), disk.pathOf(two.externalFileId));
-  assert.equal(disk.files().length, 3);
+  assert.equal(disk.files().length, filesBefore + 2);
 });
 
 test('orphan prevention: a database failure AFTER the upload removes the uploaded file again', async () => {
@@ -419,13 +432,40 @@ test('non-empty requirement: zero-byte input is refused, and the database cannot
   assert.equal(await predicate(await mk(null)), false, 'metadata-only is not evidence');
 });
 
-test('migration SQL is idempotent and additive (safe if renumbered or applied twice)', async () => {
-  const file = fs.readdirSync('infra').find(f => /bitrix_disk_1_file_storage/.test(f))!;
-  const sql = fs.readFileSync('infra/' + file, 'utf8');
-  assert.match(file, /PROVISIONAL/, 'must be renamed to a real number at integration');
-  await ctx.db.pool.query(sql);
-  await ctx.db.pool.query(sql);
+test('migration: no production number is claimed; the pending SQL is applied once by the runner, is idempotent and additive', async () => {
+  const numbered = fs.readdirSync('infra').filter(f => /^\d+_.*\.sql$/.test(f)).sort();
+  assert.ok(!numbered.some(f => /bitrix_disk/i.test(f)), 'no numbered migration was added by this branch');
+  assert.equal(Number(numbered.at(-1)!.split('_')[0]), 23, 'the numbered chain still ends at the baseline head');
+  const files = fs.readdirSync('infra/pending').filter(f => f.endsWith('.sql'));
+  assert.deepEqual(files, ['bitrix-disk-1-file-storage.sql']);
+  const sql = fs.readFileSync('infra/pending/' + files[0], 'utf8');
+  assert.match(sql, /NO MIGRATION NUMBER IS CLAIMED/);
   assert.doesNotMatch(sql, /DROP |DELETE |TRUNCATE |UPDATE attachments|INSERT INTO attachments/i, 'no destructive or backfilling statement');
+  const { migrate } = await import('../scripts/migrate');
+  await migrate();
+  await migrate();
+  assert.equal(Number((await ctx.db.pool.query('SELECT count(*)::int n FROM schema_pending_migrations WHERE name=$1', [files[0]])).rows[0].n), 1, 'tracked once by name');
+  assert.equal(Number((await ctx.db.pool.query('SELECT max(version)::int v FROM schema_migrations')).rows[0].v), 23, 'schema_migrations is untouched');
+  await ctx.db.pool.query(sql); // applying the file a further time (e.g. later under its final number) is a no-op
+  await ctx.db.pool.query(sql);
   const cols = (await ctx.db.pool.query("SELECT column_name FROM information_schema.columns WHERE table_name='attachments'")).rows.map((r: any) => r.column_name);
   for (const c of ['size_bytes', 'checksum_sha256', 'external_folder_id', 'file_provider', 'external_file_id']) assert.ok(cols.includes(c), c);
+  assert.ok((await ctx.db.pool.query("SELECT 1 FROM information_schema.tables WHERE table_name='storage_folder_mappings'")).rows.length === 1);
+});
+
+test('bounded concurrency: at most N Disk-writing transactions are in flight, the rest wait before taking a database connection', async () => {
+  const { Gate } = ctx.fsm;
+  const gate = new Gate(3);
+  let active = 0, peak = 0;
+  const order: number[] = [];
+  const task = (i: number) => gate.run(async () => { active++; peak = Math.max(peak, active); await new Promise(r => setTimeout(r, 5)); order.push(i); active--; return i; });
+  const results = await Promise.all(Array.from({ length: 12 }, (_, i) => task(i)));
+  assert.equal(peak, 3);
+  assert.deepEqual(results, Array.from({ length: 12 }, (_, i) => i));
+  assert.equal(order.length, 12);
+  await assert.rejects(gate.run(async () => { throw new Error('boom'); }), /boom/);
+  assert.equal(await gate.run(async () => 'slot released after a failure'), 'slot released after a failure');
+  // LOCAL writes are never gated (no external call, no second connection).
+  process.env.FILE_STORAGE_PROVIDER = 'LOCAL';
+  assert.equal((await put()).fileProvider, 'LOCAL');
 });

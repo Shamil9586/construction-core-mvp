@@ -36,6 +36,8 @@ PBX-1: успешные install и launch приводят пользовате�
 | disk.folder.uploadfile | disk | FileStorageProvider; UI MVP хранит вложения локально в БД |
 | OAuth token endpoint | client_id/client_secret | Установка и refresh |
 
+BITRIX-DISK-1: Disk теперь может быть физическим хранилищем файлов документации (исполнительные схемы, DOCX АОСР) — `FILE_STORAGE_PROVIDER=BITRIX_DISK`, scope `disk`, методы и чек-лист проверки на тестовом портале: [bitrix-disk-1-storage.md](bitrix-disk-1-storage.md). По умолчанию остаётся `LOCAL`.
+
 Минимум для начального входа — scope пользователя. department, im, task, disk требуются только при включении соответствующих providers. Учитываются также права сотрудника на объекты Bitrix, одного scope недостаточно.
 
 ## Placements / events / webhooks

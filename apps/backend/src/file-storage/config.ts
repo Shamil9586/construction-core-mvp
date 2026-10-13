@@ -29,6 +29,8 @@ export function assertFileStorageConfig(env: NodeJS.ProcessEnv = process.env, ha
     if (cfg.provider === STORAGE_BITRIX_DISK && !hasTransportOverride) {
         if (env.AUTH_MODE !== 'bitrix') throw storageNotConfigured('BITRIX_DISK требует AUTH_MODE=bitrix (установленное приложение Bitrix24)');
         if (!env.BITRIX_PORTAL) throw storageNotConfigured('BITRIX_DISK требует BITRIX_PORTAL');
+        // PGlite serves one connection at a time; a Disk call inside a transaction needs a second one (installation lookup) and would hang.
+        if (env.DB_MODE === 'pglite' && !env.DATABASE_URL) throw storageNotConfigured('BITRIX_DISK не поддерживается с локальной PGlite (нужен PostgreSQL)');
     }
     return cfg;
 }
