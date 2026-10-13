@@ -13,6 +13,8 @@ export const ROUTE_PATHS = {
   company: '/company',
   object: '/object/:objectId',
   work: '/object/:objectId/work/:workId',
+  /** GPR-1 — «График производства работ» of ONE object: inside the object, never a cross-object screen. */
+  schedule: '/object/:objectId/schedule',
   /** F8.2 — P01, PTO Workspace: a separate top-level destination, not part of the object drill-down chain. */
   pto: '/pto',
   /** F8.2.1 — Documentation Package detail: reachable from both P01 and W01 (Decision 1, one shared destination). */
@@ -37,6 +39,10 @@ export function objectPath(objectId: string): string {
 
 export function workPath(objectId: string, workId: string): string {
   return `/object/${encodeURIComponent(objectId)}/work/${encodeURIComponent(workId)}`;
+}
+
+export function schedulePath(objectId: string): string {
+  return `/object/${encodeURIComponent(objectId)}/schedule`;
 }
 
 export function packagePath(packageId: string): string {

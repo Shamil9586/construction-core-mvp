@@ -6,9 +6,11 @@ import { useCoreRuntime } from '../CoreRuntimeContext';
 import { canViewObjectPtoTeam } from '../../auth/internalRoles';
 import { getObjectPtoTeam } from '../../data/functionTeamsApi';
 import { buildO01ViewModel } from '../../view-models/o01';
+import { buildO01ScheduleView } from '../../view-models/schedule';
 import { useSnapshot } from '../../data/SnapshotContext';
+import { useObjectSchedule } from '../useSchedule';
 import { AppSidebar } from '../AppSidebar';
-import { ROUTE_PATHS, workPath } from '../routePaths';
+import { ROUTE_PATHS, schedulePath, workPath } from '../routePaths';
 import { RouteError, RouteLoading, RouteNotFound } from '../RouteStatus';
 
 /**
@@ -24,6 +26,9 @@ export function ObjectRoute() {
   const role = session?.user.role;
   const [ptoTeam, setPtoTeam] = useState<PtoTeamLoad>({ status: 'Loading' });
   const showPtoTeam = role !== undefined && canViewObjectPtoTeam(role);
+  // GPR-1 — the Object's production-schedule conclusion. Asked for only with a real session (the demo runtime has no backend to ask);
+  // a role or object that cannot read the schedule gets `Hidden` and the card keeps its original statement.
+  const { load: scheduleLoad } = useObjectSchedule(objectId, session !== null);
 
   // PBX-3A: the PTO block is fetched only for roles the backend lets read it (PTO_TEAM_READ).
   useEffect(() => {
@@ -50,6 +55,8 @@ export function ObjectRoute() {
       viewModel={viewModel}
       sidebar={<AppSidebar />}
       ptoTeam={showPtoTeam ? ptoTeam : undefined}
+      schedule={buildO01ScheduleView(scheduleLoad)}
+      onOpenSchedule={() => navigate(schedulePath(object.id))}
       onNavigateHome={() => navigate(ROUTE_PATHS.company)}
       onSelectWork={(workId) => navigate(workPath(object.id, workId))}
     />

@@ -20,7 +20,7 @@ export async function applyPendingScheduleMigration(): Promise<void> {
   await transaction(async (c) => { await c.query(fs.readFileSync(PENDING_SCHEDULE_SQL, 'utf8')); });
 }
 
-export async function gprHarness(key: string) {
+export async function gprHarness(key: string, options: { applyPending?: boolean; port?: number } = {}) {
   delete process.env.DATABASE_URL;
   process.env.AUTH_MODE = 'mock';
   process.env.MOCK_LOGIN_KEY = key;
@@ -32,10 +32,10 @@ export async function gprHarness(key: string) {
   const { seed } = await import('../../scripts/seed');
   const { createApp } = await import('../../apps/backend/src/main');
   await migrate();
-  await applyPendingScheduleMigration();
+  if (options.applyPending !== false) await applyPendingScheduleMigration();
   await seed();
   const app = await createApp();
-  await app.listen(0, '127.0.0.1');
+  await app.listen(options.port ?? 0, '127.0.0.1');
   const base = `http://127.0.0.1:${app.getHttpServer().address().port}`;
   let token = '';
   async function raw(path: string, body?: any) {

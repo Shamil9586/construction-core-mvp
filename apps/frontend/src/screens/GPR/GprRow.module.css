@@ -1,0 +1,133 @@
+/*
+ * GPR — one row of the schedule table.
+ *
+ * The row styling of Data / Table (design-system/data/DataTable/TableRow.module.css) is internal to the design system and not exported, so
+ * the schedule's own rows restate the few rules they need — from the same tokens, never hardcoded values. Unlike a work summary row they
+ * carry several short lines per cell (a percentage, a quantity, a plan-on-date), so the row grows with its content instead of holding a
+ * fixed height.
+ */
+
+.row {
+  height: auto;
+}
+
+.cell {
+  padding: var(--cc-p-space-12) var(--cc-table-row-padding-x);
+  vertical-align: top;
+  text-align: left;
+  overflow-wrap: break-word;
+}
+
+.alignEnd {
+  text-align: right;
+}
+
+/* A date or a day count is one token: it wraps between cells, never inside itself. */
+.nowrap {
+  white-space: nowrap;
+}
+
+.attention > .cell {
+  background: var(--cc-table-row-attention);
+}
+
+.interactive:hover > .cell {
+  background: var(--cc-table-row-hover);
+  cursor: pointer;
+}
+
+.interactive.attention:hover > .cell {
+  background: var(--cc-table-row-attention);
+  filter: brightness(0.97);
+}
+
+.row > .cell:first-child {
+  border-top-left-radius: var(--cc-table-row-radius);
+  border-bottom-left-radius: var(--cc-table-row-radius);
+}
+
+.row > .cell:last-child {
+  border-top-right-radius: var(--cc-table-row-radius);
+  border-bottom-right-radius: var(--cc-table-row-radius);
+}
+
+/* The name is the row's single tab stop and the source of its accessible name (a real <button>: Enter / Space for free). */
+.activator {
+  display: inline;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.activator:focus-visible {
+  outline: var(--cc-focus-ring-width) solid var(--cc-focus-ring);
+  outline-offset: var(--cc-focus-ring-offset);
+  border-radius: var(--cc-p-radius-3);
+}
+
+.row:has(.activator:focus-visible) > .cell {
+  background: var(--cc-action-surface-hover);
+}
+
+.identity {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sequence {
+  color: var(--cc-text-secondary);
+  margin-right: var(--cc-p-space-8);
+}
+
+.name {
+  color: var(--cc-text-primary);
+  margin: 0;
+}
+
+.meta {
+  color: var(--cc-text-secondary);
+  margin: 0;
+  display: block;
+}
+
+.progress {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--cc-p-space-4);
+  color: var(--cc-text-primary);
+}
+
+.stateStack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--cc-p-space-4);
+}
+
+.chevron {
+  color: var(--cc-table-chevron-color);
+  text-align: right;
+  vertical-align: top;
+}
+
+/* The explanation row under a delayed entry: reasons, who recorded them, and the form to add one. */
+.detailCell {
+  padding: 0 var(--cc-table-row-padding-x) var(--cc-p-space-16);
+  background: var(--cc-table-row-attention);
+  border-bottom-left-radius: var(--cc-table-row-radius);
+}
+
+/* The trailing cell exists only so the explanation spans every column but the last (the narrow layout hides it): it continues the band. */
+.detailRow > td:last-child {
+  padding: 0;
+  background: var(--cc-table-row-attention);
+  border-bottom-right-radius: var(--cc-table-row-radius);
+}
