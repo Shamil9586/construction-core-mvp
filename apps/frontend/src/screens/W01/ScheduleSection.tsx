@@ -22,7 +22,7 @@ export function ScheduleSection({ schedule, onOpenSchedule }: ScheduleSectionPro
     return <p className={[styles.note, typeClass('label')].join(' ')}>График производства работ не загружен: {schedule.message}</p>;
   }
 
-  const open = onOpenSchedule ? (
+  const open = onOpenSchedule && schedule.canOpenObject ? (
     <div className={styles.actions}>
       <Button variant="Secondary" arrow="forward" onClick={onOpenSchedule}>
         График производства работ объекта

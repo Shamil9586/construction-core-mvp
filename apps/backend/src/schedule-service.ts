@@ -67,10 +67,17 @@ function categoryNames(overrides: DelayCategoryOverride[]): Map<string, string> 
     return names;
 }
 
-/** Locks the object row (serialises this object's schedule mutations) after the access checks. */
+/**
+ * Locks the object row (serialises this object's schedule mutations) after the access checks.
+ *
+ * FOR NO KEY UPDATE, deliberately not FOR UPDATE: a foreign-key insert elsewhere that references the object (an inspection request, say)
+ * takes FOR KEY SHARE on its row, which FOR UPDATE would block — while this transaction, holding the object, may itself be waiting for a
+ * work row that such a request already holds FOR UPDATE: a lock-order inversion PostgreSQL resolves by aborting one of the two. NO KEY
+ * UPDATE still excludes every other schedule mutation (they take the same lock) and leaves those inserts untouched.
+ */
 async function lockObject(c: Db, a: Actor, objectId: string) {
     const o = await objectAccess(c, a, objectId, true);
-    await c.query('SELECT id FROM objects WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [a.tenantId, objectId]);
+    await c.query('SELECT id FROM objects WHERE tenant_id=$1 AND id=$2 FOR NO KEY UPDATE', [a.tenantId, objectId]);
     return o;
 }
 
@@ -81,6 +88,19 @@ async function ensureReadable(c: Db, a: Actor, objectId: string) {
     if (a.role === 'PTO' && !(await isCurrentPtoMember(c, a.tenantId, objectId, a.id)))
         throw new ForbiddenException(NO_ACCESS_MESSAGE);
     return o;
+}
+
+/** Whether `ensureReadable` would let this actor open the object's whole schedule — the work-level view says so, so W01 never offers a door that is shut. */
+async function canReadObjectSchedule(c: Db, a: Actor, objectId: string): Promise<boolean> {
+    try {
+        await ensureReadable(c, a, objectId);
+        return true;
+    }
+    catch (e) {
+        if (e instanceof ForbiddenException || e instanceof NotFoundException)
+            return false;
+        throw e;
+    }
 }
 
 function resolveToday(asOf?: string): string {
@@ -178,10 +198,12 @@ export class ScheduleService {
         const catNames = categoryNames(await categoryOverrides(pool, t));
         const reasons = await this.reasonViews(pool, t, w.objectId, catNames);
         const own = currentEntries.filter((e: any) => e.objectWorkId === workId);
-        const views = own.map((e: any) => this.entryView(e, scopes, today, currentEntries, reasons, undefined, current.id));
+        const views = own.map((e: any) => this.entryView(e, scopes, today, currentEntries, reasons, undefined, current.id, workId));
         const states = views.map(v => v.status.state);
         return {
             objectId: w.objectId, objectWorkId: workId, asOf: today, progressSource: SCHEDULE_PROGRESS_SOURCE,
+            // A PTO engineer holding only this work's handoff may read the work's summary but not the object's whole plan (403): say so.
+            canOpenObjectSchedule: await canReadObjectSchedule(pool, a, w.objectId),
             hasBaseline: !!current, revisionNo: current ? current.revisionNo : null,
             summary: views.length ? {
                 plannedStart: views.map(v => v.view.plannedStart).sort()[0], plannedFinish: views.map(v => v.view.plannedFinish).sort().slice(-1)[0],
@@ -207,20 +229,25 @@ export class ScheduleService {
         return s.executionUnitId !== null && scheduledKeys.has(scopeKey(s.objectWorkId, null));
     }
 
-    private entryView(e: any, scopes: Map<string, ScopeFacts>, today: string, siblings: any[], reasons: Map<string, any[]>, first: any | undefined, currentRevisionId: string) {
+    private entryView(e: any, scopes: Map<string, ScopeFacts>, today: string, siblings: any[], reasons: Map<string, any[]>, first: any | undefined, currentRevisionId: string, onlyWork?: string) {
         const scope = scopes.get(scopeKey(e.objectWorkId, e.executionUnitId));
         if (!scope)
             throw new Error('Schedule entry without a production scope'); // unreachable: works / units are never deleted and the FK guards the item
         const status = deriveScheduleEntryStatus({ plannedStart: e.plannedStart, plannedFinish: e.plannedFinish, plannedQuantity: scope.plannedQuantity, rpFactQuantity: scope.rpFactQuantity }, today);
         const pred = e.predecessorItemId ? siblings.find((x: any) => x.itemId === e.predecessorItemId) : undefined;
-        const predScope = pred && scopes.get(scopeKey(pred.objectWorkId, pred.executionUnitId));
+        // The work-level view (W01, `onlyWork`) is scoped to ONE work: a predecessor that belongs to ANOTHER work is neither named nor
+        // referenced — not its label, not its item id, not whether this entry starts before its finish. A PTO engineer holding only that
+        // work's handoff reads this view and must not learn what else the object is building.
+        const foreign = onlyWork !== undefined && !!pred && pred.objectWorkId !== onlyWork;
+        const visiblePred = foreign ? undefined : pred;
+        const predScope = visiblePred && scopes.get(scopeKey(visiblePred.objectWorkId, visiblePred.executionUnitId));
         const shifted = first && first.revisionId !== currentRevisionId
             ? { startDays: civilDayNumber(e.plannedStart) - civilDayNumber(first.plannedStart), finishDays: civilDayNumber(e.plannedFinish) - civilDayNumber(first.plannedFinish) }
             : null;
         const view = {
             entryId: e.id, itemId: e.itemId, revisionId: e.revisionId, sequence: e.sequence, ...this.scopeView(scope), plannedStart: e.plannedStart, plannedFinish: e.plannedFinish,
-            predecessorItemId: e.predecessorItemId ?? null, predecessorLabel: predScope ? label(predScope.workName, predScope.zone) : null,
-            followsPredecessor: pred ? !startsBeforePredecessorFinish(e.plannedStart, pred.plannedFinish) : null,
+            predecessorItemId: foreign ? null : e.predecessorItemId ?? null, predecessorLabel: predScope ? label(predScope.workName, predScope.zone) : null,
+            followsPredecessor: visiblePred ? !startsBeforePredecessorFinish(e.plannedStart, visiblePred.plannedFinish) : null,
             rpFactQuantity: scope.rpFactQuantity, internalScAcceptedQuantity: scope.internalScAcceptedQuantity,
             plannedProgress: status.plannedProgress, actualProgress: status.actualProgress, factReported: status.factReported, overperformed: status.overperformed,
             expectedPhase: status.expectedPhase, state: status.state, delayDays: status.delayDays, delayKind: status.delayKind,

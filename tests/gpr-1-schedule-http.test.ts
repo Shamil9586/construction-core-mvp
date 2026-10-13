@@ -118,10 +118,12 @@ test('B. a PTO engineer: no membership -> no plan; a work-level handoff opens TH
   const own = await raw(`works/${p.plasterWork.work.id}/schedule?asOf=2026-03-06`);
   assert.equal(own.status, 200, 'the handed-off work\'s own schedule summary is readable (W01)');
   assert.equal(own.data.entries.length, 2);
+  assert.equal(own.data.canOpenObjectSchedule, false, 'and the response says the object\'s whole plan is shut to this viewer, so W01 offers no door to it');
 
   // full object membership opens the object\'s schedule
   await assignPtoToObject(p.object.id, { lead: head, member: engineer });
   assert.equal((await raw(`objects/${p.object.id}/schedule`)).status, 200);
+  assert.equal((await raw(`works/${p.plasterWork.work.id}/schedule`)).data.canOpenObjectSchedule, true, 'a member may open the object\'s plan from the work');
   const other = await makeUser('Другой ПТО', 'PTO');
   await h.as(other);
   assert.equal((await raw(`objects/${p.object.id}/schedule`)).status, 403, 'another engineer, not a member');
@@ -685,6 +687,7 @@ test('N. W01: the work\'s own schedule summary, narrowed to that work', async ()
   const p = await approvedPilot();
   const w = await h.req(`works/${p.plasterWork.work.id}/schedule?asOf=2026-03-15`);
   assert.equal(w.hasBaseline, true);
+  assert.equal(w.canOpenObjectSchedule, true);
   assert.equal(w.revisionNo, 1);
   assert.equal(w.summary.plannedStart, F1.start);
   assert.equal(w.summary.plannedFinish, F2.finish);
@@ -775,4 +778,105 @@ test('P. the schedule routes do not leak across tenants or break neighbouring sl
   assert.equal((await raw(`objects/${p.object.id}/schedule`)).status, 404, 'another tenant cannot even tell the object exists');
   assert.equal((await raw(`works/${p.plasterWork.work.id}/schedule`)).status, 404);
   assert.equal((await raw(`objects/${p.object.id}/schedule/draft`, {})).status, 404);
+});
+
+test('Q. the work-level schedule names nothing of the object\'s other works: a predecessor outside the work is neither labelled nor referenced — not even for a PTO engineer holding only this work\'s handoff', async () => {
+  const p = await approvedPilot();
+  await h.as(p.pm);
+  // a second work of the same object, planned as a whole, that FOLLOWS floor 1 of the plaster work; and floor 2 follows floor 1 (inside one work)
+  const windows = await h.req('works', { objectId: p.object.id, workTypeId: p.plaster.id, contractorId: p.contractors[0].id, responsibleUserId: p.pm.id, name: 'Монтаж окон', unit: 'шт', plannedQuantity: 20, plannedStartDate: '2026-03-12', plannedFinishDate: '2026-03-30', estimatedCost: '1000' });
+  await h.req(`objects/${p.object.id}/schedule/draft`, {});
+  const floor1 = entryOf(await getSchedule(p.object.id), p.floor1.unit.id);
+  const draftFloor2 = (await getSchedule(p.object.id)).draft.entries.find((e: any) => e.executionUnitId === p.floor2.unit.id);
+  await h.req(`objects/${p.object.id}/schedule/draft/entries/${draftFloor2.entryId}/edit`, { version: draftFloor2.version, predecessorItemId: floor1.itemId });
+  await addEntry(p.object.id, windows.id, null, '2026-03-12', '2026-03-30', { predecessorItemId: floor1.itemId });
+  await h.login('DEPUTY_DIRECTOR');
+  await approve(p.object.id, { correctionReason: 'Добавлен монтаж окон; второй этаж — после первого' });
+
+  // the OBJECT's schedule names the predecessor: the whole object is this viewer's to see
+  const whole = await getSchedule(p.object.id, '2026-03-20');
+  const wholeWindows = whole.entries.find((e: any) => e.objectWorkId === windows.id);
+  assert.equal(wholeWindows.predecessorItemId, floor1.itemId);
+  assert.equal(wholeWindows.predecessorLabel, 'Штукатурка стен · 1 этаж');
+  assert.equal(wholeWindows.followsPredecessor, true);
+
+  // the WORK-level view of the windows work: its predecessor belongs to ANOTHER work — not named, not referenced, no verdict about its dates
+  const windowsView = await h.req(`works/${windows.id}/schedule?asOf=2026-03-20`);
+  assert.equal(windowsView.entries.length, 1);
+  assert.equal(windowsView.entries[0].predecessorItemId, null);
+  assert.equal(windowsView.entries[0].predecessorLabel, null);
+  assert.equal(windowsView.entries[0].followsPredecessor, null);
+  const leaked = (text: string) => text.includes(floor1.itemId) || text.includes('Штукатурка') || text.includes(p.plasterWork.work.id) || text.includes(p.floor1.unit.id) || text.includes(p.floor2.unit.id);
+  assert.equal(leaked(JSON.stringify(windowsView)), false, 'nothing of the plaster work in the windows work\'s view');
+
+  // inside ONE work the reference stays: floor 2 follows floor 1 in the plaster work's own view
+  const plasterView = await h.req(`works/${p.plasterWork.work.id}/schedule?asOf=2026-03-20`);
+  const f2 = plasterView.entries.find((e: any) => e.executionUnitId === p.floor2.unit.id);
+  assert.equal(f2.predecessorItemId, floor1.itemId);
+  assert.equal(f2.predecessorLabel, 'Штукатурка стен · 1 этаж');
+  assert.equal(f2.followsPredecessor, true);
+  assert.equal(JSON.stringify(plasterView).includes('Монтаж окон'), false, 'nor the windows work in the plaster work\'s view');
+
+  // the same for an engineer who can read ONLY the windows work (a work-level handoff, no object membership)
+  const { ObjectTeamService } = await import('../apps/backend/src/team-service');
+  const { actorByRole } = await import('./helpers/pbx3-fixtures');
+  const svc = new ObjectTeamService();
+  const deputy = await actorByRole('DEPUTY_DIRECTOR');
+  const head = await makeUser('Начальник ПТО (окна)', 'PTO_HEAD'), engineer = await makeUser('Инженер ПТО (окна)', 'PTO');
+  await svc.assignObjectLead(deputy, p.object.id, { leadUserId: head.id });
+  await svc.assignOrgMember(deputy, { memberUserId: engineer.id, managerUserId: head.id });
+  await handoffWorkToPto(windows.id, engineer);
+  await h.as(engineer);
+  const viaHandoff = await raw(`works/${windows.id}/schedule?asOf=2026-03-20`);
+  assert.equal(viaHandoff.status, 200);
+  assert.equal(viaHandoff.data.canOpenObjectSchedule, false);
+  assert.equal(viaHandoff.data.entries[0].predecessorLabel, null);
+  assert.equal(leaked(JSON.stringify(viaHandoff.data)), false, 'the engineer learns nothing of the plaster work from the windows work');
+  assert.equal((await raw(`works/${p.plasterWork.work.id}/schedule`)).status, 403, 'the plaster work was not handed off');
+  assert.equal((await raw(`objects/${p.object.id}/schedule`)).status, 403, 'nor is the object\'s plan open');
+});
+
+test('R. a two-digit year typed into a date field is refused at the boundary — never measured, never frozen into an approved plan', async () => {
+  const p = await pilotScenario(h);
+  await h.as(p.pm);
+  await h.req(`objects/${p.object.id}/schedule/draft`, {});
+  const body = (start: string, finish: string) => ({ objectWorkId: p.plasterWork.work.id, executionUnitId: p.floor1.unit.id, plannedStart: start, plannedFinish: finish });
+  for (const [start, finish] of [['0026-03-01', '2026-03-15'], ['2026-03-01', '0026-03-15'], ['1999-12-31', '2026-03-15'], ['2026-03-01', '2101-01-01']]) {
+    const r = await raw(`objects/${p.object.id}/schedule/draft/entries`, body(start, finish));
+    assert.equal(r.status, 400, `${start} .. ${finish}`);
+    assert.match(JSON.stringify(r.data), /2000/, 'the message names the years a schedule plans in');
+  }
+  assert.equal((await getSchedule(p.object.id)).draft.entries.length, 0, 'nothing was added');
+
+  const added = await addEntry(p.object.id, p.plasterWork.work.id, p.floor1.unit.id, F1.start, F1.finish);
+  const draft = (await getSchedule(p.object.id)).draft;
+  const edit = await raw(`objects/${p.object.id}/schedule/draft/entries/${added.id}/edit`, { version: draft.entries[0].version, plannedStart: '0026-03-01' });
+  assert.equal(edit.status, 400);
+  assert.deepEqual((await getSchedule(p.object.id)).draft.entries.map((e: any) => e.plannedStart), [F1.start], 'the edit changed nothing');
+  // the day plan-versus-fact is asked for follows the same rule
+  assert.equal((await raw(`objects/${p.object.id}/schedule?asOf=0026-03-06`)).status, 400);
+  assert.equal((await raw(`objects/${p.object.id}/schedule?asOf=2026-03-06`)).status, 200);
+  // the boundaries themselves are fine
+  const edge = await raw(`objects/${p.object.id}/schedule/draft/entries/${added.id}/edit`, { version: draft.entries[0].version, plannedStart: '2000-01-01', plannedFinish: '2100-12-31' });
+  assert.equal(edge.status, 201);
+});
+
+test('S. an open delay reason can still be closed after the scope has caught up — the form for a NEW reason goes with the delay, the old explanation does not stay open for good', async () => {
+  const p = await approvedPilot();
+  const f1 = entryOf(await getSchedule(p.object.id), p.floor1.unit.id);
+  assert.equal(f1.state, 'DELAYED');
+  await h.as(p.pm);
+  const rec = await h.req(`objects/${p.object.id}/schedule/delay-reasons`, { itemId: f1.itemId, categoryCode: 'MATERIALS', comment: 'Смесь задерживается' });
+  await reportFact(h, p.pm, p.floor1.portion.id, 500);
+  await h.as(p.pm);
+  const caughtUp = entryOf(await getSchedule(p.object.id), p.floor1.unit.id);
+  assert.equal(caughtUp.state, 'COMPLETED');
+  assert.equal(caughtUp.delayReasons.find((r: any) => r.id === rec.id).status, 'OPEN', 'listed, and still open');
+  assert.equal((await getSchedule(p.object.id)).conclusion.openDelayReasonCount, 1);
+  // a NEW reason needs a delay that is real now ...
+  assert.equal((await raw(`objects/${p.object.id}/schedule/delay-reasons`, { itemId: f1.itemId, categoryCode: 'OTHER', comment: 'ещё одна' })).status, 400);
+  // ... closing the old one does not
+  const closed = await h.req(`objects/${p.object.id}/schedule/delay-reasons/${rec.id}/resolve`, { version: rec.version, comment: 'Участок выполнен' });
+  assert.equal(closed.status, 'RESOLVED');
+  assert.equal((await getSchedule(p.object.id)).conclusion.openDelayReasonCount, 0);
 });

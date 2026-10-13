@@ -234,6 +234,8 @@ export interface WorkSchedule {
   objectWorkId: Uuid;
   asOf: CivilDate;
   progressSource: ScheduleProgressSource;
+  /** `false` = the viewer may read this work's summary but not the object's whole schedule (a PTO engineer holding only this work's handoff). */
+  canOpenObjectSchedule: boolean;
   hasBaseline: boolean;
   revisionNo: number | null;
   summary: {

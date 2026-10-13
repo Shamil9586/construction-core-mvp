@@ -56,7 +56,9 @@ and can be added later without a schema change to the items already created (a n
 ## Planning: draft → approved baseline → corrections
 
 1. **Draft.** Someone with `SCHEDULE_EDIT` creates a draft (one per object, enforced by a partial unique index), adds scopes
-   (unit / whole work) with `plannedStart`, `plannedFinish`, optional `sequence`, optional `predecessorItemId`. Nothing in a draft is
+   (unit / whole work) with `plannedStart`, `plannedFinish`, optional `sequence`, optional `predecessorItemId`.
+   Dates are civil dates within the years **2000–2100** (checked in the domain, at the API boundary and by a CHECK in the schema): a two-digit
+   year typed into a date field arrives as `0026-…` and is refused instead of being measured — and, once approved, frozen for good. Nothing in a draft is
    authoritative: it is never used to measure delay.
 2. **Approve.** Someone with `SCHEDULE_APPROVE` approves the draft **exactly as they saw it** (the request carries the draft's `version`; if
    it changed, they get a 409 and re-read). The draft becomes the object's current baseline; the previous baseline (if any) becomes
@@ -92,9 +94,11 @@ Rules, on a civil date `today` (the server's today, or `?asOf=YYYY-MM-DD` for a 
 * **Выполнено** (`COMPLETED`) — RP fact ≥ planned quantity. Never delayed.
 * **Есть отставание** (`DELAYED`) — behind the linear plan by **at least one whole calendar day**. `delayDays` = `floor` of the lag in
   days to the equivalent date of the linear plan at the current fact (business rule 3, not a CPM forecast), computed with exact decimals.
-  A lag below one day is not a delay (49 % against 50 % mid-flow raises no alarm); a scope that has not started a day after its start
-  date, or is unfinished on its finish date, always does. `delayKind`: `START` (nothing reported), `PROGRESS` (reported but behind),
-  `FINISH` (finish date reached).
+  A lag below one day is not a delay (49 % against 50 % mid-flow raises no alarm). A scope that has not started a day after its start date
+  is delayed, and so is every scope still unfinished once its finish date has **passed** (the lag is then at least the days since the
+  finish). On the finish date itself the same tolerance applies: a 10-day plan at 95 % on its last day is half a day short — «В работе»,
+  due complete — and is delayed from the next day. `delayKind`: `START` (nothing reported), `PROGRESS` (reported but behind), `FINISH`
+  (the finish date is reached and the lag is a whole day or more).
 * **В работе** (`IN_PROGRESS`) — fact > 0, not behind. **Не начато** (`NOT_STARTED`) — no fact (or a reported 0), start not passed.
 * "Should have started / should be underway / should be finished" (`expectedPhase`: `NOT_DUE` / `UNDERWAY` / `DUE_COMPLETE`) is the calendar
   alone, shown separately from the fact so management can compare the two.
@@ -105,7 +109,11 @@ Rules, on a civil date `today` (the server's today, or `?asOf=YYYY-MM-DD` for a 
 the largest delay, how many production scopes are **not** in the schedule, how many open delay reasons exist.
 
 **Work summary** (W01): the work's own entries only — first start, last finish, aggregated state (any delay wins; else all completed;
-else all not-started; else in progress), largest delay, number of entries and their zones. No other work of the object is revealed.
+else all not-started; else in progress), largest delay, number of entries and their zones. No other work of the object is revealed: a
+"follows" reference to a **different** work is neither named nor referenced in this view (no label, no item id, no verdict about its dates —
+a PTO engineer holding only this work's handoff reads it); a reference between two zones of the **same** work stays. The response also says
+`canOpenObjectSchedule` — whether the object's whole schedule is open to this viewer — so W01 offers the way into it only when it leads
+somewhere.
 
 ## Delay reasons (extensible, separate from СК remarks)
 
@@ -114,7 +122,7 @@ responsible party (a person **or** one of the object's contractors, optional), r
 status `OPEN` / `RESOLVED` (+ who / when / comment). A reason is append-only evidence: a database trigger refuses any change except the
 one-way `OPEN → RESOLVED`. Several reasons per scope are allowed (history of why).
 
-Categories are **open**: built-in defaults («Материалы», «Мобилизация / ресурсы», «Решения / согласования», …) live in code as defaults; a
+Categories are **open**: built-in defaults («Материалы», «Мобилизация», «Решения», «Проектная документация», «Предшествующие работы», «Рабочие и техника», «Погодные условия», «Другое») live in code as defaults; a
 tenant admin adds, renames, reorders or switches off categories through `POST schedule/delay-categories` (no seed data needed; a recorded
 reason keeps a readable category name after the category is retired). Planning delay reasons are **not** СК remarks / issues
 (`issues` table) and are never mixed with them.
@@ -141,7 +149,7 @@ Object scoping is the existing `objectAccess` (tenant, РП owns only their obje
 schedule and on every record id (reached only through `objects/:objectId/…`, re-checked in the service). A PTO engineer needs membership of
 the object's PTO team for the object's schedule; a work-level handoff opens only **that work's** summary (`GET works/:id/schedule`).
 Permission is checked before the object is touched (403 reveals nothing about the data). Every mutation runs in one transaction that locks
-the object row, so an object's schedule mutations are serialised.
+the object row (`FOR NO KEY UPDATE`, so foreign-key inserts elsewhere that reference the object are never blocked — no lock-order inversion with other slices), so an object's schedule mutations are serialised.
 
 ## API
 
@@ -197,9 +205,12 @@ Requirements the migration encodes (the coordinator should keep them if the file
 * tenant-scoped composite FKs everywhere (`(tenant_id, id)`); optimistic `version` on drafts / entries / reasons / categories;
 * partial unique indexes: one item per unit, one item per whole-work, **one draft** and **one current baseline** per object;
 * CHECKs: revision state consistency (provenance columns match the status), a correction needs a reason, `planned_finish ≥ planned_start`,
+  planning dates within 2000–2100 (`schedule_revision_entries_dates_in_range`),
   predecessor ≠ self, `delay_days_at_record ≥ 1`, a reason names a person **or** a contractor;
-* triggers: items immutable and same-object; approved / superseded / discarded revisions never rewritten (only the supersession columns may
-  change on `APPROVED → SUPERSEDED`); entries editable only while their revision is a draft; delay reasons append-only except `OPEN → RESOLVED`.
+* triggers: items immutable and same-object; revisions: a correction is cloned from, and a baseline superseded by, a revision of the **same
+  object** (for any writer), approved / superseded / discarded revisions never rewritten (only the supersession columns may change on
+  `APPROVED → SUPERSEDED`); entries editable only while their revision is a draft; delay reasons append-only except `OPEN → RESOLVED`, and
+  recorded only against an **APPROVED** revision that plans the item.
 
 **Promotion (coordinator, at integration):** `git mv infra/pending/gpr-1_production_schedule.sql infra/0NN_production_schedule.sql` using the
 next free number at that moment (023 is the highest on the baseline) — **no change to the content**. The GPR test helper applies the pending

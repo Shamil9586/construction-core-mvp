@@ -61,7 +61,7 @@ function ResolveForm({ reason, actions }: { reason: ReasonViewModel; actions: Gp
   );
 }
 
-function ReasonItem({ reason, actions, canManage }: { reason: ReasonViewModel; actions?: GprActions; canManage: boolean }) {
+function ReasonItem({ reason, actions, canResolve }: { reason: ReasonViewModel; actions?: GprActions; canResolve: boolean }) {
   return (
     <li className={styles.reasonItem}>
       <div className={styles.reasonHead}>
@@ -75,7 +75,7 @@ function ReasonItem({ reason, actions, canManage }: { reason: ReasonViewModel; a
       </span>
       <span className={[styles.muted, typeClass('meta')].join(' ')}>{reason.evidence}</span>
       {reason.resolution ? <span className={[styles.muted, typeClass('meta')].join(' ')}>{reason.resolution}</span> : null}
-      {reason.open && canManage && actions ? <ResolveForm reason={reason} actions={actions} /> : null}
+      {reason.open && canResolve && actions ? <ResolveForm reason={reason} actions={actions} /> : null}
     </li>
   );
 }
@@ -198,20 +198,23 @@ export interface ReasonPanelProps {
 
 export function ReasonPanel({ row, categories, actions }: ReasonPanelProps) {
   const [adding, setAdding] = useState(false);
-  const canManage = row.canRecordReason;
+  // Recording a NEW reason needs a delay that is real now; closing an OPEN one does not — a zone that has caught up (or been re-planned)
+  // must still let its explanation be closed.
+  const canRecord = row.canRecordReason;
+  const canResolve = row.canResolveReason;
   return (
     <div className={styles.reasonPanel}>
       <span className={[styles.label, typeClass('label-strong')].join(' ')}>Причины отставания</span>
       {row.reasons.length ? (
         <ul className={styles.reasonList}>
           {row.reasons.map((reason) => (
-            <ReasonItem key={reason.id} reason={reason} actions={actions} canManage={canManage} />
+            <ReasonItem key={reason.id} reason={reason} actions={actions} canResolve={canResolve} />
           ))}
         </ul>
       ) : (
         <p className={[styles.hint, typeClass('body')].join(' ')}>Причина отставания не указана.</p>
       )}
-      {canManage && actions ? (
+      {canRecord && actions ? (
         adding ? (
           <ReasonForm itemId={row.itemId} categories={categories} actions={actions} onDone={() => setAdding(false)} />
         ) : (

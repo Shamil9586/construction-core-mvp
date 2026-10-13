@@ -35,12 +35,33 @@ export function isCivilDate(value: unknown): value is string {
     return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 }
 
-/** Whole days since 1970-01-01 (UTC) — an exact integer for any valid civil date. */
+/**
+ * Whole days since 1970-01-01 (UTC) — an exact integer for any valid civil date, every year 0000–9999.
+ * `Date.UTC(year, …)` is deliberately not used: it reads the years 0–99 as 1900–1999, so a typed "0026-03-01" would silently be measured
+ * as 1926 (a "delay" of 36 530 days). `setUTCFullYear` takes the year as written.
+ */
 export function civilDayNumber(value: string): number {
     const m = CIVIL_DATE.exec(value);
     if (!m)
         throw new Error('Некорректная дата: ' + value);
-    return Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) / 86400000;
+    const day = new Date(0);
+    day.setUTCFullYear(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    return day.getTime() / 86400000;
+}
+
+/**
+ * The years a production schedule plans in. Wide enough for any real project, narrow enough that a typo — "26" typed into a date field
+ * arrives as 0026-03-01 — is refused instead of measured and, once approved, frozen for good. The same bounds are a CHECK in the schema.
+ */
+export const SCHEDULE_YEAR_MIN = 2000;
+export const SCHEDULE_YEAR_MAX = 2100;
+export const SCHEDULE_DATE_RANGE_MESSAGE = `Дата вне допустимого диапазона графика: годы ${SCHEDULE_YEAR_MIN}–${SCHEDULE_YEAR_MAX}.`;
+
+export function isScheduleDate(value: unknown): value is string {
+    if (!isCivilDate(value))
+        return false;
+    const year = Number(value.slice(0, 4));
+    return year >= SCHEDULE_YEAR_MIN && year <= SCHEDULE_YEAR_MAX;
 }
 
 /**
@@ -154,8 +175,10 @@ export function expectedPhaseOn(plannedStart: string, plannedFinish: string, tod
  *  * Выполнено   — the reported quantity reached the planned quantity. Independent of СК acceptance, ИД, ПТО, СДО and money.
  *  * Есть отставание — behind the linear plan by at least one whole calendar day. `delayDays` is the accepted business rule 3: the number of
  *    days between today and the date on which the linear plan would have reached the share already done (not a CPM forecast). A lag below
- *    one day is not a delay, so a fact of 49% against a plan of 50% mid-flow does not raise an alarm; a work that has not started a day
- *    after its start date, or is unfinished on its finish date, always does. A completed entry is never delayed.
+ *    one day is not a delay, so a fact of 49% against a plan of 50% mid-flow does not raise an alarm. A scope that has not started a day
+ *    after its start date is delayed, and so is every scope still unfinished once its finish date has PASSED (the lag is then at least the
+ *    days since the finish). On the finish date itself the same one-day tolerance applies: a 10-day plan at 95% on its last day is half a
+ *    day short — «В работе», due complete — and is delayed from the next day. A completed entry is never delayed.
  *  * В работе    — a fact above zero, not behind the plan.
  *  * Не начато   — no fact (or a reported 0) and the start date has not passed.
  *
@@ -304,6 +327,8 @@ export const CORRECTION_REASON_REQUIRED_MESSAGE = 'Укажите причину
 export const DELAY_ONLY_MESSAGE = 'Причину отставания можно указать только для участка, по которому есть отставание.';
 
 export function scheduleDatesViolation(plannedStart: string, plannedFinish: string): string | null {
+    if (!isScheduleDate(plannedStart) || !isScheduleDate(plannedFinish))
+        return SCHEDULE_DATE_RANGE_MESSAGE;
     return civilDayNumber(plannedFinish) < civilDayNumber(plannedStart) ? FINISH_BEFORE_START_MESSAGE : null;
 }
 

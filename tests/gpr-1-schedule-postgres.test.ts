@@ -233,3 +233,68 @@ test('B6 native concurrency: two corrections racing — one draft, one supersedi
   const old = (await ctx.db.pool.query("SELECT e.planned_finish FROM schedule_revision_entries e JOIN schedule_revisions r ON r.id=e.revision_id WHERE r.object_id=$1 AND r.revision_no=1 AND e.item_id=$2", [s.obj.id, e1.itemId])).rows[0];
   assert.equal(old.planned_finish, F1[1], 'the superseded plan still holds the originally approved date');
 });
+
+test('B7 native hardening: revision links stay inside one object, planning dates stay in range, a delay reason points at an entry of the approved baseline', async () => {
+  const s = await scenario('B7');
+  const first = await drafted(s);
+  await ctx.svc.approveDraft(s.deputy, s.obj.id, { version: (await draftOf(s)).version });
+  const other = await scenario('B7-other');
+  await drafted(other);
+  await ctx.svc.approveDraft(other.deputy, other.obj.id, { version: (await draftOf(other)).version });
+  const c = await client();
+  try {
+    const cur = (await c.query("SELECT id FROM schedule_revisions WHERE object_id=$1 AND status='APPROVED'", [s.obj.id])).rows[0];
+    const foreignRevision = (await c.query("SELECT id FROM schedule_revisions WHERE object_id=$1 AND status='APPROVED'", [other.obj.id])).rows[0];
+
+    // a correction is cloned from the SAME object's baseline; a baseline is superseded by a revision of the SAME object — for any writer
+    await assert.rejects(c.query("INSERT INTO schedule_revisions(tenant_id,object_id,revision_no,status,created_by,based_on_revision_id) VALUES($1,$2,7,'DRAFT',$3,$4)", [s.t, s.obj.id, s.pm.id, foreignRevision.id]), /должна относиться к тому же объекту/);
+    await assert.rejects(c.query("UPDATE schedule_revisions SET status='SUPERSEDED',superseded_at=now(),superseded_by_revision_id=$2 WHERE id=$1", [cur.id, foreignRevision.id]), /должна относиться к тому же объекту/);
+    assert.equal((await c.query('SELECT status FROM schedule_revisions WHERE id=$1', [cur.id])).rows[0].status, 'APPROVED', 'the baseline was not touched');
+
+    // planning dates stay in the years a schedule plans in (a two-digit year typed into a date field arrives as 0026-..)
+    await ctx.svc.createDraft(s.pm, s.obj.id);
+    const draft = (await c.query("SELECT id FROM schedule_revisions WHERE object_id=$1 AND status='DRAFT'", [s.obj.id])).rows[0];
+    await assert.rejects(c.query('UPDATE schedule_revision_entries SET planned_start=$3 WHERE revision_id=$1 AND item_id=$2', [draft.id, first.itemId, '0026-03-01']), /schedule_revision_entries_dates_in_range/);
+    await assert.rejects(c.query('UPDATE schedule_revision_entries SET planned_finish=$3 WHERE revision_id=$1 AND item_id=$2', [draft.id, first.itemId, '2101-01-01']), /schedule_revision_entries_dates_in_range/);
+    await c.query('UPDATE schedule_revision_entries SET planned_start=$3,planned_finish=$4 WHERE revision_id=$1 AND item_id=$2', [draft.id, first.itemId, '2000-01-01', '2100-12-31']);
+
+    // a delay reason is evidence about the APPROVED baseline's own entry: not a draft, not an item the baseline never planned
+    const reasonSql = 'INSERT INTO schedule_delay_reasons(tenant_id,object_id,item_id,revision_id,category_code,comment,delay_days_at_record,recorded_by) VALUES($1,$2,$3,$4,$5,$6,3,$7)';
+    await assert.rejects(c.query(reasonSql, [s.t, s.obj.id, first.itemId, draft.id, 'MATERIALS', 'по черновику', s.pm.id]), /относится к участку утверждённого графика/);
+    const workType = (await c.query('SELECT work_type_id FROM works WHERE id=$1', [s.work.id])).rows[0].work_type_id;
+    const unit3 = await ctx.db.insert(ctx.db.pool, 'work_execution_units', s.t, { objectWorkId: s.work.id, workTypeId: workType, contractorId: s.contractor.id, unit: 'м²', plannedQuantity: 100, location: '3 этаж' });
+    const item3 = (await c.query('INSERT INTO schedule_items(tenant_id,object_id,object_work_id,execution_unit_id,created_by) VALUES($1,$2,$3,$4,$5) RETURNING id', [s.t, s.obj.id, s.work.id, unit3.id, s.pm.id])).rows[0];
+    await assert.rejects(c.query(reasonSql, [s.t, s.obj.id, item3.id, cur.id, 'MATERIALS', 'участка нет в графике', s.pm.id]), /относится к участку утверждённого графика/);
+    await c.query(reasonSql, [s.t, s.obj.id, first.itemId, cur.id, 'MATERIALS', 'участок графика', s.pm.id]);
+    assert.equal((await c.query('SELECT count(*)::int n FROM schedule_delay_reasons WHERE object_id=$1', [s.obj.id])).rows[0].n, 1, 'only the legitimate reason was stored');
+  } finally { await c.end(); }
+});
+
+test('B8 native lock order: a schedule mutation holding the object never deadlocks with a transaction that holds a work row FOR UPDATE and then inserts a row referencing the object', async () => {
+  const s = await scenario('B8');
+  await ctx.svc.createDraft(s.pm, s.obj.id);
+  const spare = (await ctx.db.one(ctx.db.pool, 'SELECT id FROM contractors WHERE tenant_id=$1 AND id<>$2 ORDER BY name LIMIT 1', [s.t, s.contractor.id])).id;
+  const holder = await client(), watcher = await client();
+  try {
+    // the other slice's shape (e.g. an inspection request): lock the work row, later insert something that references the object
+    await holder.query('BEGIN');
+    await holder.query('SELECT id FROM works WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [s.t, s.work.id]);
+    // the schedule mutation takes the object lock, then needs the work row (the new item references it) and waits for the holder
+    const adding = ctx.svc.addEntry(s.pm, s.obj.id, entryBody(s, s.u1, F1));
+    const started = Date.now();
+    for (;;) {
+      const waiting = (await watcher.query("SELECT count(*)::int n FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock'")).rows[0].n;
+      if (waiting > 0) break;
+      assert.ok(Date.now() - started < 8000, 'the schedule mutation should be waiting for the work row');
+      await sleep(20);
+    }
+    // the holder now inserts a row that references the object (FOR KEY SHARE on the object row). It must not wait for the schedule
+    // mutation's object lock — FOR UPDATE would turn this into a lock-order inversion that PostgreSQL resolves by aborting one of the two.
+    const t0 = Date.now();
+    await holder.query('INSERT INTO object_contractors(tenant_id,object_id,contractor_id) VALUES($1,$2,$3)', [s.t, s.obj.id, spare]);
+    assert.ok(Date.now() - t0 < 800, 'the insert was not blocked by the schedule mutation (' + (Date.now() - t0) + ' ms)');
+    await holder.query('COMMIT');
+    const entry = await adding;
+    assert.ok(entry.id, 'the schedule mutation completes once the work row is released');
+  } finally { await holder.query('ROLLBACK').catch(() => {}); await holder.end(); await watcher.end(); }
+});

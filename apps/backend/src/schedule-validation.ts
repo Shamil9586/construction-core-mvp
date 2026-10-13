@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { uuid, text, date, version } from './validation';
-import { DELAY_CATEGORY_CODE_PATTERN } from '../../../packages/domain/schedule';
+import { DELAY_CATEGORY_CODE_PATTERN, SCHEDULE_DATE_RANGE_MESSAGE, isScheduleDate } from '../../../packages/domain/schedule';
 
 /**
  * GPR-1 request shapes. Kept beside (not inside) validation.ts so the schedule slice adds no lines to a file every slice edits.
@@ -10,22 +10,25 @@ import { DELAY_CATEGORY_CODE_PATTERN } from '../../../packages/domain/schedule';
 const sequence = z.number().int().min(1).max(100000);
 const longText = z.string().trim().min(1).max(2000);
 
+/** A planning date: a valid civil date within the years a schedule plans in (a two-digit year typed into a date field is `0026-…`, not 2026). */
+const scheduleDate = date.refine(isScheduleDate, SCHEDULE_DATE_RANGE_MESSAGE);
+
 /** `?asOf=YYYY-MM-DD` — compute plan versus fact on that day instead of today (read-only; the fact is always the latest). */
-export const scheduleAsOf = date;
+export const scheduleAsOf = scheduleDate;
 
 export const scheduleEntryCreateDto = z.object({
     objectWorkId: uuid,
     executionUnitId: uuid.nullable().optional(),
-    plannedStart: date,
-    plannedFinish: date,
+    plannedStart: scheduleDate,
+    plannedFinish: scheduleDate,
     sequence: sequence.optional(),
     predecessorItemId: uuid.nullable().optional(),
 }).strict();
 
 export const scheduleEntryEditDto = z.object({
     version,
-    plannedStart: date.optional(),
-    plannedFinish: date.optional(),
+    plannedStart: scheduleDate.optional(),
+    plannedFinish: scheduleDate.optional(),
     sequence: sequence.optional(),
     predecessorItemId: uuid.nullable().optional(),
 }).strict().refine(d => Object.keys(d).length > 1, 'Нужно изменить хотя бы одно поле');

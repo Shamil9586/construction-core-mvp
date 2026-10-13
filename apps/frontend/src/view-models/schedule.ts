@@ -178,6 +178,11 @@ export interface GprRowViewModel {
   openReasonCount: number;
   /** A delay is real and the viewer may explain it. */
   canRecordReason: boolean;
+  /**
+   * The viewer may close an open reason — whatever the entry's state is NOW: a zone that has since caught up (or been re-planned) is no
+   * longer delayed, and its explanation must not stay open for good just because the form for a NEW one has gone.
+   */
+  canResolveReason: boolean;
 }
 
 function buildRow(entry: ScheduleEntry, access: ScheduleAccess): GprRowViewModel {
@@ -217,6 +222,7 @@ function buildRow(entry: ScheduleEntry, access: ScheduleAccess): GprRowViewModel
     reasons,
     openReasonCount: reasons.filter((reason) => reason.open).length,
     canRecordReason: access.canRecordDelayReason && entry.state === 'DELAYED',
+    canResolveReason: access.canRecordDelayReason,
   };
 }
 
@@ -484,21 +490,25 @@ export type W01ScheduleView =
   | { kind: 'Hidden' }
   | { kind: 'Error'; message: string }
   /** The object has no approved schedule. */
-  | { kind: 'NoBaseline' }
+  | { kind: 'NoBaseline'; canOpenObject: boolean }
   /** The object has an approved schedule, but this work is not in it. */
-  | { kind: 'NotScheduled' }
-  | { kind: 'Ready'; plannedStart: string; plannedFinish: string; state: StatusPresentation; delay: string | null; entryCount: number; zones: string };
+  | { kind: 'NotScheduled'; canOpenObject: boolean }
+  | { kind: 'Ready'; canOpenObject: boolean; plannedStart: string; plannedFinish: string; state: StatusPresentation; delay: string | null; entryCount: number; zones: string };
 
 export function buildW01ScheduleView(load: ScheduleLoad<WorkSchedule>): W01ScheduleView {
   if (load.status === 'Loading') return { kind: 'Loading' };
   if (load.status === 'Hidden') return { kind: 'Hidden' };
   if (load.status === 'Error') return { kind: 'Error', message: load.message };
   const schedule = load.value;
-  if (!schedule.hasBaseline) return { kind: 'NoBaseline' };
-  if (!schedule.summary || schedule.summary.state === null) return { kind: 'NotScheduled' };
+  // The backend says whether the object's whole schedule is open to this viewer (a PTO engineer with only this work's handoff reads the
+  // work's summary but gets a 403 on the object's plan): the way in is offered only when it leads somewhere.
+  const canOpenObject = schedule.canOpenObjectSchedule;
+  if (!schedule.hasBaseline) return { kind: 'NoBaseline', canOpenObject };
+  if (!schedule.summary || schedule.summary.state === null) return { kind: 'NotScheduled', canOpenObject };
   const zones = schedule.entries.map((entry) => entry.zone).filter((zone): zone is string => zone !== null);
   return {
     kind: 'Ready',
+    canOpenObject,
     plannedStart: formatDate(schedule.summary.plannedStart),
     plannedFinish: formatDate(schedule.summary.plannedFinish),
     state: scheduleEntryStatePresentation(schedule.summary.state),

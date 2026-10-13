@@ -9,6 +9,12 @@
  *     Окраска потолков, 100 м², the whole work (50% on day 2 of 12: В работе)
  *   Object «Соседний объект» (another РП) with its own approved schedule — for isolation.
  */
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+/** Where the scenario hands the spec the session of a work-handoff-only PTO engineer (see tests/gpr-1-browser/schedule.spec.ts). */
+const HANDOFF_FILE = path.join(os.tmpdir(), 'gpr-1-browser-handoff.json');
 process.env.RATE_LIMIT_MAX = '5000';
 process.env.AUTH_RATE_LIMIT_MAX = '500';
 
@@ -64,5 +70,17 @@ const dayFromToday = (d: number) => new Date(Date.now() + d * 86400000).toISOStr
   await h.req(`objects/${neighbour.id}/schedule/draft/entries`, { objectWorkId: nWork.id, executionUnitId: nUnit.id, plannedStart: dayFromToday(-5), plannedFinish: dayFromToday(5) });
   await h.login('DEPUTY_DIRECTOR');
   await h.req(`objects/${neighbour.id}/schedule/draft/approve`, { version: (await h.req(`objects/${neighbour.id}/schedule`)).draft.version });
+
+  // a PTO engineer who holds ONLY the handoff of «Окраска потолков»: object shell access, no membership of the object's PTO team. The browser
+  // spec reads the session token from this file (the engineer is not a role the mock login can pick).
+  const { ObjectTeamService } = await import('../../apps/backend/src/team-service');
+  const { actorByRole, handoffWorkToPto, tokenFor } = await import('../helpers/pbx3-fixtures');
+  const teams = new ObjectTeamService();
+  const deputyActor = await actorByRole('DEPUTY_DIRECTOR');
+  const ptoHead = await makeUser('Начальник ПТО (график)', 'PTO_HEAD'), engineer = await makeUser('Инженер ПТО (график)', 'PTO');
+  await teams.assignObjectLead(deputyActor, object.id, { leadUserId: ptoHead.id });
+  await teams.assignOrgMember(deputyActor, { memberUserId: engineer.id, managerUserId: ptoHead.id });
+  await handoffWorkToPto(ceiling.id, engineer);
+  fs.writeFileSync(HANDOFF_FILE, JSON.stringify({ token: await tokenFor(engineer), objectId: object.id, workId: ceiling.id }));
   console.log('GPR-1 browser scenario ready');
 })().catch((e) => { console.error(e); process.exit(1); });

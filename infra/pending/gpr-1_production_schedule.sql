@@ -120,9 +120,21 @@ CREATE INDEX schedule_revisions_object_idx ON schedule_revisions(tenant_id,objec
 -- The audit backstop: an approved plan can never be rewritten, whatever writes to the table. Allowed: a draft is edited / approved /
 -- discarded; the current baseline is superseded (touching only the supersession columns). Superseded and discarded revisions are frozen.
 CREATE FUNCTION schedule_revisions_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE
+    related_object uuid;
 BEGIN
     IF TG_OP = 'DELETE' THEN
         RAISE EXCEPTION 'Версия графика не удаляется: она остаётся в системе для аудита.' USING ERRCODE = '23514';
+    END IF;
+    IF TG_OP = 'INSERT' THEN
+        -- A correction is cloned from the SAME object's baseline: the composite FK proves the tenant, this proves the object.
+        IF NEW.based_on_revision_id IS NOT NULL THEN
+            SELECT object_id INTO related_object FROM schedule_revisions WHERE tenant_id = NEW.tenant_id AND id = NEW.based_on_revision_id;
+            IF related_object IS DISTINCT FROM NEW.object_id THEN
+                RAISE EXCEPTION 'Версия, на которой основан черновик, должна относиться к тому же объекту.' USING ERRCODE = '23514';
+            END IF;
+        END IF;
+        RETURN NEW;
     END IF;
     IF NEW.id IS DISTINCT FROM OLD.id OR NEW.tenant_id IS DISTINCT FROM OLD.tenant_id OR NEW.object_id IS DISTINCT FROM OLD.object_id
        OR NEW.revision_no IS DISTINCT FROM OLD.revision_no OR NEW.based_on_revision_id IS DISTINCT FROM OLD.based_on_revision_id
@@ -133,6 +145,12 @@ BEGIN
            (OLD.status = 'DRAFT' AND NEW.status IN ('APPROVED','DISCARDED'))
         OR (OLD.status = 'APPROVED' AND NEW.status = 'SUPERSEDED')) THEN
         RAISE EXCEPTION 'Недопустимый переход статуса версии графика: % -> %.', OLD.status, NEW.status USING ERRCODE = '23514';
+    END IF;
+    IF NEW.superseded_by_revision_id IS NOT NULL AND NEW.superseded_by_revision_id IS DISTINCT FROM OLD.superseded_by_revision_id THEN
+        SELECT object_id INTO related_object FROM schedule_revisions WHERE tenant_id = NEW.tenant_id AND id = NEW.superseded_by_revision_id;
+        IF related_object IS DISTINCT FROM NEW.object_id THEN
+            RAISE EXCEPTION 'Замещающая версия должна относиться к тому же объекту.' USING ERRCODE = '23514';
+        END IF;
     END IF;
     IF OLD.status <> 'DRAFT' THEN
         IF NOT (OLD.status = 'APPROVED' AND NEW.status = 'SUPERSEDED') THEN
@@ -146,7 +164,7 @@ BEGIN
     END IF;
     RETURN NEW;
 END $$;
-CREATE TRIGGER schedule_revisions_guard BEFORE UPDATE OR DELETE ON schedule_revisions FOR EACH ROW EXECUTE FUNCTION schedule_revisions_guard();
+CREATE TRIGGER schedule_revisions_guard BEFORE INSERT OR UPDATE OR DELETE ON schedule_revisions FOR EACH ROW EXECUTE FUNCTION schedule_revisions_guard();
 
 -- ---------------------------------------------------------------------------------------------------------------------------------
 -- schedule_revision_entries — dates and order of an item inside one revision
@@ -169,6 +187,8 @@ CREATE TABLE schedule_revision_entries(
     UNIQUE(tenant_id,id),
     UNIQUE(tenant_id,revision_id,item_id),
     CHECK(planned_finish >= planned_start),
+    -- The years a schedule plans in (packages/domain/schedule.ts SCHEDULE_YEAR_MIN / MAX): a two-digit year typed into a date field is 0026-.., not 2026.
+    CONSTRAINT schedule_revision_entries_dates_in_range CHECK(planned_start BETWEEN DATE '2000-01-01' AND DATE '2100-12-31' AND planned_finish BETWEEN DATE '2000-01-01' AND DATE '2100-12-31'),
     CHECK(predecessor_item_id IS NULL OR predecessor_item_id <> item_id),
     FOREIGN KEY(tenant_id,revision_id) REFERENCES schedule_revisions(tenant_id,id),
     FOREIGN KEY(tenant_id,item_id) REFERENCES schedule_items(tenant_id,id),
@@ -274,15 +294,22 @@ CREATE FUNCTION schedule_delay_reasons_guard() RETURNS trigger LANGUAGE plpgsql 
 DECLARE
     item_object uuid;
     revision_object uuid;
+    revision_status text;
 BEGIN
     IF TG_OP = 'DELETE' THEN
         RAISE EXCEPTION 'Причина отставания не удаляется: она остаётся в системе для аудита.' USING ERRCODE = '23514';
     END IF;
     IF TG_OP = 'INSERT' THEN
         SELECT object_id INTO item_object FROM schedule_items WHERE tenant_id = NEW.tenant_id AND id = NEW.item_id;
-        SELECT object_id INTO revision_object FROM schedule_revisions WHERE tenant_id = NEW.tenant_id AND id = NEW.revision_id;
+        SELECT object_id, status INTO revision_object, revision_status FROM schedule_revisions WHERE tenant_id = NEW.tenant_id AND id = NEW.revision_id;
         IF item_object IS DISTINCT FROM NEW.object_id OR revision_object IS DISTINCT FROM NEW.object_id THEN
             RAISE EXCEPTION 'Участок и версия графика должны относиться к объекту причины отставания.' USING ERRCODE = '23514';
+        END IF;
+        -- The reason is evidence about a delay measured against a baseline: that baseline is the object's current APPROVED revision and it
+        -- plans this item (a draft, a discarded revision or an item the revision never contained cannot have a delay).
+        IF revision_status IS DISTINCT FROM 'APPROVED'
+           OR NOT EXISTS (SELECT 1 FROM schedule_revision_entries WHERE tenant_id = NEW.tenant_id AND revision_id = NEW.revision_id AND item_id = NEW.item_id) THEN
+            RAISE EXCEPTION 'Причина отставания относится к участку утверждённого графика объекта.' USING ERRCODE = '23514';
         END IF;
         RETURN NEW;
     END IF;

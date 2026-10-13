@@ -6,6 +6,7 @@ import {
   scheduleEntryStatePresentation, delayKindText,
 } from '../apps/frontend/src/view-models/schedule';
 import { isObjectSchedule, isWorkSchedule } from '../apps/frontend/src/data/scheduleApi';
+import { afterFailure, initialScheduleState, keepForSameKey, loadFor, type ScheduleState } from '../apps/frontend/src/app/scheduleLoadState';
 import type { ObjectSchedule, ScheduleAccess, ScheduleEntry, ScheduleLoad, WorkSchedule } from '../apps/frontend/src/types/schedule';
 
 /**
@@ -78,6 +79,10 @@ test('a row presents the backend\'s figures as they are: plan and fact side by s
   assert.equal(c.canRecordReason, true, 'the viewer may explain a real delay');
   assert.equal(a.canRecordReason, false, 'but not a completed scope');
   assert.equal(buildGprViewModel(schedule({ entries: [zero], access: access() })).rows[0].canRecordReason, false, 'nor without the permission');
+  // closing an OPEN reason is not tied to the entry still being late: a zone that has caught up must let its explanation be closed
+  assert.equal(a.canResolveReason, true, 'a completed scope\'s old explanation can still be closed');
+  assert.equal(b.canResolveReason, true);
+  assert.equal(buildGprViewModel(schedule({ entries: [zero], access: access() })).rows[0].canResolveReason, false, 'but never without the permission');
   // never a percentage-points figure, never a difference of two percentages
   assert.equal(JSON.stringify(vm).includes('п.п.'), false);
 });
@@ -226,18 +231,27 @@ test('O01: the object\'s production conclusion comes from the schedule — and s
 
 test('W01: the work\'s own summary — start, finish, state, delay — and an honest statement when there is none', () => {
   const work = (over: Partial<WorkSchedule> = {}): WorkSchedule => ({
-    objectId: OBJECT, objectWorkId: WORK, asOf: '2026-03-15', progressSource: 'RP_FACT', hasBaseline: true, revisionNo: 1,
+    objectId: OBJECT, objectWorkId: WORK, asOf: '2026-03-15', progressSource: 'RP_FACT', canOpenObjectSchedule: true, hasBaseline: true, revisionNo: 1,
     summary: { plannedStart: '2026-03-01', plannedFinish: '2026-03-22', state: 'DELAYED', delayDays: 14, entryCount: 2 },
     entries: [entry({ itemId: 'a' }), entry({ itemId: 'b', zone: '2 этаж' })], ...over,
   });
   assert.deepEqual(buildW01ScheduleView({ status: 'Hidden' }), { kind: 'Hidden' });
   assert.deepEqual(buildW01ScheduleView({ status: 'Loading' }), { kind: 'Loading' });
   const ready = buildW01ScheduleView(loaded(work()));
-  assert.deepEqual(ready, { kind: 'Ready', plannedStart: '01.03.2026', plannedFinish: '22.03.2026', state: { variant: 'Delayed', label: 'Есть отставание' }, delay: '14 дней', entryCount: 2, zones: '1 этаж, 2 этаж' });
+  assert.deepEqual(ready, { kind: 'Ready', canOpenObject: true, plannedStart: '01.03.2026', plannedFinish: '22.03.2026', state: { variant: 'Delayed', label: 'Есть отставание' }, delay: '14 дней', entryCount: 2, zones: '1 этаж, 2 этаж' });
   const done = buildW01ScheduleView(loaded(work({ summary: { plannedStart: '2026-03-01', plannedFinish: '2026-03-22', state: 'COMPLETED', delayDays: 0, entryCount: 2 } })));
   assert.equal(done.kind === 'Ready' && done.delay, null, 'a delay is shown only while there is one');
   assert.equal(buildW01ScheduleView(loaded(work({ hasBaseline: false, revisionNo: null, summary: null, entries: [] }))).kind, 'NoBaseline');
   assert.equal(buildW01ScheduleView(loaded(work({ summary: null, entries: [] }))).kind, 'NotScheduled');
+  // the way into the object's schedule is offered only when the backend says it leads somewhere (a handoff-only PTO engineer gets a 403 there)
+  const closed = { canOpenObjectSchedule: false };
+  const views = [
+    buildW01ScheduleView(loaded(work(closed))),
+    buildW01ScheduleView(loaded(work({ ...closed, hasBaseline: false, revisionNo: null, summary: null, entries: [] }))),
+    buildW01ScheduleView(loaded(work({ ...closed, summary: null, entries: [] }))),
+  ];
+  assert.deepEqual(views.map((view) => view.kind), ['Ready', 'NoBaseline', 'NotScheduled']);
+  for (const view of views) assert.equal('canOpenObject' in view && view.canOpenObject, false);
 });
 
 test('API guards: only the documented read model, for the requested object / work, ever reaches a screen', () => {
@@ -255,10 +269,11 @@ test('API guards: only the documented read model, for the requested object / wor
   assert.equal(isObjectSchedule({ ...good, entries: [{ ...good.entries[0], plannedStart: '01.03.2026' }] }, OBJECT), false);
   assert.equal(isObjectSchedule({ ...good, draft: { revisionId: 'x' } }, OBJECT), false);
 
-  const w: WorkSchedule = { objectId: OBJECT, objectWorkId: WORK, asOf: '2026-03-15', progressSource: 'RP_FACT', hasBaseline: true, revisionNo: 1, summary: { plannedStart: '2026-03-01', plannedFinish: '2026-03-22', state: 'DELAYED', delayDays: 14, entryCount: 2 }, entries: [entry({ itemId: 'a' })] };
+  const w: WorkSchedule = { objectId: OBJECT, objectWorkId: WORK, asOf: '2026-03-15', progressSource: 'RP_FACT', canOpenObjectSchedule: true, hasBaseline: true, revisionNo: 1, summary: { plannedStart: '2026-03-01', plannedFinish: '2026-03-22', state: 'DELAYED', delayDays: 14, entryCount: 2 }, entries: [entry({ itemId: 'a' })] };
   assert.equal(isWorkSchedule(w, WORK), true);
   assert.equal(isWorkSchedule(w, 'other-work'), false);
   assert.equal(isWorkSchedule({ ...w, summary: null }, WORK), true);
+  assert.equal(isWorkSchedule({ ...w, canOpenObjectSchedule: undefined }, WORK), false, 'whether the object\'s schedule is open to this viewer is part of the model');
   assert.equal(isWorkSchedule({ ...w, summary: { ...w.summary, state: 'RED' } }, WORK), false);
   assert.equal(isWorkSchedule([], WORK), false);
 });
@@ -274,4 +289,23 @@ test('the schedule\'s frontend never reaches documentation / СК / money and ne
     for (const forbidden of ['documentationPackage', 'sdoClosing', 'estimatedCost', 'contractValue', 'financial', 'п.п.', 'healthStatus', 'scheduleStatus'])
       assert.equal(src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '').includes(forbidden), false, `${f} must not use ${forbidden}`);
   }
+});
+
+test('a schedule is shown only for the object / work it was fetched for: a key change never paints the previous plan', () => {
+  const plan = loaded(schedule());
+  const forA: ScheduleState<ObjectSchedule> = { key: 'A', load: plan };
+  // the same object refreshing keeps its table on screen
+  assert.equal(keepForSameKey(forA, 'A'), forA);
+  // stepping from object A straight to object B (history reuses the route element): B starts from Loading, A's plan is gone
+  assert.deepEqual(keepForSameKey(forA, 'B'), { key: 'B', load: { status: 'Loading' } });
+  assert.deepEqual(loadFor(forA, 'B'), { status: 'Loading' }, 'even before the effect runs, the screen is not handed A\'s plan');
+  assert.equal(loadFor(forA, 'A'), plan);
+  // a failed refresh of the same key keeps the last good plan; a failure for a new key is stated, never covered by the old plan
+  assert.equal(afterFailure(forA, 'A', 'сеть'), forA);
+  assert.deepEqual(afterFailure(forA, 'B', 'сеть'), { key: 'B', load: { status: 'Error', message: 'сеть' } });
+  assert.deepEqual(afterFailure({ key: 'A', load: { status: 'Loading' } }, 'A', 'сеть'), { key: 'A', load: { status: 'Error', message: 'сеть' } });
+  // nothing is fetched without a real session or a key: the block is simply absent, not "loading" forever
+  assert.deepEqual(initialScheduleState('A', false), { key: 'A', load: { status: 'Hidden' } });
+  assert.deepEqual(initialScheduleState(undefined, true), { key: undefined, load: { status: 'Hidden' } });
+  assert.deepEqual(initialScheduleState('A', true), { key: 'A', load: { status: 'Loading' } });
 });

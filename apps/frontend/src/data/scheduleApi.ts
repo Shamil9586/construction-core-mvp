@@ -100,7 +100,7 @@ export function isObjectSchedule(value: unknown, expectedObjectId: string): valu
 export function isWorkSchedule(value: unknown, expectedWorkId: string): value is WorkSchedule {
   if (!isRecord(value)) return false;
   if (value.objectWorkId !== expectedWorkId || !isString(value.objectId) || !isCivil(value.asOf) || value.progressSource !== 'RP_FACT') return false;
-  if (typeof value.hasBaseline !== 'boolean' || !Array.isArray(value.entries) || !value.entries.every(isEntry)) return false;
+  if (typeof value.hasBaseline !== 'boolean' || typeof value.canOpenObjectSchedule !== 'boolean' || !Array.isArray(value.entries) || !value.entries.every(isEntry)) return false;
   if (value.summary === null) return true;
   return isRecord(value.summary) && isCivil(value.summary.plannedStart) && isCivil(value.summary.plannedFinish) && isNumber(value.summary.delayDays) && isNumber(value.summary.entryCount) &&
     (value.summary.state === null || (typeof value.summary.state === 'string' && (STATES as readonly string[]).includes(value.summary.state)));

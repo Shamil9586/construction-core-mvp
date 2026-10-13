@@ -5,7 +5,7 @@ import {
   civilDayNumber, isCivilDate, todayCivil, plannedProgressOn, expectedPhaseOn, deriveScheduleEntryStatus, aggregateScheduleStates,
   resolveObjectScheduleConclusion, diffScheduleEntries, hasPredecessorCycle, worksScheduledAtBothLevels, scheduleApprovalViolations,
   scheduleDatesViolation, isScheduleRevisionTransitionAllowed, effectiveDelayCategories, DEFAULT_DELAY_REASON_CATEGORIES, delayReasonViolation,
-  startsBeforePredecessorFinish, nextScheduleSequence, compareScheduleOrder, SCHEDULE_PROGRESS_SOURCE,
+  startsBeforePredecessorFinish, nextScheduleSequence, compareScheduleOrder, SCHEDULE_PROGRESS_SOURCE, isScheduleDate, SCHEDULE_DATE_RANGE_MESSAGE,
   FINISH_BEFORE_START_MESSAGE, NO_CHANGES_MESSAGE, CORRECTION_REASON_REQUIRED_MESSAGE, EMPTY_SCHEDULE_MESSAGE, PREDECESSOR_CYCLE_MESSAGE, WORK_SCHEDULED_AS_WHOLE_MESSAGE,
   type ScheduleEntrySnapshot,
 } from '../packages/domain/schedule';
@@ -27,6 +27,26 @@ test('civil dates: exact whole-day arithmetic, invalid dates refused', () => {
   assert.equal(isCivilDate('2026-03-01'), true);
   assert.throws(() => civilDayNumber('bad'));
   assert.equal(todayCivil(new Date('2026-10-13T23:59:59Z')), '2026-10-13');
+});
+
+test('civil dates: every year is read as written — Date.UTC would read 0026 as 1926', () => {
+  assert.equal(civilDayNumber('1970-01-01'), 0);
+  assert.equal(civilDayNumber('1969-12-31'), -1);
+  assert.ok(civilDayNumber('0026-03-01') < civilDayNumber('1900-01-01'), 'year 26 is long before 1900, not 1926');
+  assert.notEqual(civilDayNumber('0026-03-01'), civilDayNumber('1926-03-01'));
+  assert.notEqual(civilDayNumber('0099-01-01'), civilDayNumber('1999-01-01'));
+  assert.ok(civilDayNumber('0099-12-31') < civilDayNumber('0100-01-01'), 'the order of years 99 and 100 holds');
+  assert.equal(civilDayNumber('0100-01-01') - civilDayNumber('0099-12-31'), 1);
+  assert.equal(civilDayNumber('2000-03-01') - civilDayNumber('2000-02-28'), 2, 'leap year 2000');
+  assert.equal(civilDayNumber('2100-03-01') - civilDayNumber('2100-02-28'), 1, '2100 is not a leap year');
+});
+
+test('a schedule plans in the years 2000–2100: a typed two-digit year is refused, not measured', () => {
+  for (const ok of ['2000-01-01', '2026-03-01', '2100-12-31']) assert.equal(isScheduleDate(ok), true, ok);
+  for (const bad of ['1999-12-31', '2101-01-01', '0026-03-01', '0099-12-31', '9999-01-01', '2026-02-30', 'bad', 20260301, null]) assert.equal(isScheduleDate(bad), false, String(bad));
+  assert.equal(scheduleDatesViolation('0026-03-01', '2026-03-15'), SCHEDULE_DATE_RANGE_MESSAGE);
+  assert.equal(scheduleDatesViolation('2026-03-01', '2101-03-15'), SCHEDULE_DATE_RANGE_MESSAGE);
+  assert.equal(scheduleDatesViolation('2026-03-01', '2026-03-15'), null);
 });
 
 test('planned progress is the accepted linear plan: 0 before the start, 100 from the finish date on', () => {
@@ -92,7 +112,7 @@ test('Есть отставание: behind the plan by a whole day or more — 
   assert.equal(status('2026-03-06', 20).delayDays, 3);
 });
 
-test('unfinished on the finish date or after it is delayed (FINISH), and the days keep counting', () => {
+test('on the finish date a lag under one whole day is not yet a delay; once a whole day is lost — and always after the finish date — it is (FINISH), and the days keep counting', () => {
   const onFinish = status('2026-03-11', 90);
   assert.equal(onFinish.state, 'DELAYED');
   assert.equal(onFinish.delayDays, 1);

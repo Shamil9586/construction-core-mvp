@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { test, expect, type Page } from '@playwright/test';
 
 /**
@@ -272,4 +275,45 @@ test('a correction: the РП prepares a draft, the approved dates keep measuring
   await expect(dp.getByText(`Окончание: ${ru(dt(6))} → ${ru(newFinish)}`).first()).toBeVisible();
   await expect(dp.getByText('Версия №1 — Заменена версией №2')).toBeVisible();
   await ctx.close();
+});
+
+test('an explanation of a delay that has since been overcome can still be closed: the zone caught up, and the open reason is not stuck for good', async ({ page }) => {
+  // zone 2 catches up: the RP reports the whole 300 м²
+  const pm = await mockLogin('PROJECT_MANAGER');
+  const auth = { 'Content-Type': 'application/json', Authorization: `Bearer ${pm.token}` };
+  const snapshot = await (await fetch(`${API}/snapshot`, { headers: auth })).json();
+  const unit = snapshot.executionUnits.find((u: any) => u.objectWorkId === plasterId && u.location === '2 этаж');
+  const portion = snapshot.portions.find((p: any) => p.executionUnitId === unit.id);
+  const reported = await fetch(`${API}/portions/${portion.id}/fact`, { method: 'POST', headers: auth, body: JSON.stringify({ quantity: 300, version: portion.version, comment: 'Факт РП' }) });
+  expect(reported.status).toBe(201);
+
+  await openAs(page, pm.token, `/object/${objectId}/schedule`);
+  await expect(rowOf(page, '2 этаж').getByText('Выполнено', { exact: true })).toBeVisible();
+  // the form for a NEW reason went with the delay ...
+  await expect(page.getByRole('button', { name: 'Указать причину' })).toHaveCount(0);
+  // ... the old explanation is still listed, still open, and can be closed
+  const reasons = page.getByRole('list').filter({ hasText: 'Штукатурная смесь не доставлена на объект' });
+  await expect(reasons).toContainText('Открыта');
+  await expect(rowOf(page, '2 этаж')).toContainText('Причин указано: 1');
+  await reasons.getByRole('button', { name: 'Закрыть причину' }).click();
+  const form = page.getByRole('form', { name: /Закрыть причину/ });
+  await form.getByLabel('Что изменилось (необязательно)').fill('Участок выполнен');
+  await form.getByRole('button', { name: 'Закрыть причину' }).click();
+  await expect(reasons).toContainText('Закрыта');
+  await expect(reasons).toContainText('Участок выполнен');
+  await expect(rowOf(page, '2 этаж')).not.toContainText('Причин указано');
+  await expect(page.getByRole('button', { name: 'Закрыть причину' })).toHaveCount(0);
+});
+
+test('W01 for a PTO engineer who holds only this work\'s handoff: the work\'s schedule summary, and no door into an object plan that is shut to them', async ({ page }) => {
+  const handoff = JSON.parse(fs.readFileSync(path.join(os.tmpdir(), 'gpr-1-browser-handoff.json'), 'utf8')) as { token: string; objectId: string; workId: string };
+  await openAs(page, handoff.token, `/object/${handoff.objectId}/work/${handoff.workId}`);
+  await expect(page.getByRole('heading', { name: 'График производства работ', level: 2 })).toBeVisible();
+  const section = page.locator('section').filter({ has: page.getByText('Плановое начало по графику') });
+  await expect(section.getByText(ru(dt(-2)))).toBeVisible();
+  await expect(section.getByText(ru(dt(10)))).toBeVisible();
+  // the object's schedule is not theirs to open (403), so W01 does not offer a button that ends on an error page
+  await expect(page.getByRole('button', { name: /График производства работ объекта/ })).toHaveCount(0);
+  await page.goto(`/app.html/object/${handoff.objectId}/schedule`);
+  await expect(page.getByText('График производства работ недоступен для вашей роли или для этого объекта')).toBeVisible();
 });
