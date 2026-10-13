@@ -1,4 +1,5 @@
-import { useNavigate, useParams } from 'react-router-dom';
+import { useEffect } from 'react';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { PackageDetail } from '../../screens/PackageDetail';
 import type { PackageDetailActionHandlers } from '../../screens/PackageDetail';
 import { buildPackageDetailViewModel } from '../../view-models/documentationPackage';
@@ -11,7 +12,7 @@ import { useAosrSection } from '../useAosrSection';
 import { AosrSection } from '../../screens/PackageDetail/AosrSection';
 import { canAccessDocumentation, canManageDocumentation, isPtoRole } from '../../auth/internalRoles';
 import { AppSidebar } from '../AppSidebar';
-import { ROUTE_PATHS, objectPath, workPath } from '../routePaths';
+import { ROUTE_PATHS, documentationRegistryPath, objectPath, workPath } from '../routePaths';
 import { RouteError, RouteForbidden, RouteLoading, RouteNotFound } from '../RouteStatus';
 
 /**
@@ -49,6 +50,22 @@ export function PackageDetailRoute() {
   const ptoAssignment = useWorkPtoAssignment(routePackage?.objectWorkId, !!session && session.user.role === 'PTO', routePackage?.objectId);
 
   const aosr = useAosrSection(routePackage?.id, !!session && canManageDocumentation(session.user.role));
+
+  // ID-AUTO-2 — a registry blocker deep-links to the section that fixes it (`?focus=scope|method|aosr|schemes`, `&aosr=<id>`). Navigation
+  // only: the target section is scrolled into view and focused once its content exists; nothing about the package is decided here.
+  const [searchParams] = useSearchParams();
+  const focusName = searchParams.get('focus');
+  const focusAosrId = searchParams.get('aosr');
+  const focusReady = aosr.view !== null;
+  useEffect(() => {
+    if (!focusName || !focusReady) return;
+    const id = focusName === 'aosr' && focusAosrId ? `package-focus-aosr-${focusAosrId}` : ['scope', 'method', 'aosr', 'schemes'].includes(focusName) ? `package-focus-${focusName}` : null;
+    const element = id ? document.getElementById(id) : null;
+    if (!element) return;
+    if (!element.hasAttribute('tabindex')) element.setAttribute('tabindex', '-1');
+    element.scrollIntoView({ block: 'start' });
+    element.focus({ preventScroll: true });
+  }, [focusName, focusAosrId, focusReady]);
 
   if (state.status === 'Loading') return <RouteLoading />;
   if (state.status === 'Error') return <RouteError message={state.message} />;
@@ -90,6 +107,7 @@ export function PackageDetailRoute() {
         onNavigateHome={() => navigate(ROUTE_PATHS.company)}
         onSelectObject={(id) => navigate(objectPath(id))}
         onSelectWork={(objectId, objectWorkId) => navigate(workPath(objectId, objectWorkId))}
+        onOpenRegistry={session && canAccessDocumentation(session.user.role) ? () => navigate(documentationRegistryPath(archived.objectId)) : undefined}
       />
     );
   }
@@ -197,9 +215,11 @@ export function PackageDetailRoute() {
       onSelectObject={(id) => navigate(objectPath(id))}
       onSelectWork={(objectId, objectWorkId) => navigate(workPath(objectId, objectWorkId))}
       actions={actions}
+      onOpenRegistry={session && canAccessDocumentation(session.user.role) ? () => navigate(documentationRegistryPath(pkg.objectId)) : undefined}
       aosrSection={
         <AosrSection
           packageId={pkg.id}
+          initialOpenAosrId={focusName === 'aosr' ? focusAosrId : null}
           packageStatus={pkg.status}
           view={aosr.view}
           quantity={aosr.quantity}

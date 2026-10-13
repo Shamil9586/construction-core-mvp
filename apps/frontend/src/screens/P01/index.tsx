@@ -48,6 +48,8 @@ export interface P01ActionHandlers {
    */
   onOpenWork: (objectId: string, objectWorkId: string) => void;
   onOpenPackage: (packageId: string) => void;
+  /** ID-AUTO-2 — the object's «Реестр ИД» (documentary readiness inside ONE object); the queue itself stays an assignment / work queue. */
+  onOpenRegistry?: (objectId: string) => void;
 }
 
 function WorkRow({ row, actions }: { row: P01WorkRow; actions?: P01ActionHandlers }) {
@@ -58,6 +60,11 @@ function WorkRow({ row, actions }: { row: P01WorkRow; actions?: P01ActionHandler
       </td>
       <td className={styles.cell}>
         <span className={[typeClass('body'), styles.secondary].join(' ')}>{row.objectName}</span>
+        {actions?.onOpenRegistry ? (
+          <button type="button" className={styles.registryLink} onClick={() => actions.onOpenRegistry?.(row.objectId)}>
+            Реестр ИД
+          </button>
+        ) : null}
       </td>
       <td className={styles.cell}>
         {row.package ? (

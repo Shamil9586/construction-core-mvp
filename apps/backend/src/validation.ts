@@ -77,6 +77,15 @@ export const sdoClosingAllocationCancelDto = z.object({ version }).strict();
 // F8.3-17.2: PTO-only pre-handoff correction — same shape as sdoReturnToPtoDto
 // (SDO's own post-handoff "Вернуть в ПТО"), a separate dedicated operation.
 export const documentationPackageArchiveDto = z.object({ reason: text, version }).strict();
+// ID-AUTO-2 — Object documentation registry filters (query string). Filters narrow the rows only; they never widen what the actor may read.
+export const documentationRegistryQuery = z.object({
+    responsibleUserId: uuid.optional(),
+    status: z.enum(['DRAFT', 'PREPARING', 'READY_FOR_PRESENTATION', 'PRESENTED', 'RETURNED', 'CORRECTING', 'ACCEPTED_BY_CUSTOMER']).optional(),
+    ready: z.enum(['true', 'false']).optional(),
+    method: z.enum(['CORE', 'EXTERNAL', 'UNSET']).optional(),
+    q: z.string().trim().max(200).optional(),
+    archived: z.enum(['true', 'false']).optional(),
+}).strict();
 export const documentationPackageCorrectionDto = z.object({ version, comment: text.optional() }).strict();
 // ID-AUTO-1 AOSR.
 const longText = z.string().trim().min(1).max(4000);

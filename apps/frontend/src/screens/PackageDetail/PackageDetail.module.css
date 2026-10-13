@@ -186,3 +186,24 @@
   outline: var(--cc-focus-ring-width) solid var(--cc-focus-ring);
   outline-offset: var(--cc-focus-ring-offset);
 }
+
+/* ID-AUTO-2 — back to the object's «Реестр ИД». */
+.registryButton {
+  box-sizing: border-box;
+  padding: var(--cc-p-space-8) var(--cc-button-padding-x);
+  border: var(--cc-border-width) solid var(--cc-border-interactive);
+  border-radius: var(--cc-button-radius);
+  background: var(--cc-background-surface);
+  color: var(--cc-text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.registryButton:hover {
+  background: var(--cc-action-surface-hover);
+}
+
+.registryButton:focus-visible {
+  outline: var(--cc-focus-ring-width) solid var(--cc-focus-ring);
+  outline-offset: var(--cc-focus-ring-offset);
+}

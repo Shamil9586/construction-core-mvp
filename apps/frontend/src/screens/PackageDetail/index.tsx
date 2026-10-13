@@ -84,6 +84,8 @@ export interface PackageDetailProps {
   actions?: PackageDetailActionHandlers;
   /** ID-AUTO-1 — the АОСР / accepted-quantity sections, built by the route container (data chain stays out of this screen). */
   aosrSection?: ReactNode;
+  /** ID-AUTO-2 — back to this object's «Реестр ИД». Omitted when the viewer has no documentation access. */
+  onOpenRegistry?: () => void;
   className?: string;
 }
 
@@ -612,6 +614,7 @@ export function PackageDetail({
   onSelectWork,
   actions,
   aosrSection,
+  onOpenRegistry,
   className,
 }: PackageDetailProps) {
   return (
@@ -636,6 +639,11 @@ export function PackageDetail({
           <div className={styles.headerActions}>
             <StatusBadge variant={viewModel.status.variant}>{viewModel.status.label}</StatusBadge>
             {viewModel.identity.archive ? <StatusBadge variant="Neutral">{viewModel.identity.archive.badgeText}</StatusBadge> : null}
+            {onOpenRegistry ? (
+              <button type="button" className={styles.registryButton} onClick={onOpenRegistry}>
+                Реестр ИД объекта
+              </button>
+            ) : null}
             {actions && !viewModel.identity.archive && viewModel.nextStatus && viewModel.nextStatusLabel ? (
               <AdvanceStatusControl
                 nextStatus={viewModel.nextStatus}
@@ -649,7 +657,7 @@ export function PackageDetail({
 
       <PackageIdentitySection viewModel={viewModel} />
 
-      <section className={styles.section}>
+      <section className={styles.section} id="package-focus-scope">
         <span className={[styles.sectionLabel, typeClass('label')].join(' ')}>Участки</span>
         {viewModel.portions.length > 0 ? (
           <ul className={styles.plainList}>

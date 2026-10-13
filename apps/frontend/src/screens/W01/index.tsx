@@ -54,6 +54,8 @@ export interface W01Props {
   documentationHandoff?: DocumentationHandoff;
   /** F8.2.1 — `false` only for a confirmed excluded role (SDO); see `DocumentationSection`'s own prop comment. */
   documentationVisible?: boolean;
+  /** ID-AUTO-2 — a link to this object's «Реестр ИД». Omitted when the viewer has no documentation access; the registry is not duplicated here. */
+  onOpenRegistry?: () => void;
 }
 
 function ConfirmationStatus({
@@ -128,6 +130,7 @@ export function WorkCard({
   documentationActions,
   documentationHandoff,
   documentationVisible,
+  onOpenRegistry,
 }: W01Props) {
   return (
     <AppShell sidebar={sidebar} topbar={topbar} className={className}>
@@ -247,6 +250,7 @@ export function WorkCard({
         actions={documentationActions}
         handoff={documentationHandoff}
         visible={documentationVisible}
+        onOpenRegistry={onOpenRegistry}
       />
 
       <SdoSection sdoClosingCases={viewModel.sdoClosingCases} visible={documentationVisible} />

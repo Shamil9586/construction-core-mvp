@@ -10,7 +10,7 @@ import { useCoreRuntime } from '../CoreRuntimeContext';
 import { canAccessDocumentation, canManageDocumentation } from '../../auth/internalRoles';
 import { useWorkPtoAssignment } from '../useWorkPtoAssignment';
 import { AppSidebar } from '../AppSidebar';
-import { ROUTE_PATHS, objectPath, packagePath } from '../routePaths';
+import { ROUTE_PATHS, documentationRegistryPath, objectPath, packagePath } from '../routePaths';
 import { RouteError, RouteLoading, RouteNotFound } from '../RouteStatus';
 
 /**
@@ -133,6 +133,7 @@ export function WorkRoute() {
       documentationActions={documentationActions}
       documentationHandoff={documentationHandoff}
       documentationVisible={documentationVisible}
+      onOpenRegistry={session && canAccessDocumentation(session.user.role) ? () => navigate(documentationRegistryPath(work.objectId)) : undefined}
     />
   );
 }

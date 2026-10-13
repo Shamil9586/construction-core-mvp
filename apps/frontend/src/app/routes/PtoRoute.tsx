@@ -6,7 +6,7 @@ import { useSnapshot } from '../../data/SnapshotContext';
 import { useCoreRuntime } from '../CoreRuntimeContext';
 import { canAccessDocumentation, canManageDocumentation } from '../../auth/internalRoles';
 import { AppSidebar } from '../AppSidebar';
-import { packagePath, workPath } from '../routePaths';
+import { documentationRegistryPath, packagePath, workPath } from '../routePaths';
 import { RouteError, RouteForbidden, RouteLoading } from '../RouteStatus';
 
 /**
@@ -80,6 +80,9 @@ export function PtoRoute() {
           },
           onOpenPackage: (packageId) => {
             navigate(packagePath(packageId));
+          },
+          onOpenRegistry: (objectId) => {
+            navigate(documentationRegistryPath(objectId));
           },
         }
       : undefined;
