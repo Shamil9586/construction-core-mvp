@@ -5,6 +5,8 @@ import { pool, insert } from '../../db';
 import { authenticate, requirePermission, scoped, ensure } from '../../security';
 import { Permission as P } from '../../../../../packages/domain';
 import * as V from '../../validation';
+import { getFileStore } from '../../file-storage/file-store';
+import { authorizeDocumentationAttachment } from '../../file-storage/attachment-access';
 @Controller()
 @ApiTags('Attachments')
 @ApiBearerAuth()
@@ -23,5 +25,5 @@ export class AttachmentsController {
     res: any,
     @Param('id')
     id: string) { const a = await authenticate(r); requirePermission(a, P.PTO_VIEW); const f = await scoped(pool, 'attachments', V.uuid.parse(id), a); if (a.role === 'PROJECT_MANAGER')
-        ensure(f.uploadedBy === a.id, 'РП может скачивать только собственные вложения'); res.setHeader('Content-Type', f.mimeType); res.setHeader('Content-Disposition', "attachment; filename*=UTF-8''" + encodeURIComponent(f.fileName)); res.send(f.content); }
+        ensure(f.uploadedBy === a.id, 'РП может скачивать только собственные вложения'); await authorizeDocumentationAttachment(pool, a, f.id); const file = await getFileStore().read(a.tenantId, f.id); res.setHeader('Content-Type', f.mimeType); res.setHeader('Content-Disposition', "attachment; filename*=UTF-8''" + encodeURIComponent(f.fileName)); res.setHeader('Cache-Control', 'private, no-store'); res.send(file.content); }
 }

@@ -8,6 +8,8 @@ import { Permission as P, isPtoRole, canAccessDocumentation, canMutateDocumentat
 import { AosrPartyRecord, AosrMaterialInput, AosrQualityDocType, resolveAosrReadiness, suggestTypicalAosr, findTypicalItem, proposeAosrPoint1, resolveCurrentAcceptedQuantity, PortionQuantityFigures } from '../../../packages/domain/aosr';
 import { buildAosrRenderModel } from './id-auto/aosr';
 import { renderAosrDocx, aosrTemplateAvailable, AOSR_DOCX_MIME } from './id-auto/aosr-docx';
+import { getFileStore } from './file-storage/file-store';
+import type { FileUnitOfWork } from './file-storage/file-store';
 
 /**
  * ID-AUTO-1 — AOSR documents inside the existing Documentation Package.
@@ -251,31 +253,36 @@ export class AosrService {
         ensure(ok, 'Содержимое файла не соответствует типу');
         return { bytes, fileName: d.fileName.replace(/[^\p{L}\p{N}_. -]/gu, '_') };
     }
-    private async storeSchemeFile(c: any, a: Actor, documentId: string, d: any) {
+    /**
+     * Stores the scheme's bytes through the file store (Core record in `attachments`, bytes in whichever provider is configured) and appends
+     * the next immutable Core version pointing at that record. The version stays `CORE_FILE`: the physical provider is infrastructure.
+     */
+    private async storeSchemeFile(c: any, a: Actor, documentId: string, d: any, where: { objectId: string; packageId: string }, files: FileUnitOfWork) {
         const { bytes, fileName } = this.decodeSchemeFile(d);
-        const file = await insert(c, 'attachments', a.tenantId, { fileProvider: 'LOCAL', fileName, mimeType: d.mimeType, content: bytes, uploadedBy: a.id });
         const max = await one(c, 'SELECT coalesce(max(version_number),0) AS n FROM documentation_document_versions WHERE tenant_id=$1 AND documentation_document_id=$2', [a.tenantId, documentId]);
-        const version = await insert(c, 'documentation_document_versions', a.tenantId, { documentationDocumentId: documentId, versionNumber: Number(max.n) + 1, storageProvider: 'CORE_FILE', storageReference: file.id, comment: fileName, createdBy: a.id });
-        await audit(c, a, 'DocumentationDocumentVersion', version.id, 'CREATE', null, version);
+        const versionNumber = Number(max.n) + 1;
+        const file = await getFileStore().put(c, a, { fileName, mimeType: d.mimeType, bytes, placement: { objectId: where.objectId, category: 'EXECUTIVE_SCHEME' }, log: { documentId, packageId: where.packageId, versionNumber } }, files);
+        const version = await insert(c, 'documentation_document_versions', a.tenantId, { documentationDocumentId: documentId, versionNumber, storageProvider: 'CORE_FILE', storageReference: file.id, comment: fileName, createdBy: a.id });
+        await audit(c, a, 'DocumentationDocumentVersion', version.id, 'CREATE', null, { ...version, attachment: { id: file.id, provider: file.fileProvider, externalFileId: file.externalFileId, sizeBytes: file.sizeBytes, checksumSha256: file.checksumSha256 } });
         return version;
     }
     async createScheme(a: Actor, packageId: string, d: any) {
-        return transaction(async (c) => {
-            await this.writeContext(c, a, packageId, { content: true });
+        return getFileStore().transaction(async (c, files) => {
+            const { pkg } = await this.writeContext(c, a, packageId, { content: true });
             const doc = await insert(c, 'documentation_documents', a.tenantId, { documentationPackageId: packageId, type: 'EXECUTIVE_SCHEME', title: d.title, createdBy: a.id });
             await audit(c, a, 'DocumentationDocument', doc.id, 'CREATE', null, doc);
-            await this.storeSchemeFile(c, a, doc.id, d);
+            await this.storeSchemeFile(c, a, doc.id, d, { objectId: pkg.objectId, packageId }, files);
             return (await packageSchemes(c, a.tenantId, packageId, [doc.id]))[0];
         });
     }
     /** Attaches (or replaces — a new version) the file of an existing scheme, e.g. one that so far had metadata only. */
     async attachSchemeFile(a: Actor, packageId: string, schemeId: string, d: any) {
-        return transaction(async (c) => {
-            await this.writeContext(c, a, packageId, { content: true });
+        return getFileStore().transaction(async (c, files) => {
+            const { pkg } = await this.writeContext(c, a, packageId, { content: true });
             const doc = await scoped(c, 'documentation_documents', schemeId, a, true);
             ensure(doc.type === 'EXECUTIVE_SCHEME' && doc.documentationPackageId === packageId, 'Исполнительная схема не относится к пакету');
             if (d.title) await c.query('UPDATE documentation_documents SET title=$3,version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2', [a.tenantId, schemeId, d.title]);
-            await this.storeSchemeFile(c, a, schemeId, d);
+            await this.storeSchemeFile(c, a, schemeId, d, { objectId: pkg.objectId, packageId }, files);
             return (await packageSchemes(c, a.tenantId, packageId, [schemeId]))[0];
         });
     }
@@ -284,10 +291,10 @@ export class AosrService {
         await this.readContext(pool, a, packageId);
         const doc = await scoped(pool, 'documentation_documents', schemeId, a);
         if (doc.type !== 'EXECUTIVE_SCHEME' || doc.documentationPackageId !== packageId) throw new NotFoundException('Исполнительная схема не найдена');
-        const v = await one(pool, "SELECT storage_reference FROM documentation_document_versions WHERE tenant_id=$1 AND documentation_document_id=$2 AND storage_provider='CORE_FILE' ORDER BY version_number DESC LIMIT 1", [a.tenantId, schemeId]);
+        const v = await one(pool, "SELECT storage_reference,version_number FROM documentation_document_versions WHERE tenant_id=$1 AND documentation_document_id=$2 AND storage_provider='CORE_FILE' ORDER BY version_number DESC LIMIT 1", [a.tenantId, schemeId]);
         if (!v) throw new NotFoundException('Файл схемы не загружен');
-        const f = await scoped(pool, 'attachments', v.storageReference, a);
-        return { fileName: f.fileName as string, mimeType: f.mimeType as string, content: f.content as Buffer };
+        // Authorized above against the Core package/scheme; the attachment id comes from that Core version, never from the client.
+        return getFileStore().read(a.tenantId, v.storageReference, { documentId: schemeId, packageId, versionNumber: v.versionNumber });
     }
 
     async saveParty(a: Actor, packageId: string, d: any) {
@@ -333,7 +340,7 @@ export class AosrService {
      * technical revision and a new documentation version under the same number.
      */
     async generate(a: Actor, id: string, version: number) {
-        return transaction(async (c) => {
+        return getFileStore().transaction(async (c, files) => {
             const aosr0 = await this.aosrOf(c, a, id);
             const { pkg, work } = await this.writeContext(c, a, aosr0.documentationPackageId, { content: true });
             await this.requireCoreMethod(c, a, pkg.id);
@@ -350,9 +357,10 @@ export class AosrService {
             let documentId: string = aosr.documentationDocumentId;
             if (!documentId) documentId = (await insert(c, 'documentation_documents', a.tenantId, { documentationPackageId: pkg.id, type: 'AOSR', title: aosr.title, createdBy: a.id })).id;
             const fileName = `АОСР_${number}_${aosr.title.replace(/[^\p{L}\p{N}]+/gu, '_').slice(0, 60)}.docx`;
-            const file = await insert(c, 'attachments', a.tenantId, { fileProvider: 'LOCAL', fileName, mimeType: AOSR_DOCX_MIME, content: bytes, uploadedBy: a.id });
             const max = await one(c, 'SELECT coalesce(max(version_number),0) AS n FROM documentation_document_versions WHERE tenant_id=$1 AND documentation_document_id=$2', [a.tenantId, documentId]);
             const revision = aosr.revisionCount + 1;
+            // The regenerated DOCX is a NEW Core file record + NEW immutable Core version; whatever the provider is, no previous DOCX is overwritten.
+            const file = await getFileStore().put(c, a, { fileName, mimeType: AOSR_DOCX_MIME, bytes, placement: { objectId: pkg.objectId, category: 'AOSR' }, log: { aosrId: id, documentId, packageId: pkg.id, versionNumber: Number(max.n) + 1 } }, files);
             const dv = await insert(c, 'documentation_document_versions', a.tenantId, { documentationDocumentId: documentId, versionNumber: Number(max.n) + 1, storageProvider: 'CORE_FILE', storageReference: file.id, comment: `АОСР № ${number}, ревизия ${revision}`, createdBy: a.id });
             await insert(c, 'aosr_revisions', a.tenantId, { aosrId: id, revisionNumber: revision, officialNumber: number, renderModel: JSON.stringify(model), documentationVersionId: dv.id, generatedBy: a.id });
             const n = await one(c, 'UPDATE aosr_documents SET official_number=$3,documentation_document_id=$4,revision_count=$5,generated_at_version=version+1,version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2 RETURNING *', [a.tenantId, id, number, documentId, revision]);
@@ -364,10 +372,9 @@ export class AosrService {
     async download(a: Actor, id: string) {
         const aosr = await this.aosrOf(pool, a, id);
         await this.readContext(pool, a, aosr.documentationPackageId);
-        const dv = aosr.documentationDocumentId ? await one(pool, "SELECT storage_reference FROM documentation_document_versions WHERE tenant_id=$1 AND documentation_document_id=$2 AND storage_provider='CORE_FILE' ORDER BY version_number DESC LIMIT 1", [a.tenantId, aosr.documentationDocumentId]) : null;
+        const dv = aosr.documentationDocumentId ? await one(pool, "SELECT storage_reference,version_number FROM documentation_document_versions WHERE tenant_id=$1 AND documentation_document_id=$2 AND storage_provider='CORE_FILE' ORDER BY version_number DESC LIMIT 1", [a.tenantId, aosr.documentationDocumentId]) : null;
         if (!dv) throw new NotFoundException('DOCX ещё не сформирован');
-        const f = await scoped(pool, 'attachments', dv.storageReference, a);
-        return { fileName: f.fileName as string, mimeType: f.mimeType as string, content: f.content as Buffer };
+        return getFileStore().read(a.tenantId, dv.storageReference, { aosrId: id, documentId: aosr.documentationDocumentId, packageId: aosr.documentationPackageId, versionNumber: dv.versionNumber });
     }
 
     /* ---------------------------- quantity ---------------------------- */
