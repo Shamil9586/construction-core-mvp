@@ -64,15 +64,18 @@ that would otherwise make the registry and the gate disagree.
   Work / zone / AOSR title or number. Filters only narrow rows; counts (`summary`) always describe the whole authorized working set:
   active packages, ready, not ready, awaiting engineer action (= the existing PTO attention classifier `resolveDocumentationAttention`).
 * **Navigation.** `/pto` object cell, the object page and W01 («Открыть в реестре ИД») lead to the registry; a row, a blocker or an act opens the
-  existing package detail; the package detail links back. W01 keeps its package cards; `/pto` keeps its assignment queue.
+  existing package detail; the package detail links back. W01 keeps its package cards (its link is a real `<a href>`, not a control);
+  `/pto` keeps its assignment queue.
 
 ## Authorization (the existing contour, nothing new)
 
-`canAccessDocumentation(role)` (SDO / contractors refused) → `objectAccess` (PTO head: current lead of the object; PTO engineer: object member or
-holder of an effective handoff on some work of it; project manager: own object; admin/management as today) → for an engineer who is **not** an
-object member, only the works they are the **effective assignee** of (`worksScope: ASSIGNED_WORKS`) — the same predicates `workAccess` and the
-snapshot apply, asserted equal to the snapshot's visibility in tests. No tenant-wide widening, no portal-wide engineer fallback. Read-only roles
-(e.g. deputy director) see the same register without package links (the package route stays PTO/ADMIN).
+The registry is PTO's documentary workspace, gated exactly like `/pto` and the package screen: `DOCUMENTATION_MANAGE` (PTO, PTO head, ADMIN).
+Roles that only *read* documentation status on W01 (project manager, deputy director, general director, construction control) get **no registry**
+(403 and an explanatory route message; no entry point is shown to them) — the locked F8.2.1-02 decision that W01 is their documentation
+surface is untouched; SDO and contractors have no documentation access at all. Then `objectAccess` (PTO head: current lead of the object; PTO
+engineer: object member or holder of an effective handoff on some work of it) → for an engineer who is **not** an object member, only the works
+they are the **effective assignee** of (`worksScope: ASSIGNED_WORKS`) — the same predicates `workAccess` and the snapshot apply, asserted equal
+to the snapshot's visibility in tests. No tenant-wide widening, no portal-wide engineer fallback.
 
 ## Database
 

@@ -155,7 +155,7 @@ test('«Показать архивные» is an explicit secondary view: read-
   await shot(page, 'registry-archive-1440');
 });
 
-test('PTO head sees the whole object; an assignment-scoped engineer sees only the work they hold; a read-only role sees no package links', async ({ page, browser }) => {
+test('PTO head sees the whole object; an assignment-scoped engineer sees only the work they hold; a read-only role has no registry and no entry point', async ({ page, browser }) => {
   await asRole(page, 'head');
   await page.goto(registryUrl());
   await expect(page.getByRole('button', { name: 'PILOT-W01 Штукатурка стен', exact: true })).toBeVisible();
@@ -175,10 +175,16 @@ test('PTO head sees the whole object; an assignment-scoped engineer sees only th
   const deputy = await browser.newContext({ viewport: { width: 1440, height: 1000 }, locale: 'ru-RU' });
   const dPage = await deputy.newPage();
   await dPage.addInitScript((t: string) => { try { sessionStorage.setItem('session', t); } catch { /* */ } }, sc.tokens.deputy!);
+  // a role that only READS documentation status (deputy / РП / СК / CEO) has no registry: the route explains, and no screen offers an entry point
   await dPage.goto(registryUrl());
-  await expect(dPage.getByText('PILOT-W01 Штукатурка стен')).toBeVisible();
-  await expect(dPage.getByRole('button', { name: 'PILOT-W01 Штукатурка стен', exact: true })).toHaveCount(0); // the name is not a link for a read-only role
-  await expect(dPage.getByText('АОСР «Грунтовка основания» не сформирован')).toBeVisible(); // still told WHY, read-only
+  await expect(dPage.getByText(/Реестр ИД — рабочая область ПТО/)).toBeVisible();
+  await expect(dPage.getByRole('button', { name: 'PILOT-W01 Штукатурка стен', exact: true })).toHaveCount(0);
+  await dPage.goto(`/app.html/object/${sc.objectId}`);
+  await expect(dPage.getByRole('heading', { name: sc.objectName, level: 1 })).toBeVisible();
+  await expect(dPage.getByRole('button', { name: 'Реестр ИД объекта' })).toHaveCount(0);
+  await dPage.goto(`/app.html/object/${sc.objectId}/work/${sc.workA}`);
+  await expect(dPage.getByRole('heading', { name: 'Исполнительная документация' })).toBeVisible(); // W01 documentation status is unchanged for them
+  await expect(dPage.getByRole('link', { name: 'Открыть в реестре ИД' })).toHaveCount(0);
   await deputy.close();
 });
 
@@ -192,7 +198,10 @@ test('entry points: /pto object cell, the object page, and W01 all lead to the s
   await expect(page).toHaveURL(new RegExp(`/object/${sc.objectId}/documentation$`));
   await page.goto(`/app.html/object/${sc.objectId}/work/${sc.workA}`);
   await expect(page.getByRole('button', { name: 'Открыть пакет' }).first()).toBeVisible(); // W01 keeps its own package cards
-  await page.getByRole('button', { name: 'Открыть в реестре ИД' }).click();
+  // W01: a real link (so «open in a new tab» works) that also navigates inside the app on a plain click
+  const link = page.getByRole('link', { name: 'Открыть в реестре ИД' });
+  await expect(link).toHaveAttribute('href', new RegExp(`/object/${sc.objectId}/documentation$`));
+  await link.click();
   await expect(page).toHaveURL(new RegExp(`/object/${sc.objectId}/documentation$`));
   await expect(page.getByRole('navigation', { name: 'Основная навигация' }).or(page.locator('nav').first())).toBeVisible();
 });

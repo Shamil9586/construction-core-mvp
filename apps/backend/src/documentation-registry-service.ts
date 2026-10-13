@@ -1,7 +1,7 @@
 import { Injectable, ForbiddenException } from '@nestjs/common';
 import { pool, rows } from './db';
 import { Actor, objectAccess, isCurrentPtoMember, effectivePtoAssignedWork } from './security';
-import { canAccessDocumentation } from '../../../packages/domain';
+import { Permission as P, hasPermission } from '../../../packages/domain';
 import { buildPackageScope, isPackageActive, zoneName } from '../../../packages/domain/package-scope';
 import { resolveAosrReadiness, type AosrMaterialInput, type AosrQualityDocType, type AosrPartyRecord } from '../../../packages/domain/aosr';
 import { aosrDocxState, resolveAosrDocumentaryReadiness, resolvePackageReadiness } from '../../../packages/domain/documentation-readiness';
@@ -21,7 +21,7 @@ import { aosrTemplateAvailable } from './id-auto/aosr-docx';
  * the very rules the forward gate uses, over facts loaded by documentation-evidence.ts. Quantity follows the accepted provenance through
  * documentation-scope.ts. A fixed number of batched queries serves the whole object, however many packages or AOSRs it holds.
  *
- * Authorization is the existing one, not a new contour: documentation access by role (canAccessDocumentation), the object gate (objectAccess:
+ * Authorization is the existing one, not a new contour: the PTO workspace permission (DOCUMENTATION_MANAGE), the object gate (objectAccess:
  * PTO head = current lead, PTO engineer = object member or holder of an effective handoff on a work of the object, project manager = own object),
  * and, for an engineer who is not an object member, only the works they are the EFFECTIVE assignee of — the same predicates workAccess() and the
  * snapshot apply. Filters narrow rows; they never widen access.
@@ -48,7 +48,9 @@ const iso = (v: unknown): string => new Date(v as any).toISOString();
 @Injectable()
 export class DocumentationRegistryService {
     async objectRegistry(a: Actor, objectId: string, filters: RegistryFilters, includeArchived: boolean): Promise<DocumentationRegistryView> {
-        if (!canAccessDocumentation(a.role as any)) throw new ForbiddenException('Недостаточно прав: доступ к исполнительной документации');
+        // The registry is PTO's documentary workspace (like /pto and the package screen): PTO, PTO head and ADMIN (DOCUMENTATION_MANAGE). Roles that only
+        // READ documentation status on W01 (project manager, deputy, general director, construction control) get no registry; SDO / contractors none at all.
+        if (!hasPermission(a.role, P.DOCUMENTATION_MANAGE)) throw new ForbiddenException('Недостаточно прав: реестр ИД — рабочая область ПТО');
         const object = await objectAccess(pool, a, objectId); // 404 / 403 exactly as every other object read
         const t = a.tenantId;
 

@@ -10,7 +10,7 @@ import {
 } from '../../design-system';
 import type { W01ViewModel, WorkConfirmation } from '../../view-models/w01';
 import { ExecutionSection, type W01ActionHandlers } from './ExecutionSection';
-import { DocumentationSection, type DocumentationHandoff, type DocumentationSectionActionHandlers } from './DocumentationSection';
+import { DocumentationSection, type DocumentationHandoff, type DocumentationSectionActionHandlers, type RegistryLink } from './DocumentationSection';
 import { SdoSection } from './SdoSection';
 import styles from './W01.module.css';
 
@@ -54,8 +54,8 @@ export interface W01Props {
   documentationHandoff?: DocumentationHandoff;
   /** F8.2.1 — `false` only for a confirmed excluded role (SDO); see `DocumentationSection`'s own prop comment. */
   documentationVisible?: boolean;
-  /** ID-AUTO-2 — a link to this object's «Реестр ИД». Omitted when the viewer has no documentation access; the registry is not duplicated here. */
-  onOpenRegistry?: () => void;
+  /** ID-AUTO-2 — a link to this object's «Реестр ИД» (PTO workspace roles only); the registry is not duplicated here. */
+  registryLink?: RegistryLink;
 }
 
 function ConfirmationStatus({
@@ -130,7 +130,7 @@ export function WorkCard({
   documentationActions,
   documentationHandoff,
   documentationVisible,
-  onOpenRegistry,
+  registryLink,
 }: W01Props) {
   return (
     <AppShell sidebar={sidebar} topbar={topbar} className={className}>
@@ -250,7 +250,7 @@ export function WorkCard({
         actions={documentationActions}
         handoff={documentationHandoff}
         visible={documentationVisible}
-        onOpenRegistry={onOpenRegistry}
+        registryLink={registryLink}
       />
 
       <SdoSection sdoClosingCases={viewModel.sdoClosingCases} visible={documentationVisible} />

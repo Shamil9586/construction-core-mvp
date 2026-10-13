@@ -107,7 +107,7 @@ export function PackageDetailRoute() {
         onNavigateHome={() => navigate(ROUTE_PATHS.company)}
         onSelectObject={(id) => navigate(objectPath(id))}
         onSelectWork={(objectId, objectWorkId) => navigate(workPath(objectId, objectWorkId))}
-        onOpenRegistry={session && canAccessDocumentation(session.user.role) ? () => navigate(documentationRegistryPath(archived.objectId)) : undefined}
+        onOpenRegistry={session && canManageDocumentation(session.user.role) ? () => navigate(documentationRegistryPath(archived.objectId)) : undefined}
       />
     );
   }
@@ -215,7 +215,7 @@ export function PackageDetailRoute() {
       onSelectObject={(id) => navigate(objectPath(id))}
       onSelectWork={(objectId, objectWorkId) => navigate(workPath(objectId, objectWorkId))}
       actions={actions}
-      onOpenRegistry={session && canAccessDocumentation(session.user.role) ? () => navigate(documentationRegistryPath(pkg.objectId)) : undefined}
+      onOpenRegistry={session && canManageDocumentation(session.user.role) ? () => navigate(documentationRegistryPath(pkg.objectId)) : undefined}
       aosrSection={
         <AosrSection
           packageId={pkg.id}

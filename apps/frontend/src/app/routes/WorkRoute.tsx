@@ -1,4 +1,4 @@
-import { useNavigate, useParams } from 'react-router-dom';
+import { useHref, useNavigate, useParams } from 'react-router-dom';
 import { WorkCard } from '../../screens/W01';
 import type { W01ActionHandlers } from '../../screens/W01/ExecutionSection';
 import type { DocumentationHandoff, DocumentationSectionActionHandlers } from '../../screens/W01/DocumentationSection';
@@ -25,6 +25,8 @@ export function WorkRoute() {
   const refetch = useRefetchSnapshot();
   const { session } = useCoreRuntime();
   const navigate = useNavigate();
+  // ID-AUTO-2 — the registry link is a real anchor (open in a new tab works); `useHref` applies the router's base path.
+  const registryHref = useHref(documentationRegistryPath(objectId ?? ''));
   // PILOT-W01 UI03 — the backend's PTO handoff read model; called unconditionally,
   // before any early return, per the Rules of Hooks.
   const ptoAssignment = useWorkPtoAssignment(
@@ -133,7 +135,7 @@ export function WorkRoute() {
       documentationActions={documentationActions}
       documentationHandoff={documentationHandoff}
       documentationVisible={documentationVisible}
-      onOpenRegistry={session && canAccessDocumentation(session.user.role) ? () => navigate(documentationRegistryPath(work.objectId)) : undefined}
+      registryLink={session && canManageDocumentation(session.user.role) ? { href: registryHref, onOpen: () => navigate(documentationRegistryPath(work.objectId)) } : undefined}
     />
   );
 }

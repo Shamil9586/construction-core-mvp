@@ -374,7 +374,7 @@ test('authorization: PTO engineer = assignment-scoped, PTO head = the object the
   assert.equal((await ok(ctx.object.id, `?responsibleUserId=${engineer.id}`)).rows[0].packageId, engineerPkg.id);
 });
 
-test('authorization: cross-object access, SDO, contractors and anonymous callers are refused; an unknown object is 404', async () => {
+test('authorization: cross-object access, roles outside the PTO workspace and anonymous callers are refused; an unknown object is 404', async () => {
   const { login, as, base } = await harness();
   const a = await pilot();
   const b = await pilot();
@@ -384,7 +384,8 @@ test('authorization: cross-object access, SDO, contractors and anonymous callers
   const otherPm = await makeUser('Другой РП', 'PROJECT_MANAGER');
   await as(otherPm);
   assert.equal((await registry(a.object.id)).status, 403, 'a project manager of another object');
-  for (const role of ['SDO', 'SDO_HEAD', 'CONTRACTOR_VIEWER']) {
+  // the registry is PTO's documentary workspace (DOCUMENTATION_MANAGE): roles that only READ documentation status on W01 get none, SDO / contractors neither
+  for (const role of ['SDO', 'SDO_HEAD', 'CONTRACTOR_VIEWER', 'PROJECT_MANAGER', 'DEPUTY_DIRECTOR', 'GENERAL_DIRECTOR', 'CONSTRUCTION_CONTROL', 'CONSTRUCTION_CONTROL_HEAD']) {
     await login(role);
     assert.equal((await registry(a.object.id)).status, 403, role);
   }
@@ -392,13 +393,15 @@ test('authorization: cross-object access, SDO, contractors and anonymous callers
   assert.equal((await registry(randomUUID())).status, 404);
   assert.equal((await registry('not-a-uuid')).status, 400);
   assert.equal((await fetch(`${base}/objects/${a.object.id}/documentation-registry`)).status, 401);
-  // the legitimate actors are unaffected: same two objects, each its own registry
-  await login('PROJECT_MANAGER');
+  // the legitimate actors are unaffected: same two objects, each its own registry (ADMIN = system override, the PTO member via its membership)
+  await login('ADMIN');
   assert.equal((await ok(a.object.id)).rows[0].packageId, a.pkg.id);
   assert.equal((await ok(b.object.id)).rows[0].packageId, b.pkg.id);
-  // read-only oversight roles see the object they may open (their existing documentation visibility), nothing more
+  await login('PTO');
+  assert.equal((await ok(a.object.id)).rows[0].packageId, a.pkg.id);
+  // existing visibility is untouched: a read-only role still reads the same packages through the snapshot (W01), it just has no registry
   await login('DEPUTY_DIRECTOR');
-  assert.equal((await ok(a.object.id)).rows.length, 1);
+  assert.equal((await snapshotPackages(a.object.id)).length >= 1, true);
 });
 
 test('the registry is a pure read: no audit rows, no domain rows, no number consumed — viewing and filtering write nothing', async () => {

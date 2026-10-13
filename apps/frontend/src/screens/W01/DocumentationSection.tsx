@@ -59,7 +59,13 @@ export interface DocumentationSectionProps {
    */
   visible?: boolean;
   /** ID-AUTO-2 — «Открыть в реестре ИД»: the object-level documentary overview. The registry itself is never repeated inside W01. */
-  onOpenRegistry?: () => void;
+  registryLink?: RegistryLink;
+}
+
+/** Navigation, not a control: a real anchor (`href`, so open-in-new-tab works) whose plain click navigates inside the app. */
+export interface RegistryLink {
+  href: string;
+  onOpen: () => void;
 }
 
 function errorMessage(error: unknown): string {
@@ -338,17 +344,25 @@ function ArchivedPackages({ packages, onOpenPackage }: { packages: W01ArchivedPa
 
 export const OPEN_REGISTRY_TEXT = 'Открыть в реестре ИД';
 
-export function DocumentationSection({ documentationPackages, archivedPackages = [], actions, handoff, visible = true, onOpenRegistry }: DocumentationSectionProps) {
+export function DocumentationSection({ documentationPackages, archivedPackages = [], actions, handoff, visible = true, registryLink }: DocumentationSectionProps) {
   const canCreate = !!actions && !!handoff?.view.canCreatePackage;
   return (
     <section className={styles.section}>
       <h2 className={[styles.sectionLabel, typeClass('label')].join(' ')}>
         Исполнительная документация
       </h2>
-      {visible && onOpenRegistry ? (
-        <button type="button" className={styles.actionButtonSecondary} onClick={onOpenRegistry}>
+      {visible && registryLink ? (
+        <a
+          href={registryLink.href}
+          className={styles.registryLink}
+          onClick={(event) => {
+            if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+            event.preventDefault();
+            registryLink.onOpen();
+          }}
+        >
           {OPEN_REGISTRY_TEXT}
-        </button>
+        </a>
       ) : null}
       {!visible ? (
         <span className={[styles.empty, typeClass('body')].join(' ')}>

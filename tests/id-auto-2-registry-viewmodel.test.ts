@@ -90,7 +90,7 @@ test('blockers keep the server\'s order and wording, show a concise preview, and
   assert.equal(blockerLink({ kind: 'AOSR', aosrId: 'x' }).aosrId, 'x');
 });
 
-test('a read-only role sees the same reasons without links the package screen would refuse', () => {
+test('when the screen offers no package links (no actions) the reasons are still shown, without links', () => {
   const row = buildRegistryViewModel(payload([pkg()]), {}, false).rows[0]!;
   assert.equal(row.reasons.length, 3);
   assert.ok(row.reasons.every(r => r.link === null));

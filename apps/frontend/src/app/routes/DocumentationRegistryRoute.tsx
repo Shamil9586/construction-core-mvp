@@ -20,9 +20,10 @@ import { RouteError, RouteForbidden, RouteLoading, RouteNotFound } from '../Rout
  * are the backend's; this container only reads the URL filters, fetches once per (object, filters) and hands the answer to the screen.
  * Filters live in the URL so a link, a refresh and the back button keep them.
  *
- * Opening a package or a blocker goes to the existing package detail (`packagePath`, with an optional deep link to the section that fixes
- * it) — and only for `canManageDocumentation` roles, the same gate that route already applies. Other roles with documentation access see
- * the same register read-only, without links the package screen would refuse.
+ * The registry is PTO's documentary workspace: it is gated on `canManageDocumentation` (PTO, PTO head, ADMIN) exactly like `/pto` and the
+ * package screen. A role that only reads documentation status on W01 (project manager, deputy, CEO, СК) gets the same explanatory message those
+ * routes give. Opening a package or a blocker goes to the existing package detail (`packagePath`, with an optional deep link to the
+ * section that fixes it).
  */
 export function DocumentationRegistryRoute() {
   const { objectId } = useParams<{ objectId: string }>();
@@ -44,21 +45,30 @@ export function DocumentationRegistryRoute() {
   }
 
   const objectKnown = state.status === 'Ready' && state.snapshot.objects.some((candidate) => candidate.id === objectId);
-  const allowed = !!session && canAccessDocumentation(session.user.role);
+  const allowed = !!session && canManageDocumentation(session.user.role);
   const { load, reload } = useDocumentationRegistry(objectId, query, allowed && objectKnown);
 
   if (state.status === 'Loading') return <RouteLoading />;
   if (state.status === 'Error') return <RouteError message={state.message} />;
   if (!session) return <RouteForbidden label="Реестр ИД доступен после входа в Core." />;
-  if (!canAccessDocumentation(session.user.role)) return <RouteForbidden label="У вас нет доступа к исполнительной документации." />;
+  if (!canManageDocumentation(session.user.role)) {
+    return (
+      <RouteForbidden
+        label={
+          canAccessDocumentation(session.user.role)
+            ? 'Реестр ИД — рабочая область ПТО. Статус исполнительной документации по работе доступен на странице работы.'
+            : 'У вас нет доступа к исполнительной документации.'
+        }
+      />
+    );
+  }
 
   const object = state.snapshot.objects.find((candidate) => candidate.id === objectId);
   if (!object) return <RouteNotFound label="Объект не найден" />;
 
-  const canOpen = canManageDocumentation(session.user.role);
-  const actions: RegistryActionHandlers | undefined = canOpen
-    ? { onOpenPackage: (packageId, link) => navigate(packagePath(packageId, link ? { focus: link.focus, ...(link.aosrId ? { aosrId: link.aosrId } : {}) } : undefined)) }
-    : undefined;
+  // Same gate as the package route the rows lead to, so every row / blocker link is one the viewer may follow.
+  const canOpen = true;
+  const actions: RegistryActionHandlers = { onOpenPackage: (packageId, link) => navigate(packagePath(packageId, link ? { focus: link.focus, ...(link.aosrId ? { aosrId: link.aosrId } : {}) } : undefined)) };
 
   const screenState: RegistryScreenState =
     load.status === 'Ready'

@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { ObjectOverview } from '../../screens/O01';
 import type { PtoTeamLoad } from '../../screens/O01/PtoTeamSection';
 import { useCoreRuntime } from '../CoreRuntimeContext';
-import { canAccessDocumentation, canViewObjectPtoTeam } from '../../auth/internalRoles';
+import { canManageDocumentation, canViewObjectPtoTeam } from '../../auth/internalRoles';
 import { getObjectPtoTeam } from '../../data/functionTeamsApi';
 import { buildO01ViewModel } from '../../view-models/o01';
 import { useSnapshot } from '../../data/SnapshotContext';
@@ -50,7 +50,7 @@ export function ObjectRoute() {
       viewModel={viewModel}
       sidebar={<AppSidebar />}
       ptoTeam={showPtoTeam ? ptoTeam : undefined}
-      onOpenRegistry={role !== undefined && canAccessDocumentation(role) ? () => navigate(documentationRegistryPath(object.id)) : undefined}
+      onOpenRegistry={role !== undefined && canManageDocumentation(role) ? () => navigate(documentationRegistryPath(object.id)) : undefined}
       onNavigateHome={() => navigate(ROUTE_PATHS.company)}
       onSelectWork={(workId) => navigate(workPath(object.id, workId))}
     />

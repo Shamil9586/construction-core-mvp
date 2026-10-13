@@ -187,3 +187,16 @@
   border: var(--cc-border-width) dashed var(--cc-border-default);
   border-radius: var(--cc-card-radius);
 }
+
+/* ID-AUTO-2 — «Открыть в реестре ИД»: a link into the object's registry. */
+.registryLink {
+  align-self: flex-start;
+  color: var(--cc-text-link);
+  text-decoration: underline;
+}
+
+.registryLink:focus-visible {
+  outline: var(--cc-focus-ring-width) solid var(--cc-focus-ring);
+  outline-offset: var(--cc-focus-ring-offset);
+  border-radius: var(--cc-p-radius-3);
+}
