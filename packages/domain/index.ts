@@ -98,7 +98,14 @@ export enum Permission {
     // PBX-3A's PTO_OBJECT_TEAM_MANAGE); OrgStructureService admits them separately and narrows them to THEIR OWN
     // functional team. Ordinary engineers and PROJECT_MANAGER get neither. Mutations stay on FUNCTION_TEAM_MANAGE
     // (DEPUTY_DIRECTOR, ADMIN) — GENERAL_DIRECTOR is read-only. This is NOT an operational PTO/SDO/SC grant.
-    ORG_STRUCTURE_READ = 'ORG_STRUCTURE_READ'
+    ORG_STRUCTURE_READ = 'ORG_STRUCTURE_READ',
+    // GPR-1 — Production Schedule («График производства работ», packages/domain/schedule.ts). Four separate permissions because the four
+    // acts have four different owners: reading the schedule, preparing it, approving it as the current baseline, and explaining a delay.
+    // The matrix itself is the block right after `grants` below.
+    SCHEDULE_VIEW = 'SCHEDULE_VIEW',
+    SCHEDULE_EDIT = 'SCHEDULE_EDIT',
+    SCHEDULE_APPROVE = 'SCHEDULE_APPROVE',
+    SCHEDULE_DELAY_REASON = 'SCHEDULE_DELAY_REASON'
 }
 const view = [Permission.OBJECT_VIEW, Permission.WORK_VIEW, Permission.PTO_VIEW, Permission.SDO_VIEW, Permission.FINANCE_VIEW];
 // DEPUTY_DIRECTOR managerial grant — company/object/work visibility (`view`)
@@ -113,6 +120,27 @@ const sdoGrants = [...view, Permission.SDO_EDIT, Permission.SDO_CLOSE, Permissio
 const teamRead = [Permission.PTO_TEAM_READ];
 const orgRead = [Permission.ORG_STRUCTURE_READ];
 const grants: Record<Role, Permission[]> = { ADMIN: Object.values(Permission), GENERAL_DIRECTOR: [...view, ...teamRead, ...orgRead], DEPUTY_DIRECTOR: [...view, Permission.OBJECT_CREATE, Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE, Permission.EXECUTION_UNIT_MANAGE, Permission.FUNCTION_TEAM_MANAGE, Permission.OBJECT_FUNCTION_LEAD_ASSIGN, ...teamRead, ...orgRead], PROJECT_MANAGER: [...view, Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE, Permission.EXECUTION_UNIT_MANAGE, Permission.WORK_UPDATE_PROGRESS, Permission.INSPECTION_REQUEST, Permission.ISSUE_RESOLVE], CONSTRUCTION_CONTROL: constructionControlGrants, CONSTRUCTION_CONTROL_HEAD: constructionControlGrants, PTO: [...ptoGrants, ...teamRead], PTO_HEAD: [...ptoGrants, Permission.PTO_OBJECT_TEAM_MANAGE, ...teamRead], SDO: sdoGrants, SDO_HEAD: sdoGrants, CONTRACTOR_VIEWER: [Permission.OBJECT_VIEW, Permission.WORK_VIEW] };
+// GPR-1 — who may do what with the Production Schedule. Appended (not folded into the matrix above) so it reads as one block and does
+// not rewrite the grants of any other slice. Every internal role may READ the schedule of an object it can open; CONTRACTOR_VIEWER may not
+// (it carries cross-contractor planning and management delay reasons — an external-participant view is a later product phase).
+//   PREPARE (draft) and DELAY REASONS: the project manager of the object and the managerial role — the people who run the production.
+//   APPROVE (baseline / correction):   the managerial role only. The project manager prepares; management approves.
+//   GENERAL_DIRECTOR and СК/ПТО/СДО roles are read-only here, like everywhere else in the oversight contour. ADMIN holds everything.
+const scheduleView = [Permission.SCHEDULE_VIEW];
+const scheduleManage = [Permission.SCHEDULE_VIEW, Permission.SCHEDULE_EDIT, Permission.SCHEDULE_DELAY_REASON];
+const scheduleGrants: Partial<Record<Role, Permission[]>> = {
+    GENERAL_DIRECTOR: scheduleView,
+    DEPUTY_DIRECTOR: [...scheduleManage, Permission.SCHEDULE_APPROVE],
+    PROJECT_MANAGER: scheduleManage,
+    CONSTRUCTION_CONTROL: scheduleView,
+    CONSTRUCTION_CONTROL_HEAD: scheduleView,
+    PTO: scheduleView,
+    PTO_HEAD: scheduleView,
+    SDO: scheduleView,
+    SDO_HEAD: scheduleView,
+};
+for (const [role, extra] of Object.entries(scheduleGrants) as [Role, Permission[]][])
+    grants[role] = [...grants[role], ...extra];
 // OBJ-1 (OBJ1-D01): creating an object == appointing its РП, a managerial act of the
 // Deputy Director (ADMIN = system override). PROJECT_MANAGER never self-assigns;
 // read-only GENERAL_DIRECTOR is not current authority.
