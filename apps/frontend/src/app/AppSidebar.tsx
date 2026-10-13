@@ -46,8 +46,15 @@ export function AppSidebar() {
 
   // /company and every /object/... route (O01, W01) are all part of the one
   // portfolio section this sidebar represents — none of them get their own item.
+  //
+  // ID-AUTO-2 — except an object's «Реестр ИД» (/object/:id/documentation): that is PTO's documentary work, so for a role that has the
+  // «ПТО» item it highlights «ПТО»; for any other role it stays part of the portfolio section.
+  const ptoVisible = !!session && canManageDocumentation(session.user.role);
+  const isRegistry = /^\/object\/[^/]+\/documentation$/.test(location.pathname);
   const activeKey =
-    location.pathname === ROUTE_PATHS.company || location.pathname.startsWith('/object/')
+    isRegistry && ptoVisible
+      ? 'pto'
+      : location.pathname === ROUTE_PATHS.company || location.pathname.startsWith('/object/')
       ? 'company'
       : location.pathname === ROUTE_PATHS.pto
         ? 'pto'

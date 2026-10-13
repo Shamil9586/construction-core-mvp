@@ -20,6 +20,8 @@ export interface AosrSectionProps {
   canEdit: boolean;
   /** PTO only — the backend refuses everyone else. */
   canRecordCustomerQuantity: boolean;
+  /** ID-AUTO-2 — a registry blocker may land here with one act already open (deep link `?focus=aosr&aosr=<id>`). */
+  initialOpenAosrId?: string | null;
   onChanged: () => void;
 }
 
@@ -187,7 +189,7 @@ function MethodBlock({ packageId, view, canEdit, onChanged }: { packageId: strin
   const choose = (method: api.AosrMethod) => void action.run(async () => { await api.setAosrMethod(packageId, method); onChanged(); });
   const last = view.methodHistory[view.methodHistory.length - 1];
   return (
-    <div className={styles.documentCard}>
+    <div className={styles.documentCard} id="package-focus-method">
       <span className={typeClass('label')}>Как готовятся АОСР по этому пакету</span>
       {view.method === null ? (
         <span className={typeClass('body')}>Генератор АОСР в Core — необязательный инструмент: можно готовить АОСР у себя на компьютере. Выберите способ — это фиксируется в истории пакета; без выбора пакет нельзя предъявить заказчику.</span>
@@ -232,7 +234,7 @@ function SchemeUploadForm({ packageId, onCreated }: { packageId: string; onCreat
 function SchemesBlock({ packageId, view, editable, onChanged }: { packageId: string; view: api.AosrPackageView; editable: boolean; onChanged: () => void }) {
   const action = useAction();
   return (
-    <section className={styles.section}>
+    <section className={styles.section} id="package-focus-schemes">
       <span className={[styles.sectionLabel, typeClass('label')].join(' ')}>Исполнительные схемы</span>
       {view.schemes.length ? (
         <ul className={styles.plainList}>
@@ -398,8 +400,8 @@ function AosrCard({ item, packageId, view, canEdit, frozen, onChanged }: { item:
   );
 }
 
-export function AosrSection({ packageId, packageStatus, view, quantity, error, canEdit, canRecordCustomerQuantity, onChanged }: AosrSectionProps) {
-  const [openId, setOpenId] = useState<string | null>(null);
+export function AosrSection({ packageId, packageStatus, view, quantity, error, canEdit, canRecordCustomerQuantity, initialOpenAosrId = null, onChanged }: AosrSectionProps) {
+  const [openId, setOpenId] = useState<string | null>(initialOpenAosrId);
   const [title, setTitle] = useState('');
   const action = useAction();
   const frozen = !EDITABLE.includes(packageStatus);
@@ -409,7 +411,7 @@ export function AosrSection({ packageId, packageStatus, view, quantity, error, c
   return (
     <>
       {quantity ? <QuantityBlock packageId={packageId} packageStatus={packageStatus} quantity={quantity} canRecord={canRecordCustomerQuantity} onChanged={onChanged} /> : null}
-      <section className={styles.section}>
+      <section className={styles.section} id="package-focus-aosr">
         <span className={[styles.sectionLabel, typeClass('label')].join(' ')}>АОСР</span>
         <MethodBlock packageId={packageId} view={view} canEdit={canEdit} onChanged={onChanged} />
         {view.method === 'CORE' && view.items.some((i) => i.status !== 'GENERATED') ? <span className={[styles.secondary, typeClass('body')].join(' ')}>Перед предъявлением заказчику у каждого АОСР должен быть сформирован актуальный DOCX; ненужные черновики можно удалить.</span> : null}
@@ -418,7 +420,7 @@ export function AosrSection({ packageId, packageStatus, view, quantity, error, c
         {view.method !== 'CORE' ? null : view.items.length ? (
           <div className={styles.documentList}>
             {view.items.map((item) => (
-              <div key={item.id} className={styles.documentCard}>
+              <div key={item.id} id={`package-focus-aosr-${item.id}`} className={styles.documentCard}>
                 <div className={styles.inlineForm}>
                   <span className={typeClass('body-strong')}>{item.title}{item.officialNumber !== null ? ` — № ${item.officialNumber}` : ''}</span>
                   <StatusBadge variant={item.status === 'GENERATED' ? 'OnTrack' : item.status === 'NEEDS_REGENERATION' ? 'Attention' : 'Neutral'}>{STATUS_LABEL[item.status]}</StatusBadge>

@@ -42,6 +42,11 @@ export interface O01Props {
   schedule?: O01ScheduleView;
   /** Opens «График производства работ» of this object. */
   onOpenSchedule?: () => void;
+  /**
+   * ID-AUTO-2 — navigation only: a link to this object's «Реестр ИД». O01 itself still carries no ИД data; the link is omitted for a role
+   * without documentation access.
+   */
+  onOpenRegistry?: () => void;
   onNavigateHome: () => void;
   onSelectWork: (workId: string) => void;
   className?: string;
@@ -59,6 +64,7 @@ export function ObjectOverview({
   ptoTeam,
   schedule,
   onOpenSchedule,
+  onOpenRegistry,
   onNavigateHome,
   onSelectWork,
   className,
@@ -136,6 +142,17 @@ export function ObjectOverview({
       </section>
 
       {ptoTeam ? <PtoTeamSection load={ptoTeam} /> : null}
+
+      {onOpenRegistry ? (
+        <section className={styles.section} aria-label="Исполнительная документация">
+          <button type="button" className={styles.registryLink} onClick={onOpenRegistry}>
+            Реестр ИД объекта
+          </button>
+          <span className={[styles.cardNote, typeClass('label')].join(' ')}>
+            Документальная готовность по всем пакетам исполнительной документации объекта.
+          </span>
+        </section>
+      ) : null}
 
       <section className={styles.section}>
         <DataTable

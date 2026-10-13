@@ -122,3 +122,23 @@
   color: var(--cc-status-blocked-text);
   text-align: end;
 }
+
+/* ID-AUTO-2 — entry to the object's «Реестр ИД» from the queue's object cell. */
+.registryLink {
+  display: block;
+  margin-top: var(--cc-p-space-4);
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--cc-text-link);
+  text-decoration: underline;
+  text-align: left;
+  cursor: pointer;
+}
+
+.registryLink:focus-visible {
+  outline: var(--cc-focus-ring-width) solid var(--cc-focus-ring);
+  outline-offset: var(--cc-focus-ring-offset);
+  border-radius: var(--cc-p-radius-3);
+}

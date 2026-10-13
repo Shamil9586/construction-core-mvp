@@ -15,6 +15,8 @@ export const ROUTE_PATHS = {
   work: '/object/:objectId/work/:workId',
   /** GPR-1 — «График производства работ» of ONE object: inside the object, never a cross-object screen. */
   schedule: '/object/:objectId/schedule',
+  /** ID-AUTO-2 — «Реестр ИД»: the documentary register of ONE object (object → исполнительная документация → реестр). */
+  documentationRegistry: '/object/:objectId/documentation',
   /** F8.2 — P01, PTO Workspace: a separate top-level destination, not part of the object drill-down chain. */
   pto: '/pto',
   /** F8.2.1 — Documentation Package detail: reachable from both P01 and W01 (Decision 1, one shared destination). */
@@ -45,8 +47,20 @@ export function schedulePath(objectId: string): string {
   return `/object/${encodeURIComponent(objectId)}/schedule`;
 }
 
-export function packagePath(packageId: string): string {
-  return `/pto/package/${encodeURIComponent(packageId)}`;
+/**
+ * The package detail screen. `focus` (+ `aosrId`) is the optional deep link a registry blocker uses to land on the section that fixes it
+ * (`scope` / `method` / `aosr` / `schemes`); without it the screen opens as always.
+ */
+export function packagePath(packageId: string, target?: { focus: 'scope' | 'method' | 'aosr' | 'schemes'; aosrId?: string }): string {
+  const base = `/pto/package/${encodeURIComponent(packageId)}`;
+  if (!target) return base;
+  const params = new URLSearchParams({ focus: target.focus });
+  if (target.aosrId) params.set('aosr', target.aosrId);
+  return `${base}?${params.toString()}`;
+}
+
+export function documentationRegistryPath(objectId: string): string {
+  return `/object/${encodeURIComponent(objectId)}/documentation`;
 }
 
 export function sdoPath(): string {

@@ -1,0 +1,349 @@
+/*
+ * ID-AUTO-2 — «Реестр ИД». Tokens only; the row/table surface is DataTable's (F11: scroll below the column budget, stacked blocks below 640px).
+ * Anything that would force a second visual language (new colours, new radii) is deliberately absent.
+ */
+
+.notice {
+  margin: 0 0 var(--cc-p-space-16);
+  padding: var(--cc-p-space-12) var(--cc-p-space-16);
+  border: var(--cc-border-width) solid var(--cc-border-default);
+  border-radius: var(--cc-radius-card);
+  background: var(--cc-status-neutral-fill);
+  color: var(--cc-status-neutral-text);
+}
+
+.summary {
+  list-style: none;
+  margin: 0 0 var(--cc-p-space-20);
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--cc-p-space-16);
+}
+
+.tile {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-4);
+  box-sizing: border-box;
+  padding: var(--cc-p-space-16);
+  background: var(--cc-background-surface);
+  border: var(--cc-border-width) solid var(--cc-border-default);
+  border-radius: var(--cc-radius-card);
+}
+
+.secondary {
+  color: var(--cc-text-secondary);
+}
+
+.attentionText {
+  color: var(--cc-status-attention-text);
+}
+
+.block {
+  display: block;
+}
+
+/* ---- filters ---- */
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--cc-p-space-12) var(--cc-p-space-16);
+  margin-bottom: var(--cc-p-space-20);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-4);
+  min-width: 0;
+}
+
+.fieldLabel {
+  color: var(--cc-text-secondary);
+}
+
+.control {
+  box-sizing: border-box;
+  min-width: 148px;
+  max-width: 220px;
+  padding: var(--cc-p-space-8) var(--cc-p-space-12);
+  border: var(--cc-border-width) solid var(--cc-border-interactive);
+  border-radius: var(--cc-p-radius-6);
+  background: var(--cc-background-surface);
+  color: var(--cc-text-primary);
+  font: inherit;
+}
+
+.control:focus-visible,
+.checkbox input:focus-visible {
+  outline: var(--cc-focus-ring-width) solid var(--cc-focus-ring);
+  outline-offset: var(--cc-focus-ring-offset);
+}
+
+.filters input[type='search'].control {
+  min-width: 240px;
+  max-width: 280px;
+}
+
+.filterTail {
+  display: flex;
+  align-items: center;
+  gap: var(--cc-p-space-16);
+  flex-wrap: wrap;
+  min-height: 40px;
+}
+
+.checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--cc-p-space-8);
+  cursor: pointer;
+}
+
+/* ---- rows ---- */
+
+.row {
+  border-top: var(--cc-border-width) solid var(--cc-border-default);
+}
+
+.cell {
+  box-sizing: border-box;
+  padding: var(--cc-p-space-12) var(--cc-table-row-padding-x);
+  vertical-align: top;
+  text-align: left;
+  overflow-wrap: break-word;
+}
+
+.interactive:hover > .cell {
+  background: var(--cc-table-row-hover);
+  cursor: pointer;
+}
+
+.chevron {
+  color: var(--cc-table-chevron-color);
+  text-align: right;
+}
+
+.primary {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--cc-p-space-4);
+  min-width: 0;
+}
+
+.activator {
+  display: inline;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--cc-text-link);
+  text-align: left;
+  cursor: pointer;
+}
+
+.activator:hover {
+  text-decoration: underline;
+}
+
+.activator:focus-visible,
+.linkButton:focus-visible {
+  outline: var(--cc-focus-ring-width) solid var(--cc-focus-ring);
+  outline-offset: var(--cc-focus-ring-offset);
+  border-radius: var(--cc-p-radius-3);
+}
+
+.reasonList,
+.plainList {
+  list-style: disc;
+  margin: 0;
+  padding-left: var(--cc-p-space-16);
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-4);
+}
+
+.plainList {
+  margin-top: var(--cc-p-space-4);
+}
+
+.linkButton {
+  display: inline;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--cc-text-link);
+  text-align: left;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.secondaryButton {
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  padding: var(--cc-p-space-8) var(--cc-button-padding-x);
+  border: var(--cc-border-width) solid var(--cc-border-interactive);
+  border-radius: var(--cc-button-radius);
+  background: var(--cc-background-surface);
+  color: var(--cc-text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.secondaryButton:focus-visible {
+  outline: var(--cc-focus-ring-width) solid var(--cc-focus-ring);
+  outline-offset: var(--cc-focus-ring-offset);
+}
+
+/* ---- expanded detail ---- */
+
+.detailRow {
+  background: var(--cc-background-neutral);
+}
+
+.detailCell {
+  box-sizing: border-box;
+  padding: var(--cc-p-space-16) var(--cc-table-row-padding-x);
+}
+
+/* the flex layout lives on an inner box: `display:flex` on the <td> itself would stop it being a table cell */
+.detailInner {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-16);
+  min-width: 0;
+}
+
+.detailBlock {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-8);
+  min-width: 0;
+}
+
+.detailTitle {
+  margin: 0;
+}
+
+.detailText {
+  margin: var(--cc-p-space-4) 0 0;
+  white-space: pre-line;
+}
+
+.aosrTable {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.aosrGrid {
+  display: grid;
+  grid-template-columns: 88px minmax(160px, 1.6fr) minmax(120px, 0.9fr) 150px minmax(120px, 1fr) minmax(130px, 0.9fr);
+  gap: var(--cc-p-space-12);
+  padding: var(--cc-p-space-8) var(--cc-p-space-12);
+  align-items: start;
+}
+
+.aosrHead {
+  color: var(--cc-text-secondary);
+}
+
+.aosrRow {
+  border-top: var(--cc-border-width) solid var(--cc-border-default);
+  overflow-wrap: break-word;
+}
+
+.aosrDetails {
+  margin-top: var(--cc-p-space-4);
+}
+
+.aosrDetails summary {
+  cursor: pointer;
+  color: var(--cc-text-link);
+}
+
+.aosrDetails summary:focus-visible {
+  outline: var(--cc-focus-ring-width) solid var(--cc-focus-ring);
+  outline-offset: var(--cc-focus-ring-offset);
+}
+
+/* ---- archive ---- */
+
+.archive {
+  margin-top: var(--cc-p-space-32);
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-12);
+}
+
+.archiveTitle {
+  margin: 0;
+}
+
+.archiveList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-8);
+}
+
+.archiveItem {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--cc-p-space-16);
+  box-sizing: border-box;
+  padding: var(--cc-p-space-12) var(--cc-p-space-16);
+  background: var(--cc-background-surface);
+  border: var(--cc-border-width) solid var(--cc-border-default);
+  border-radius: var(--cc-radius-card);
+}
+
+/* ---- narrow: the AOSR register stacks like the package table does (DataTable stacks below 640px) ---- */
+
+@media (max-width: 639px) {
+  .filters {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .control,
+  .filters input[type='search'].control {
+    width: 100%;
+    min-width: 0;
+  }
+
+  /* the register stacks: header hidden visually (kept for assistive technology), each act a labelled block */
+  .aosrGrid {
+    grid-template-columns: 1fr;
+    gap: var(--cc-p-space-4);
+  }
+
+  .aosrHead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .aosrRow > [data-label]:not([data-label=''])::before {
+    content: attr(data-label);
+    display: block;
+    color: var(--cc-text-secondary);
+    font-size: var(--cc-p-size-12);
+  }
+
+  .archiveItem {
+    flex-direction: column;
+  }
+}

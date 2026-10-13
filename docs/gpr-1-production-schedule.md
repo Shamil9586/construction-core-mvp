@@ -268,3 +268,14 @@ No dependency on the current PTO corrective work and none on Bitrix Disk.
 
 Run: `node --import tsx --test tests/gpr-1-*.test.ts`; browser: `npm run test:gpr-1-browser` (set `PLAYWRIGHT_CHROMIUM_PATH` if the default
 Playwright browser is not installed).
+
+## Pre-LIVE UX Acceptance
+
+Open item recorded at integration (not implemented in the integration slice; GPR is not redesigned here):
+
+* **Legacy work status vs GPR status.** The legacy work status (the Work's own state shown on O01 / W01, driven by the pre-GPR execution flow) and the
+  GPR schedule status (derived from the approved baseline and physical progress — «По графику» / «Есть отставание», delay) are computed from different
+  sources and can disagree for the same Work on the same screen (e.g. a Work shown as in progress / on track by the legacy status while the schedule
+  reports a delay, or the reverse). Before LIVE the product owner must accept or correct how the two statuses are presented together (wording, which
+  one is primary, whether a disagreement is flagged). Until then both are shown as-is; neither overrides the other, and physical progress remains the
+  only input of the schedule's derived state.

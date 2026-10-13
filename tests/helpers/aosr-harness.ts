@@ -56,7 +56,9 @@ export function harness() {
       return data;
     }
     async function login(role: string) { const d = await req('auth/mock', { role, key: 'aosr-key' }); token = d.token; return d.user; }
-    return { app, req, raw, login, base };
+    /** Acts as an arbitrary existing user (a fixture-made engineer / head / outsider) through a real session token. */
+    async function as(user: any) { token = await (await import('./pbx3-fixtures')).tokenFor(user); return user; }
+    return { app, req, raw, login, as, base };
   })());
 }
 export async function closeHarness() { if (shared) await (await shared).app.close(); }

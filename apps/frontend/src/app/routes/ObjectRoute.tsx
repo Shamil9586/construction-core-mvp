@@ -3,14 +3,14 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { ObjectOverview } from '../../screens/O01';
 import type { PtoTeamLoad } from '../../screens/O01/PtoTeamSection';
 import { useCoreRuntime } from '../CoreRuntimeContext';
-import { canViewObjectPtoTeam } from '../../auth/internalRoles';
+import { canManageDocumentation, canViewObjectPtoTeam } from '../../auth/internalRoles';
 import { getObjectPtoTeam } from '../../data/functionTeamsApi';
 import { buildO01ViewModel } from '../../view-models/o01';
 import { buildO01ScheduleView } from '../../view-models/schedule';
 import { useSnapshot } from '../../data/SnapshotContext';
 import { useObjectSchedule } from '../useSchedule';
 import { AppSidebar } from '../AppSidebar';
-import { ROUTE_PATHS, schedulePath, workPath } from '../routePaths';
+import { ROUTE_PATHS, documentationRegistryPath, schedulePath, workPath } from '../routePaths';
 import { RouteError, RouteLoading, RouteNotFound } from '../RouteStatus';
 
 /**
@@ -57,6 +57,7 @@ export function ObjectRoute() {
       ptoTeam={showPtoTeam ? ptoTeam : undefined}
       schedule={buildO01ScheduleView(scheduleLoad)}
       onOpenSchedule={() => navigate(schedulePath(object.id))}
+      onOpenRegistry={role !== undefined && canManageDocumentation(role) ? () => navigate(documentationRegistryPath(object.id)) : undefined}
       onNavigateHome={() => navigate(ROUTE_PATHS.company)}
       onSelectWork={(workId) => navigate(workPath(object.id, workId))}
     />

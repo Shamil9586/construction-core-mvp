@@ -16,8 +16,8 @@ export const CREATOR_UNKNOWN_TEXT = 'Создатель не зафиксиро�
 export const ARCHIVED_BADGE_TEXT = 'Архивирован';
 export const ARCHIVER_UNKNOWN_TEXT = 'Архивировал: не зафиксировано';
 
-const METHOD_TEXT = { CORE: 'Формируются в Core', EXTERNAL: 'Формируются вне Core' } as const;
-const SOURCE_TEXT: Record<PackageQuantitySource, string> = {
+export const METHOD_TEXT = { CORE: 'Формируются в Core', EXTERNAL: 'Формируются вне Core' } as const;
+export const SOURCE_TEXT: Record<PackageQuantitySource, string> = {
   CUSTOMER_ACCEPTED: 'принято заказчиком',
   INTERNAL_SC: 'подтверждено строительным контролем',
   RP_FACT: 'по факту РП',

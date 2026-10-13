@@ -11,7 +11,7 @@ import {
 import type { W01ViewModel, WorkConfirmation } from '../../view-models/w01';
 import type { W01ScheduleView } from '../../view-models/schedule';
 import { ExecutionSection, type W01ActionHandlers } from './ExecutionSection';
-import { DocumentationSection, type DocumentationHandoff, type DocumentationSectionActionHandlers } from './DocumentationSection';
+import { DocumentationSection, type DocumentationHandoff, type DocumentationSectionActionHandlers, type RegistryLink } from './DocumentationSection';
 import { SdoSection } from './SdoSection';
 import { ScheduleSection } from './ScheduleSection';
 import styles from './W01.module.css';
@@ -60,6 +60,8 @@ export interface W01Props {
   schedule?: W01ScheduleView;
   /** GPR-1 — opens «График производства работ» of the work's object. */
   onOpenSchedule?: () => void;
+  /** ID-AUTO-2 — a link to this object's «Реестр ИД» (PTO workspace roles only); the registry is not duplicated here. */
+  registryLink?: RegistryLink;
 }
 
 function ConfirmationStatus({
@@ -136,6 +138,7 @@ export function WorkCard({
   documentationVisible,
   schedule,
   onOpenSchedule,
+  registryLink,
 }: W01Props) {
   return (
     <AppShell sidebar={sidebar} topbar={topbar} className={className}>
@@ -257,6 +260,7 @@ export function WorkCard({
         actions={documentationActions}
         handoff={documentationHandoff}
         visible={documentationVisible}
+        registryLink={registryLink}
       />
 
       <SdoSection sdoClosingCases={viewModel.sdoClosingCases} visible={documentationVisible} />
