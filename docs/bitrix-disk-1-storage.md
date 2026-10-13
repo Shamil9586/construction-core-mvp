@@ -112,7 +112,7 @@ The domain (`aosr-service.ts`) calls `getFileStore().put(...)` / `.read(...)` an
 
 `BITRIX_DISK` is refused at startup unless `AUTH_MODE=bitrix` and `BITRIX_PORTAL` are set, and on the local PGlite mode (needs PostgreSQL).
 
-**Database:** one additive, idempotent migration — `infra/pending/bitrix-disk-1-file-storage.sql` (see §9). `scripts/migrate.ts` applies it automatically at container start (before the API starts), which is required because the code reads the new columns even with `LOCAL`.
+**Database:** one additive, idempotent migration — `infra/024_bitrix_disk_file_storage.sql` (migration **024**, see §9). `scripts/migrate.ts` applies it through the normal numbered chain at container start (before the API starts), which is required because the code reads the new columns even with `LOCAL`.
 
 **Rollout:** deploy code + migration with `FILE_STORAGE_PROVIDER` unset → verify nothing changed (LOCAL) → on the test portal set `BITRIX_DISK` and run §8 → production. **Rollback:** unset the variable; Disk-backed records remain readable while Bitrix is reachable.
 
@@ -128,11 +128,9 @@ The domain (`aosr-service.ts`) calls `getFileStore().put(...)` / `.read(...)` an
 8. Per-upload REST cost on the first upload of an Object is ~15 calls (tree creation) and 1 on repeats — check against the portal's REST rate limit.
 9. Out-of-band edit in Disk ⇒ Core refuses to serve (`STORAGE_INTEGRITY`); a trashed file ⇒ `STORAGE_NOT_FOUND`.
 
-## 9. Migration (FINAL NUMBER REQUIRED AT INTEGRATION)
+## 9. Migration (production number 024)
 
-No production migration number is claimed. The SQL is `infra/pending/bitrix-disk-1-file-storage.sql`; `scripts/migrate.ts` applies `infra/pending/*.sql` once each, **after** the numbered chain,
-tracked by file name in `schema_pending_migrations` (see `infra/pending/README.md`). The numbered chain (`001`–`023`) and every test that checks it (no gaps, head version) are unchanged.
-**The coordinator `git mv`s the file to the next free number** (`infra/0NN_bitrix_disk_1_file_storage.sql`) after all parallel migrations are placed; the SQL is idempotent, so a database that applied it from `pending/` simply re-confirms it. Intent:
+The SQL is `infra/024_bitrix_disk_file_storage.sql`, migration **024**, applied exactly once by the ordinary numbered runner (`scripts/migrate.ts`, recorded in `schema_migrations`). It follows `023` (package soft archive) and precedes `025` (GPR production schedule). The former `infra/pending/` mechanism (and its `schema_pending_migrations` table) was removed at integration: the production runner executes no pending SQL. The SQL stays idempotent. Intent:
 
 * `attachments` + `size_bytes bigint`, `checksum_sha256 text`, `external_folder_id text`;
 * `attachments_size_nonnegative` and `attachments_external_provider_complete` CHECKs (LOCAL rows pass trivially — nothing legacy can be rejected);

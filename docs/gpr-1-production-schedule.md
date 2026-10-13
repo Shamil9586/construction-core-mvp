@@ -5,7 +5,7 @@ model that already exists, measured against the production fact that already exi
 
 Baseline: `origin/main` @ `3ad27dd214b4ae844e96e2060ac4b4a25ad661eb`. Branch: `feature/construction-schedule`.
 Code: `packages/domain/schedule.ts` (rules), `apps/backend/src/schedule-service.ts` (+ `schedule-scope.ts`, `schedule-validation.ts`,
-`modules/schedule/`), `infra/pending/gpr-1_production_schedule.sql` (schema), `apps/frontend/src/screens/GPR/` (+ O01 / W01 blocks).
+`modules/schedule/`), `infra/025_production_schedule.sql` (schema), `apps/frontend/src/screens/GPR/` (+ O01 / W01 blocks).
 
 ## Locked principles (what this slice does NOT do)
 
@@ -195,10 +195,10 @@ The schedule code imports nothing from documentation, AOSR, packages, СДО or 
 the frontend schedule modules are guarded the same way). It does not touch document storage or the Bitrix Disk integration, the PTO package
 lifecycle or ID-AUTO. Completing a scope's physical fact is not blocked, delayed or implied by any of them.
 
-## Database — PENDING migration (no production number claimed)
+## Database — production migration 025
 
-`infra/pending/gpr-1_production_schedule.sql` — **additive only**: five new tables with indexes and guard triggers; no existing table or column
-is altered. `scripts/migrate.ts` reads only `infra/<digits>_*.sql`, so the file reaches **no** database until promoted.
+`infra/025_production_schedule.sql` — **additive only**: five new tables with indexes and guard triggers; no existing table or column
+is altered. `scripts/migrate.ts` applies it once through the numbered chain (024 is Bitrix Disk file storage).
 
 Requirements the migration encodes (the coordinator should keep them if the file is ever re-cut):
 
@@ -212,12 +212,9 @@ Requirements the migration encodes (the coordinator should keep them if the file
   `APPROVED → SUPERSEDED`); entries editable only while their revision is a draft; delay reasons append-only except `OPEN → RESOLVED`, and
   recorded only against an **APPROVED** revision that plans the item.
 
-**Promotion (coordinator, at integration):** `git mv infra/pending/gpr-1_production_schedule.sql infra/0NN_production_schedule.sql` using the
-next free number at that moment (023 is the highest on the baseline) — **no change to the content**. The GPR test helper applies the pending
-file while it sits in `infra/pending/` and does nothing once the ordinary runner has applied it, so the suites pass unchanged on either
-side of the rename. The migration is idempotent only through the runner's ledger (like every other migration), not by `IF NOT EXISTS`.
+**Numbering (assigned at integration):** `025_production_schedule.sql`, content unchanged from the accepted candidate. The unprovisioned-database test de-provisions a throw-away test database and re-applies this same file. The migration is idempotent only through the runner's ledger (like every other migration), not by `IF NOT EXISTS`.
 
-**A database that does not have it yet** (a deploy before promotion): every schedule route answers `503` with «Раздел «График производства
+**A database that does not have it yet** (a code deploy ahead of the migration run): every schedule route answers `503` with «Раздел «График производства
 работ» не активирован: схема базы данных ещё не обновлена (миграция GPR-1)» — nothing else in the application depends on the tables, the
 O01 / W01 blocks show a quiet «График производства работ не загружен: …» note carrying that message (no verdict is invented), and the rest of the product behaves exactly as before.
 
@@ -235,7 +232,7 @@ Touched files that other slices may also edit (all changes are small and additiv
 | `package.json` | one script `test:gpr-1-browser` | Low |
 
 New files (no conflict): `packages/domain/schedule.ts`, `apps/backend/src/{schedule-service,schedule-scope,schedule-validation}.ts`,
-`apps/backend/src/modules/schedule/*`, `infra/pending/gpr-1_production_schedule.sql`, `apps/frontend/src/{types/schedule.ts,data/scheduleApi.ts,
+`apps/backend/src/modules/schedule/*`, `infra/025_production_schedule.sql`, `apps/frontend/src/{types/schedule.ts,data/scheduleApi.ts,
 app/useSchedule.ts,app/routes/ScheduleRoute.tsx,view-models/schedule.ts,screens/GPR/*,screens/O01/ScheduleConclusion.*,screens/W01/ScheduleSection.*}`,
 `tests/gpr-1-*`, `tests/helpers/gpr-fixtures.ts`, `playwright.gpr-1.config.ts`.
 

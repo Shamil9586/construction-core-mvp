@@ -6,8 +6,7 @@ import * as V from '../../validation';
 import * as S from '../../schedule-validation';
 
 /**
- * The schedule's tables arrive with a PENDING migration (infra/pending/gpr-1_production_schedule.sql) that gets its production number at
- * integration. A database that has not had it applied answers "undefined table" (42P01) on a schedule table: say so, plainly and as a 503,
+ * The schedule's tables arrive with production migration 025 (infra/025_production_schedule.sql). A database that has not had it applied answers "undefined table" (42P01) on a schedule table: say so, plainly and as a 503,
  * instead of the generic 500 — nothing else in the application depends on those tables, so everything else keeps working.
  */
 const NOT_PROVISIONED = 'Раздел «График производства работ» не активирован: схема базы данных ещё не обновлена (миграция GPR-1).';

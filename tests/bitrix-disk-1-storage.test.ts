@@ -432,22 +432,21 @@ test('non-empty requirement: zero-byte input is refused, and the database cannot
   assert.equal(await predicate(await mk(null)), false, 'metadata-only is not evidence');
 });
 
-test('migration: no production number is claimed; the pending SQL is applied once by the runner, is idempotent and additive', async () => {
+test('migration 024: numbered, applied exactly once by the ordinary runner, idempotent and additive; no pending-SQL execution remains', async () => {
   const numbered = fs.readdirSync('infra').filter(f => /^\d+_.*\.sql$/.test(f)).sort();
-  assert.ok(!numbered.some(f => /bitrix_disk/i.test(f)), 'no numbered migration was added by this branch');
-  assert.equal(Number(numbered.at(-1)!.split('_')[0]), 23, 'the numbered chain still ends at the baseline head');
-  const files = fs.readdirSync('infra/pending').filter(f => f.endsWith('.sql'));
-  assert.deepEqual(files, ['bitrix-disk-1-file-storage.sql']);
-  const sql = fs.readFileSync('infra/pending/' + files[0], 'utf8');
-  assert.match(sql, /NO MIGRATION NUMBER IS CLAIMED/);
+  assert.ok(numbered.includes('024_bitrix_disk_file_storage.sql'));
+  assert.equal(Number(numbered.at(-1)!.split('_')[0]), 25, 'the chain ends at 025 (GPR schedule) after 024 (Bitrix Disk)');
+  assert.ok(!fs.existsSync('infra/pending'), 'infra/pending is gone');
+  assert.doesNotMatch(fs.readFileSync('scripts/migrate.ts', 'utf8'), /pending/i, 'the production runner executes no pending SQL');
+  const sql = fs.readFileSync('infra/024_bitrix_disk_file_storage.sql', 'utf8');
   assert.doesNotMatch(sql, /DROP |DELETE |TRUNCATE |UPDATE attachments|INSERT INTO attachments/i, 'no destructive or backfilling statement');
   const { migrate } = await import('../scripts/migrate');
   await migrate();
   await migrate();
-  assert.equal(Number((await ctx.db.pool.query('SELECT count(*)::int n FROM schema_pending_migrations WHERE name=$1', [files[0]])).rows[0].n), 1, 'tracked once by name');
-  assert.equal(Number((await ctx.db.pool.query('SELECT max(version)::int v FROM schema_migrations')).rows[0].v), 23, 'schema_migrations is untouched');
-  await ctx.db.pool.query(sql); // applying the file a further time (e.g. later under its final number) is a no-op
-  await ctx.db.pool.query(sql);
+  assert.equal(Number((await ctx.db.pool.query('SELECT count(*)::int n FROM schema_migrations WHERE version=24')).rows[0].n), 1, 'recorded once');
+  assert.equal(Number((await ctx.db.pool.query('SELECT max(version)::int v FROM schema_migrations')).rows[0].v), 25);
+  assert.equal((await ctx.db.pool.query("SELECT 1 FROM information_schema.tables WHERE table_name='schema_pending_migrations'")).rows.length, 0, 'no pending-migration bookkeeping table');
+  await ctx.db.pool.query(sql); // the SQL is idempotent: a further application is a no-op
   const cols = (await ctx.db.pool.query("SELECT column_name FROM information_schema.columns WHERE table_name='attachments'")).rows.map((r: any) => r.column_name);
   for (const c of ['size_bytes', 'checksum_sha256', 'external_folder_id', 'file_provider', 'external_file_id']) assert.ok(cols.includes(c), c);
   assert.ok((await ctx.db.pool.query("SELECT 1 FROM information_schema.tables WHERE table_name='storage_folder_mappings'")).rows.length === 1);

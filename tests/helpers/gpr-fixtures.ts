@@ -2,22 +2,26 @@ import fs from 'node:fs';
 import { makeUser, tokenFor } from './pbx3-fixtures';
 
 /**
- * GPR-1 shared fixtures: the pending-migration bridge, an HTTP harness over the REAL backend on PGlite, and the representative pilot scenario.
+ * GPR-1 shared fixtures: the schedule (migration 025) provisioning helpers, an HTTP harness over the REAL backend on PGlite, and the representative pilot scenario.
  * Real routes only — nothing here writes production facts with raw SQL except where a test says so explicitly.
  */
-export const PENDING_SCHEDULE_SQL = 'infra/pending/gpr-1_production_schedule.sql';
+export const SCHEDULE_SQL = 'infra/025_production_schedule.sql';
 export const dt = (delta: number) => new Date(Date.now() + delta * 86400000).toISOString().slice(0, 10);
 
 /**
- * The schedule schema is a PENDING migration (no production number is claimed on this branch), so the repository runner does not see it.
- * This applies it on top of the ordinary chain while it still sits in infra/pending/, and is a no-op once the coordinator has promoted it
- * to a numbered migration (the runner then applied it already) — the suites therefore pass unchanged on either side of the rename.
+ * The schedule schema is production migration 025, applied by the ordinary runner. These helpers exist only for the "unprovisioned" scenario:
+ * `deprovisionSchedule` removes the schedule objects from a throw-away test database (simulating a database that has not been migrated to 025
+ * yet) and `applyPendingScheduleMigration` re-applies the very same numbered file; it is a no-op when the tables already exist.
  */
+export async function deprovisionSchedule(): Promise<void> {
+  const { pool } = await import('../../apps/backend/src/db');
+  await pool.query('DROP TABLE IF EXISTS schedule_delay_reasons, schedule_delay_categories, schedule_revision_entries, schedule_revisions, schedule_items CASCADE');
+  for (const f of ['schedule_items_guard', 'schedule_revisions_guard', 'schedule_revision_entries_guard', 'schedule_delay_reasons_guard']) await pool.query(`DROP FUNCTION IF EXISTS ${f}() CASCADE`);
+}
 export async function applyPendingScheduleMigration(): Promise<void> {
-  if (!fs.existsSync(PENDING_SCHEDULE_SQL)) return;
   const { pool, transaction } = await import('../../apps/backend/src/db');
   if ((await pool.query("SELECT to_regclass('schedule_items') AS t")).rows[0].t) return;
-  await transaction(async (c) => { await c.query(fs.readFileSync(PENDING_SCHEDULE_SQL, 'utf8')); });
+  await transaction(async (c) => { await c.query(fs.readFileSync(SCHEDULE_SQL, 'utf8')); });
 }
 
 export async function gprHarness(key: string, options: { applyPending?: boolean; port?: number } = {}) {
@@ -32,7 +36,7 @@ export async function gprHarness(key: string, options: { applyPending?: boolean;
   const { seed } = await import('../../scripts/seed');
   const { createApp } = await import('../../apps/backend/src/main');
   await migrate();
-  if (options.applyPending !== false) await applyPendingScheduleMigration();
+  if (options.applyPending === false) await deprovisionSchedule();
   await seed();
   const app = await createApp();
   await app.listen(options.port ?? 0, '127.0.0.1');

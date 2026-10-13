@@ -1,13 +1,7 @@
--- GPR-1 Production Schedule («График производства работ») — PENDING MIGRATION.
+-- GPR-1 Production Schedule («График производства работ») — production migration 025.
 --
--- NOT NUMBERED, ON PURPOSE. Other slices are being built in parallel and several of them may need a migration; the production migration
--- number is the coordinator's to assign at integration. This file therefore lives in infra/pending/, which scripts/migrate.ts does not read
--- (it applies only infra/<digits>_*.sql), so NOTHING here reaches any database through the repository runner until it is promoted.
---
--- PROMOTION (coordinator, at integration): rename the file to the next free production number and commit — no change to its content.
---     git mv infra/pending/gpr-1_production_schedule.sql infra/0NN_production_schedule.sql
--- The GPR tests apply this file from infra/pending/ while it is still there and rely on the ordinary runner once it has been promoted,
--- so they pass unchanged on either side of the rename (tests/helpers/gpr-fixtures.ts).
+-- Applied exactly once, in order, by scripts/migrate.ts through the normal numbered chain (after 024 Bitrix Disk file storage).
+-- Content unchanged from the accepted GPR-1 candidate; only the file location/number was assigned at integration.
 --
 -- Additive only: five new tables, their indexes and guard triggers. No existing table or column is altered; a database without this file
 -- behaves exactly as before (the schedule endpoints answer with an error, nothing else is affected).

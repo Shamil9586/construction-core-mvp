@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { gprHarness, applyPendingScheduleMigration, type Harness } from './helpers/gpr-fixtures';
 
 /**
- * GPR-1 — the schedule's schema is a PENDING migration. A database that has not had it applied must degrade cleanly: the schedule routes say
+ * GPR-1 — the schedule's schema is production migration 025 (the database here is explicitly de-provisioned to simulate a database not yet migrated to 025). A database that has not had it applied must degrade cleanly: the schedule routes say
  * so (503, a plain Russian message — not a generic 500), every other part of the application keeps working, authorization still answers
  * before the missing table is ever touched, and the schedule comes alive the moment the migration is applied — no restart, no code change.
  */
@@ -33,7 +33,7 @@ test('without the migration: schedule routes answer 503 with a clear message; th
   assert.equal((await h.raw(`objects/${object.id}`)).status, 200);
   assert.equal((await h.raw(`works/${work.id}/progress`)).status, 200);
 
-  // the coordinator promotes / applies the migration: the same routes answer
+  // migration 025 is applied: the same routes answer
   await applyPendingScheduleMigration();
   const live = await h.req(`objects/${object.id}/schedule`);
   assert.equal(live.conclusion.status, 'NO_BASELINE');

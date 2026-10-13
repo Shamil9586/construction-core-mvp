@@ -3,10 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { Client } from 'pg';
 import { actorByRole, tenantId } from './helpers/pbx3-fixtures';
-import { applyPendingScheduleMigration } from './helpers/gpr-fixtures';
 
 /**
- * GPR-1 — REAL PostgreSQL evidence for the pending schedule migration (infra/pending/gpr-1_production_schedule.sql): the exact schema, the
+ * GPR-1 — REAL PostgreSQL evidence for production migration 025 (infra/025_production_schedule.sql): the exact schema, the
  * database-level guards that make an approved plan unrewritable by ANY writer, and the concurrency behaviour of the schedule service
  * (PGlite is one connection and cannot show a race). A dedicated fresh database is created and dropped, like the other *-postgres suites.
  * Needs a server at E2E_DATABASE_URL (default postgresql://postgres:local-test-only@127.0.0.1:5432/postgres); without one the hooks fail,
@@ -32,7 +31,6 @@ before(async () => {
   const db = await import('../apps/backend/src/db');
   const { ScheduleService } = await import('../apps/backend/src/schedule-service');
   await migrate();
-  await applyPendingScheduleMigration();
   await seed();
   ctx = { db, svc: new ScheduleService() };
 });
@@ -71,18 +69,17 @@ async function drafted(s: any) {
 }
 const draftOf = async (s: any) => (await ctx.svc.objectSchedule(s.pm, s.obj.id)).draft;
 
-test('A1 fresh native chain: the numbered chain is untouched, the pending file adds exactly its five tables, and re-applying is a no-op', async () => {
+test('A1 fresh native chain: migration 025 (numbered) adds exactly the five schedule tables, is recorded once, and re-running the runner is a no-op', async () => {
   const c = await client();
   try {
     const files = fs.readdirSync('infra').filter((f) => /^\d+_.*\.sql$/.test(f)).sort();
-    assert.ok(!files.some((f) => /schedule/i.test(f)), 'this branch claims no production migration number');
+    assert.ok(files.includes('025_production_schedule.sql') && files.includes('024_bitrix_disk_file_storage.sql') && files.at(-1) === '025_production_schedule.sql', 'chain ends 024 disk, 025 schedule');
     const versions = (await c.query('SELECT version FROM schema_migrations ORDER BY version')).rows.map((r) => r.version);
-    assert.deepEqual(versions, files.map((f) => Number(f.split('_')[0])), 'schema_migrations records only the numbered chain');
+    assert.deepEqual(versions, files.map((f) => Number(f.split('_')[0])), 'schema_migrations records exactly the numbered chain, each version once');
     const tables = (await c.query("SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_name LIKE 'schedule\\_%' ORDER BY 1")).rows.map((r) => r.table_name);
     assert.deepEqual(tables, ['schedule_delay_categories', 'schedule_delay_reasons', 'schedule_items', 'schedule_revision_entries', 'schedule_revisions']);
     const { migrate } = await import('../scripts/migrate');
     await migrate();
-    await applyPendingScheduleMigration();
     assert.deepEqual((await c.query('SELECT version FROM schema_migrations ORDER BY version')).rows.map((r) => r.version), versions);
     for (const t of tables) assert.equal((await c.query(`SELECT count(*)::int n FROM ${t}`)).rows[0].n >= 0, true);
   } finally { await c.end(); }
