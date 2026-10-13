@@ -262,12 +262,12 @@ No dependency on the current PTO corrective work and none on Bitrix Disk.
 
 | Suite | What it proves |
 |---|---|
-| `tests/gpr-1-schedule-domain.test.ts` (24) | Pure rules: civil dates, linear plan, states, whole-day delay (exact), conclusion, diff, approval rules, revision life, categories, authorization matrix |
-| `tests/gpr-1-schedule-http.test.ts` (16) | Real backend (PGlite) via HTTP: authorization, PTO shell vs membership, object / production-domain tie, cross-object isolation, approval immutability (API **and** SQL), audit, plan-vs-fact with `asOf` through the real RP-fact route, no PTO / SDO / СК influence (+ source guard), partial progress, several portions, delay reasons + provenance, corrections, advisory predecessor, W01 summary, O01 conclusion, tenant isolation |
-| `tests/gpr-1-schedule-postgres.test.ts` (8) | Native PostgreSQL (needs a server at `127.0.0.1:5432`): exact schema, guards for any writer, races (two drafts, simultaneous approvals, approval vs edit, duplicate scope, racing corrections) |
+| `tests/gpr-1-schedule-domain.test.ts` (26) | Pure rules: civil dates (every year read as written; the 2000–2100 planning range), linear plan, states, whole-day delay (exact), conclusion, diff, approval rules, revision life, categories, authorization matrix |
+| `tests/gpr-1-schedule-http.test.ts` (19) | Real backend (PGlite) via HTTP: authorization, PTO shell vs membership, object / production-domain tie, cross-object isolation, approval immutability (API **and** SQL), audit, plan-vs-fact with `asOf` through the real RP-fact route, no PTO / SDO / СК influence (+ source guard), partial progress, several portions, delay reasons + provenance (and closing one after the scope caught up), corrections, advisory predecessor, W01 summary and its work-level isolation, date range, O01 conclusion, tenant isolation |
+| `tests/gpr-1-schedule-postgres.test.ts` (10) | Native PostgreSQL (needs a server at `127.0.0.1:5432`): exact schema, guards for any writer (incl. same-object revision links, date range, reason → baseline entry), races (two drafts, simultaneous approvals, approval vs edit, duplicate scope, racing corrections) and the lock order against a transaction holding a work row |
 | `tests/gpr-1-unprovisioned.test.ts` (1) | A database without the migration: 503 with a clear message, the rest of the app untouched, then live after applying |
-| `tests/gpr-1-viewmodel.test.ts` (13) | Frontend presentation: terminology, plan / fact / СК kept apart, O01 / W01 views, API guards, no PTO / money reach |
-| `tests/gpr-1-browser/schedule.spec.ts` (7) | Real browser over the real backend: O01, the table (+ layout guards), W01, read-only roles and cross-object, narrow screens, recording a delay reason, a correction |
+| `tests/gpr-1-viewmodel.test.ts` (14) | Frontend presentation: terminology, plan / fact / СК kept apart, O01 / W01 views, API guards, load-state rules (a plan is only shown for the object it was fetched for), no PTO / money reach |
+| `tests/gpr-1-browser/schedule.spec.ts` (10) | Real browser over the real backend: O01, the table (+ layout guards), W01, read-only roles and cross-object, narrow screens, recording and closing a delay reason, a correction, a work-handoff-only PTO engineer, stepping from one object to another |
 
 Run: `node --import tsx --test tests/gpr-1-*.test.ts`; browser: `npm run test:gpr-1-browser` (set `PLAYWRIGHT_CHROMIUM_PATH` if the default
 Playwright browser is not installed).

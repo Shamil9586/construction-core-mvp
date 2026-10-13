@@ -317,3 +317,30 @@ test('W01 for a PTO engineer who holds only this work\'s handoff: the work\'s sc
   await page.goto(`/app.html/object/${handoff.objectId}/schedule`);
   await expect(page.getByText('График производства работ недоступен для вашей роли или для этого объекта')).toBeVisible();
 });
+
+test('stepping from one object straight to another never paints the first object\'s plan under the second: loading until the new schedule arrives', async ({ page }) => {
+  const deputy = await mockLogin('DEPUTY_DIRECTOR');
+  // the neighbour's schedule answers slowly, so the in-between state can be observed
+  await page.route(`**/api/objects/${neighbourId}/schedule*`, async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    await route.continue();
+  });
+  await openAs(page, deputy.token, `/object/${objectId}/schedule`);
+  await expect(positions(page)).toBeVisible();
+  await expect(page.getByText('Штукатурка стен').first()).toBeVisible();
+
+  // history reuses the SAME route element when only the object id changes (a jump in the browser's history list does exactly this)
+  await page.evaluate((to) => {
+    window.history.pushState(null, '', to);
+    window.dispatchEvent(new PopStateEvent('popstate'));
+  }, `/app.html/object/${neighbourId}/schedule`);
+  await expect(page).toHaveURL(new RegExp(`/object/${neighbourId}/schedule$`));
+  await page.waitForTimeout(800);
+  // a point-in-time look while the neighbour's schedule is still on its way — not an auto-retrying assertion, which would wait the stale
+  // screen out and pass anyway: nothing of the first object may be on screen now
+  expect(await page.getByText('Штукатурка стен').count(), 'the first object\'s plan under the second object\'s address').toBe(0);
+  expect(await page.getByText('Тест после удаления ролей').count(), 'the first object\'s name under the second object\'s address').toBe(0);
+  // ... and then the neighbour's own plan
+  await expect(page.getByText('Окраска фасада').first()).toBeVisible({ timeout: 15000 });
+  await expect(page.getByText('Штукатурка стен')).toHaveCount(0);
+});
