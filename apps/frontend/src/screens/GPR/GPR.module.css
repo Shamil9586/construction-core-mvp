@@ -1,0 +1,269 @@
+/* GPR — Production Schedule. Every value is a design token; nothing is hardcoded. */
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-12);
+  margin-top: var(--cc-p-space-24);
+}
+
+.section:first-of-type {
+  margin-top: var(--cc-p-space-20);
+}
+
+.sectionTitle {
+  color: var(--cc-text-primary);
+  margin: 0;
+}
+
+.card {
+  background: var(--cc-background-surface);
+  border: var(--cc-border-width) solid var(--cc-border-default);
+  border-radius: var(--cc-card-radius);
+  padding: var(--cc-card-padding);
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-12);
+  width: 100%;
+}
+
+.cardHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--cc-p-space-12);
+}
+
+.muted {
+  color: var(--cc-text-secondary);
+  margin: 0;
+}
+
+.plainList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-4);
+}
+
+.bulletList {
+  margin: 0;
+  padding-left: var(--cc-p-space-20);
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-4);
+}
+
+.bulletList li,
+.plainList li {
+  overflow-wrap: anywhere;
+}
+
+/* ---- forms ------------------------------------------------------------------------------------------------------------------------ */
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-12);
+}
+
+.fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--cc-p-space-12);
+  align-items: end;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-4);
+  min-width: 0;
+}
+
+.fieldWide {
+  grid-column: 1 / -1;
+}
+
+.label {
+  color: var(--cc-text-secondary);
+}
+
+.input,
+.select,
+.textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: var(--cc-p-space-8) var(--cc-p-space-12);
+  border: var(--cc-border-width) solid var(--cc-border-interactive);
+  border-radius: var(--cc-p-radius-6);
+  background: var(--cc-background-surface);
+  color: var(--cc-text-primary);
+  font: inherit;
+}
+
+.textarea {
+  resize: vertical;
+  min-height: 72px;
+}
+
+.input:focus-visible,
+.select:focus-visible,
+.textarea:focus-visible {
+  outline: var(--cc-focus-ring-width) solid var(--cc-focus-ring);
+  outline-offset: var(--cc-focus-ring-offset);
+}
+
+.input:disabled,
+.select:disabled,
+.textarea:disabled {
+  background: var(--cc-background-neutral);
+  color: var(--cc-text-secondary);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--cc-p-space-8);
+}
+
+.error {
+  color: var(--cc-status-delayed-text);
+  background: var(--cc-status-delayed-fill);
+  border-radius: var(--cc-radius-badge);
+  padding: var(--cc-p-space-8) var(--cc-p-space-12);
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.hint {
+  color: var(--cc-text-secondary);
+  margin: 0;
+}
+
+/* ---- the draft ------------------------------------------------------------------------------------------------------------------- */
+
+.draftList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-12);
+}
+
+.draftItem {
+  border: var(--cc-border-width) solid var(--cc-border-default);
+  border-radius: var(--cc-radius-row);
+  padding: var(--cc-p-space-12);
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-12);
+}
+
+.draftHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--cc-p-space-8);
+}
+
+.draftIdentity {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.changeLines {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-4);
+}
+
+/* ---- delay reasons ---------------------------------------------------------------------------------------------------------------- */
+
+.reasonPanel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-12);
+  padding-top: var(--cc-p-space-8);
+  border-top: var(--cc-border-width) solid var(--cc-border-default);
+}
+
+.reasonList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-8);
+}
+
+.reasonItem {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--cc-p-space-8) var(--cc-p-space-12);
+  background: var(--cc-background-surface);
+  border: var(--cc-border-width) solid var(--cc-border-default);
+  border-radius: var(--cc-radius-row);
+}
+
+.reasonHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--cc-p-space-8);
+}
+
+/* ---- history ----------------------------------------------------------------------------------------------------------------------- */
+
+.historyItem {
+  border: var(--cc-border-width) solid var(--cc-border-default);
+  border-radius: var(--cc-radius-row);
+  padding: var(--cc-p-space-8) var(--cc-p-space-12);
+}
+
+.historyItem > summary {
+  cursor: pointer;
+  list-style-position: inside;
+}
+
+.historyItem > summary:focus-visible {
+  outline: var(--cc-focus-ring-width) solid var(--cc-focus-ring);
+  outline-offset: var(--cc-focus-ring-offset);
+  border-radius: var(--cc-p-radius-3);
+}
+
+.historyBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-8);
+  padding-top: var(--cc-p-space-8);
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@media (max-width: 639px) {
+  .fields {
+    grid-template-columns: 1fr;
+  }
+}

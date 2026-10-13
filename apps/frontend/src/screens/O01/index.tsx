@@ -11,7 +11,9 @@ import {
   workSummaryColumns,
 } from '../../design-system';
 import type { O01ViewModel } from '../../view-models/o01';
+import type { O01ScheduleView } from '../../view-models/schedule';
 import { PtoTeamSection, type PtoTeamLoad } from './PtoTeamSection';
+import { ScheduleConclusion } from './ScheduleConclusion';
 import styles from './O01.module.css';
 
 /**
@@ -33,6 +35,13 @@ export interface O01Props {
   topbar?: ReactNode;
   /** PBX-3A — present only for roles that may read the PTO team; absent means the block is not rendered. */
   ptoTeam?: PtoTeamLoad;
+  /**
+   * GPR-1 — the Object's production-schedule conclusion («По графику» / «Есть отставание»), from its approved schedule. Omitted (the design
+   * preview, the demo runtime) the card keeps its original statement; see `ScheduleConclusion`.
+   */
+  schedule?: O01ScheduleView;
+  /** Opens «График производства работ» of this object. */
+  onOpenSchedule?: () => void;
   onNavigateHome: () => void;
   onSelectWork: (workId: string) => void;
   className?: string;
@@ -48,6 +57,8 @@ export function ObjectOverview({
   sidebar,
   topbar,
   ptoTeam,
+  schedule,
+  onOpenSchedule,
   onNavigateHome,
   onSelectWork,
   className,
@@ -105,13 +116,12 @@ export function ObjectOverview({
             Состояние графика
           </h2>
           {/*
-            No status badge here: no API field gives a confirmed per-object
-            schedule status, and `healthStatus` — the one status the backend
-            does compute — mixes in issues, staleness and late ИД/СДО, so
-            presenting it next to "Состояние графика" would claim a
-            schedule-specific verdict the value does not confirm. Plan and
-            fact are both real, confirmed figures and stand on their own,
-            per Design Rules §7.
+            Plan and fact are both real, confirmed figures and stand on their own,
+            per Design Rules §7. The object-level conclusion is NOT derived from them
+            or from `healthStatus` (which mixes in issues, staleness and late ИД/СДО):
+            it comes from the Object's approved production schedule (GPR-1) and is
+            rendered by `ScheduleConclusion`, which keeps the original "not
+            determined" statement whenever no schedule is offered to this viewer.
           */}
           <div className={styles.scheduleRow}>
             <PlanFact
@@ -121,9 +131,7 @@ export function ObjectOverview({
               ]}
             />
           </div>
-          <span className={[styles.cardNote, typeClass('label')].join(' ')}>
-            Итоговый статус графика по объекту не определён: в данных нет подтверждённого значения.
-          </span>
+          <ScheduleConclusion schedule={schedule} onOpenSchedule={onOpenSchedule} />
         </div>
       </section>
 

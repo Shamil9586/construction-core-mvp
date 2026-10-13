@@ -9,9 +9,11 @@ import {
   typeClass,
 } from '../../design-system';
 import type { W01ViewModel, WorkConfirmation } from '../../view-models/w01';
+import type { W01ScheduleView } from '../../view-models/schedule';
 import { ExecutionSection, type W01ActionHandlers } from './ExecutionSection';
 import { DocumentationSection, type DocumentationHandoff, type DocumentationSectionActionHandlers } from './DocumentationSection';
 import { SdoSection } from './SdoSection';
+import { ScheduleSection } from './ScheduleSection';
 import styles from './W01.module.css';
 
 /**
@@ -54,6 +56,10 @@ export interface W01Props {
   documentationHandoff?: DocumentationHandoff;
   /** F8.2.1 — `false` only for a confirmed excluded role (SDO); see `DocumentationSection`'s own prop comment. */
   documentationVisible?: boolean;
+  /** GPR-1 — this work's summary from the Object's production schedule (planned start / finish, state, delay). Omitted: no block at all. */
+  schedule?: W01ScheduleView;
+  /** GPR-1 — opens «График производства работ» of the work's object. */
+  onOpenSchedule?: () => void;
 }
 
 function ConfirmationStatus({
@@ -128,6 +134,8 @@ export function WorkCard({
   documentationActions,
   documentationHandoff,
   documentationVisible,
+  schedule,
+  onOpenSchedule,
 }: W01Props) {
   return (
     <AppShell sidebar={sidebar} topbar={topbar} className={className}>
@@ -200,6 +208,8 @@ export function WorkCard({
           </dl>
         </div>
       </section>
+
+      <ScheduleSection schedule={schedule} onOpenSchedule={onOpenSchedule} />
 
       {viewModel.blockers.length > 0 ? (
         <section className={styles.section}>

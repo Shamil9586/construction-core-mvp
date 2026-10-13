@@ -3,14 +3,16 @@ import { WorkCard } from '../../screens/W01';
 import type { W01ActionHandlers } from '../../screens/W01/ExecutionSection';
 import type { DocumentationHandoff, DocumentationSectionActionHandlers } from '../../screens/W01/DocumentationSection';
 import { buildW01ViewModel } from '../../view-models/w01';
+import { buildW01ScheduleView } from '../../view-models/schedule';
 import { useRefetchSnapshot, useSnapshot } from '../../data/SnapshotContext';
 import * as executionUnitsApi from '../../data/executionUnitsApi';
 import * as documentationApi from '../../data/documentationApi';
 import { useCoreRuntime } from '../CoreRuntimeContext';
 import { canAccessDocumentation, canManageDocumentation } from '../../auth/internalRoles';
 import { useWorkPtoAssignment } from '../useWorkPtoAssignment';
+import { useWorkSchedule } from '../useSchedule';
 import { AppSidebar } from '../AppSidebar';
-import { ROUTE_PATHS, objectPath, packagePath } from '../routePaths';
+import { ROUTE_PATHS, objectPath, packagePath, schedulePath } from '../routePaths';
 import { RouteError, RouteLoading, RouteNotFound } from '../RouteStatus';
 
 /**
@@ -31,6 +33,8 @@ export function WorkRoute() {
     workId,
     !!session && canAccessDocumentation(session.user.role),
   );
+  // GPR-1 — this work's summary from the Object's production schedule; a role or runtime that cannot read it gets `Hidden` (no block).
+  const { load: scheduleLoad } = useWorkSchedule(workId, session !== null);
 
   if (state.status === 'Loading') return <RouteLoading />;
   if (state.status === 'Error') return <RouteError message={state.message} />;
@@ -133,6 +137,8 @@ export function WorkRoute() {
       documentationActions={documentationActions}
       documentationHandoff={documentationHandoff}
       documentationVisible={documentationVisible}
+      schedule={buildW01ScheduleView(scheduleLoad)}
+      onOpenSchedule={() => navigate(schedulePath(object.id))}
     />
   );
 }

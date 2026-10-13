@@ -23,6 +23,7 @@
     "test:obj1-browser": "playwright test --config playwright.obj1.config.ts",
     "test:org1-browser": "playwright test --config playwright.org1.config.ts",
     "test:id-auto-1-browser": "playwright test --config playwright.id-auto-1.config.ts",
+    "test:gpr-1-browser": "playwright test --config playwright.gpr-1.config.ts",
     "test:f7-prod": "playwright test --config playwright.f7-prod.config.ts"
   },
   "dependencies": {
