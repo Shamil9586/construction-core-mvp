@@ -83,8 +83,26 @@ design-system components. Components receive finished values, never raw API obje
 component that reaches into `work.financial.buckets` has quietly become domain logic.
 
 Derivation the backend does not do belongs in `view-models/`, not in a component.
-Known cases: the per-object schedule aggregate (the snapshot exposes per-work
-`scheduleStatus`), and the object-level attention selector for C01.
+A known case is the object-level attention selector for C01.
+
+Schedule compliance is the exception to "derive it in the frontend": it is calculated by
+the backend and the frontend only presents it. The Object's approved GPR (production
+schedule; `data/scheduleApi.ts`, `types/schedule.ts`, `docs/gpr-1-production-schedule.md`)
+is the single source of schedule compliance:
+
+- the object-level schedule conclusion on O01 (`NO_BASELINE` / `ON_TRACK` / `DELAYED`)
+  comes from the approved GPR;
+- O01 per-work compliance derives from the approved GPR entries
+  (`view-models/schedule.ts`); a work with no approved baseline or no entry says so in
+  words and never defaults to "on schedule";
+- W01 shows the work's own GPR summary and its physical state separately.
+
+Do not use the legacy `work.scheduleStatus` for O01/W01 schedule compliance, and do not
+calculate delay, planned progress or an object-level conclusion in a view-model or
+component. View-models map the GPR response into display strings and presentation
+variants, and combine the backend-calculated entry states of one work the way the GPR
+document describes (any delay wins). `work.scheduleStatus` remains only the input of
+C01's portfolio attention.
 
 `DataProvider` covers the read side only. Write actions that have no mock counterpart
 (for example `data/executionUnitsApi.ts`) are standalone modules gated on a real
@@ -146,9 +164,10 @@ do not extend it by assumption.
 | Work layers | Not rendered | `executionUnitLayers` are in the snapshot; no view-model or screen reads them. |
 | Sequencing | Partial | Work-level `WorkDependency` (`FINISH_TO_START` only) feeds `blockers`; the GPR schedule has per-entry `sequence`, `predecessorItemId` and an advisory `followsPredecessor`. W01 renders no sequence block. |
 
-Quantity sources stay separate: **RP_FACT** (the contractor's reported fact),
-**INTERNAL_SC** (internal construction control) and **CUSTOMER_SC** (customer
-construction control) never overwrite one another and are never merged into one number.
+Quantity sources stay separate: **RP_FACT** (the production fact recorded by the Project
+Manager, РП), **INTERNAL_SC** (internal construction control) and **CUSTOMER_SC**
+(customer construction control) never overwrite one another and are never merged into
+one number.
 `CUSTOMER_ACCEPTED` is a different, package-level source used by the documentation
 registry and AOSR.
 
