@@ -7,27 +7,44 @@ description: TypeScript conventions for the Construction Core frontend — the s
 
 ## The strictness boundary
 
-The repository root `tsconfig.json` has `"strict": false` and covers `apps`, `packages`,
-`scripts`, `tests`. **Do not flip it globally.** The backend, the domain package and the
-legacy frontend were written under the loose setting; turning strict on repo-wide
-produces hundreds of errors in code this workstream is not allowed to change, and
-`npm run build` (which runs `tsc --noEmit`) would fail for reasons unrelated to the work.
+There are two TypeScript gates, and both already exist:
 
-New design-system and screen code is strict-clean by discipline instead: explicit
-parameter and return types, no implicit `any`, no non-null assertions to silence the
-compiler. A local `tsconfig` with `strict: true` over the new directories is the way to
-get the compiler to enforce this without touching the global gate — keep it additive and
-keep the root gate green.
+- **Root `tsconfig.json`** has `"strict": false` and covers `apps`, `packages`,
+  `scripts`, `tests`. It runs as part of `npm run build` (`tsc --noEmit`, then Vite).
+- **`apps/frontend/tsconfig.strict.json`** extends the root config with `"strict": true`,
+  `noEmit`, and `lib` `ES2022`/`DOM`/`DOM.Iterable`. Its `include` list is
+  `src/design-system`, `src/formatters`, `src/types`, `src/view-models`, `src/screens`,
+  `src/preview`, `src/app`, `src/data` and `src/auth` — the layers written under the
+  current architecture. Run it with `npm run typecheck:strict`.
+
+Code under those directories must be strict-clean: explicit parameter and return types,
+no implicit `any`, no non-null assertions to silence the compiler. Run
+`npm run typecheck:strict` for any change there, in addition to `npm run build`; the root
+build alone does not enforce strict mode on them.
+
+Files outside that list — the backend, the domain package, scripts, tests, and the legacy
+frontend entry (`main.tsx`, `ContractorPanel.tsx`, `Gantt.tsx`) — are not roots of the
+strict gate and are checked only under the loose root setting. (A file that a listed file
+imports, such as `http.ts`, is still compiled by the strict config when it is imported.)
+They were written under the loose setting, and this workstream does not change them as a
+side effect.
+
+**Do not flip `strict` in the root `tsconfig.json`, and do not edit
+`tsconfig.strict.json` (including its `include` list) as part of ordinary feature work.**
+Enabling strict repo-wide, or widening the strict gate to more directories, is a separate
+decision that needs its own authorization. If new code lands in a directory the strict
+config does not list, say so rather than quietly leaving it unchecked.
 
 ## Typing the API boundary
 
-`ReadService.snapshot()` and the controllers return untyped JSON, and fields are
-denormalised in ways that are not obvious from the endpoint name. Describe the payload
-once in `types/api.ts` and narrow there. After that boundary, `any` should not appear.
+`ReadService.snapshot()` and the controllers return JSON the compiler cannot check, and
+fields are denormalised in ways that are not obvious from the endpoint name. Describe the payload
+once in `types/api.ts` (schedule API: `types/schedule.ts`); `data/validateSnapshot.ts`
+checks the snapshot's shape at runtime. Narrow there. After that boundary, `any` should not appear.
 
-The existing frontend types everything as `any` (`function stages(data: any, works: any[])`).
-That is the state being moved away from; do not copy the pattern into new files, and do
-not "fix" the old files as a side effect of unrelated work.
+The legacy frontend entry types much of its data as `any` (`main.tsx`, `ContractorPanel.tsx`).
+Do not copy that pattern into new files, and do not "fix" the old files as a side effect of
+unrelated work.
 
 ## Variants
 
