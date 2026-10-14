@@ -32,8 +32,15 @@
  * `scheduleStatus` (`scheduleStatusPresentation`, `workStatusPresentation`)
  * is unaffected: it is a real, confirmed, already-per-work figure and was
  * never the problem.
+ *
+ * GPR-UX-D01: once the Object's production schedule (GPR) is approved, O01 and
+ * W01 no longer read `work.scheduleStatus` at all. `workStatusPresentation` is
+ * removed; schedule compliance comes from the GPR alone (`schedule.ts`) and the
+ * physical execution state is shown separately (`workExecutionPresentation`
+ * below). `scheduleStatusPresentation` stays for C01's portfolio.
  */
 
+import Decimal from 'decimal.js';
 import type { DocumentationPackageStatus, ScheduleStatus, SdoClosingStatus, Work } from '../types/api';
 
 export type ScheduleVariant = 'OnTrack' | 'Delayed' | 'Attention' | 'Blocked' | 'Neutral';
@@ -77,15 +84,44 @@ export function scheduleStatusPresentation(status: ScheduleStatus): StatusPresen
 export const NO_SCHEDULE_STATUS: StatusPresentation = { variant: 'Neutral', label: 'Нет данных' };
 
 /**
- * A work's own status presentation. `Blocked` overrides the schedule colour
- * because it is a different, stronger claim with its own confirmed source —
- * `work.blockers`, the named reasons — never derived from `scheduleStatus`
- * itself (Design Rules; see `StatusBadge`'s own documentation for why this
- * matters more here than anywhere else).
+ * GPR-UX-D01 — the work's ACTUAL PHYSICAL execution state, the only thing the work list and the Work header say about "where the work is".
+ * It never says anything about the schedule: once an object's production schedule (GPR) is approved, compliance with the deadlines is decided
+ * by that schedule alone (`view-models/schedule.ts`), and the legacy `work.scheduleStatus` no longer produces a schedule verdict on O01 / W01
+ * (it remains the input of C01's portfolio attention only).
+ *
+ * Derived from the production fact the snapshot already carries (the RP fact — the same source the schedule measures progress by), with the
+ * distinction the fact model keeps: `lastReportedAt === null` means NOTHING was ever reported, which is not a reported zero — an unreported
+ * work reads «Не начато» whatever `actualQuantity` happens to hold, and only a REPORTED positive fact is «В работе». «Выполнено» is a reported
+ * fact that reaches the planned quantity (the schedule's own rule: fact ≥ plan > 0). Independent of СК, ПТО, ИД, СДО and financial closing.
  */
-export function workStatusPresentation(work: Pick<Work, 'scheduleStatus' | 'blockers'>): StatusPresentation {
-  if (work.blockers.length > 0) return { variant: 'Blocked', label: 'Заблокировано' };
-  return scheduleStatusPresentation(work.scheduleStatus);
+export type WorkExecutionState = 'NOT_STARTED' | 'IN_PROGRESS' | 'COMPLETED';
+
+export function workExecutionState(work: Pick<Work, 'lastReportedAt' | 'actualQuantity' | 'plannedQuantity'>): WorkExecutionState {
+  if (work.lastReportedAt === null) return 'NOT_STARTED';
+  const fact = new Decimal(work.actualQuantity);
+  const plan = new Decimal(work.plannedQuantity);
+  if (plan.gt(0) && fact.gte(plan)) return 'COMPLETED';
+  return fact.gt(0) ? 'IN_PROGRESS' : 'NOT_STARTED';
+}
+
+/** Colour never carries the schedule here: «Не начато» and «В работе» are neutral facts; «Выполнено» is the one positive physical fact. */
+export function workExecutionPresentation(work: Pick<Work, 'lastReportedAt' | 'actualQuantity' | 'plannedQuantity'>): StatusPresentation {
+  switch (workExecutionState(work)) {
+    case 'COMPLETED':
+      return { variant: 'OnTrack', label: 'Выполнено' };
+    case 'IN_PROGRESS':
+      return { variant: 'Neutral', label: 'В работе' };
+    default:
+      return { variant: 'Neutral', label: 'Не начато' };
+  }
+}
+
+/**
+ * An operational blocker is its own claim with its own confirmed source — `work.blockers`, the named reasons — shown beside the execution
+ * state, never as the schedule verdict and never derived from `scheduleStatus` (see `StatusBadge`'s own documentation for why).
+ */
+export function workBlockerPresentation(work: Pick<Work, 'blockers'>): StatusPresentation | null {
+  return work.blockers.length > 0 ? { variant: 'Blocked', label: 'Заблокировано' } : null;
 }
 
 /**

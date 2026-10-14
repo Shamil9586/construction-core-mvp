@@ -139,7 +139,7 @@ export function WorkRoute() {
       documentationActions={documentationActions}
       documentationHandoff={documentationHandoff}
       documentationVisible={documentationVisible}
-      schedule={buildW01ScheduleView(scheduleLoad)}
+      schedule={buildW01ScheduleView(scheduleLoad, work.id)}
       onOpenSchedule={() => navigate(schedulePath(object.id))}
       registryLink={session && canManageDocumentation(session.user.role) ? { href: registryHref, onOpen: () => navigate(documentationRegistryPath(work.objectId)) } : undefined}
     />

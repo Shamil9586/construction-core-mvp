@@ -127,8 +127,8 @@ function fail(): never {
  * `objectId`) routing keys off. That left every other field the builders and
  * screens actually read unguarded: a `work.blockers` that is missing, `null`
  * or a non-array object still passed straight through, and
- * `workStatusPresentation()` (`view-models/status.ts`, called by every one
- * of C01/O01/W01) then throws reading `.length` on it — past `Ready`, with
+ * `workBlockerPresentation()` (`view-models/status.ts`, called by O01/W01,
+ * and C01's own blocker checks) then throws reading `.length` on it — past `Ready`, with
  * no `RouteError` for it. The same crash class applies wherever a screen
  * renders a field directly as a JSX child (`work.blockers.map(reason =>
  * <li>{reason}</li>)` in W01/O01 — an object element there throws the same

@@ -482,6 +482,67 @@ export function buildO01ScheduleView(load: ScheduleLoad<ObjectSchedule>): O01Sch
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------
+// GPR-UX-D01 — per-work schedule compliance (O01's work list)
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+/**
+ * The state of a Work from the states of its entries (one per execution unit): any delay wins; otherwise the least advanced common state.
+ * The same rule as `aggregateScheduleStates` in `packages/domain/schedule.ts` that the backend applies for W01's summary (parity pinned by
+ * tests/gpr-ux-d01-viewmodel.test.ts) — restated here only because the frontend does not import the domain package.
+ */
+export function aggregateWorkEntryStates(states: ScheduleEntryState[]): ScheduleEntryState | null {
+  if (states.length === 0) return null;
+  if (states.includes('DELAYED')) return 'DELAYED';
+  if (states.every((state) => state === 'COMPLETED')) return 'COMPLETED';
+  if (states.every((state) => state === 'NOT_STARTED')) return 'NOT_STARTED';
+  return 'IN_PROGRESS';
+}
+
+/**
+ * Schedule compliance of ONE work, as a claim about the deadlines and nothing else. It comes from the Object's approved GPR alone — never from
+ * the legacy `work.scheduleStatus`. When the GPR cannot answer (loading, not offered to this viewer, failed, no approved baseline, work not in
+ * it) the answer is an explicit absence in words, never «По графику» by default.
+ */
+export type WorkScheduleCompliance =
+  | { kind: 'Loading'; presentation: StatusPresentation }
+  | { kind: 'Unavailable'; presentation: StatusPresentation }
+  | { kind: 'Error'; presentation: StatusPresentation }
+  | { kind: 'NoBaseline'; presentation: StatusPresentation }
+  | { kind: 'NotScheduled'; presentation: StatusPresentation }
+  | { kind: 'OnSchedule'; presentation: StatusPresentation }
+  | { kind: 'Delayed'; presentation: StatusPresentation };
+
+const NEUTRAL = (text: string): StatusPresentation => ({ variant: 'Neutral', label: text });
+export const COMPLIANCE_LOADING = NEUTRAL('Загрузка графика…');
+export const COMPLIANCE_UNAVAILABLE = NEUTRAL('График недоступен');
+export const COMPLIANCE_ERROR = NEUTRAL('График не загружен');
+export const COMPLIANCE_NO_BASELINE = NEUTRAL('График не утверждён');
+export const COMPLIANCE_NOT_SCHEDULED = NEUTRAL('Не включена в график');
+
+/**
+ * Compliance of every work of ONE object, from that object's schedule load. A schedule that belongs to another object (a stale value held
+ * across a route change) is never used: it reads as `Loading`.
+ */
+export function buildObjectWorkCompliance(load: ScheduleLoad<ObjectSchedule> | undefined, objectId: string): (workId: string) => WorkScheduleCompliance {
+  const constant = (value: WorkScheduleCompliance) => () => value;
+  if (!load || load.status === 'Hidden') return constant({ kind: 'Unavailable', presentation: COMPLIANCE_UNAVAILABLE });
+  if (load.status === 'Loading') return constant({ kind: 'Loading', presentation: COMPLIANCE_LOADING });
+  if (load.status === 'Error') return constant({ kind: 'Error', presentation: COMPLIANCE_ERROR });
+  const schedule = load.value;
+  if (schedule.objectId !== objectId) return constant({ kind: 'Loading', presentation: COMPLIANCE_LOADING });
+  if (schedule.conclusion.status === 'NO_BASELINE' || !schedule.current) return constant({ kind: 'NoBaseline', presentation: COMPLIANCE_NO_BASELINE });
+  const statesByWork = new Map<string, ScheduleEntryState[]>();
+  for (const entry of schedule.entries) statesByWork.set(entry.objectWorkId, [...(statesByWork.get(entry.objectWorkId) ?? []), entry.state]);
+  return (workId) => {
+    const state = aggregateWorkEntryStates(statesByWork.get(workId) ?? []);
+    if (state === null) return { kind: 'NotScheduled', presentation: COMPLIANCE_NOT_SCHEDULED };
+    return state === 'DELAYED'
+      ? { kind: 'Delayed', presentation: { variant: 'Delayed', label: 'Есть отставание' } }
+      : { kind: 'OnSchedule', presentation: { variant: 'OnTrack', label: 'По графику' } };
+  };
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------
 // W01 — one Work's schedule summary
 // ---------------------------------------------------------------------------------------------------------------------------------
 
@@ -495,11 +556,13 @@ export type W01ScheduleView =
   | { kind: 'NotScheduled'; canOpenObject: boolean }
   | { kind: 'Ready'; canOpenObject: boolean; plannedStart: string; plannedFinish: string; state: StatusPresentation; delay: string | null; entryCount: number; zones: string };
 
-export function buildW01ScheduleView(load: ScheduleLoad<WorkSchedule>): W01ScheduleView {
+export function buildW01ScheduleView(load: ScheduleLoad<WorkSchedule>, workId?: string): W01ScheduleView {
   if (load.status === 'Loading') return { kind: 'Loading' };
   if (load.status === 'Hidden') return { kind: 'Hidden' };
   if (load.status === 'Error') return { kind: 'Error', message: load.message };
   const schedule = load.value;
+  // A summary that belongs to another work is never this work's (GPR-UX-D01): it reads as still loading.
+  if (workId !== undefined && schedule.objectWorkId !== workId) return { kind: 'Loading' };
   // The backend says whether the object's whole schedule is open to this viewer (a PTO engineer with only this work's handoff reads the
   // work's summary but gets a 403 on the object's plan): the way in is offered only when it leads somewhere.
   const canOpenObject = schedule.canOpenObjectSchedule;

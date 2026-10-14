@@ -8,7 +8,7 @@ import {
   ProgressBar,
   WorkSummaryRow,
   typeClass,
-  workSummaryColumns,
+  workSummaryExecutionColumns,
 } from '../../design-system';
 import type { O01ViewModel } from '../../view-models/o01';
 import type { O01ScheduleView } from '../../view-models/schedule';
@@ -156,7 +156,7 @@ export function ObjectOverview({
 
       <section className={styles.section}>
         <DataTable
-          columns={workSummaryColumns}
+          columns={workSummaryExecutionColumns}
           title="Работы объекта"
           stackOnNarrow
           context={`${viewModel.works.length} работ объекта`}
@@ -171,7 +171,8 @@ export function ObjectOverview({
               plan={work.plan}
               fact={work.fact}
               smr={work.smr}
-              status={work.status}
+              status={work.scheduleCompliance}
+              execution={{ state: work.execution, blocker: work.blocker }}
               tone={work.needsAttention ? 'Attention' : 'Neutral'}
               interactive
               onActivate={() => onSelectWork(work.id)}

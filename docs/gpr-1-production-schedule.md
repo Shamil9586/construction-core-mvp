@@ -271,11 +271,19 @@ Playwright browser is not installed).
 
 ## Pre-LIVE UX Acceptance
 
-Open item recorded at integration (not implemented in the integration slice; GPR is not redesigned here):
+**GPR-UX-D01 (product decision, implemented before LIVE):** once an object's GPR is approved, compliance with the production deadlines is
+determined by the approved GPR **alone**. The actual physical state of a work is shown separately — «Не начато» / «В работе» / «Выполнено» —
+derived from the RP production fact (an unreported fact is not a reported zero: `lastReportedAt === null` reads «Не начато» whatever the
+number holds). The legacy `work.scheduleStatus` no longer produces a schedule verdict on O01 or W01 (it still feeds C01's portfolio
+attention, untouched by this decision).
 
-* **Legacy work status vs GPR status.** The legacy work status (the Work's own state shown on O01 / W01, driven by the pre-GPR execution flow) and the
-  GPR schedule status (derived from the approved baseline and physical progress — «По графику» / «Есть отставание», delay) are computed from different
-  sources and can disagree for the same Work on the same screen (e.g. a Work shown as in progress / on track by the legacy status while the schedule
-  reports a delay, or the reverse). Before LIVE the product owner must accept or correct how the two statuses are presented together (wording, which
-  one is primary, whether a disagreement is flagged). Until then both are shown as-is; neither overrides the other, and physical progress remains the
-  only input of the schedule's derived state.
+* **O01 work list:** the single «График» status became two cells — «Выполнение» (physical state, plus «Заблокировано» when `work.blockers` is
+  non-empty) and «График» (the GPR verdict: «По графику» / «Есть отставание» / «Не включена в график» / «График не утверждён»). A work with
+  several execution units takes the GPR's own aggregation (any delay wins; all completed; all not started; otherwise in progress). While the
+  schedule is loading, not offered to the viewer or failed, the cell says so («Загрузка графика…» / «График недоступен» / «График не
+  загружен») — never the legacy verdict and never «По графику» by default. A work's attention marker comes from a blocker or a GPR delay.
+* **W01:** the Work header shows the physical state (and the blocker) under «Выполнение»; the legacy schedule badge is gone. The one schedule
+  verdict on the screen is the «График производства работ» section (state, delay, zones), which also states «График не утверждён» /
+  «Не включена в график» explicitly.
+* Unchanged: GPR calculations, RP_FACT / INTERNAL_SC / CUSTOMER_SC, the backend and the schema, ID-AUTO-2 navigation, SDO and documentary
+  readiness; physical progress stays independent of СК, ПТО, ИД, СДО and financial closing.

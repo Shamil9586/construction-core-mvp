@@ -7,6 +7,9 @@
  * nothing here reads `inspections`, `packages`, `documents`, `sdo` or
  * `closings`, so there is nothing to accidentally mix in.
  *
+ * GPR-UX-D01: the work list no longer reads `work.scheduleStatus`. Each row states its ACTUAL physical state («Не начато» / «В работе» /
+ * «Выполнено») and, separately, its compliance with the deadlines taken from the Object's approved GPR alone (`buildObjectWorkCompliance`).
+ *
  * Corrective note, first pass (Work review, F4 patch 1): `schedule.status`
  * used to come from a frontend-computed worst-wins aggregate of the object's
  * works — removed for inventing a business rule the backend does not have.
@@ -28,7 +31,9 @@
 
 import type { ObjectSummary, Work } from '../types/api';
 import { formatDate, formatPercent, formatQuantityWithUnit, NO_DATA_DASH } from '../formatters';
-import { workStatusPresentation, type StatusPresentation } from './status';
+import type { ObjectSchedule, ScheduleLoad } from '../types/schedule';
+import { workBlockerPresentation, workExecutionPresentation, type StatusPresentation } from './status';
+import { buildObjectWorkCompliance } from './schedule';
 
 export interface O01Details {
   externalCode: string;
@@ -47,8 +52,16 @@ export interface O01WorkRow {
   plan: string;
   fact: string;
   smr: string;
-  status: StatusPresentation;
-  /** `true` for the one tone the row list actually uses — see `RowTone`. */
+  /** GPR-UX-D01 — the ACTUAL physical state: «Не начато» / «В работе» / «Выполнено». Says nothing about the schedule. */
+  execution: StatusPresentation;
+  /** An operational blocker (`work.blockers`), shown beside the execution state; `null` when nothing blocks the work. */
+  blocker: StatusPresentation | null;
+  /**
+   * GPR-UX-D01 — compliance with the deadlines, from the Object's approved GPR ALONE (never `work.scheduleStatus`):
+   * «По графику» / «Есть отставание» / «Не включена в график» / «График не утверждён», or an explicit «график недоступен / загружается».
+   */
+  scheduleCompliance: StatusPresentation;
+  /** `true` for the one tone the row list actually uses — see `RowTone`: a blocked work, or one the GPR reports as delayed. */
   needsAttention: boolean;
 }
 
@@ -76,11 +89,17 @@ export interface O01ViewModel {
   blockedWorks: O01BlockedWork[];
 }
 
-export function buildO01ViewModel(object: ObjectSummary, works: Work[]): O01ViewModel {
+/**
+ * `schedule` is the Object's schedule load (GPR-1). Omitted (the design preview) or not offered, the work list makes NO schedule-compliance
+ * claim — it says the schedule is unavailable; it never falls back to the legacy `work.scheduleStatus`.
+ */
+export function buildO01ViewModel(object: ObjectSummary, works: Work[], schedule?: ScheduleLoad<ObjectSchedule>): O01ViewModel {
   const objectWorks = works.filter((work) => work.objectId === object.id);
+  const complianceOf = buildObjectWorkCompliance(schedule, object.id);
 
   const workRows: O01WorkRow[] = objectWorks.map((work) => {
-    const status = workStatusPresentation(work);
+    const compliance = complianceOf(work.id);
+    const blocker = workBlockerPresentation(work);
     const factReported = work.lastReportedAt !== null;
 
     return {
@@ -90,8 +109,10 @@ export function buildO01ViewModel(object: ObjectSummary, works: Work[]): O01View
       plan: formatQuantityWithUnit(work.plannedQuantity, work.unit),
       fact: factReported ? formatQuantityWithUnit(work.actualQuantity, work.unit) : NO_DATA_DASH,
       smr: formatPercent(work.actualProgress),
-      status,
-      needsAttention: status.variant === 'Blocked' || status.variant === 'Delayed' || status.variant === 'Attention',
+      execution: workExecutionPresentation(work),
+      blocker,
+      scheduleCompliance: compliance.presentation,
+      needsAttention: blocker !== null || compliance.kind === 'Delayed',
     };
   });
   // Attention-needing works surface first; a stable sort keeps the backend's own

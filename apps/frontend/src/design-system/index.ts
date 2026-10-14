@@ -44,7 +44,7 @@ export type {
 export { ObjectRow, objectColumns } from './data/ObjectRow';
 export type { ObjectRowProps } from './data/ObjectRow';
 
-export { WorkSummaryRow, workSummaryColumns } from './data/WorkSummaryRow';
+export { WorkSummaryRow, workSummaryColumns, workSummaryExecutionColumns } from './data/WorkSummaryRow';
 export type { WorkSummaryRowProps } from './data/WorkSummaryRow';
 
 export { Button } from './controls/Button';

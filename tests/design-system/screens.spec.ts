@@ -182,41 +182,36 @@ test.describe('O01 — Object Overview', () => {
     await expect(section.getByText('75%', { exact: true })).toBeVisible();
   });
 
-  test('"Состояние графика" shows plan and fact only — no status badge, no healthStatus verdict', async ({
+  test('"Состояние графика" shows plan and fact only — and no schedule verdict at all without an approved GPR (GPR-UX-D01)', async ({
     page,
   }) => {
-    // healthStatus for this object is RED (from a real blocker), but nothing
-    // here may say "Есть отставание"/"По графику" for the *object* — that
-    // would claim a schedule-specific verdict healthStatus does not confirm
-    // (it mixes in issues, staleness and late ИД/СДО). The only "Есть
-    // отставание" on this screen belongs to one specific WorkSummaryRow
-    // (Отделка фасада), a real per-work figure, not an object-level one.
+    // This preview carries no production schedule. healthStatus is RED and one work's legacy `scheduleStatus` is RED, but neither may say
+    // "Есть отставание"/"По графику" anywhere: schedule compliance comes from the approved GPR alone, and where the GPR cannot answer the
+    // work list says so in words instead of falling back to the legacy status.
     const section = o01Section(page);
     const scheduleHeading = section.getByText('Состояние графика', { exact: true });
     await expect(scheduleHeading).toBeVisible();
 
-    const worksTableDelayedBadges = section
-      .getByRole('table', { name: /Работы объекта/ })
-      .getByText('Есть отставание', { exact: true });
-    await expect(worksTableDelayedBadges).toHaveCount(1);
-    // Exactly one "Есть отставание" on the whole screen — the works-table
-    // one above. If the schedule card still had its own badge, this would be 2.
-    await expect(section.getByText('Есть отставание', { exact: true })).toHaveCount(1);
+    await expect(section.getByText('Есть отставание', { exact: true })).toHaveCount(0);
+    await expect(section.getByText('По графику', { exact: true })).toHaveCount(0);
+    const table = section.getByRole('table', { name: /Работы объекта/ });
+    await expect(table.getByText('График недоступен', { exact: true })).toHaveCount(4);
   });
 
-  test('production attention lists every work, with the ones needing attention first', async ({
+  test('the work list states the physical state apart from the schedule; blocked works are listed first (GPR-UX-D01)', async ({
     page,
   }) => {
     const table = o01Section(page).getByRole('table', { name: /Работы объекта/ });
     const rows = table.locator('tbody tr');
 
     await expect(rows).toHaveCount(4);
-    // Отделка фасада (Delayed) and Монтаж вентфасада (Blocked) sort ahead of
-    // the on-track/no-data works — `needsAttention` first, per view-models/o01.ts.
-    await expect(rows.nth(0)).toContainText('Отделка фасада');
-    await expect(rows.nth(1)).toContainText('Монтаж вентфасада');
-
-    await expect(table.getByText('Заблокировано', { exact: true })).toBeVisible();
+    const headers = (await table.getByRole('columnheader').allInnerTexts()).map((text) => text.trim().toLowerCase()).filter(Boolean);
+    expect(headers).toEqual(['работа / исполнитель', 'план', 'факт', 'смр', 'выполнение', 'график']);
+    // Монтаж вентфасада carries a real blocker, so it sorts ahead; Отделка фасада's legacy RED no longer raises attention on its own.
+    await expect(rows.nth(0)).toContainText('Монтаж вентфасада');
+    await expect(rows.nth(0)).toContainText('Заблокировано');
+    await expect(table.getByText('Заблокировано', { exact: true })).toHaveCount(1);
+    for (const state of ['Не начато', 'В работе']) await expect(table.getByText(state, { exact: true }).first()).toBeVisible();
   });
 
   test('quality, ИД and finance are never rendered on the production overview', async ({
@@ -273,13 +268,17 @@ test.describe('W01 — Work Card', () => {
     );
   });
 
-  test('header shows the work, its performer and its schedule state', async ({ page }) => {
+  test('header shows the work, its performer and its physical state — never a schedule verdict (GPR-UX-D01)', async ({ page }) => {
     const section = w01Section(page);
     await expect(section.getByRole('heading', { level: 1, name: 'Отделка фасада' })).toBeVisible();
     await expect(
       section.getByText('Жилой комплекс «Полесье» · ООО «ФасадСтройГрупп»', { exact: true }),
     ).toBeVisible();
-    await expect(section.getByText('Есть отставание', { exact: true })).toBeVisible();
+    await expect(section.getByText('Выполнение', { exact: true })).toBeVisible();
+    await expect(section.getByText('В работе', { exact: true })).toBeVisible();
+    // the work's legacy scheduleStatus is RED, but compliance with the deadlines is the GPR's alone — and this preview has none
+    await expect(section.getByText('Есть отставание', { exact: true })).toHaveCount(0);
+    await expect(section.getByText('По графику', { exact: true })).toHaveCount(0);
   });
 
   test('plan, fact and СК confirmation are three separate figures, never merged', async ({

@@ -72,7 +72,8 @@ import { formatDate, formatMeasure, formatMoney, formatQuantityWithUnit, type Me
 import {
   documentationPackageStatusPresentation,
   sdoClosingStatusPresentation,
-  workStatusPresentation,
+  workBlockerPresentation,
+  workExecutionPresentation,
   type StatusPresentation,
 } from './status';
 import { buildPackageIdentity, type PackageIdentityViewModel } from './packageIdentity';
@@ -419,7 +420,10 @@ export interface W01ViewModel {
   objectName: string;
   name: string;
   performer: string;
-  status: StatusPresentation;
+  /** GPR-UX-D01 — the work's ACTUAL physical state («Не начато» / «В работе» / «Выполнено»). Never a schedule verdict: compliance is the GPR section's alone. */
+  execution: StatusPresentation;
+  /** An operational blocker beside the execution state; `null` when nothing blocks the work (the reasons are `blockers`). */
+  blocker: StatusPresentation | null;
   plan: Measure;
   fact: Measure;
   confirmation: WorkConfirmation;
@@ -500,7 +504,8 @@ export function buildW01ViewModel(
     objectName: object.name,
     name: work.name,
     performer: work.contractor,
-    status: workStatusPresentation(work),
+    execution: workExecutionPresentation(work),
+    blocker: workBlockerPresentation(work),
     plan: formatMeasure(work.plannedQuantity, work.unit, 'плановый объём'),
     fact: formatMeasure(factReported ? work.actualQuantity : null, work.unit, 'физически выполнено'),
     confirmation,

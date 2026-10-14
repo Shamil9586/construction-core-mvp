@@ -48,7 +48,7 @@ export function ObjectRoute() {
   const object = state.snapshot.objects.find((candidate) => candidate.id === objectId);
   if (!object) return <RouteNotFound label="Объект не найден" />;
 
-  const viewModel = buildO01ViewModel(object, state.snapshot.works);
+  const viewModel = buildO01ViewModel(object, state.snapshot.works, scheduleLoad);
 
   return (
     <ObjectOverview

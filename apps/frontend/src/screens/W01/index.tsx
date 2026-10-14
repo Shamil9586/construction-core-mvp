@@ -155,7 +155,15 @@ export function WorkCard({
         title={viewModel.name}
         description={`${viewModel.objectName} · ${viewModel.performer}`}
         actions={
-          <StatusBadge variant={viewModel.status.variant}>{viewModel.status.label}</StatusBadge>
+          // GPR-UX-D01 — the ACTUAL physical state, and an operational blocker beside it. Deliberately no schedule verdict in the header:
+          // compliance with the deadlines is stated once, by the «График производства работ» section below (the approved GPR).
+          <span className={styles.headerStates}>
+            <span className={[styles.headerStatesLabel, typeClass('label')].join(' ')}>Выполнение</span>
+            <StatusBadge variant={viewModel.execution.variant}>{viewModel.execution.label}</StatusBadge>
+            {viewModel.blocker ? (
+              <StatusBadge variant={viewModel.blocker.variant}>{viewModel.blocker.label}</StatusBadge>
+            ) : null}
+          </span>
         }
       />
 

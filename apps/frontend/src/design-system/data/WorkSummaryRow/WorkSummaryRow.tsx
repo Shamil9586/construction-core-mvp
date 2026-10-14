@@ -37,7 +37,13 @@ export interface WorkSummaryRowProps {
   fact: string;
   /** Readiness of execution, already formatted — "50%", or "—". */
   smr: string;
+  /** The row's «График» cell: compliance with the deadlines, decided by the caller from the schedule. */
   status: RowStatus;
+  /**
+   * GPR-UX-D01 — the work's actual physical state in its own «Выполнение» cell, apart from the schedule cell, with an optional operational
+   * blocker beside it. Present only with `workSummaryExecutionColumns`; without it the row is the original six-column row.
+   */
+  execution?: { state: RowStatus; blocker?: RowStatus | null };
   tone?: RowTone;
   interactive?: boolean;
   onActivate?: () => void;
@@ -54,6 +60,13 @@ export const workSummaryColumns: DataTableColumn[] = [
   { key: 'chevron', header: '', width: 24 },
 ];
 
+/** The column set of a row that carries `execution`: the original columns with «Выполнение» before «График». */
+export const workSummaryExecutionColumns: DataTableColumn[] = [
+  ...workSummaryColumns.slice(0, 4),
+  { key: 'execution', header: 'Выполнение', width: 160 },
+  ...workSummaryColumns.slice(4),
+];
+
 export function WorkSummaryRow({
   name,
   performer,
@@ -61,6 +74,7 @@ export function WorkSummaryRow({
   fact,
   smr,
   status,
+  execution,
   tone = 'Neutral',
   interactive = false,
   onActivate,
@@ -125,6 +139,17 @@ export function WorkSummaryRow({
       >
         {smr}
       </td>
+
+      {execution ? (
+        <td role="cell" data-label="Выполнение" className={rowStyles.cell}>
+          <div className={rowStyles.badges}>
+            <StatusBadge variant={execution.state.variant}>{execution.state.label}</StatusBadge>
+            {execution.blocker ? (
+              <StatusBadge variant={execution.blocker.variant}>{execution.blocker.label}</StatusBadge>
+            ) : null}
+          </div>
+        </td>
+      ) : null}
 
       <td role="cell" data-label="График" className={rowStyles.cell}>
         <StatusBadge variant={status.variant}>{status.label}</StatusBadge>

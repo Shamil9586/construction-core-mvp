@@ -1,5 +1,5 @@
 import { Button, StatusBadge, typeClass } from '../../design-system';
-import type { W01ScheduleView } from '../../view-models/schedule';
+import { COMPLIANCE_NOT_SCHEDULED, COMPLIANCE_NO_BASELINE, type W01ScheduleView } from '../../view-models/schedule';
 import styles from './ScheduleSection.module.css';
 
 /**
@@ -36,9 +36,15 @@ export function ScheduleSection({ schedule, onOpenSchedule }: ScheduleSectionPro
       <section className={styles.section}>
         <div className={styles.card}>
           {schedule.kind === 'NoBaseline' ? (
-            <span className={typeClass('body')}>График производства работ по объекту не утверждён — сроки работы не контролируются.</span>
+            <>
+              <StatusBadge variant={COMPLIANCE_NO_BASELINE.variant}>{COMPLIANCE_NO_BASELINE.label}</StatusBadge>
+              <span className={typeClass('body')}>График производства работ по объекту не утверждён — сроки работы не контролируются.</span>
+            </>
           ) : schedule.kind === 'NotScheduled' ? (
-            <span className={typeClass('body')}>Работа не включена в утверждённый график объекта.</span>
+            <>
+              <StatusBadge variant={COMPLIANCE_NOT_SCHEDULED.variant}>{COMPLIANCE_NOT_SCHEDULED.label}</StatusBadge>
+              <span className={typeClass('body')}>Работа не включена в утверждённый график объекта.</span>
+            </>
           ) : (
             <dl className={styles.list}>
               <div className={styles.item}>

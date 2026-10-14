@@ -94,3 +94,15 @@
     min-width: 0;
   }
 }
+
+/* GPR-UX-D01 — the Work header's physical state (and blocker): a caption and its badge(s), never a schedule verdict. */
+.headerStates {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--cc-p-space-8);
+}
+
+.headerStatesLabel {
+  color: var(--cc-text-secondary);
+}
