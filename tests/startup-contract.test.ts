@@ -94,10 +94,15 @@ test('PBX1-R01: the web image build stage produces the Core entry', async t => {
 
     await t.test('the exact RUN command from the Dockerfile emits index.html and app.html with the real provider baked in', async () => {
         const out = mkdtempSync(join(tmpdir(), 'web-image-'));
+        // The Dockerfile build stage sets no NODE_ENV, so Vite builds in production mode there. An inherited
+        // NODE_ENV (CI sets NODE_ENV=test) would make Vite compile import.meta.env.DEV as true and emit the
+        // development JSX runtime, so it is dropped to run the RUN command in the build stage's environment.
+        const env: NodeJS.ProcessEnv = { ...process.env, OUT_DIR: out };
+        delete env.NODE_ENV;
         try {
             await new Promise<void>((resolve, reject) => {
                 execFile('sh', ['-c', CORE_BUILD_RUN + ' -- --outDir "$OUT_DIR"'],
-                    { env: { ...process.env, OUT_DIR: out }, cwd: process.cwd(), maxBuffer: 64 * 1024 * 1024 },
+                    { env, cwd: process.cwd(), maxBuffer: 64 * 1024 * 1024 },
                     (error, _stdout, stderr) => error ? reject(new Error(String(stderr) || error.message)) : resolve());
             });
             assert.ok(existsSync(join(out, 'index.html')), 'legacy entry must stay available');
