@@ -19,6 +19,17 @@ function apiStartCommand(): string[] {
     return argv;
 }
 
+function composeServiceBlock(compose: string, name: string): string {
+    const lines = compose.split('\n');
+    const start = lines.findIndex(line => line === `  ${name}:`);
+    assert.notEqual(start, -1, `docker-compose.yml must define the ${name} service`);
+    let end = start + 1;
+    while (end < lines.length && !/^  [A-Za-z0-9_-]+:$/.test(lines[end]) && lines[end] !== 'volumes:') {
+        end += 1;
+    }
+    return lines.slice(start + 1, end).join('\n');
+}
+
 test('API container startup is runtime-only', async t => {
     await t.test('API CMD does not invoke migrations or demo seed', () => {
         const argv = apiStartCommand();
@@ -26,12 +37,23 @@ test('API container startup is runtime-only', async t => {
         assert.ok(!argv.some(arg => arg.includes('seed.ts')));
     });
 
-    await t.test('migrations and demo seeding remain available as explicit commands', () => {
+    await t.test('migrations remain explicit and API/worker wait for successful migration', () => {
         const packageJson = JSON.parse(readFileSync('package.json', 'utf8'));
         assert.equal(packageJson.scripts['db:migrate'], 'node --import tsx scripts/migrate.ts');
         assert.equal(packageJson.scripts['db:seed'], 'node --import tsx scripts/seed.ts');
+
         const compose = readFileSync('docker-compose.yml', 'utf8');
-        assert.match(compose, /command: \["node", "--import", "tsx", "scripts\/migrate\.ts"\]/);
+        const migration = composeServiceBlock(compose, 'migrate');
+        assert.match(migration, /command: \["node", "--import", "tsx", "scripts\/migrate\.ts"\]/,
+            'the dedicated migrate service must run only the migration command');
+        assert.match(migration, /depends_on:\s*\n\s*db:\s*\{condition: service_healthy\}/,
+            'migrations must wait for the database health check');
+
+        for (const serviceName of ['api', 'worker']) {
+            const service = composeServiceBlock(compose, serviceName);
+            assert.match(service, /depends_on:\s*\n\s*migrate:\s*\{condition: service_completed_successfully\}/,
+                `${serviceName} must not start unless the migration service completes successfully`);
+        }
     });
 
     await t.test('scripts/seed.ts keeps its own fail-closed guard as defence in depth', () => {
