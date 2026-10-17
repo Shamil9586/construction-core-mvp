@@ -1,0 +1,71 @@
+name: CR01 Full Regression with Temporary PostgreSQL
+
+on:
+  push:
+    branches:
+      - fix/cr01-startup-contract-and-docs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cr01-full-regression-postgres-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  full-regression:
+    name: Full repository tests (disposable PostgreSQL, no LIVE credentials)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: local-test-only
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      NODE_ENV: test
+      E2E_ADMIN_DATABASE_URL: postgresql://postgres:local-test-only@127.0.0.1:5432/postgres
+      E2E_POSTGRES_HOST_URL: postgresql://postgres:local-test-only@127.0.0.1:5432/
+    steps:
+      - name: Checkout corrective candidate
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84bd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Create the isolated construction_test database
+        run: |
+          node --input-type=module <<'NODE'
+          import pg from 'pg';
+          const client = new pg.Client({ connectionString: process.env.E2E_ADMIN_DATABASE_URL });
+          await client.connect();
+          try {
+            await client.query("CREATE DATABASE construction_test TEMPLATE template0 ENCODING 'UTF8' LC_COLLATE 'C' LC_CTYPE 'C'");
+            console.log('Created disposable construction_test database');
+          } finally {
+            await client.end();
+          }
+          NODE
+
+      - name: Run the complete repository test suite
+        run: npm test
+
+      - name: Build application (also report build if tests fail)
+        if: always()
+        run: npm run build
