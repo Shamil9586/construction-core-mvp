@@ -21,7 +21,7 @@ EXPOSE 3001
 # (npm run db:migrate) as a separately controlled operation before deploying code
 # that requires a new schema. The local Docker Compose stack has a dedicated migrate
 # service. Demo fixtures are also prepared explicitly with npm run db:seed.
-CMD ["/bin/sh", "-c", "node --import tsx apps/backend/src/main.ts"]
+CMD ["node", "--import", "tsx", "apps/backend/src/main.ts"]
 FROM caddy:2-alpine AS web
 # Render's sandboxed runtime rejects exec of binaries carrying Linux file
 # capabilities (cap_net_bind_service), which the official caddy image sets
