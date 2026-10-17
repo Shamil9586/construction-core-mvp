@@ -5,15 +5,12 @@ import { readFileSync, mkdtempSync, rmSync, existsSync, readdirSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-// The API container's startup chain is the surface that actually broke the first
-// AUTH_MODE=bitrix test deployment ("Demo seed is allowed only in local/mock test
-// environments"): scripts/seed.ts is deliberately fail-closed for bitrix, and the
-// Dockerfile CMD called it unconditionally. Nothing else in the suite covers infra,
-// so this runs the exact CMD string shipped in infra/Dockerfile through /bin/sh with
-// `node` replaced by a shell function that only records its arguments. No migration,
-// no seed and no server actually run — what is asserted is the real boot sequence.
+// The API startup chain must be runtime-only: applying schema migrations or seeding
+// demo fixtures during an ordinary restart would make a restart mutate the database.
+// This test executes the exact CMD string from infra/Dockerfile through /bin/sh with
+// node replaced by a shell function that records arguments; no database script or
+// server is actually executed.
 function apiStartCommand(): string {
-    // Committed with LF, but a Windows checkout converts to CRLF, so normalise first.
     const dockerfile = readFileSync('infra/Dockerfile', 'utf8').split('\r\n').join('\n');
     const api = dockerfile.split(/^FROM /m).find(stage => /^\S+ AS api$/.test(stage.split('\n')[0]));
     assert.ok(api, 'infra/Dockerfile must still define an api stage');
@@ -24,15 +21,11 @@ function apiStartCommand(): string {
     return argv[2];
 }
 
-// Returns the scripts the boot chain invoked, in order, plus its exit code.
-// `seedExit` simulates scripts/seed.ts failing, to prove the chain stays &&-linked.
-function boot(authMode: string | undefined, seedExit = 0) {
+// Run the boot chain and record its node invocations without executing them.
+function boot(authMode: string | undefined) {
     const dir = mkdtempSync(join(tmpdir(), 'startup-'));
     const log = join(dir, 'calls.log');
-    // A shell function shadows PATH lookup in POSIX sh, so the command under test runs
-    // verbatim while every `node ...` invocation is intercepted instead of executed.
-    const stub = 'node() { printf "%s\\n" "$*" >> "$STARTUP_CALL_LOG"; case "$*" in *seed.ts*) return '
-        + seedExit + ';; esac; }\n';
+    const stub = 'node() { printf "%s\\n" "$*" >> "$STARTUP_CALL_LOG"; }\n';
     const env: NodeJS.ProcessEnv = { ...process.env, STARTUP_CALL_LOG: log.split('\\').join('/') };
     if (authMode === undefined) delete env.AUTH_MODE; else env.AUTH_MODE = authMode;
     return new Promise<{ scripts: string[]; code: number }>(resolve => {
@@ -45,29 +38,37 @@ function boot(authMode: string | undefined, seedExit = 0) {
     });
 }
 
-test('API container startup chain gates the demo seed on AUTH_MODE', async t => {
-    await t.test('AUTH_MODE=mock: migrations -> seed -> backend', async () => {
+test('API container startup never applies migrations or seeds demo data', async t => {
+    await t.test('AUTH_MODE=mock: backend only', async () => {
         const { scripts, code } = await boot('mock');
-        assert.deepEqual(scripts, ['scripts/migrate.ts', 'scripts/seed.ts', 'apps/backend/src/main.ts']);
+        assert.deepEqual(scripts, ['apps/backend/src/main.ts']);
+        assert.ok(!scripts.some(s => s.includes('migrate.ts')));
+        assert.ok(!scripts.some(s => s.includes('seed.ts')));
         assert.equal(code, 0);
     });
 
-    await t.test('AUTH_MODE=bitrix: migrations -> backend, seed never invoked', async () => {
+    await t.test('AUTH_MODE=bitrix: backend only', async () => {
         const { scripts, code } = await boot('bitrix');
-        assert.deepEqual(scripts, ['scripts/migrate.ts', 'apps/backend/src/main.ts']);
-        assert.ok(!scripts.some(s => s.includes('seed')));
+        assert.deepEqual(scripts, ['apps/backend/src/main.ts']);
+        assert.ok(!scripts.some(s => s.includes('migrate.ts')));
+        assert.ok(!scripts.some(s => s.includes('seed.ts')));
         assert.equal(code, 0);
     });
 
-    await t.test('Unset AUTH_MODE skips the seed too; main.ts stays the one gate', async () => {
-        const { scripts } = await boot(undefined);
-        assert.deepEqual(scripts, ['scripts/migrate.ts', 'apps/backend/src/main.ts']);
+    await t.test('Unset AUTH_MODE still invokes only the backend entrypoint', async () => {
+        const { scripts, code } = await boot(undefined);
+        assert.deepEqual(scripts, ['apps/backend/src/main.ts']);
+        assert.ok(!scripts.some(s => s.includes('migrate.ts')));
+        assert.ok(!scripts.some(s => s.includes('seed.ts')));
+        assert.equal(code, 0);
     });
 
-    await t.test('A failing seed in mock mode still aborts startup', async () => {
-        const { scripts, code } = await boot('mock', 3);
-        assert.deepEqual(scripts, ['scripts/migrate.ts', 'scripts/seed.ts']);
-        assert.notEqual(code, 0);
+    await t.test('Migrations and demo seeding remain available as explicit commands', () => {
+        const packageJson = JSON.parse(readFileSync('package.json', 'utf8'));
+        assert.equal(packageJson.scripts['db:migrate'], 'node --import tsx scripts/migrate.ts');
+        assert.equal(packageJson.scripts['db:seed'], 'node --import tsx scripts/seed.ts');
+        const compose = readFileSync('docker-compose.yml', 'utf8');
+        assert.match(compose, /command: \["node", "--import", "tsx", "scripts\/migrate\.ts"\]/);
     });
 
     await t.test('scripts/seed.ts keeps its own fail-closed guard as defence in depth', () => {
