@@ -16,17 +16,12 @@ ENV NODE_ENV=test BIND_HOST=0.0.0.0
 COPY --from=build --chown=node:node /app /app
 USER node
 EXPOSE 3001
-# Migrations run on every API boot. The demo seed runs only for AUTH_MODE=mock:
-# it is what populates the demo tenant/users that /auth/mock depends on, and it
-# is idempotent (returns immediately if the demo tenant already exists), so
-# running it on every mock boot is safe. scripts/seed.ts is deliberately
-# fail-closed for AUTH_MODE=bitrix, so calling it unconditionally aborted API
-# startup the moment this deployment switched to bitrix auth. Gating it here
-# means it is never invoked in that mode; the guard inside scripts/seed.ts stays
-# as defence in depth. Any unset/unknown AUTH_MODE also skips the seed, and
-# main.ts then rejects it explicitly. A seed failure in mock mode still aborts
-# startup, because the chain remains &&-linked.
-CMD ["/bin/sh", "-c", "node --import tsx scripts/migrate.ts && if [ \"$AUTH_MODE\" = mock ]; then node --import tsx scripts/seed.ts; fi && node --import tsx apps/backend/src/main.ts"]
+# API startup must not apply schema migrations. Restarts and redeploys must not
+# mutate the database as a side effect. Use the existing explicit migration command
+# (npm run db:migrate) as a separately controlled operation before deploying code
+# that requires a new schema. The local Docker Compose stack has a dedicated migrate
+# service. Demo fixtures are also prepared explicitly with npm run db:seed.
+CMD ["/bin/sh", "-c", "node --import tsx apps/backend/src/main.ts"]
 FROM caddy:2-alpine AS web
 # Render's sandboxed runtime rejects exec of binaries carrying Linux file
 # capabilities (cap_net_bind_service), which the official caddy image sets
