@@ -15,9 +15,9 @@ concurrency:
 
 jobs:
   test-and-build:
-    name: Test and build (isolated, no LIVE credentials)
+    name: Focused CR01 test and build (isolated, no LIVE credentials)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     env:
       # Deliberately do not map repository secrets or production connection strings.
       # This job must never connect to LIVE PostgreSQL or deploy any service.
@@ -35,8 +35,11 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
-      - name: Run repository test suite
-        run: npm test
+      - name: Run focused CR01 API startup contract tests
+        # The full repository suite includes independent native-PostgreSQL tests
+        # that require a dedicated database service, plus unrelated browser/build
+        # contract tests. This workflow gates only the CR01 startup contract.
+        run: node --import tsx --test --test-name-pattern='API container startup is runtime-only' tests/startup-contract.test.ts
 
       - name: Build application
         run: npm run build
