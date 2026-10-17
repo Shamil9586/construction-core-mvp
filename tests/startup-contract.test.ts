@@ -5,65 +5,28 @@ import { readFileSync, mkdtempSync, rmSync, existsSync, readdirSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-// The API startup chain must be runtime-only: applying schema migrations or seeding
-// demo fixtures during an ordinary restart would make a restart mutate the database.
-// This test executes the exact CMD string from infra/Dockerfile through /bin/sh with
-// node replaced by a shell function that records arguments; no database script or
-// server is actually executed.
-function apiStartCommand(): string {
+// API startup must be a direct backend command: schema migration and demo seeding
+// are explicit operations, not side effects of restart/redeploy.
+function apiStartCommand(): string[] {
     const dockerfile = readFileSync('infra/Dockerfile', 'utf8').split('\r\n').join('\n');
     const api = dockerfile.split(/^FROM /m).find(stage => /^\S+ AS api$/.test(stage.split('\n')[0]));
     assert.ok(api, 'infra/Dockerfile must still define an api stage');
     const cmd = api.split('\n').find(line => line.startsWith('CMD '));
     assert.ok(cmd, 'the api stage must still define a CMD');
     const argv = JSON.parse(cmd.slice(4));
-    assert.deepEqual(argv.slice(0, 2), ['/bin/sh', '-c'], 'api CMD must stay a /bin/sh -c chain');
-    return argv[2];
+    assert.deepEqual(argv, ['node', '--import', 'tsx', 'apps/backend/src/main.ts'],
+        'API CMD must directly start only the backend entrypoint');
+    return argv;
 }
 
-// Run the boot chain and record its node invocations without executing them.
-function boot(authMode: string | undefined) {
-    const dir = mkdtempSync(join(tmpdir(), 'startup-'));
-    const log = join(dir, 'calls.log');
-    const stub = 'node() { printf "%s\\n" "$*" >> "$STARTUP_CALL_LOG"; }\n';
-    const env: NodeJS.ProcessEnv = { ...process.env, STARTUP_CALL_LOG: log.split('\\').join('/') };
-    if (authMode === undefined) delete env.AUTH_MODE; else env.AUTH_MODE = authMode;
-    return new Promise<{ scripts: string[]; code: number }>(resolve => {
-        execFile('sh', ['-c', stub + apiStartCommand()], { env, cwd: process.cwd() }, (error: any) => {
-            let calls: string[] = [];
-            try { calls = readFileSync(log, 'utf8').split('\n').filter(Boolean); } catch { calls = []; }
-            rmSync(dir, { recursive: true, force: true });
-            resolve({ scripts: calls.map(c => c.replace('--import tsx ', '').trim()), code: error ? (error.code ?? 1) : 0 });
-        });
-    });
-}
-
-test('API container startup never applies migrations or seeds demo data', async t => {
-    await t.test('AUTH_MODE=mock: backend only', async () => {
-        const { scripts, code } = await boot('mock');
-        assert.deepEqual(scripts, ['apps/backend/src/main.ts']);
-        assert.ok(!scripts.some(s => s.includes('migrate.ts')));
-        assert.ok(!scripts.some(s => s.includes('seed.ts')));
-        assert.equal(code, 0);
+test('API container startup is runtime-only', async t => {
+    await t.test('API CMD does not invoke migrations or demo seed', () => {
+        const argv = apiStartCommand();
+        assert.ok(!argv.some(arg => arg.includes('migrate.ts')));
+        assert.ok(!argv.some(arg => arg.includes('seed.ts')));
     });
 
-    await t.test('AUTH_MODE=bitrix: backend only', async () => {
-        const { scripts, code } = await boot('bitrix');
-        assert.deepEqual(scripts, ['apps/backend/src/main.ts']);
-        assert.ok(!scripts.some(s => s.includes('migrate.ts')));
-        assert.ok(!scripts.some(s => s.includes('seed.ts')));
-        assert.equal(code, 0);
-    });
-
-    await t.test('Unset AUTH_MODE still invokes only the backend entrypoint', async () => {
-        const { scripts, code } = await boot(undefined);
-        assert.deepEqual(scripts, ['apps/backend/src/main.ts']);
-        assert.ok(!scripts.some(s => s.includes('migrate.ts')));
-        assert.ok(!scripts.some(s => s.includes('seed.ts')));
-        assert.equal(code, 0);
-    });
-
-    await t.test('Migrations and demo seeding remain available as explicit commands', () => {
+    await t.test('migrations and demo seeding remain available as explicit commands', () => {
         const packageJson = JSON.parse(readFileSync('package.json', 'utf8'));
         assert.equal(packageJson.scripts['db:migrate'], 'node --import tsx scripts/migrate.ts');
         assert.equal(packageJson.scripts['db:seed'], 'node --import tsx scripts/seed.ts');
