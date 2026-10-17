@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - fix/cr01-api-startup-no-auto-migrations
+      - fix/cr01-startup-contract-and-docs
   workflow_dispatch:
 
 permissions:
