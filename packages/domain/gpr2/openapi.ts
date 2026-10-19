@@ -56,7 +56,7 @@ export const SCHEMAS: Record<string, Json> = {
   },
   OpenObject: { type: 'object', propertyNames: { not: { const: '__proto__' } }, additionalProperties: ref('OpenValue') },
   // R01-B03: the common fence of an approve / commit (TD §11.1) — at least ONE named immutable source version.
-  SourceVersions: { type: 'object', minProperties: 1, propertyNames: { pattern: SOURCE_NAME.source }, additionalProperties: uuid, description: 'Named immutable source versions the input was built from; the names belong to the owning stage.' },
+  SourceVersions: { type: 'object', minProperties: 1, propertyNames: { allOf: [{ pattern: SOURCE_NAME.source }, { not: { const: '__proto__' } }] }, additionalProperties: uuid, description: 'Named immutable source versions the input was built from; the names belong to the owning stage.' },
   ErrorCode: { type: 'string', enum: [...GPR2_ERROR_CODES] },
   ValidationRule: { type: 'string', enum: [...GPR2_VALIDATION_RULES] },
   ErrorBody: obj({
@@ -143,7 +143,7 @@ function operation(e: Gpr2Endpoint): Json {
   if (e.idempotent)
     parameters.push({ name: 'Idempotency-Key', in: 'header', required: true, schema: uuid, description: 'Scoped by tenant, actor, command kind and aggregate; a repeat of the same command returns the same result.' });
   else if (e.kind === 'COMMAND')
-    parameters.push({ name: 'Idempotency-Key', in: 'header', required: false, schema: uuid, description: 'A pure preview needs none; one that is sent must still be well formed.' });
+    parameters.push({ name: 'Idempotency-Key', in: 'header', required: false, schema: uuid, description: 'A pure preview needs none (absent is fine); one that is sent must still be a well formed uuid — an empty value is IDEMPOTENCY_KEY_MALFORMED (422).' });
   const authorization = e.authorization.type === 'EXISTING_RULES' ? { type: 'EXISTING_RULES' } : e.authorization;
   const op: Json = {
     operationId: e.id, tags: [e.stage], security: [{ bearerAuth: [] }], parameters,

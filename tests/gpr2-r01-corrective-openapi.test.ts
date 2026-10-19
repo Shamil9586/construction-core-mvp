@@ -155,7 +155,7 @@ test('R01-B05: the Idempotency-Key header — required exactly where the documen
       const params = ownedParams(trusted, e, owner), req = validRequest(e, params);
       delete req.headers['Idempotency-Key'];
       if (value !== undefined) req.headers['Idempotency-Key'] = value;
-      const docAccepts = value === undefined || value === '' ? !param.required : validate(param.schema, value, served).length === 0;
+      const docAccepts = value === undefined ? !param.required : validate(param.schema, value, served).length === 0; // an EMPTY header is a value, and not a uuid (R01-B05-R2)
       const r = await g.call(await g.roleToken(ROLE[e.id] ?? PM), req.method, req.path, { body: req.body, headers: req.headers });
       assert.equal(r.status === 200, docAccepts, `${e.id} / header ${label}: ${r.status}`);
     }
@@ -290,4 +290,81 @@ test('R01-B05: the rules JSON Schema cannot state (one field compared with anoth
   const doc = served.paths['/v2' + e.path].post.requestBody.content['application/json'].schema;
   assert.equal(accepts(doc, { expectedVersion: '1', payload: { entries: [{ workId: W, startDate: '2026-03-20', endDate: '2026-03-01' }] } }, served), true);
   assert.equal((await run({ entries: [{ workId: W, startDate: '2026-03-20', endDate: '2026-03-20' }] })).status, 200, 'start = end is fine');
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Final B05 corrective: R1 (SourceVersions / __proto__) and R2 (optional Idempotency-Key)
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+const rules = (b: any) => (b?.details?.violations ?? []).map((v: any) => `${v.path}:${v.rule}`).sort();
+const rawBody = async (role: string, e: Gpr2Endpoint, params: Record<string, string>, text: string, headers?: Record<string, string>) => {
+  const req = validRequest(e, params);
+  const r = await fetch(g.h.base + req.path, { method: req.method, headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + await g.roleToken(role), ...(headers ?? req.headers) }, body: text });
+  return { status: r.status, body: (await r.json().catch(() => null)) as any };
+};
+
+test('R01-B05-R1: SourceVersions refuses a real JSON own key "__proto__" in the document AND on the server (JSON text, not a JS object literal)', async () => {
+  const names = served.components.schemas.SourceVersions.propertyNames;
+  assert.deepEqual(names, { allOf: [{ pattern: '^[A-Za-z0-9_.-]{1,64}$' }, { not: { const: '__proto__' } }], }, 'the published schema names the prohibition');
+  const fp = 'a'.repeat(64), src = uuid();
+  // JSON.parse creates an OWN property called __proto__; an object literal { __proto__: x } would only set the prototype and prove nothing
+  const real = JSON.parse(`{"__proto__":"${src}"}`);
+  assert.equal(Object.prototype.hasOwnProperty.call(real, '__proto__'), true, 'the fixture really carries an own __proto__ key');
+  const literal: any = { __proto__: src as any };
+  assert.equal(Object.keys(literal).length, 0, 'while the literal form has no such key — it is not a valid probe');
+  const schema = { $ref: '#/components/schemas/SourceVersions' };
+  assert.deepEqual(validate(schema, real, served).map(m => m.replace(/<name .*>/, '<name>')), ['$.<name>: matches a forbidden schema'], 'the document refuses it');
+  assert.equal(accepts(schema, { calendar: src, 'proto': src, constructor: src, '__proto': src }, served), true, 'near-misses stay valid in the document…');
+  for (const id of ['quantity.request.approve', 'imports.boq.commit', 'imports.estimate-labor.commit', 'schedule.revision.approve']) {
+    const e = endpointById(id)!, role = ROLE[id] ?? PM;
+    const prefix = JSON.stringify({ ...(e.aggregateVersion ? { expectedVersion: '1' } : {}), ...(e.scopeFence ? { expectedScopeVersion: '1' } : {}) }).slice(1, -1);
+    const body = (sources: string) => `{${prefix}${prefix ? ',' : ''}"payload":{"inputFingerprint":"${fp}","expectedSourceVersions":${sources}}}`;
+    // the whole request body agrees with the document, and the server answers with the controlled rule
+    const bad = await rawBody(role, e, ownedParams(trusted, e, owner), body(`{"__proto__":"${src}"}`));
+    assert.deepEqual([bad.status, bad.body.code, rules(bad.body)], [422, 'VALIDATION_FAILED', ['payload.expectedSourceVersions.*:FIELD_NOT_ALLOWED']], id);
+    assert.equal(accepts(bodySchemaOf(e), JSON.parse(body(`{"__proto__":"${src}"}`)), served), false, id + ': document rejects the same body');
+    // …and on the server too
+    const good = await rawBody(role, e, ownedParams(trusted, e, owner), body(`{"proto":"${src}","constructor":"${src}"}`));
+    assert.equal(good.status, 200, id + ' ' + JSON.stringify(good.body));
+    assert.equal(accepts(bodySchemaOf(e), JSON.parse(body(`{"proto":"${src}","constructor":"${src}"}`)), served), true, id + ': document accepts it');
+    // the protection is not weakened: a __proto__ next to a valid source is refused, and nothing is polluted
+    const mixed = await rawBody(role, e, ownedParams(trusted, e, owner), body(`{"calendar":"${src}","__proto__":"${src}"}`));
+    assert.deepEqual([mixed.status, rules(mixed.body)], [422, ['payload.expectedSourceVersions.*:FIELD_NOT_ALLOWED']], id);
+  }
+  assert.equal(({} as any).calendar, undefined, 'Object.prototype was not polluted');
+});
+
+test('R01-B05-R2: an optional Idempotency-Key — absent is fine, a uuid is fine, an EMPTY or malformed one is 422 IDEMPOTENCY_KEY_MALFORMED; the document says the same', async () => {
+  const optional = mountedEndpoints().filter(e => !e.idempotent && e.kind === 'COMMAND');
+  assert.deepEqual(optional.map(e => e.id).sort(), ['finish-system.preview', 'schedule.backplan.preview', 'schedule.changes.preview']);
+  for (const e of optional) {
+    const param = servedOp(e).parameters.find((p: any) => p.name === 'Idempotency-Key');
+    assert.equal(param.required, false, e.id);
+    assert.deepEqual(param.schema, { type: 'string', format: 'uuid' });
+    assert.match(param.description, /empty value is IDEMPOTENCY_KEY_MALFORMED/, 'the document states the rule');
+    const cases: [string, string | undefined, number, string | null][] = [
+      ['absent', undefined, 200, null], ['valid uuid', KEY(7), 200, null], ['valid upper-case uuid', KEY(7).toUpperCase(), 200, null],
+      ['EMPTY', '', 422, 'IDEMPOTENCY_KEY_MALFORMED'], ['not a uuid', 'abc', 422, 'IDEMPOTENCY_KEY_MALFORMED'], ['uuid plus a character', KEY(7) + 'x', 422, 'IDEMPOTENCY_KEY_MALFORMED'],
+      ['two keys', KEY(7) + ', ' + KEY(8), 422, 'IDEMPOTENCY_KEY_MALFORMED']
+    ];
+    for (const [label, value, status, rule] of cases) {
+      const req = validRequest(e, ownedParams(trusted, e, owner));
+      delete req.headers['Idempotency-Key'];
+      if (value !== undefined) req.headers['Idempotency-Key'] = value;
+      const docAccepts = value === undefined ? true : validate(param.schema, value, served).length === 0;
+      const r = await g.call(await g.roleToken(ROLE[e.id] ?? PM), req.method, req.path, { body: req.body, headers: req.headers });
+      assert.equal(r.status, status, `${e.id} / ${label}: ${JSON.stringify(r.body)}`);
+      assert.equal(docAccepts, status === 200, `${e.id} / ${label}: document vs server`);
+      if (rule) assert.deepEqual(r.body.details.violations, [{ path: 'Idempotency-Key', rule }], `${e.id} / ${label}`);
+    }
+  }
+  // the required key keeps its rule: absent or empty is "required", a non-uuid is "malformed"
+  const required = endpointById('schedule.revision.submit')!;
+  for (const [value, rule] of [[undefined, 'IDEMPOTENCY_KEY_REQUIRED'], ['', 'IDEMPOTENCY_KEY_REQUIRED'], ['abc', 'IDEMPOTENCY_KEY_MALFORMED']] as const) {
+    const req = validRequest(required, ownedParams(trusted, required, owner));
+    delete req.headers['Idempotency-Key'];
+    if (value !== undefined) req.headers['Idempotency-Key'] = value;
+    const r = await g.call(await g.roleToken(PM), req.method, req.path, { body: req.body, headers: req.headers });
+    assert.deepEqual([r.status, r.body.details.violations], [422, [{ path: 'Idempotency-Key', rule }]], JSON.stringify(value));
+  }
 });

@@ -81,8 +81,12 @@ const fingerprint = z.unknown().transform((input, ctx) => input === undefined ? 
 // ---------------------------------------------------------------------------------------------------------------------------------
 
 export function parseIdempotencyKey(header: unknown, required: boolean): { ok: true; value: string | null } | { ok: false; rule: Gpr2ValidationRule } {
-    if (header === undefined || header === null || header === '')
+    // Absent is absent. A header that IS sent but empty is not "absent": where the key is optional (a pure preview) it is malformed (R01-B05-R2),
+    // where it is required it stays "required" (nothing usable was given).
+    if (header === undefined || header === null)
         return required ? { ok: false, rule: 'IDEMPOTENCY_KEY_REQUIRED' } : { ok: true, value: null };
+    if (header === '')
+        return { ok: false, rule: required ? 'IDEMPOTENCY_KEY_REQUIRED' : 'IDEMPOTENCY_KEY_MALFORMED' };
     if (typeof header !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(header))
         return { ok: false, rule: 'IDEMPOTENCY_KEY_MALFORMED' };
     return { ok: true, value: header.toLowerCase() };

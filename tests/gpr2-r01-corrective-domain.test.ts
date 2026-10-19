@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   parseCivilDate, isCivilDate, daysInMonth, isLeapYear, gprEntryInput, gprChangeSet, parseCommand, endpointById, GPR2_ENDPOINTS, mountedEndpoints, pathParamsOf, canonicalJson, commandFingerprint,
   openValueViolations, openObjectViolations, MAX_OPEN_DEPTH, FINISH_CHANGE_RECORD, findTransition, resourceRefsOf, ownershipPermits, DENY_ALL_RESOURCES, GPR2_RESOURCE_KINDS,
-  TENANT_LEVEL_RESOURCE_KINDS, LIFECYCLES, Gpr2Error
+  TENANT_LEVEL_RESOURCE_KINDS, LIFECYCLES, parseIdempotencyKey, Gpr2Error
 } from '../packages/domain/gpr2';
 
 /**
@@ -277,4 +277,33 @@ test('R01-B04: every id-bearing endpoint is refused by the default resolver — 
     n++;
   }
   assert.equal(n, 24);
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// R01-B05-R2 — optional vs required Idempotency-Key, domain level
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+test('R01-B05-R2: parseIdempotencyKey — absent is allowed where optional, an EMPTY header is malformed there, and the required key keeps REQUIRED for absent / empty', () => {
+  assert.deepEqual(parseIdempotencyKey(undefined, false), { ok: true, value: null });
+  assert.deepEqual(parseIdempotencyKey(null, false), { ok: true, value: null });
+  assert.deepEqual(parseIdempotencyKey(KEY.toUpperCase(), false), { ok: true, value: KEY });
+  for (const bad of ['', 'abc', KEY + 'x', ' ' + KEY, KEY + ', ' + KEY, 5, {}, []]) assert.deepEqual(parseIdempotencyKey(bad, false), { ok: false, rule: 'IDEMPOTENCY_KEY_MALFORMED' }, JSON.stringify(bad));
+  assert.deepEqual(parseIdempotencyKey(undefined, true), { ok: false, rule: 'IDEMPOTENCY_KEY_REQUIRED' });
+  assert.deepEqual(parseIdempotencyKey('', true), { ok: false, rule: 'IDEMPOTENCY_KEY_REQUIRED' });
+  assert.deepEqual(parseIdempotencyKey('abc', true), { ok: false, rule: 'IDEMPOTENCY_KEY_MALFORMED' });
+  // through the envelope of a pure preview
+  const preview = ep('schedule.changes.preview');
+  assert.deepEqual(parseCommand(preview, {}, { expectedVersion: '1', payload: {} }).idempotencyKey, null);
+  assert.deepEqual(violations(() => parseCommand(preview, { 'idempotency-key': '' }, { expectedVersion: '1', payload: {} })), ['Idempotency-Key:IDEMPOTENCY_KEY_MALFORMED']);
+});
+
+test('R01-B05-R1: the server rule behind the published SourceVersions schema — a real JSON own key __proto__ is FIELD_NOT_ALLOWED at «*», and look-alike names stay valid', () => {
+  const fence = (sources: string) => JSON.parse(`{"inputFingerprint":"${FP}","expectedSourceVersions":${sources}}`);
+  assert.equal(Object.prototype.hasOwnProperty.call(fence(`{"__proto__":"${U(1)}"}`).expectedSourceVersions, '__proto__'), true);
+  for (const id of FENCED) {
+    assert.deepEqual(violations(() => run(id, fence(`{"__proto__":"${U(1)}"}`))), ['payload.expectedSourceVersions.*:FIELD_NOT_ALLOWED'], id);
+    assert.deepEqual(violations(() => run(id, fence(`{"calendar":"${U(1)}","__proto__":"${U(2)}"}`))), ['payload.expectedSourceVersions.*:FIELD_NOT_ALLOWED'], id);
+    assert.deepEqual(run(id, fence(`{"proto":"${U(1)}","__proto":"${U(2)}","constructor":"${U(3)}"}`)).payload.expectedSourceVersions, { proto: U(1), __proto: U(2), constructor: U(3) }, id);
+  }
+  assert.equal(({} as any).proto, undefined);
 });
