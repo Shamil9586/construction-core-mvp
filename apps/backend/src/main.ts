@@ -31,12 +31,17 @@ import { ImportsModule } from './modules/imports/imports.module';
 import { FunctionTeamsModule } from './modules/function-teams/function-teams.module';
 import { OrgStructureModule } from './modules/org-structure/org-structure.module';
 import { ProductionScheduleModule } from './modules/schedule/schedule.module';
+import { Gpr2ContractModule } from './modules/gpr2/gpr2.module';
+import { Gpr2HttpException } from './gpr2-command-guard';
 @Catch()
 class Errors implements ExceptionFilter {
     catch(error: any, host: ArgumentsHost) { const ctx = host.switchToHttp(), res = ctx.getResponse(), req = ctx.getRequest(); const status = error instanceof ZodError ? 400 : error instanceof HttpException ? error.getStatus() : ['23505', '23503', '23514', '22P02'].includes(error.code) ? 409 : 500; const message = error instanceof ZodError ? error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ') : status === 500 ? 'Внутренняя ошибка' : error instanceof HttpException ? error.message : 'Конфликт данных или нарушена связь'; if (status === 500)
-        console.error(JSON.stringify({ level: 'error', requestId: req.requestId, errorType: error.constructor?.name, code: error.code })); res.status(status).json({ statusCode: status, message, requestId: req.requestId }); }
+        console.error(JSON.stringify({ level: 'error', requestId: req.requestId, errorType: error.constructor?.name, code: error.code })); res.status(status).json({ statusCode: status, message, ...(error instanceof Gpr2HttpException ? { code: error.gpr2.code, ...(error.gpr2.details ? { details: error.gpr2.details } : {}) } : {}), requestId: req.requestId }); }
 }
-@Module({ imports: [HealthModule, AuthModule, BitrixModule, DashboardModule, ObjectsModule, WorksModule, InspectionsModule, ExecutionUnitsModule, DocumentationModule, AttachmentsModule, PtoModule, SdoModule, SdoClosingModule, FinancialModule, ContractorsModule, DictionariesModule, UsersModule, MaterialsModule, AuditModule, NotificationsModule, ImportsModule, FunctionTeamsModule, OrgStructureModule, ProductionScheduleModule] })
+// GPR-2 R01: the guarded /v2 command surface is mounted only when explicitly switched on (exactly 'enabled'; any other value leaves it out).
+// Without the flag the application's routes, providers and behaviour are exactly what they were.
+const gpr2Contract = process.env.GPR2_CONTRACT_ROUTES === 'enabled' ? [Gpr2ContractModule] : [];
+@Module({ imports: [HealthModule, AuthModule, BitrixModule, DashboardModule, ObjectsModule, WorksModule, InspectionsModule, ExecutionUnitsModule, DocumentationModule, AttachmentsModule, PtoModule, SdoModule, SdoClosingModule, FinancialModule, ContractorsModule, DictionariesModule, UsersModule, MaterialsModule, AuditModule, NotificationsModule, ImportsModule, FunctionTeamsModule, OrgStructureModule, ProductionScheduleModule, ...gpr2Contract] })
 class AppModule {
 }
 /**
