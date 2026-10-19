@@ -29,17 +29,20 @@ export async function gpr2Harness(key: string) {
 }
 export type Gpr2Harness = Awaited<ReturnType<typeof gpr2Harness>>;
 
-const PAYLOADS: Record<string, unknown> = {
-  'schedule.revision.submit': { changeReason: 'готово к утверждению' },
-  'schedule.revision.approve': { inputFingerprint: 'a'.repeat(64), expectedSourceVersions: {} },
-  'schedule.changes.apply': { previewFingerprint: 'a'.repeat(64) },
-  'schedule.revision.return': { reason: 'нужна доработка' }, 'quantity.request.return': { reason: 'нужна доработка' }, 'work-type.publication.reject': { reason: 'дубликат' }
+/** A fresh, well-formed approve / commit fence (TD §11.1): the exact input and the immutable source versions it was built from. */
+export const fence = () => ({ inputFingerprint: 'a'.repeat(64), expectedSourceVersions: { calendar: uuid(), quantity: uuid() } });
+const PAYLOADS: Record<string, () => unknown> = {
+  'schedule.revision.submit': () => ({ changeReason: 'готово к утверждению' }),
+  'schedule.revision.approve': fence, 'quantity.request.approve': fence, 'imports.boq.commit': fence, 'imports.estimate-labor.commit': fence,
+  'finish-change.record-correction': () => ({ reason: 'исправление внешнего решения' }),
+  'schedule.changes.apply': () => ({ previewFingerprint: 'a'.repeat(64) }),
+  'schedule.revision.return': () => ({ reason: 'нужна доработка' }), 'quantity.request.return': () => ({ reason: 'нужна доработка' }), 'work-type.publication.reject': () => ({ reason: 'дубликат' })
 };
 
 /** A well-formed request for a command: every header and token its register row asks for, a payload the contract accepts. */
 export function validRequest(e: Gpr2Endpoint, params: Record<string, string>, nth = 1) {
   const path = '/v2' + e.path.replace(/\{(\w+)\}/g, (_, name) => params[name] ?? uuid());
-  const body: Record<string, unknown> = { payload: PAYLOADS[e.id] ?? {} };
+  const body: Record<string, unknown> = { payload: PAYLOADS[e.id]?.() ?? {} };
   if (e.aggregateVersion) body.expectedVersion = '1';
   if (e.scopeFence) body.expectedScopeVersion = '1';
   return { method: e.method, path, body, headers: e.idempotent ? { 'Idempotency-Key': KEY(nth) } : {} };

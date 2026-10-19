@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { roles } from '../packages/domain';
 import {
   LIFECYCLES, GPR_REVISION, QUANTITY_CHANGE_REQUEST, WORK_TYPE_PUBLICATION_REQUEST, RESULT_USE, FINISH_CHANGE_RECORD, FACT_SOURCE_MODE, IMPORT_BATCH_STATES,
-  findTransition, commandsFrom, applyTransition, assertSeparationOfDuties, authorizeTransition, endpointById, GPR2_ENDPOINTS, Gpr2Permission, hasGpr2Permission,
+  findTransition, commandsFrom, applyTransition, transitionForEndpoint, assertSeparationOfDuties, authorizeTransition, endpointById, GPR2_ENDPOINTS, Gpr2Permission, hasGpr2Permission,
   Gpr2Error, type Lifecycle
 } from '../packages/domain/gpr2';
 
@@ -26,6 +26,7 @@ const EXPECTED: Record<string, [string, string, string, Gpr2Permission | null][]
     ['APPROVED', 'supersede', 'SUPERSEDED', null]                 // §8.1 "superseded_by" — by a later approval, never by a role
   ],
   QUANTITY_CHANGE_REQUEST: [
+    ['DRAFT', 'edit', 'DRAFT', P.QUANTITY_AUTHOR],                // §11.2 PATCH of a draft — an ordinary edit, nothing submitted yet (R01-B02)
     ['DRAFT', 'submit', 'SUBMITTED', P.QUANTITY_AUTHOR],          // §5.3 DRAFT → SUBMITTED
     ['SUBMITTED', 'approve', 'APPROVED', P.QUANTITY_REVIEW],      // §5.3 → APPROVED / RETURNED, deputy
     ['SUBMITTED', 'return', 'RETURNED', P.QUANTITY_REVIEW],
@@ -186,10 +187,73 @@ test('every transition that names an endpoint names a real one, with the SAME pe
       assert.deepEqual(e!.authorization, { type: 'PERMISSION', permission: tr.permission }, `${l.name}:${tr.command} permission`);
       assert.equal(e!.kind, 'COMMAND');
     }
-  // and the reverse: every endpoint that claims a transition is claimed by a real row
-  for (const e of GPR2_ENDPOINTS.filter(x => x.transition)) {
-    const l = by(e.transition!.lifecycle);
-    assert.ok(l, e.id + ' lifecycle exists');
-    assert.ok(l.transitions.some(t => t.command === e.transition!.command && t.endpoint === e.id), `${e.id} ⇄ ${e.transition!.lifecycle}:${e.transition!.command}`);
+  // and the reverse: every endpoint that claims a transition is claimed by a real row — each of its several rows, when it has more than one
+  for (const e of GPR2_ENDPOINTS.filter(x => x.transitions)) {
+    assert.ok(e.transitions!.length > 0, e.id + ' lists at least one row');
+    for (const x of e.transitions!) {
+      const l = by(x.lifecycle);
+      assert.ok(l, e.id + ' lifecycle exists');
+      assert.ok(l.transitions.some(t => t.command === x.command && t.endpoint === e.id), `${e.id} ⇄ ${x.lifecycle}:${x.command}`);
+    }
   }
+});
+
+test('R01-B02: PATCH quantity-change-requests/{id} is expressible in DRAFT (edit) and in RETURNED (revise → DRAFT), and in no other state', () => {
+  const patch = endpointById('quantity.request.patch')!;
+  assert.deepEqual(patch.transitions, [{ lifecycle: 'QUANTITY_CHANGE_REQUEST', command: 'edit' }, { lifecycle: 'QUANTITY_CHANGE_REQUEST', command: 'revise' }]);
+  assert.deepEqual({ method: patch.method, path: patch.path, version: patch.aggregateVersion, authorization: patch.authorization },
+    { method: 'PATCH', path: '/objects/{objectId}/quantity-change-requests/{id}', version: true, authorization: { type: 'PERMISSION', permission: P.QUANTITY_AUTHOR } });
+
+  const L = QUANTITY_CHANGE_REQUEST;
+  const draft = transitionForEndpoint(L, 'DRAFT', 'quantity.request.patch');
+  assert.deepEqual([draft.command, draft.from, draft.to, draft.effect, draft.permission], ['edit', 'DRAFT', 'DRAFT', 'EDIT_IN_PLACE', P.QUANTITY_AUTHOR]);
+  const returned = transitionForEndpoint(L, 'RETURNED', 'quantity.request.patch');
+  assert.deepEqual([returned.command, returned.from, returned.to, returned.effect, returned.permission], ['revise', 'RETURNED', 'DRAFT', 'OPEN_NEW_SUBMISSION_VERSION', P.QUANTITY_AUTHOR]);
+  // the correction opens a NEW version; the ordinary edit and every other row do not claim to
+  assert.deepEqual(L.transitions.filter(t => t.effect).map(t => `${t.from}:${t.command}:${t.effect}`).sort(), ['DRAFT:edit:EDIT_IN_PLACE', 'RETURNED:revise:OPEN_NEW_SUBMISSION_VERSION']);
+
+  // fail-closed: a request under review, an approved one — and, for completeness, every state × a command the table does not hold
+  for (const state of ['SUBMITTED', 'APPROVED'] as const) {
+    const e = thrown(() => transitionForEndpoint(L, state, 'quantity.request.patch'));
+    assert.ok(e instanceof Gpr2Error && e.code === 'INVALID_TRANSITION' && e.status === 422, state);
+    assert.deepEqual(e!.details, { machine: 'QUANTITY_CHANGE_REQUEST', from: state, command: 'quantity.request.patch' });
+    assert.equal(findTransition(L, state, 'edit'), undefined, state + ' has no edit row');
+    assert.equal(findTransition(L, state, 'revise'), undefined, state + ' has no revise row');
+  }
+  // a row from another state is not borrowed: edit is not a RETURNED row, revise is not a DRAFT row
+  assert.equal(findTransition(L, 'RETURNED', 'edit'), undefined);
+  assert.equal(findTransition(L, 'DRAFT', 'revise'), undefined);
+});
+
+test('R01-B02: state × operation matrix of the quantity request — every endpoint of the machine is allowed in exactly the designed states and refused in all others', () => {
+  const L = QUANTITY_CHANGE_REQUEST;
+  const OPERATIONS = ['quantity.request.patch', 'quantity.request.submit', 'quantity.request.approve', 'quantity.request.return'];
+  const ALLOWED: Record<string, string[]> = {
+    DRAFT: ['quantity.request.patch', 'quantity.request.submit'],
+    SUBMITTED: ['quantity.request.approve', 'quantity.request.return'],
+    RETURNED: ['quantity.request.patch'],
+    APPROVED: []
+  };
+  let allowed = 0, refused = 0;
+  for (const state of L.states)
+    for (const op of OPERATIONS) {
+      const e = thrown(() => transitionForEndpoint(L, state, op));
+      if (ALLOWED[state].includes(op)) { assert.equal(e, undefined, `${state} × ${op}`); allowed++; }
+      else { assert.ok(e instanceof Gpr2Error && e.code === 'INVALID_TRANSITION', `${state} × ${op} must be refused`); refused++; }
+    }
+  assert.deepEqual([allowed, refused], [5, 11]);
+  // an unknown endpoint, or one that performs no transition of this machine, is refused in every state
+  for (const state of L.states) for (const op of ['quantity.request.create', 'quantity.request.review-note', 'works.create', '']) assert.equal(thrown(() => transitionForEndpoint(L, state, op))?.code, 'INVALID_TRANSITION', `${state} × ${op}`);
+  // the edit in DRAFT keeps the request in DRAFT, so it may repeat; it never reaches SUBMITTED by itself
+  assert.equal(applyTransition(L, 'DRAFT', 'edit').to, 'DRAFT');
+  assert.equal(applyTransition(L, applyTransition(L, 'DRAFT', 'edit').to, 'edit').to, 'DRAFT');
+  assert.equal(applyTransition(L, applyTransition(L, 'RETURNED', 'revise').to, 'edit').to, 'DRAFT', 'a corrected (reopened) request is a draft again and can be edited');
+});
+
+test('R01-B02: the role that may edit a draft is the quantity author and nobody else — the reviewer cannot edit what they review', () => {
+  const who = (state: 'DRAFT' | 'RETURNED') => roles.filter(r => authorizeTransition(transitionForEndpoint(QUANTITY_CHANGE_REQUEST, state, 'quantity.request.patch'), p => hasGpr2Permission(r, p)));
+  assert.deepEqual(who('DRAFT'), ['PROJECT_MANAGER']);
+  assert.deepEqual(who('RETURNED'), ['PROJECT_MANAGER']);
+  assert.equal(who('DRAFT').includes('DEPUTY_DIRECTOR' as any), false);
+  assert.equal(who('DRAFT').includes('ADMIN' as any), false, 'ADMIN gains no business right');
 });

@@ -1,0 +1,829 @@
+{
+ "tdSha256": "b80ba7315509b9a011b87a45957f7e9a3eaf802624c1ca241f7072fab8879368",
+ "roadmapSha256": "a4c27d19a731b0d32a70c75a14af4f04c289ff93007d4ed78fe308a6ab434f76",
+ "stageAcceptance": {
+  "R01": [
+   "A19"
+  ],
+  "R02": [
+   "A05",
+   "A24"
+  ],
+  "R03": [
+   "A06",
+   "A19",
+   "A30"
+  ],
+  "R04": [
+   "A05",
+   "A12"
+  ],
+  "R05": [
+   "A01",
+   "A03",
+   "A07"
+  ],
+  "R06": [
+   "A04",
+   "A06",
+   "A30"
+  ],
+  "R07": [
+   "A04",
+   "A06",
+   "A07",
+   "A19"
+  ],
+  "R08": [
+   "A11",
+   "A23"
+  ],
+  "R09": [
+   "A21",
+   "A22",
+   "A23"
+  ],
+  "R10": [
+   "A08",
+   "A09"
+  ],
+  "R11": [
+   "A01",
+   "A13",
+   "A17",
+   "A18"
+  ],
+  "R12": [
+   "A13",
+   "A17",
+   "A19",
+   "A30"
+  ],
+  "R13": [
+   "A15",
+   "A16",
+   "A18",
+   "A24",
+   "A30"
+  ],
+  "R14": [
+   "A09",
+   "A10",
+   "A14"
+  ],
+  "R15": [
+   "A02",
+   "A19",
+   "A20"
+  ],
+  "R16": [
+   "A20",
+   "A26"
+  ],
+  "R17": [
+   "A20",
+   "A21",
+   "A26",
+   "A27",
+   "A28"
+  ],
+  "R18": [
+   "A01",
+   "A14",
+   "A15",
+   "A16",
+   "A18",
+   "A21",
+   "A27"
+  ],
+  "R19": [
+   "A05",
+   "A25",
+   "A30"
+  ],
+  "R20": [
+   "A01",
+   "A13",
+   "A25"
+  ],
+  "R21": [
+   "A01",
+   "A02",
+   "A03",
+   "A04",
+   "A05",
+   "A06",
+   "A07",
+   "A08",
+   "A09",
+   "A10",
+   "A11",
+   "A12",
+   "A13",
+   "A14",
+   "A15",
+   "A16",
+   "A17",
+   "A18",
+   "A19",
+   "A20",
+   "A21",
+   "A22",
+   "A23",
+   "A24",
+   "A25",
+   "A26",
+   "A27",
+   "A28",
+   "A29",
+   "A30"
+  ],
+  "R22": [
+   "A25",
+   "A29",
+   "A30"
+  ]
+ },
+ "decisions": {
+  "D01": {
+   "tdRaw": "§4–5, §10; A01, A25",
+   "acceptance": [
+    "A01",
+    "A25"
+   ],
+   "stages": [
+    "R05",
+    "R11",
+    "R18",
+    "R19",
+    "R20",
+    "R21",
+    "R22"
+   ],
+   "stagesFrom": "ROADMAP_ACCEPTANCE"
+  },
+  "D02": {
+   "tdRaw": "§7; A02, A20",
+   "acceptance": [
+    "A02",
+    "A20"
+   ],
+   "stages": [
+    "R15",
+    "R16",
+    "R17",
+    "R21"
+   ],
+   "stagesFrom": "ROADMAP_ACCEPTANCE"
+  },
+  "D03": {
+   "tdRaw": "§4–5; A01, A03",
+   "acceptance": [
+    "A01",
+    "A03"
+   ],
+   "stages": [
+    "R05",
+    "R11",
+    "R18",
+    "R20",
+    "R21"
+   ],
+   "stagesFrom": "ROADMAP_ACCEPTANCE"
+  },
+  "D04": {
+   "tdRaw": "§5–6; A04–A06",
+   "acceptance": [
+    "A04",
+    "A05",
+    "A06"
+   ],
+   "stages": [
+    "R02",
+    "R03",
+    "R04",
+    "R06",
+    "R07",
+    "R19",
+    "R21"
+   ],
+   "stagesFrom": "ROADMAP_ACCEPTANCE"
+  },
+  "D05": {
+   "tdRaw": "§5, §11; A03, A19",
+   "acceptance": [
+    "A03",
+    "A19"
+   ],
+   "stages": [
+    "R01",
+    "R03",
+    "R05",
+    "R07",
+    "R12",
+    "R15",
+    "R21"
+   ],
+   "stagesFrom": "ROADMAP_ACCEPTANCE"
+  },
+  "D06": {
+   "tdRaw": "§5, §10; A07",
+   "acceptance": [
+    "A07"
+   ],
+   "stages": [
+    "R05",
+    "R07",
+    "R21"
+   ],
+   "stagesFrom": "ROADMAP_ACCEPTANCE"
+  },
+  "D07": {
+   "tdRaw": "§8; A08–A10",
+   "acceptance": [
+    "A08",
+    "A09",
+    "A10"
+   ],
+   "stages": [
+    "R10",
+    "R14",
+    "R21"
+   ],
+   "stagesFrom": "ROADMAP_ACCEPTANCE"
+  },
+  "D08": {
+   "tdRaw": "§9; A11, A23",
+   "acceptance": [
+    "A11",
+    "A23"
+   ],
+   "stages": [
+    "R08",
+    "R09",
+    "R21"
+   ],
+   "stagesFrom": "ROADMAP_ACCEPTANCE"
+  },
+  "D09": {
+   "tdRaw": "§5, §9; A12",
+   "acceptance": [
+    "A12"
+   ],
+   "stages": [
+    "R04",
+    "R21"
+   ],
+   "stagesFrom": "ROADMAP_ACCEPTANCE"
+  },
+  "D10": {
+   "tdRaw": "§13; A25, A29",
+   "acceptance": [
+    "A25",
+    "A29"
+   ],
+   "stages": [
+    "R19",
+    "R20",
+    "R21",
+    "R22"
+   ],
+   "stagesFrom": "ROADMAP_ACCEPTANCE"
+  },
+  "D11": {
+   "tdRaw": "§8, §11; A13, A19",
+   "acceptance": [
+    "A13",
+    "A19"
+   ],
+   "stages": [
+    "R01",
+    "R03",
+    "R07",
+    "R11",
+    "R12",
+    "R15",
+    "R20",
+    "R21"
+   ],
+   "stagesFrom": "ROADMAP_ACCEPTANCE"
+  },
+  "D12": {
+   "tdRaw": "§10; A14",
+   "acceptance": [
+    "A14"
+   ],
+   "stages": [
+    "R14",
+    "R18",
+    "R21"
+   ],
+   "stagesFrom": "ROADMAP_ACCEPTANCE"
+  },
+  "D13": {
+   "tdRaw": "§8, §10; A15",
+   "acceptance": [
+    "A15"
+   ],
+   "stages": [
+    "R13",
+    "R18",
+    "R21"
+   ],
+   "stagesFrom": "ROADMAP_ACCEPTANCE"
+  },
+  "D14": {
+   "tdRaw": "§8; A16",
+   "acceptance": [
+    "A16"
+   ],
+   "stages": [
+    "R13",
+    "R18",
+    "R21"
+   ],
+   "stagesFrom": "ROADMAP_ACCEPTANCE"
+  },
+  "D15": {
+   "tdRaw": "§8–9; A16",
+   "acceptance": [
+    "A16"
+   ],
+   "stages": [
+    "R13",
+    "R18",
+    "R21"
+   ],
+   "stagesFrom": "ROADMAP_ACCEPTANCE"
+  },
+  "D16": {
+   "tdRaw": "§8, §12; A13, A17",
+   "acceptance": [
+    "A13",
+    "A17"
+   ],
+   "stages": [
+    "R11",
+    "R12",
+    "R20",
+    "R21"
+   ],
+   "stagesFrom": "ROADMAP_ACCEPTANCE"
+  },
+  "D17": {
+   "tdRaw": "§6, §8; A04, A18",
+   "acceptance": [
+    "A04",
+    "A18"
+   ],
+   "stages": [
+    "R06",
+    "R07",
+    "R11",
+    "R13",
+    "R18",
+    "R21"
+   ],
+   "stagesFrom": "ROADMAP_ACCEPTANCE"
+  },
+  "D18": {
+   "tdRaw": "§6, §11; A19",
+   "acceptance": [
+    "A19"
+   ],
+   "stages": [
+    "R01",
+    "R03",
+    "R07",
+    "R12",
+    "R15",
+    "R21"
+   ],
+   "stagesFrom": "ROADMAP_ACCEPTANCE"
+  },
+  "D19": {
+   "tdRaw": "§6; A04–A06, A23",
+   "acceptance": [
+    "A04",
+    "A05",
+    "A06",
+    "A23"
+   ],
+   "stages": [
+    "R02",
+    "R03",
+    "R04",
+    "R06",
+    "R07",
+    "R08",
+    "R09",
+    "R19",
+    "R21"
+   ],
+   "stagesFrom": "ROADMAP_ACCEPTANCE"
+  },
+  "D20": {
+   "tdRaw": "§5–6; A07",
+   "acceptance": [
+    "A07"
+   ],
+   "stages": [
+    "R05",
+    "R07",
+    "R21"
+   ],
+   "stagesFrom": "ROADMAP_ACCEPTANCE"
+  },
+  "D21": {
+   "tdRaw": "§9; A21–A22",
+   "acceptance": [
+    "A21",
+    "A22"
+   ],
+   "stages": [
+    "R09",
+    "R17",
+    "R18",
+    "R21"
+   ],
+   "stagesFrom": "ROADMAP_ACCEPTANCE"
+  },
+  "D22": {
+   "tdRaw": "§9; A21, A23",
+   "acceptance": [
+    "A21",
+    "A23"
+   ],
+   "stages": [
+    "R08",
+    "R09",
+    "R17",
+    "R18",
+    "R21"
+   ],
+   "stagesFrom": "ROADMAP_ACCEPTANCE"
+  },
+  "D23": {
+   "tdRaw": "§5, §9; A21–A22",
+   "acceptance": [
+    "A21",
+    "A22"
+   ],
+   "stages": [
+    "R09",
+    "R17",
+    "R18",
+    "R21"
+   ],
+   "stagesFrom": "ROADMAP_ACCEPTANCE"
+  },
+  "D24": {
+   "tdRaw": "§10; A21",
+   "acceptance": [
+    "A21"
+   ],
+   "stages": [
+    "R09",
+    "R17",
+    "R18",
+    "R21"
+   ],
+   "stagesFrom": "ROADMAP_ACCEPTANCE"
+  },
+  "K01": {
+   "tdRaw": "§7; A20, A26–A28",
+   "acceptance": [
+    "A20",
+    "A26",
+    "A27",
+    "A28"
+   ],
+   "stages": [
+    "R15",
+    "R16",
+    "R17",
+    "R18",
+    "R21"
+   ],
+   "stagesFrom": "ROADMAP_ACCEPTANCE"
+  },
+  "K02": {
+   "tdRaw": "§6, §8; A18",
+   "acceptance": [
+    "A18"
+   ],
+   "stages": [
+    "R11",
+    "R13",
+    "R18",
+    "R21"
+   ],
+   "stagesFrom": "ROADMAP_ACCEPTANCE"
+  },
+  "K03": {
+   "tdRaw": "§9, §11; A21–A23",
+   "acceptance": [
+    "A21",
+    "A22",
+    "A23"
+   ],
+   "stages": [
+    "R08",
+    "R09",
+    "R17",
+    "R18",
+    "R21"
+   ],
+   "stagesFrom": "ROADMAP_ACCEPTANCE"
+  },
+  "K04": {
+   "tdRaw": "§8; A08–A10",
+   "acceptance": [
+    "A08",
+    "A09",
+    "A10"
+   ],
+   "stages": [
+    "R10",
+    "R14",
+    "R21"
+   ],
+   "stagesFrom": "ROADMAP_ACCEPTANCE"
+  },
+  "C01": {
+   "tdRaw": "R11, R20; A01, A25",
+   "acceptance": [
+    "A01",
+    "A25"
+   ],
+   "stages": [
+    "R11",
+    "R20"
+   ],
+   "stagesFrom": "TD_ROW"
+  },
+  "C02": {
+   "tdRaw": "R05, R19; A03, A25",
+   "acceptance": [
+    "A03",
+    "A25"
+   ],
+   "stages": [
+    "R05",
+    "R19"
+   ],
+   "stagesFrom": "TD_ROW"
+  },
+  "C03": {
+   "tdRaw": "R05, R15–R17; A02, A03, A26",
+   "acceptance": [
+    "A02",
+    "A03",
+    "A26"
+   ],
+   "stages": [
+    "R05",
+    "R15",
+    "R16",
+    "R17"
+   ],
+   "stagesFrom": "TD_ROW"
+  },
+  "C04": {
+   "tdRaw": "R02, R04; A12",
+   "acceptance": [
+    "A12"
+   ],
+   "stages": [
+    "R02",
+    "R04"
+   ],
+   "stagesFrom": "TD_ROW"
+  },
+  "C05": {
+   "tdRaw": "R06–R07; A04–A06",
+   "acceptance": [
+    "A04",
+    "A05",
+    "A06"
+   ],
+   "stages": [
+    "R06",
+    "R07"
+   ],
+   "stagesFrom": "TD_ROW"
+  },
+  "C06": {
+   "tdRaw": "R05, R07; A07",
+   "acceptance": [
+    "A07"
+   ],
+   "stages": [
+    "R05",
+    "R07"
+   ],
+   "stagesFrom": "TD_ROW"
+  },
+  "C07": {
+   "tdRaw": "R08; A11, A23",
+   "acceptance": [
+    "A11",
+    "A23"
+   ],
+   "stages": [
+    "R08"
+   ],
+   "stagesFrom": "TD_ROW"
+  },
+  "C08": {
+   "tdRaw": "R11–R13; A18",
+   "acceptance": [
+    "A18"
+   ],
+   "stages": [
+    "R11",
+    "R12",
+    "R13"
+   ],
+   "stagesFrom": "TD_ROW"
+  },
+  "C09": {
+   "tdRaw": "R13, R18, R21; A15–A16",
+   "acceptance": [
+    "A15",
+    "A16"
+   ],
+   "stages": [
+    "R13",
+    "R18",
+    "R21"
+   ],
+   "stagesFrom": "TD_ROW"
+  },
+  "C10": {
+   "tdRaw": "R01, R11–R12; A13, A19",
+   "acceptance": [
+    "A13",
+    "A19"
+   ],
+   "stages": [
+    "R01",
+    "R11",
+    "R12"
+   ],
+   "stagesFrom": "TD_ROW"
+  },
+  "C11": {
+   "tdRaw": "R11–R12; A17",
+   "acceptance": [
+    "A17"
+   ],
+   "stages": [
+    "R11",
+    "R12"
+   ],
+   "stagesFrom": "TD_ROW"
+  },
+  "C12": {
+   "tdRaw": "R09; A21–A23",
+   "acceptance": [
+    "A21",
+    "A22",
+    "A23"
+   ],
+   "stages": [
+    "R09"
+   ],
+   "stagesFrom": "TD_ROW"
+  },
+  "C13": {
+   "tdRaw": "R02, R04, R19; A05, A25",
+   "acceptance": [
+    "A05",
+    "A25"
+   ],
+   "stages": [
+    "R02",
+    "R04",
+    "R19"
+   ],
+   "stagesFrom": "TD_ROW"
+  },
+  "C14": {
+   "tdRaw": "R10, R14, R18; A08–A10, A14",
+   "acceptance": [
+    "A08",
+    "A09",
+    "A10",
+    "A14"
+   ],
+   "stages": [
+    "R10",
+    "R14",
+    "R18"
+   ],
+   "stagesFrom": "TD_ROW"
+  },
+  "C15": {
+   "tdRaw": "R02; A24",
+   "acceptance": [
+    "A24"
+   ],
+   "stages": [
+    "R02"
+   ],
+   "stagesFrom": "TD_ROW"
+  },
+  "C16": {
+   "tdRaw": "R03, R07, R12; A06, A17, A30",
+   "acceptance": [
+    "A06",
+    "A17",
+    "A30"
+   ],
+   "stages": [
+    "R03",
+    "R07",
+    "R12"
+   ],
+   "stagesFrom": "TD_ROW"
+  },
+  "C17": {
+   "tdRaw": "R00, R03, R19–R22; A25, A29",
+   "acceptance": [
+    "A25",
+    "A29"
+   ],
+   "stages": [
+    "R00",
+    "R03",
+    "R19",
+    "R20",
+    "R21",
+    "R22"
+   ],
+   "stagesFrom": "TD_ROW"
+  },
+  "C18": {
+   "tdRaw": "Каждый этап; A01–A30",
+   "acceptance": [
+    "A01",
+    "A02",
+    "A03",
+    "A04",
+    "A05",
+    "A06",
+    "A07",
+    "A08",
+    "A09",
+    "A10",
+    "A11",
+    "A12",
+    "A13",
+    "A14",
+    "A15",
+    "A16",
+    "A17",
+    "A18",
+    "A19",
+    "A20",
+    "A21",
+    "A22",
+    "A23",
+    "A24",
+    "A25",
+    "A26",
+    "A27",
+    "A28",
+    "A29",
+    "A30"
+   ],
+   "stages": [
+    "R00",
+    "R01",
+    "R02",
+    "R03",
+    "R04",
+    "R05",
+    "R06",
+    "R07",
+    "R08",
+    "R09",
+    "R10",
+    "R11",
+    "R12",
+    "R13",
+    "R14",
+    "R15",
+    "R16",
+    "R17",
+    "R18",
+    "R19",
+    "R20",
+    "R21",
+    "R22"
+   ],
+   "stagesFrom": "TD_ROW_EVERY_STAGE"
+  }
+ }
+}

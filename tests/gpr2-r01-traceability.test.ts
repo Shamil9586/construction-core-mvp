@@ -42,8 +42,9 @@ test('every decision is honest about R01: PINNED / PARTIAL rows cite real new te
     for (const r of d.protectedTests) assert.doesNotMatch(r.file, /gpr2-r01/, d.id + ': a protected test is an EXISTING suite');
   }
   const count = (s: string) => DECISIONS.filter(d => d.r01 === s).length;
-  assert.deepEqual([count('CONTRACT_PINNED'), count('CONTRACT_PARTIAL'), count('LATER_STAGE')], [9, 30, 7], 'the coverage split is a conscious number: changing it is changing a claim');
-  assert.deepEqual(DECISIONS.filter(d => d.r01 === 'CONTRACT_PINNED').map(d => d.id), ['D11', 'D14', 'D15', 'D16', 'D18', 'D22', 'K03', 'C10', 'C18']);
+  assert.deepEqual([count('CONTRACT_PINNED'), count('CONTRACT_PARTIAL'), count('LATER_STAGE')], [8, 31, 7], 'the coverage split is a conscious number: changing it is changing a claim');
+  assert.deepEqual(DECISIONS.filter(d => d.r01 === 'CONTRACT_PINNED').map(d => d.id), ['D11', 'D14', 'D15', 'D16', 'D18', 'D22', 'K03', 'C10']);
+  assert.equal(DECISIONS.find(d => d.id === 'C18')!.r01, 'CONTRACT_PARTIAL', 'C18 is accepted by A01–A30 across every stage: R01 builds its matrix but cannot complete it (R01-B06)');
   assert.deepEqual(DECISIONS.filter(d => d.r01 === 'LATER_STAGE').map(d => d.id), ['D03', 'D20', 'D24', 'C02', 'C06', 'C07', 'C15']);
 });
 
@@ -97,10 +98,10 @@ test('R01 adds no migration (no number is reserved in advance) and commits no no
 
 test('the committed matrix document is exactly what the generator prints from the index (it cannot drift), and a TAP report adds one mark per referenced test', () => {
   assert.equal(read('docs/gpr-2-r01-decision-test-matrix.md'), renderMatrix(), 'regenerate with: node --import tsx scripts/gpr2-r01-matrix.ts --write');
-  assert.deepEqual(parseTap('# comment\nok 3 - a title # SKIP\nnot ok 4 - another\n  ---\n  duration_ms: 1\n'), [{ title: 'a title', ok: true }, { title: 'another', ok: false }]);
+  assert.deepEqual(parseTap('# comment\nok 3 - a title # SKIP\nnot ok 4 - another\n  ---\n  duration_ms: 1\n'), [{ title: 'a title', status: 'skip' }, { title: 'another', status: 'fail' }]);
   const marked = renderMatrix('ok 1 - D14: no approved GPR — no dates, no baseline\nnot ok 2 - D15: a Work outside the approved GPR is NOT_INCLUDED\n');
   assert.match(marked, /✔ `gpr2-r01-contracts` › D14: no approved GPR/);
   assert.match(marked, /✘ `gpr2-r01-contracts` › D15: a Work outside the approved GPR/);
   assert.match(marked, /\? `gpr2-r01-decimal` › NULL is not zero/, 'a test absent from the report is shown as "?", never silently as passed');
-  assert.doesNotMatch(read('docs/gpr-2-r01-decision-test-matrix.md'), /[✔✘]/, 'the committed file carries no run results');
+  assert.doesNotMatch(read('docs/gpr-2-r01-decision-test-matrix.md'), /[✔✘⊘]/, 'the committed file carries no run results');
 });

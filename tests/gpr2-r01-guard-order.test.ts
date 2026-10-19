@@ -5,23 +5,29 @@ import { endpointById, ESTIMATE_MAPPING_REVIEW, isInputFingerprint, type Capabil
 import type { Gpr2CommandContext, Gpr2Hooks } from '../apps/backend/src/gpr2-command-guard';
 import { assertInMemoryPool } from './helpers/gpr2-isolation';
 import { gpr2Harness, validRequest, pilotScenario, KEY, uuid, type Gpr2Harness } from './helpers/gpr2-fixtures';
+import { TrustedResources, type Owner } from './helpers/gpr2-resources';
 import { actorByRole, assignPtoToObject } from './helpers/pbx3-fixtures';
 import type { Pilot } from './helpers/gpr-fixtures';
 
 /**
  * GPR-2 R01 — the order of the command pipeline, proved with spies (TD §12.4, A19 "no cached-response privilege leak").
- * authenticate → permission → path ids + scope → envelope → replay → execute. Nothing after a failed step may run; in particular a stored result
- * (replay) is never even LOOKED UP for a caller who is not authorised, in scope and well formed.
+ * authenticate → permission → object scope → nested resource preflight → envelope → replay → execute. Nothing after a failed step may run; in particular
+ * a stored result (replay) is never even LOOKED UP for a caller who is not authorised, in scope, owner of the addressed aggregate and well formed.
+ * (The resource step has its own focused suite, gpr2-r01-corrective-http.test.ts; here it is wired with a trusted resolver so the older order
+ * tests keep proving what they proved.)
  */
 let g: Gpr2Harness;
 let pilot: Pilot;
-before(async () => { g = await gpr2Harness('gpr2-r01-order-key'); pilot = await pilotScenario(g.h); assert.equal(await assertInMemoryPool(), true); });
+let owner: Owner;
+const trusted = new TrustedResources();
+before(async () => { g = await gpr2Harness('gpr2-r01-order-key'); pilot = await pilotScenario(g.h); assert.equal(await assertInMemoryPool(), true); owner = { tenantId: await g.tenantId(), objectId: pilot.object.id }; });
 after(async () => { await g?.h.close(); });
 
 const RESULT: CommandResult = { commandId: uuid(), resultIds: [], appliedVersions: { aggregate: '2', scope: null }, warnings: [] };
 function spies(replayResult: CommandResult | null = null) {
   const calls: string[] = [], seen: Gpr2CommandContext[] = [];
   const hooks: Gpr2Hooks = {
+    resources: trusted,
     replay: async ctx => { calls.push('replay'); seen.push(ctx); return replayResult; },
     execute: async ctx => { calls.push('execute'); seen.push(ctx); return RESULT; }
   };
@@ -38,8 +44,14 @@ const input = async (id: string, role: string, params: Record<string, string>, t
     (await guard()).runGpr2Command(e, { actor: who ?? await actor(role), params, headers: Object.fromEntries(Object.entries(req.headers).map(([k, v]) => [k.toLowerCase(), v])), body: req.body }, hooks, assignments) };
 };
 const code = async (p: Promise<unknown>) => { try { await p; return 'NO ERROR'; } catch (e: any) { return e.code ?? 'UNEXPECTED:' + e.message; } };
-// the router supplies every path parameter in HTTP; a direct call must too — a missing or malformed aggregate id is a 404, never a pass
-const at = (objectId: string) => ({ objectId, id: uuid() });
+// the router supplies every path parameter in HTTP; a direct call must too — a missing or malformed aggregate id is a 404, never a pass.
+// The aggregate behind `id` is registered with the trusted resolver as the pilot object's (for every kind: these tests are about the ORDER of the steps).
+const at = (objectId: string) => {
+  const id = uuid();
+  for (const kind of ['SCHEDULE_REVISION', 'QUANTITY_CHANGE_REQUEST', 'ESTIMATE_LABOR_IMPORT', 'WORK_TYPE_PUBLICATION_REQUEST'] as const)
+    trusted.own(kind, id, { tenantId: owner.tenantId, objectId: kind === 'WORK_TYPE_PUBLICATION_REQUEST' ? null : pilot.object.id });
+  return { objectId, id };
+};
 const own = () => at(pilot.object.id);
 
 test('an unauthorised caller reaches NEITHER hook — the stored result of a command is never looked up for them (no cached-response leak)', async () => {
@@ -99,8 +111,23 @@ test('the context handed to the stage carries what it needs and nothing unvalida
   assert.notEqual(stale.seen[0].fingerprint, ctx.fingerprint);
 });
 
-test('default hooks: an authorised, in-scope, well-formed call is refused as COMMAND_NOT_ENABLED and nothing is replayed', async () => {
-  assert.equal(await code((await input('schedule.revision.submit', 'PROJECT_MANAGER', own())).run((await guard()).DISABLED_HOOKS)), 'COMMAND_NOT_ENABLED');
+test('default hooks: an authorised, in-scope, well-formed call is refused as COMMAND_NOT_ENABLED and nothing is replayed — and an aggregate nobody has verified is not addressable at all', async () => {
+  const { DISABLED_HOOKS } = await guard();
+  assert.equal(await code((await input('schedule.revision.create', 'PROJECT_MANAGER', own())).run(DISABLED_HOOKS)), 'COMMAND_NOT_ENABLED', 'no {id}: nothing to verify, the gate answers');
+  assert.equal(await code((await input('schedule.revision.submit', 'PROJECT_MANAGER', own())).run(DISABLED_HOOKS)), 'RESOURCE_NOT_FOUND', 'an {id} the default resolver does not know is the scope-safe 404');
+});
+
+test('R01-B04 wiring: a hook set without a resolver is a configuration error that fails BEFORE anything runs — never a command that skips the preflight', async () => {
+  const { run } = await input('schedule.revision.submit', 'PROJECT_MANAGER', own());
+  const calls: string[] = [];
+  const broken = [
+    { replay: async () => { calls.push('replay'); return null; }, execute: async () => { calls.push('execute'); return RESULT; } },                       // no resolver at all
+    { resources: {}, replay: async () => { calls.push('replay'); return null; }, execute: async () => { calls.push('execute'); return RESULT; } },    // a resolver that cannot resolve
+    { resources: trusted, execute: async () => { calls.push('execute'); return RESULT; } },                                                              // no replay
+    null
+  ];
+  for (const hooks of broken) await assert.rejects(run(hooks as any), /hooks must provide resources\.resolve, replay and execute/);
+  assert.deepEqual(calls, [], 'neither hook of a half-built set ran');
 });
 
 test('only commands with a GPR-2 authorization can enter the pipeline — a query or an "existing rules" command is a programming error, not a silent pass', async () => {

@@ -7,6 +7,7 @@ import { GPR2_ENDPOINTS, mountedEndpoints, routeOf, endpointById, NO_CAPABILITY_
 import { gpr2Harness, validRequest, foreignTenantObject, pilotScenario, KEY, uuid, type Gpr2Harness } from './helpers/gpr2-fixtures';
 import type { Pilot } from './helpers/gpr-fixtures';
 import { assertInMemoryPool } from './helpers/gpr2-isolation';
+import { TrustedResources, ownedParams, installHooks, type Owner } from './helpers/gpr2-resources';
 
 /**
  * GPR-2 R01 — A19 at the HTTP level (TD §11.1–11.3), over the REAL backend on in-memory PGlite with mock auth.
@@ -17,8 +18,19 @@ import { assertInMemoryPool } from './helpers/gpr2-isolation';
  */
 let g: Gpr2Harness;
 let pilot: Pilot;
-before(async () => { g = await gpr2Harness('gpr2-r01-http-key'); pilot = await pilotScenario(g.h); assert.equal(await assertInMemoryPool(), true); });
-after(async () => { await g?.h.close(); });
+let owner: Owner;
+// Since R01-B04 a command addressed to an aggregate (`{id}`) is refused (404) unless a resolver has VERIFIED its owner, and the production default
+// verifies nothing. The A19 matrix below is about ROLES, so it runs with an explicit, isolated, trusted resolver that owns the ids these tests use;
+// the default-deny behaviour itself is proved in gpr2-r01-corrective-http.test.ts.
+const trusted = new TrustedResources();
+let uninstall = () => {};
+before(async () => {
+  g = await gpr2Harness('gpr2-r01-http-key'); pilot = await pilotScenario(g.h); assert.equal(await assertInMemoryPool(), true);
+  owner = { tenantId: await g.tenantId(), objectId: pilot.object.id };
+  const { DISABLED_HOOKS } = await import('../apps/backend/src/gpr2-command-guard');
+  uninstall = await installHooks(g.h.app, { ...DISABLED_HOOKS, resources: trusted });
+});
+after(async () => { uninstall(); await g?.h.close(); });
 
 const PM = ['PROJECT_MANAGER'], DEPUTY = ['DEPUTY_DIRECTOR'], ADMIN = ['ADMIN'], NOBODY: string[] = [];
 // command id → the ONLY roles that may issue it (TD §11.3 / §11.2)
@@ -36,7 +48,9 @@ const WHO: Record<string, string[]> = {
 };
 
 const send = async (token: string | null, e: Gpr2Endpoint, params: Record<string, string>, tweak: (r: ReturnType<typeof validRequest>) => void = () => {}) => {
-  const req = validRequest(e, params); tweak(req);
+  // the aggregate behind {id} (when the caller named none) is one the trusted resolver owns for this tenant and the pilot object
+  const owned = e.resource && params.id === undefined ? ownedParams(trusted, e, owner) : {};
+  const req = validRequest(e, { ...params, ...(owned.id ? { id: owned.id } : {}) }); tweak(req);
   return g.call(token, req.method, req.path, { body: req.body, headers: req.headers });
 };
 const params = () => ({ objectId: pilot.object.id });
@@ -224,7 +238,11 @@ test('cross-tenant: a user of another tenant holding the right role is refused t
   const a = await send(token, e, { objectId: pilot.object.id }), b = await send(token, e, { objectId: uuid() });
   assert.deepEqual([a.status, b.status], [404, 404]);
   assert.deepEqual(strip(a.body), strip(b.body));
-  assert.equal((await send(token, e, { objectId: foreign.object.id })).status, 501, 'their own object is reachable by them');
+  // their own object AND their own aggregate are reachable by them; this tenant's aggregate addressed under their own object is not (R01-B04)
+  const theirs = trusted.own('SCHEDULE_REVISION', uuid(), { tenantId: foreign.tenant.id, objectId: foreign.object.id });
+  assert.equal((await send(token, e, { objectId: foreign.object.id, id: theirs })).status, 501, 'their own object and aggregate are reachable by them');
+  const ours = trusted.own('SCHEDULE_REVISION', uuid(), { tenantId: owner.tenantId, objectId: pilot.object.id });
+  assert.equal((await send(token, e, { objectId: foreign.object.id, id: ours })).status, 404, 'another tenant\'s aggregate under their own object is one more 404');
 });
 
 test('the Idempotency-Key is not an access token: knowing a key another user used grants nothing, and each user\'s keys live in their own space', async () => {
@@ -242,8 +260,9 @@ test('the swagger document lists the guarded routes only while they are mounted'
   assert.equal(Object.keys(doc.body.paths).filter(p => p.startsWith('/v2/')).length >= 20, true);
 });
 
-test('hooks and capability sources default to "not enabled" / "nobody holds it"', async () => {
+test('hooks and capability sources default to "not enabled" / "no aggregate is known" / "nobody holds it"', async () => {
   const { DISABLED_HOOKS } = await import('../apps/backend/src/gpr2-command-guard');
+  assert.deepEqual(await DISABLED_HOOKS.resources.resolve({ kind: 'QUANTITY_CHANGE_REQUEST', id: uuid() }), { found: false });
   assert.equal(await DISABLED_HOOKS.replay({} as any), null);
   await assert.rejects(DISABLED_HOOKS.execute({} as any), (e: any) => e.code === 'COMMAND_NOT_ENABLED' && e.status === 501);
   assert.equal(NO_CAPABILITY_ASSIGNMENTS.length, 0);

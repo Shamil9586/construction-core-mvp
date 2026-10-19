@@ -11,6 +11,7 @@
  *   separationOfDuties the approver must be neither the author nor the submitter (§11.3: "combining roles does not let one user approve
  *                      their own submission")
  *   endpoint           the register id (endpoints.ts) of the command that performs it, or null when none exists
+ *   effect             what the step does to the aggregate's history, when that is more than "the state changed" (see TransitionEffect)
  *
  * Deliberately NOT here: import-batch edges. TD §7.3 fixes the batch STATES and the processing order, not the edges between them, so the
  * states are exported (IMPORT_BATCH_STATES) and the edge table is left to the import stages. Calendar-version and template publication
@@ -27,7 +28,15 @@ export interface LifecycleTransition<S extends string = string> {
     reasonRequired: boolean;
     separationOfDuties: boolean;
     endpoint: string | null;
+    effect: TransitionEffect | null;
 }
+/**
+ * EDIT_IN_PLACE                 the draft itself is changed; no submission version exists yet, so there is nothing to preserve.
+ * OPEN_NEW_SUBMISSION_VERSION   the request is reopened for a correction as a NEW submission version. Every earlier submission version and every
+ *                               decision (review note, return reason) stays exactly as it was — history is appended to, never rewritten.
+ * Both are CONTRACT statements for R07, which implements the persistence; R01 stores nothing.
+ */
+export type TransitionEffect = 'EDIT_IN_PLACE' | 'OPEN_NEW_SUBMISSION_VERSION';
 export interface Lifecycle<S extends string = string> {
     name: string;
     states: readonly S[];
@@ -38,8 +47,8 @@ export interface Lifecycle<S extends string = string> {
 
 const P = Gpr2Permission;
 const t = <S extends string>(from: S, command: string, to: S, permission: Gpr2Permission | null, endpoint: string | null,
-                              flags: { reason?: boolean; separation?: boolean } = {}): LifecycleTransition<S> =>
-    ({ from, command, to, permission, reasonRequired: !!flags.reason, separationOfDuties: !!flags.separation, endpoint });
+                              flags: { reason?: boolean; separation?: boolean; effect?: TransitionEffect } = {}): LifecycleTransition<S> =>
+    ({ from, command, to, permission, reasonRequired: !!flags.reason, separationOfDuties: !!flags.separation, endpoint, effect: flags.effect ?? null });
 const freeze = <S extends string>(l: Lifecycle<S>): Lifecycle<S> => Object.freeze({ ...l, transitions: Object.freeze([...l.transitions]) }) as Lifecycle<S>;
 
 // D11 / C10 — РП edits and submits; the deputy approves or returns; the deputy never edits. A returned revision stays as it was (RETURNED is
@@ -61,8 +70,13 @@ export const GPR_REVISION: Lifecycle<GprRevisionState> = freeze({
     ]
 });
 
-// D17 / D18 — quantity approval is independent of schedule approval. A correction after a return is a new submission version of the same
-// request, so a RETURNED request is reopened as DRAFT by the РП's PATCH (the register has no separate "revise" command).
+// D17 / D18 — quantity approval is independent of schedule approval. The register has ONE editing command, PATCH quantity-change-requests/{id}
+// (§11.2), and it means two things depending on the state it finds (R01-B02):
+//   DRAFT     --edit-->   DRAFT   an ordinary edit of the draft; nothing has been submitted, so nothing is versioned.
+//   RETURNED  --revise--> DRAFT   the correction after a return: the request is reopened and its next submission is a NEW version. Past
+//                                 submission versions and the decision history (review notes, return reasons) are immutable.
+// SUBMITTED and APPROVED have no PATCH row: a request under review is not edited under the reviewer, and an approved one is final. A handler
+// must obtain its row from transitionForEndpoint(), which refuses those states, instead of testing the state itself.
 export const QUANTITY_REQUEST_STATES = ['DRAFT', 'SUBMITTED', 'APPROVED', 'RETURNED'] as const;
 export type QuantityRequestState = typeof QUANTITY_REQUEST_STATES[number];
 export const QUANTITY_CHANGE_REQUEST: Lifecycle<QuantityRequestState> = freeze({
@@ -71,10 +85,11 @@ export const QUANTITY_CHANGE_REQUEST: Lifecycle<QuantityRequestState> = freeze({
     initial: 'DRAFT',
     terminal: ['APPROVED'],
     transitions: [
+        t('DRAFT', 'edit', 'DRAFT', P.QUANTITY_AUTHOR, 'quantity.request.patch', { effect: 'EDIT_IN_PLACE' }),
         t('DRAFT', 'submit', 'SUBMITTED', P.QUANTITY_AUTHOR, 'quantity.request.submit'),
         t('SUBMITTED', 'approve', 'APPROVED', P.QUANTITY_REVIEW, 'quantity.request.approve', { separation: true }),
         t('SUBMITTED', 'return', 'RETURNED', P.QUANTITY_REVIEW, 'quantity.request.return', { reason: true }),
-        t('RETURNED', 'revise', 'DRAFT', P.QUANTITY_AUTHOR, 'quantity.request.patch')
+        t('RETURNED', 'revise', 'DRAFT', P.QUANTITY_AUTHOR, 'quantity.request.patch', { effect: 'OPEN_NEW_SUBMISSION_VERSION' })
     ]
 });
 
@@ -146,6 +161,16 @@ export const LIFECYCLES: readonly Lifecycle[] = Object.freeze([GPR_REVISION, QUA
 
 export const findTransition = <S extends string>(l: Lifecycle<S>, from: S, command: string) =>
     l.transitions.find(x => x.from === from && x.command === command);
+/**
+ * The row a given endpoint performs when the aggregate is in `from`. This is how an endpoint that serves several rows (the quantity PATCH) is
+ * resolved without the handler looking at the state itself: no row for (from, endpoint) is INVALID_TRANSITION, never a silent no-op.
+ */
+export function transitionForEndpoint<S extends string>(l: Lifecycle<S>, from: S, endpointId: string): LifecycleTransition<S> {
+    const rows = l.transitions.filter(x => x.from === from && x.endpoint === endpointId);
+    if (rows.length !== 1)
+        throw new Gpr2Error('INVALID_TRANSITION', { machine: l.name, from, command: endpointId });
+    return rows[0];
+}
 export const commandsFrom = <S extends string>(l: Lifecycle<S>, from: S) => l.transitions.filter(x => x.from === from).map(x => x.command);
 
 export interface TransitionContext {

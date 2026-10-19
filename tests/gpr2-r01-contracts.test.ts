@@ -12,6 +12,8 @@ import {
  * D01/D04/D08/D13–D16/D19, K01/K02, C01/C04/C05/C08/C09/C11). Pure domain.
  */
 const q = (s: string) => decimalOf(QUANTITY, s);
+// §5.1 / §10.3 / §12.2: every projection carries its calculation version, its source version(s) and the instant it was computed (R01-B07)
+const META = { calculationVersion: 'calc-r01', sourceVersion: 'src-1', sourceVersionIds: { quantity: '00000007-0000-4000-8000-000000000000' }, computedAt: '2026-10-19T00:00:00Z' };
 const U = (n: number) => `0000000${n}-0000-4000-8000-000000000000`.slice(-36);
 const KEY = '11111111-1111-4111-8111-111111111111';
 const must = (fn: () => unknown): Gpr2Error => { try { fn(); } catch (e: any) { assert.ok(e instanceof Gpr2Error, String(e)); return e; } assert.fail('expected a contract error'); };
@@ -23,7 +25,7 @@ const must = (fn: () => unknown): Gpr2Error => { try { fn(); } catch (e: any) { 
 const projection = (over: Partial<QuantityProjection> = {}): QuantityProjection => {
   const current = over.currentQuantity ?? q('800'), fact = over.rpFactQuantity === undefined ? q('800') : over.rpFactQuantity;
   return { originalQuantity: q('1000'), originalProvenance: 'PROVEN', currentQuantity: current, currentQuantityVersionId: U(1), baselineQuantity: q('1000'), rpFactQuantity: fact,
-    excludedQuantity: q('200'), addedQuantity: q('0'), remainingQuantity: remainingQuantityOf(current, fact), physicalState: classifyPhysical(current, fact), workPhysicalPercent: null, ...over };
+    excludedQuantity: q('200'), addedQuantity: q('0'), remainingQuantity: remainingQuantityOf(current, fact), physicalState: classifyPhysical(current, fact), workPhysicalPercent: null, ...META, ...over };
 };
 
 test('D04/D19, §6.3 case 1: original 1000 / current 800 / fact 800 / excluded 200 — four different numbers, physically complete, nothing invented', () => {
@@ -81,7 +83,7 @@ test('D04/C05: an unproven original is UNKNOWN_LEGACY with a null value — neve
 
 const sched = (over: Partial<ScheduleProjection>): ScheduleProjection => ({
   baselineRevisionId: U(1), calendarVersionId: U(2), objectTimezone: 'Europe/Moscow', evaluatedThroughLocalDate: '2026-03-10', scheduleState: 'ON_PLAN', stateReason: null,
-  operativeStart: '2026-03-01', operativeEnd: '2026-03-20', baselineQuantity: q('1000'), quantityBehind: q('0'), workingDayLag: decimalOf(NORMATIVE, '0'), verdict: 'ON_PLAN', ...over
+  operativeStart: '2026-03-01', operativeEnd: '2026-03-20', baselineQuantity: q('1000'), quantityBehind: q('0'), workingDayLag: decimalOf(NORMATIVE, '0'), verdict: 'ON_PLAN', ...META, ...over
 });
 const NOTHING: Partial<ScheduleProjection> = { operativeStart: null, operativeEnd: null, baselineQuantity: null, quantityBehind: null, workingDayLag: null, verdict: null };
 
@@ -119,7 +121,8 @@ test('§8.4/§8.3: DATA_INCOMPLETE and INTEGRITY_CONFLICT give a reason and neve
     assert.ok(validateScheduleProjection(sched({ scheduleState: state, stateReason: null, verdict: null, quantityBehind: null, workingDayLag: null })).length > 0, state + ' needs a concrete reason');
     assert.ok(validateScheduleProjection(sched({ scheduleState: state, stateReason: 'x', verdict: 'ON_PLAN', quantityBehind: null, workingDayLag: null })).length > 0, state + ' never carries a verdict');
   }
-  assert.deepEqual(validateScheduleProjection(sched({ scheduleState: 'COMPLETED_COMPLETION_DATE_UNKNOWN', verdict: null })), []);
+  assert.deepEqual(validateScheduleProjection(sched({ scheduleState: 'COMPLETED_COMPLETION_DATE_UNKNOWN', verdict: null, quantityBehind: q('0'), workingDayLag: null })), [], 'the lag is fixed at a moment nobody can prove');
+  assert.ok(validateScheduleProjection(sched({ scheduleState: 'COMPLETED_COMPLETION_DATE_UNKNOWN', verdict: null, workingDayLag: decimalOf(NORMATIVE, '0') })).length > 0, 'and a lag of 0 would be an invented "on time"');
   assert.ok(validateScheduleProjection(sched({ scheduleState: 'COMPLETED_COMPLETION_DATE_UNKNOWN', verdict: 'COMPLETED_ON_TIME' as any })).length > 0, 'no "on time" when the completion date is unknown');
   assert.deepEqual(validateScheduleProjection(sched({ scheduleState: 'BEHIND', verdict: 'BEHIND', quantityBehind: q('200'), workingDayLag: decimalOf(NORMATIVE, '1') })), []);
   assert.deepEqual(validateScheduleProjection(sched({ scheduleState: 'COMPLETED_LATE', verdict: 'COMPLETED_LATE', quantityBehind: q('0'), workingDayLag: decimalOf(NORMATIVE, '2') })), []);
@@ -134,15 +137,17 @@ test('§8.4/§8.3: DATA_INCOMPLETE and INTEGRITY_CONFLICT give a reason and neve
 
 const labor = (over: Partial<LaborCoverageProjection>): LaborCoverageProjection => ({
   coverageState: 'COMPLETE', plannedWorkerHours: decimalOf(NORMATIVE, '1600'), earnedWorkerHours: decimalOf(NORMATIVE, '1600'), objectPhysicalPercent: decimalOf(NORMATIVE, '100'),
-  calculationVersion: 'c1', sourceVersion: 's1', computedAt: '2026-10-19T00:00:00Z', ...over
+  ...META, ...over
 });
 
 test('K01/§7.6: the general physical percent exists only for COMPLETE coverage with a positive worker denominator; everywhere else it is null, never 0 or 100', () => {
   assert.deepEqual(validateLaborCoverage(labor({})), [], 'A28: current 800 × rate 2 = 1600 planned, 1600 earned');
   for (const state of COVERAGE_STATES.filter(s => s !== 'COMPLETE')) {
-    assert.deepEqual(validateLaborCoverage(labor({ coverageState: state, objectPhysicalPercent: null })), [], state + ' → null is correct');
-    assert.ok(validateLaborCoverage(labor({ coverageState: state })).length > 0, state + ' must not carry a percent');
-    assert.ok(validateLaborCoverage(labor({ coverageState: state, objectPhysicalPercent: decimalOf(NORMATIVE, '0') })).length > 0, state + ' must not carry 0 as a stand-in for "unknown"');
+    // a zero denominator is its own state and needs a KNOWN zero plan; the other states are fine with the default hours
+    const basis: Partial<LaborCoverageProjection> = state === 'ZERO_WORKER_DENOMINATOR' ? { plannedWorkerHours: decimalOf(NORMATIVE, '0'), earnedWorkerHours: decimalOf(NORMATIVE, '0') } : {};
+    assert.deepEqual(validateLaborCoverage(labor({ coverageState: state, objectPhysicalPercent: null, ...basis })), [], state + ' → null is correct');
+    assert.ok(validateLaborCoverage(labor({ coverageState: state, ...basis })).length > 0, state + ' must not carry a percent');
+    assert.ok(validateLaborCoverage(labor({ coverageState: state, objectPhysicalPercent: decimalOf(NORMATIVE, '0'), ...basis })).length > 0, state + ' must not carry 0 as a stand-in for "unknown"');
   }
   assert.ok(validateLaborCoverage(labor({ plannedWorkerHours: decimalOf(NORMATIVE, '0'), earnedWorkerHours: decimalOf(NORMATIVE, '0') })).length > 0, 'a zero denominator is not "100 %"');
   assert.ok(validateLaborCoverage(labor({ plannedWorkerHours: null })).length > 0, 'COMPLETE states its planned hours');
@@ -308,7 +313,8 @@ test('approve names its input fingerprint and expected source versions (§11.1);
   const approve = (payload: unknown) => parseCommand(ep('schedule.revision.approve'), { 'idempotency-key': KEY }, { expectedVersion: '2', expectedScopeVersion: '5', payload });
   const good = approve({ inputFingerprint: 'b'.repeat(64), expectedSourceVersions: { calendar: U(7).toUpperCase(), quantity: U(8) } });
   assert.deepEqual(good.payload.expectedSourceVersions, { calendar: U(7), quantity: U(8) });
-  assert.deepEqual(violations(() => approve({ expectedSourceVersions: {} })), ['payload.inputFingerprint:FIELD_REQUIRED']);
+  assert.deepEqual(violations(() => approve({ expectedSourceVersions: { calendar: U(7) } })), ['payload.inputFingerprint:FIELD_REQUIRED']);
+  assert.deepEqual(violations(() => approve({})), ['payload.expectedSourceVersions:FIELD_REQUIRED', 'payload.inputFingerprint:FIELD_REQUIRED'], 'the fence is mandatory (R01-B03)');
   assert.deepEqual(violations(() => approve({ inputFingerprint: 'b'.repeat(64), expectedSourceVersions: { calendar: 'x' } })), ['payload.expectedSourceVersions.calendar:ID_MALFORMED']);
   for (const id of ['schedule.revision.return', 'quantity.request.return', 'work-type.publication.reject']) {
     const run = (reason: unknown) => parseCommand(ep(id), { 'idempotency-key': KEY }, { expectedVersion: '1', payload: { reason } });

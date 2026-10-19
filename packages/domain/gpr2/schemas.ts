@@ -18,6 +18,8 @@ import { z } from 'zod';
 import { DecimalProfile, NORMATIVE, parseDecimal } from './decimal';
 import { Gpr2Error, Gpr2ValidationRule, Gpr2Violation, validationFailed } from './errors';
 import { parseAggregateVersion, parseScopeVersion, parseSourceVersionId, isInputFingerprint } from './versions';
+import { parseCivilDate } from './civil-date';
+import { openObjectViolations } from './open-value';
 import type { Gpr2Endpoint } from './endpoints';
 
 // ---------------------------------------------------------------------------------------------------------------------------------
@@ -59,12 +61,12 @@ export const uuidSchema = z.unknown().transform((input, ctx) => {
         return fail(ctx, 'FIELD_TYPE');
     return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input) ? input.toLowerCase() : fail(ctx, 'ID_MALFORMED');
 });
+/** A calendar day (§5.1). Validated by integer arithmetic (civil-date.ts) — never through the host Date, whose RangeError used to surface as HTTP 500 (R01-B01). */
 export const civilDate = z.unknown().transform((input, ctx) => {
     if (input === undefined)
         return fail(ctx, 'FIELD_REQUIRED');
-    if (typeof input !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(input) || new Date(input + 'T00:00:00Z').toISOString().slice(0, 10) !== input)
-        return fail(ctx, 'DATE_MALFORMED');
-    return input;
+    const r = parseCivilDate(input);
+    return r.ok === true ? r.value : fail(ctx, r.rule);
 });
 export const REASON_LIMIT = 2000;
 /** A reason / comment: real text, trimmed. Blank or missing is REASON_REQUIRED. */
@@ -86,13 +88,57 @@ export function parseIdempotencyKey(header: unknown, required: boolean): { ok: t
     return { ok: true, value: header.toLowerCase() };
 }
 
-/** Which payload schema, if any, the design fixes for a command; otherwise an object whose fields the implementing stage owns. */
-const OPEN_PAYLOAD = z.record(z.string(), z.unknown());
+/**
+ * Which payload schema, if any, the design fixes for a command; otherwise an object whose fields the implementing stage owns.
+ * "Open" is not "anything" (R01-B03): the object must be plain JSON that the fingerprint can canonicalise (open-value.ts), so a client mistake
+ * is a 422 here and never a 500 out of commandFingerprint.
+ */
+const issues = (ctx: z.RefinementCtx, found: Gpr2Violation[]) => { for (const v of found) ctx.addIssue({ code: 'custom', message: v.rule, path: v.path ? v.path.split('.') : [] }); return z.NEVER; };
+export const openObject = z.unknown().transform((input, ctx) => {
+    const found = openObjectViolations(input);
+    // The ORIGINAL object is returned, not a copy: canonicalJson only accepts plain Object prototypes.
+    return found.length ? issues(ctx, found) : input as Record<string, unknown>;
+});
+const OPEN_PAYLOAD = openObject;
 export const reasonPayload = z.strictObject({ reason: reasonText });
 export const schedulePayloads = {
-    submit: z.strictObject({ changeReason: reasonText }),
-    approve: z.strictObject({ inputFingerprint: fingerprint, expectedSourceVersions: z.record(z.string(), sourceVersionIdSchema), comment: reasonText.optional() })
+    submit: z.strictObject({ changeReason: reasonText })
 };
+
+/**
+ * The common fence of an approve / commit (§11.1: "У approve/commit — immutable input fingerprint и expected source versions"; R01-B03).
+ *   inputFingerprint        the exact input the approver / committer looked at (sha256, 64 hex)
+ *   expectedSourceVersions  the immutable source versions that input was built from: at least ONE named version id. An empty map would fence
+ *                           nothing, so it is refused like a missing one. Which sources a command names belongs to the stage that implements it.
+ * Both are mandatory: a body without them is refused (422) before replay and before execute.
+ */
+export const SOURCE_NAME = /^[A-Za-z0-9_.-]{1,64}$/;
+export const sourceVersionsSchema = z.unknown().transform((input, ctx) => {
+    if (input === undefined)
+        return fail(ctx, 'FIELD_REQUIRED');
+    if (typeof input !== 'object' || input === null || Array.isArray(input) || Object.getPrototypeOf(input) !== Object.prototype)
+        return fail(ctx, 'FIELD_TYPE');
+    const out: Record<string, string> = {}, entries = Object.entries(input as object);
+    if (entries.length === 0)
+        return fail(ctx, 'FIELD_REQUIRED');
+    for (const [name, value] of entries) {
+        const at = SOURCE_NAME.test(name) && name !== '__proto__' ? name : '*';
+        if (at === '*') { ctx.addIssue({ code: 'custom', message: 'FIELD_NOT_ALLOWED', path: [at] }); continue; }
+        const r = parseSourceVersionId(value);
+        if (r.ok === true) out[name] = r.value; else ctx.addIssue({ code: 'custom', message: r.rule, path: [at] });
+    }
+    return out;
+});
+export const approvalFence = { inputFingerprint: fingerprint, expectedSourceVersions: sourceVersionsSchema };
+/**
+ * A payload that is a typed FENCE plus stage-owned fields: the fence keys are typed here, every other key is a deferred extension of the owning
+ * stage — accepted, but only as safe JSON (open-value.ts), never interpreted by R01.
+ */
+const fenced = (shape: Record<string, z.ZodType>) => openObject.pipe(z.looseObject(shape));
+export const approvalPayload = fenced({ ...approvalFence, comment: reasonText.optional() });
+export const commitPayload = fenced(approvalFence);
+/** A correction of an external outcome always says why (lifecycle: reasonRequired on `record-correction`); the corrected content is R09's. */
+export const correctionPayload = fenced({ reason: reasonText });
 
 // --- the draft change-set (§5.4, §11.2 "Entries/placement/edges/calendar/omissions") ----------------------------------------------
 // D01/C01: one entry per Work. There is no execution-unit field, and .strict() makes sending one an error, not a silent ignore.
@@ -122,7 +168,9 @@ export const gprChangeApply = gprChangeSet.extend({ previewFingerprint: fingerpr
 const PAYLOAD_SCHEMAS: Record<string, z.ZodType> = {
     'quantity.request.return': reasonPayload, 'schedule.revision.return': reasonPayload, 'work-type.publication.reject': reasonPayload,
     'work-type.publication.approve': z.strictObject({ aliasOfWorkTypeId: uuidSchema.optional() }),
-    'schedule.revision.submit': schedulePayloads.submit, 'schedule.revision.approve': schedulePayloads.approve,
+    'schedule.revision.submit': schedulePayloads.submit, 'schedule.revision.approve': z.strictObject({ ...approvalFence, comment: reasonText.optional() }),
+    'quantity.request.approve': approvalPayload, 'imports.boq.commit': commitPayload, 'imports.estimate-labor.commit': commitPayload,
+    'finish-change.record-correction': correctionPayload,
     'schedule.changes.preview': gprChangeSet, 'schedule.changes.apply': gprChangeApply
 };
 export const payloadSchemaFor = (endpointId: string): z.ZodType => PAYLOAD_SCHEMAS[endpointId] ?? OPEN_PAYLOAD;
