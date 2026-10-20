@@ -46,6 +46,17 @@ export function isolatedAdminUrl(): string {
     return url;
 }
 
+export interface IsolationRow { v: string; num: number; cluster: string; port: number; addr: string | null; db: string; dd: string | null }
+
+/** The pure decision: is what the server reported the isolated cluster? Throws with the reason. Exported so the refusal itself can be tested. */
+export function validateIsolationRow(r: IsolationRow, url: string): IsolationEvidence {
+    if (r.cluster !== ISOLATED_CLUSTER_NAME)
+        throw new Error('not the isolated cluster: cluster_name=' + JSON.stringify(r.cluster));
+    if (r.addr !== null && !/^(127\.0\.0\.1|::1)(\/\d+)?$/.test(r.addr))
+        throw new Error('server address is not loopback: ' + r.addr);
+    return { serverVersion: r.v, serverVersionNum: r.num, clusterName: r.cluster, port: r.port, host: new URL(url).hostname, serverAddr: r.addr, dataDirectory: r.dd, database: r.db, productionCredentialsUsed: false, checkedAt: new Date().toISOString() };
+}
+
 /** Throws unless the server behind `url` is the isolated cluster. Returns what it saw, for the evidence file. */
 export async function assertIsolatedPostgres(url = isolatedAdminUrl()): Promise<IsolationEvidence> {
     const c = new Client({ connectionString: url });
@@ -54,11 +65,7 @@ export async function assertIsolatedPostgres(url = isolatedAdminUrl()): Promise<
         const r = (await c.query(`SELECT version() AS v, current_setting('server_version_num')::int AS num, current_setting('cluster_name') AS cluster,
             current_setting('port')::int AS port, inet_server_addr()::text AS addr, current_database() AS db,
             (SELECT setting FROM pg_settings WHERE name='data_directory') AS dd`)).rows[0];
-        if (r.cluster !== ISOLATED_CLUSTER_NAME)
-            throw new Error('not the isolated cluster: cluster_name=' + JSON.stringify(r.cluster));
-        if (r.addr !== null && !/^(127\.0\.0\.1|::1)(\/\d+)?$/.test(r.addr))
-            throw new Error('server address is not loopback: ' + r.addr);
-        return { serverVersion: r.v, serverVersionNum: r.num, clusterName: r.cluster, port: r.port, host: new URL(url).hostname, serverAddr: r.addr, dataDirectory: r.dd, database: r.db, productionCredentialsUsed: false, checkedAt: new Date().toISOString() };
+        return validateIsolationRow(r, url);
     }
     finally {
         await c.end();
