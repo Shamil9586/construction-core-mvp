@@ -122,3 +122,30 @@ Schema defends it: a deferred constraint trigger refuses to `COMMIT` a claimed r
 | **native**: different keys never queue; 8 concurrent retries → 1 execution, 7 replays, 1 command id | `gpr2-r03c-ledger-pg` |
 
 **Not done here:** no real command uses the ledger yet — the R01 `/v2` handlers are still `501` (their stages R04–R17 call `runLedgered`). Retention/archival of ledger rows is a release-plan question (R22).
+
+---
+
+## R03d — controlled migration execution and checksums
+
+`scripts/migration-runner.ts` (pure planning + apply), `scripts/migrate.ts` (the entry point, same name and behaviour for callers), `infra/migrations.legacy.sha256.json` (the pinned manifest). **No applied migration file is edited**: 001–025 are byte-identical to the baseline and pinned by hash.
+
+| What it adds | How |
+|---|---|
+| **Class.** Every migration after 025 declares `-- migration-class: additive \| contract` in its header; none declared ⇒ error (fail closed); 001–025 are the grandfathered `legacy` range | `readMigrationFiles` |
+| **Additive means additive — checked, not trusted.** An additive file may not contain `DROP …`, `TRUNCATE`, `DELETE FROM`, a data-rewriting `UPDATE … SET`, `ALTER COLUMN … TYPE / SET NOT NULL`, `ALTER TABLE … DROP`, `RENAME` (comments stripped first) | `destructiveStatements` |
+| **Contract never runs implicitly.** Only when the operator names the version (`--allow-contract=NNN`), never in `boot` mode (no flag overrides that), and refused at *planning* time — before anything is applied, so a refused run leaves the database exactly as it was | `planMigrations` |
+| **Checksums.** The ledger gains `checksum`, `file_name`, `migration_class`, `runner_version` (added `IF NOT EXISTS` inside the run's transaction). A recorded checksum that no longer matches its file ⇒ `MIGRATION_CHANGED_AFTER_APPLY`. sha256 over the file with line endings normalised | `applyMigrations` |
+| **No pretending, no stranding.** A ledger row **without** a checksum — the 25 legacy ones, and any row the *previous* runner wrote after 026/027 existed — is **not** presented as verified and is **not** refused either: the plan and the result list it as `unverifiedInLedger`. (A first version refused post-025 rows without a checksum; the full-suite run found it breaks `f8.3-migration-011-upgrade` and would strand any database migrated by the old runner.) The legacy *files* are verified against the pinned manifest (which equals the files at the base commit — a test re-derives it from `git show`) | manifest + plan |
+| **Plan / dry run.** `npm run db:migrate -- --plan` prints what would run (version, class, checksum) and applies nothing; it works on a database with no ledger and on one with the old ledger; `--through=N` stops at N | `planAgainstLedger` |
+| **Out-of-order files.** A pending file numbered below an already-applied version ⇒ `MIGRATION_GAP`, nothing applied | `planMigrations` |
+| **Unchanged guarantees.** One transaction, one advisory lock (830017): all-or-nothing, a restart is a no-op, concurrent runners serialise | `applyMigrations` |
+
+**Boot path.** The image already starts the API with `node … main.ts` and the Dockerfile says startup must not migrate; R03d makes that a tested fact: no module under `apps/backend/src` imports the runner (the detector is itself tested against samples and against a comment that merely names the file), and no `CMD` of the image mentions a migration. `migrate({ mode: 'boot' })` exists for any future caller and can never apply a contract step.
+
+| Evidence | Test |
+|---|---|
+| checksum/CRLF, class header, destructive detector (with look-alikes), real chain classes, manifest = baseline (`git show`), legacy edit refused, class missing/unknown/not-additive/duplicate, plan, changed-after-apply, gap, contract gate, CLI, boot-safety | `gpr2-r03d-migration-runner` |
+| all-or-nothing, restart no-op, edited-after-apply, contract applied only when named, real chain on a fresh database (every file with a checksum, legacy recorded as legacy, boot mode no-op) | `gpr2-r03d-migration-runner` (PGlite) |
+| **native**: two runners started together; a run failing in the middle leaves nothing (not even the ledger); upgrade from the **old runner's** ledger (old rows and times untouched, unverified, new files checksummed); `--plan` on no ledger / old ledger changes nothing; contract refused with its data intact; a runner **observed blocked** on the migration lock | `gpr2-r03d-migration-pg` |
+
+**Not done (belongs to the release stages):** applying anything to LIVE, Render configuration, the contract/retirement manifest (RETIRE-MANIFEST), a startup check that refuses to boot against a database with unapplied migrations (a release-plan decision — it would change what a deploy does).

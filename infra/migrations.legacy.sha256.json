@@ -1,0 +1,30 @@
+{
+  "note": "sha256 of each applied legacy migration (001-025) at baseline 678e795f8802a76ac025f28b0d698351af8b7721, line endings normalised. The runner refuses to run if any of these files changes: an applied migration is never edited.",
+  "files": {
+    "001_initial.sql": "429b9670eec1c540ead770db34387169628441b7a50c1da601efe15b13158f9c",
+    "002_invariants.sql": "0ccc8e18bacefb1468a67e3874279b05104cab62d15f1f66e99317af8cd02e55",
+    "003_bitrix_application_token.sql": "10216af293fc5faf2b7205ace25a172513b825a5b7e34184206b2af9f427e3d9",
+    "004_object_contractor_history.sql": "a67f918ba62b5b53cdca6bdaa9eb6e9bed20a22dc9147ad45c535f487b153287",
+    "005_active_contractor_view.sql": "a5c9dde4bf020548a4cfdda040278c8a2954ba719a5ac402c9715170c0796817",
+    "006_production_execution.sql": "23d99a2cd157762db489becfd0978bd5ee9e77b9283781bcd63b6b4c6689d27e",
+    "007_documentation_foundation.sql": "1fadcddd7a8963794e562fbfa3921fc391d39de1b2078b997a932976a2e990a4",
+    "008_sdo_closing.sql": "51f27ae081f4597e6e178d1b42970c74c299329cb450727aeffee7ca2e5c32dd",
+    "009_sdo_closing_corrective.sql": "5c552a8151ad7d386ed7528aea84c586dfa9085a8c020d396d00977ab78ae7cf",
+    "010_sdo_closing_allocation_cancellation.sql": "0e00fcf3c2892e453b0e4157e0faeaaf37262e8080a45efc3f2094eaed3168df",
+    "011_sdo_closing_allocation_history_operation_repair.sql": "6fec5f303c7ba16053e06897056a5898c21bd22231b37820d16ed73b3ecb8823",
+    "012_deputy_director_role.sql": "7977488f501dc06d17fd7205323fa52e1e7d8d3743d19c246efc4bf995d73d4a",
+    "013_retry_idempotency.sql": "de58211c8276174a93b261b03fc0eeb810e78d9977a0f8623e9b519d787dad01",
+    "014_command_idempotency.sql": "5bfbd2062b94ac83d165b46a3fa5d9107f4fd98e5c3e700186b29f6082e53d94",
+    "015_department_head_roles.sql": "cc8fa7f3b4f4efd83562cccfd4a2387c9b7b418eb3754969726b80af8b268e99",
+    "016_object_team_foundation.sql": "adcde61a4b0872ae5166c8bc4446cbb42a56eac9a62f7e39a041a7cf8feaf803",
+    "017_remove_legacy_director_roles.sql": "c2618bcb1ca9157e104494add3ed72c56548457b9c62106dadfd2235bdb7d3ed",
+    "018_bitrix_notification_outbox.sql": "74d586664e3f7baf2e3046ae9f51a4c772c95421153424a72d4f72caa2d4edee",
+    "019_pto_work_assignments.sql": "74d9669e1f7404ab92929e8b0b2015ae4963b6a2deb2850e16915e0b66962125",
+    "020_aosr_foundation.sql": "c9f86bb0d6c106cde0867f20eaa3711b292df1b857865018cf7851f8a67c1903",
+    "021_aosr_method_and_scheme_files.sql": "0790968317c7db628f779c6cfa95d0a33f844a5b9b5ecfdbf4f88d2b43d101aa",
+    "022_package_scope_no_overlap.sql": "fcf5ce8deb7d9443d8a956a414ad917dd2eb3536be0f0ec7d914b4c0f4544a03",
+    "023_package_soft_archive.sql": "30f775cfd97ff6c6921086999c6326dc9a43f492df254fa55d888dc7f68835e6",
+    "024_bitrix_disk_file_storage.sql": "b34e9e8e15c9e5418c6f4c7e3a9b7470cb2a026e2d9040b2b5f6f0aa0e83f513",
+    "025_production_schedule.sql": "4b998e195ad169c11e52ba4338cf8c3a3cab2504a572b0f2e24a3613e1e7eea1"
+  }
+}
