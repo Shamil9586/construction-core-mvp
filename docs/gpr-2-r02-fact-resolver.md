@@ -83,7 +83,25 @@ Creating an execution unit, a layer or a portion is never a transition and never
    overlap on unclassified Works. This matches the Roadmap's own gate ("классификация реальных Work и любое включение нового source mode — только R19"). If the reviewer wants the gate on
    unclassified Works too, it is a one-line change in `evaluatePortionFactModeTransition()` plus new fixtures for those suites — a decision, not a defect fix.
 2. **No column default.** A default would classify every future Work implicitly. R04/R15 (Work creation) set the mode explicitly.
-3. **Read model.** `works[].actualQuantity` is `0.0000` when the resolver cannot state a figure (`UNKNOWN_TIE`), with `factState` saying so; guards use `null` and fail closed.
+3. **Read model.** *(Corrected by R02-001, see below; the first R02 candidate rendered an unknown figure as `0.0000`.)* `works[].actualQuantity` is `null` when the resolver cannot state a figure (`UNKNOWN_TIE`, `HISTORY_UNAVAILABLE`, `NOT_YET_KNOWN`), with `factState` and `factUnknown` saying so; a confirmed zero stays `"0.0000"`. Guards use `null` and fail closed.
+
+## R02-001 — an unknown fact is not a confirmed zero (corrective)
+
+Independent acceptance found that `ReadService.snapshot()` replaced the resolver's `null` by `"0.0000"`, so an unknown figure fed progress, the schedule status, the closing potential, the dependency blockers and the object / dashboard aggregates as a certain zero. Behaviour now, for a Work whose `actualQuantity` is `null`:
+
+| Consumer | Output |
+|---|---|
+| Work | `actualQuantity: null`, `factState`, `factUnknown: true`, `actualProgress: null`, `variance: null` |
+| Schedule status (dashboard `ScheduleStatusService`) | `GRAY`, `delayDays: 0`; `plannedProgress` (plan only) is still stated |
+| Closing funnel | `financial = { physical: null, potential: null, buckets: null, closed, factUnknown: true }` — `closed` does not depend on the fact |
+| Dependency | the successor is **blocked** with the reason «факт выполнения не определён (<state>) — следующий переход не разрешён» (it is not reported as «не завершена»; the write-side guard was already fail-closed) |
+| Attention queue | one GRAY item «Факт выполнения не определён» (no delay item, no duplicate «Нет актуального факта», `moneyImpact: null`) |
+| Object | `actualProgress: null`, `potential: null`, `unknownFactWorks: n`; the known part is shown beside: `actualProgressKnownPart`, `potentialKnownPart` (the latter stripped for `CONTRACTOR_VIEWER`) |
+| Dashboard | `potentialClosing: null`, every `buckets` value `null`, `unknownFactWorks`, and `potentialClosingKnownPart` / `bucketsKnownPart` |
+
+When no Work of the object / portfolio is unknown the aggregates are exactly what they were. A Work nobody has reported on keeps its previous reading (`"0.0000"`, GRAY); a confirmed zero is a real zero (RED when overdue, `potential "0.00"`). Frontend: `Work.actualQuantity` is `string | null`; `workExecutionState` has a fourth value `UNKNOWN` («Факт не определён») instead of constructing a `Decimal` from `null`; the existing formatters already print `—` for `null`.
+
+**Not changed (limitation, needs a decision):** the GPR-1 schedule module (`packages/domain/schedule.ts`, `schedule-scope.ts`) has no «unknown» state — four management states only. A scope whose fact is unknown there is still read as «nothing reported» (for a PORTION Work) or from the legacy column (for a LEGACY_WORK Work with a tie), exactly as before R02-001; giving it a fifth state changes the GPR-1 contract, its frontend validation and the object conclusion, which is outside this corrective.
    New additive fields on every Work: `factState`, `factSourceMode`, `factSourceModeProvenance`.
 4. **Ties.** An exact tie needs identical `recorded_at`, i.e. rows of one transaction (or legacy data). `confirmation_seq` orders rows of one transaction by statement order.
 5. **Existing tests changed — six, all because they pinned the END of the migration chain** (any additive migration invalidates that, C17 numbers migrations from the real ledger): `gpr2-r01-traceability` (exactly 25 files → the baseline chain through 025 intact, later files gap-free); `gpr-1-schedule-postgres` A1 (`files.at(-1) === 025` → 025 directly follows 024; its pinned hash in `tests/helpers/gpr2-decision-index.ts` is updated deliberately, citing C17); `org1-company-structure-postgres` (`slice(17)` → `slice(17, 25)`); `pbx5a-bitrix-notifications-postgres` (exactly 1–25 → 1–25 intact and gap-free); `role-cleanup-migration-postgres` and `bitrix-disk-1-storage` (literal head `25` → number of numbered files). No business assertion was weakened; the first R02 candidate failed these five and the failing run is kept as evidence.

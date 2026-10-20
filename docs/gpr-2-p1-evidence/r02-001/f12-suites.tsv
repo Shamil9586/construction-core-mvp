@@ -1,0 +1,9 @@
+file	exit	tests	pass	fail	cancelled	skipped	seconds
+tests/f12-deputy-director.test.ts	0	2	2	0	0	0	13
+tests/f12-file-01-object-boundary.test.ts	0	1	1	0	0	0	13
+tests/f12-final-corrective-postgres-concurrency.test.ts	0	8	8	0	0	0	17
+tests/f12-final-r06-auth-safe-idempotency.test.ts	0	1	1	0	0	0	13
+tests/f12-qty-06-retry-safety.test.ts	0	1	1	0	0	0	13
+tests/f12-sdo-03-retry-safety.test.ts	0	1	1	0	0	0	13
+tests/f12.1-customer-sc-zero-accept.test.ts	0	1	1	0	0	0	5
+tests/f12.1-fact-freeze-customer-sc.test.ts	0	1	1	0	0	0	4

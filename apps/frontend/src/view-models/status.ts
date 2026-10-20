@@ -94,9 +94,11 @@ export const NO_SCHEDULE_STATUS: StatusPresentation = { variant: 'Neutral', labe
  * work reads «Не начато» whatever `actualQuantity` happens to hold, and only a REPORTED positive fact is «В работе». «Выполнено» is a reported
  * fact that reaches the planned quantity (the schedule's own rule: fact ≥ plan > 0). Independent of СК, ПТО, ИД, СДО and financial closing.
  */
-export type WorkExecutionState = 'NOT_STARTED' | 'IN_PROGRESS' | 'COMPLETED';
+export type WorkExecutionState = 'NOT_STARTED' | 'IN_PROGRESS' | 'COMPLETED' | 'UNKNOWN';
 
 export function workExecutionState(work: Pick<Work, 'lastReportedAt' | 'actualQuantity' | 'plannedQuantity'>): WorkExecutionState {
+  // The resolver could not state the quantity (`actualQuantity === null`): neither «Не начато» nor a figure — an unknown is not a zero.
+  if (work.actualQuantity === null) return 'UNKNOWN';
   if (work.lastReportedAt === null) return 'NOT_STARTED';
   const fact = new Decimal(work.actualQuantity);
   const plan = new Decimal(work.plannedQuantity);
@@ -111,6 +113,8 @@ export function workExecutionPresentation(work: Pick<Work, 'lastReportedAt' | 'a
       return { variant: 'OnTrack', label: 'Выполнено' };
     case 'IN_PROGRESS':
       return { variant: 'Neutral', label: 'В работе' };
+    case 'UNKNOWN':
+      return { variant: 'Neutral', label: 'Факт не определён' };
     default:
       return { variant: 'Neutral', label: 'Не начато' };
   }

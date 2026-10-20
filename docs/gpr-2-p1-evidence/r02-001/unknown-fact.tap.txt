@@ -1,0 +1,76 @@
+TAP version 13
+# Subtest: R02-001 \#1 UNKNOWN_TIE reaches the read model as actualQuantity = null, with the reason beside it
+ok 1 - R02-001 \#1 UNKNOWN_TIE reaches the read model as actualQuantity = null, with the reason beside it
+  ---
+  duration_ms: 4539.07978
+  type: 'test'
+  ...
+# Subtest: R02-001 \#2 progress: an unknown fact is not 0 % — it is not stated
+ok 2 - R02-001 \#2 progress: an unknown fact is not 0 % — it is not stated
+  ---
+  duration_ms: 74.638077
+  type: 'test'
+  ...
+# Subtest: R02-001 \#3 schedule: an unknown fact on an overdue Work is GRAY, never RED, and invents no delay — the plan itself is still stated
+ok 3 - R02-001 \#3 schedule: an unknown fact on an overdue Work is GRAY, never RED, and invents no delay — the plan itself is still stated
+  ---
+  duration_ms: 124.666473
+  type: 'test'
+  ...
+# Subtest: R02-001 \#4 potential closing: an unknown fact is null, not a fictitious "0.00"; what was closed is still known
+ok 4 - R02-001 \#4 potential closing: an unknown fact is null, not a fictitious "0.00"; what was closed is still known
+  ---
+  duration_ms: 58.249329
+  type: 'test'
+  ...
+# Subtest: R02-001 \#5 dependency: an unknown predecessor blocks the successor, says WHY, and does not claim "not finished"
+ok 5 - R02-001 \#5 dependency: an unknown predecessor blocks the successor, says WHY, and does not claim "not finished"
+  ---
+  duration_ms: 105.69619
+  type: 'test'
+  ...
+# Subtest: R02-001 \#6 object and dashboard aggregates say they are incomplete instead of looking certain
+ok 6 - R02-001 \#6 object and dashboard aggregates say they are incomplete instead of looking certain
+  ---
+  duration_ms: 87.283328
+  type: 'test'
+  ...
+# Subtest: R02-001 \#7 a CONFIRMED zero stays "0.0000" and a real, calculated zero
+ok 7 - R02-001 \#7 a CONFIRMED zero stays "0.0000" and a real, calculated zero
+  ---
+  duration_ms: 51.103354
+  type: 'test'
+  ...
+# Subtest: R02-001 \#7b a Work nobody has reported on keeps its pre-R02 reading (GRAY, 0.0000) and is told apart from the unknown by its state
+ok 8 - R02-001 \#7b a Work nobody has reported on keeps its pre-R02 reading (GRAY, 0.0000) and is told apart from the unknown by its state
+  ---
+  duration_ms: 128.284799
+  type: 'test'
+  ...
+# Subtest: R02-001 \#8 ordinary KNOWN facts are unchanged (legacy figure, numbers, funnel)
+ok 9 - R02-001 \#8 ordinary KNOWN facts are unchanged (legacy figure, numbers, funnel)
+  ---
+  duration_ms: 125.910125
+  type: 'test'
+  ...
+# Subtest: R02-001 \#9 the fix is in the read model only: the resolver, F12.1 customer-SC grouping and the write-side guard are untouched
+ok 10 - R02-001 \#9 the fix is in the read model only: the resolver, F12.1 customer-SC grouping and the write-side guard are untouched
+  ---
+  duration_ms: 1.513118
+  type: 'test'
+  ...
+# Subtest: R02-001 \#10 the frontend reads null as "not determined", never as a quantity: status, dash formatting, no Decimal(null)
+ok 11 - R02-001 \#10 the frontend reads null as "not determined", never as a quantity: status, dash formatting, no Decimal(null)
+  ---
+  duration_ms: 25.533089
+  type: 'test'
+  ...
+1..11
+# tests 11
+# suites 0
+# pass 11
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 14662.004267

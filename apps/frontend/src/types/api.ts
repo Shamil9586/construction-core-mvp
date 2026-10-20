@@ -209,25 +209,35 @@ export interface ObjectSummary extends Versioned {
   responsible: string;
   contractorIds: Uuid[];
   contractors: string[];
+  /** `null` when at least one of the object's works has an unknown fact (`unknownFactWorks > 0`): an average over incomplete data is not stated. */
   actualProgress: number | null;
+  /** The weighted progress over the works whose fact is known; equals `actualProgress` when none is unknown. */
+  actualProgressKnownPart?: number | null;
   plannedProgress: number | null;
+  /** How many works of the object have a fact the resolver cannot state (UNKNOWN_TIE, HISTORY_UNAVAILABLE, NOT_YET_KNOWN). */
+  unknownFactWorks?: number;
   contractValue?: Numeric;
   closed?: Numeric;
-  potential?: Numeric;
+  /** `null` when `unknownFactWorks > 0`. */
+  potential?: Numeric | null;
+  /** The potential of the works whose fact is known; stripped for `CONTRACTOR_VIEWER` like `potential`. */
+  potentialKnownPart?: Numeric;
 }
 
 /** The closing funnel for one work, from `PotentialClosingService`. */
 export interface WorkFinancial {
-  physical: Numeric;
+  /** `null` (with `potential` and `buckets`) when the work's fact is unknown: no physical value is stated. `closed` is always known. */
+  physical: Numeric | null;
   closed: Numeric;
-  potential: Numeric;
+  potential: Numeric | null;
   buckets: {
     notAccepted: Numeric;
     pto: Numeric;
     ready: Numeric;
     sdo: Numeric;
     calculated: Numeric;
-  };
+  } | null;
+  factUnknown?: boolean;
 }
 
 /**
@@ -248,7 +258,15 @@ export interface Work extends Versioned {
   name: string;
   unit: string;
   plannedQuantity: Numeric;
-  actualQuantity: Numeric;
+  /**
+   * `null` = the fact resolver cannot state the quantity (`factState` UNKNOWN_TIE, HISTORY_UNAVAILABLE, NOT_YET_KNOWN). It is NOT a zero: a confirmed
+   * zero is `"0.0000"`, and nothing reported is `factState` NONE_REPORTED.
+   */
+  actualQuantity: Numeric | null;
+  factState?: string;
+  factUnknown?: boolean;
+  factSourceMode?: string;
+  factSourceModeProvenance?: string;
   plannedStartDate: CivilDate;
   plannedFinishDate: CivilDate;
   actualStartDate: CivilDate | null;
@@ -832,7 +850,7 @@ export interface AttentionSignal {
   reason: string;
   severity: Known<'RED' | 'YELLOW' | 'GRAY'>;
   daysOverdue: number;
-  moneyImpact: Numeric;
+  moneyImpact: Numeric | null;
   responsible: string;
   recommendedAction: string;
 }
@@ -852,10 +870,22 @@ export interface DashboardProjection {
   sdoBacklog: number;
   plannedClosing: Numeric;
   closedThisMonth: Numeric;
-  potentialClosing: Numeric;
+  /** `null` when `unknownFactWorks > 0`: a total over incomplete facts is not stated. */
+  potentialClosing: Numeric | null;
+  potentialClosingKnownPart?: Numeric;
+  /** Works whose fact the resolver cannot state. */
+  unknownFactWorks?: number;
   forecastClosing: Numeric;
   readyToClose: Numeric;
+  /** Every value is `null` when `unknownFactWorks > 0`. */
   buckets: {
+    notAccepted: Numeric | null;
+    pto: Numeric | null;
+    ready: Numeric | null;
+    sdo: Numeric | null;
+    calculated: Numeric | null;
+  };
+  bucketsKnownPart?: {
     notAccepted: Numeric;
     pto: Numeric;
     ready: Numeric;
