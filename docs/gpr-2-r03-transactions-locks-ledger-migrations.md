@@ -86,3 +86,39 @@ One transaction-scoped PostgreSQL advisory lock per `(tenant, object)`, in two m
 | all three EXCLUSIVE writers (through `createWork`, `dependency`, GPR-1 `approveDraft`) and a SHARED writer wait together behind an open scope-changing section; nothing applied while it was open | exclusive writers |
 | 18 facts on 6 portions + 3 exclusive sections at random moments: no deadlock, no lost write, no timeout | stress |
 | existing package-first / F12 ordering unchanged | the unmodified native suites `f8.3-postgres-concurrency`, `f12-final-corrective-postgres-concurrency` and the rest, run per file on the isolated cluster (P1-B package) |
+
+---
+
+## R03c — the command ledger
+
+`apps/backend/src/command-ledger.ts` over migration `027_gpr2_command_ledger.sql` (class: additive, one new table, nothing existing altered). One mechanism for every new command — **not a cache per command**; the older `idempotent_commands` ledger (014) keeps serving the five F12 commands exactly as it does.
+
+A row says: *this actor, in this tenant, issued this command kind against this object-or-aggregate under this Idempotency-Key, with this input fingerprint, and this is the result.* `UNIQUE(tenant, actor, command_kind, scope, key)` — knowing a key opens nothing: another actor's identical key is another row, the same key on another aggregate or command is another row. The row id **is** the `commandId` the client receives.
+
+### The order, fixed in code and proved from a trace (`runLedgered`)
+
+1. **`authorize()`** — always, with the caller's rights *now*, before any look-up (§12.4). In the HTTP path the R01 pipeline has already done authenticate → permission → scope → ownership → envelope before the `replay` hook is reached; `authorize` repeats the check inside the transaction.
+2. **claim** — `INSERT … ON CONFLICT DO NOTHING` on the unique scope. A concurrent twin **waits inside PostgreSQL** on the first transaction's uncommitted row; if that commits it sees the conflict, if that rolls back it proceeds.
+3. **compare** — stored fingerprint vs this call's: different → `409 IDEMPOTENCY_PAYLOAD_MISMATCH`, nothing executed. The fingerprint is R01's canonical one (key order and whitespace cannot change it; payload, expected versions and source versions always do).
+4. **replay or run** — same fingerprint on a completed row → the stored result, no second effect; otherwise `execute(commandId)`.
+5. **complete** — the result (validated against R01's `commandResultSchema`) is written onto the claimed row **in the same transaction** as the business mutation.
+
+Schema defends it: a deferred constraint trigger refuses to `COMMIT` a claimed row that never received its result; a completed row is immutable; a row cannot be deleted; only the result may be written onto a claim; `result` and `completed_at` come together; fingerprint is 64 hex, command kind a dotted id.
+
+`ledgerReplayHook(pool)` is the pipeline's `replay` hook (R01 step 6): a read-only look-up, reached only by a caller who has already passed every earlier step; the claim in step 2 remains the authority for a race the look-up cannot see. `ledgerScopeId` = the aggregate named by the path, else the object, else the tenant.
+
+| Claim | Test |
+|---|---|
+| first call runs once; **lost-response retry** returns the same result/ids and does not execute (trace: only the replay hook ran) | `gpr2-r03c-command-ledger` |
+| same key + other payload → 409 before execute; canonical fingerprint | `gpr2-r03c-command-ledger` |
+| **A19** changed role, ADMIN, another РП holding the key → 403/404 and the replay hook is *never called*; owner still served | `gpr2-r03c-command-ledger` |
+| key scoped by tenant/actor/kind/aggregate | `gpr2-r03c-command-ledger` |
+| **A30** aborted mutation leaves no ledger row and no effect; later retry is a clean first execution | `gpr2-r03c-command-ledger` |
+| `authorize` first and alone on refusal; malformed result rolled back; no key ⇒ no row; in-transaction twin = authorize→claim→compare→replay | `gpr2-r03c-command-ledger` |
+| table triggers / checks | `gpr2-r03c-command-ledger` |
+| **native**: two connections, one key — the second observed *blocked in the INSERT* until the first finishes, then replays (one effect, one command id) | `gpr2-r03c-ledger-pg` |
+| **native**: the first aborts while the second waits — claim vanishes, second runs as a first execution | `gpr2-r03c-ledger-pg` |
+| **native**: same key, different payload, concurrently → loser gets the mismatch, nothing else executes | `gpr2-r03c-ledger-pg` |
+| **native**: different keys never queue; 8 concurrent retries → 1 execution, 7 replays, 1 command id | `gpr2-r03c-ledger-pg` |
+
+**Not done here:** no real command uses the ledger yet — the R01 `/v2` handlers are still `501` (their stages R04–R17 call `runLedgered`). Retention/archival of ledger rows is a release-plan question (R22).
