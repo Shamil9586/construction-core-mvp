@@ -52,7 +52,8 @@ test('A migration chain is exactly 1-25 on native PostgreSQL; rerun is a no-op',
   const c = await client();
   try {
     const v = (await c.query('SELECT version FROM schema_migrations ORDER BY version')).rows.map((r) => r.version);
-    assert.deepEqual(v, Array.from({ length: 25 }, (_, i) => i + 1));
+    assert.deepEqual(v.slice(0, 25), Array.from({ length: 25 }, (_, i) => i + 1)); // GPR-2 R02: 1-25 intact; later stages append, gap-free
+    assert.deepEqual(v, Array.from({ length: v.length }, (_, i) => i + 1));
     const before = (await c.query('SELECT version, applied_at FROM schema_migrations ORDER BY version')).rows;
     await (await import('../scripts/migrate')).migrate();
     assert.deepEqual((await c.query('SELECT version, applied_at FROM schema_migrations ORDER BY version')).rows, before);

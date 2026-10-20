@@ -4,6 +4,7 @@ import { Injectable } from '@nestjs/common';
 import { buildPackageScope } from '../../../packages/domain/package-scope';
 import Decimal from 'decimal.js';
 import { pool, rows, one } from './db';
+import { loadPortionFigures, loadWorkFacts } from './fact-resolver';
 import { Actor, requirePermission, objectAccess, effectivePtoAssignedWork } from './security';
 import { Permission as P, ProgressCalculationService, ScheduleStatusService, PotentialClosingService, ObjectHealthService, PortionCompletionService, defaultRisk, resolveInternalScAccepted, resolveActualQuantity, canAccessDocumentation, resolveDocumentationAttention, resolvePackageSdoReadiness, isCustomerAcceptanceSnapshotCurrent, resolveCustomerScLatestGroup } from '../../../packages/domain';
 @Injectable()
@@ -83,8 +84,13 @@ export class ReadService {
         // A dedicated query, scoped to CUSTOMER_SC alone: RP_FACT/INTERNAL_SC
         // keep the plain single-latest-wins reading above (portionConfirmations
         // + latestConfirmation() below), unaffected by R01.
-        const customerScLatestGroupRows = portions.length ? await rows(pool, "SELECT c.portion_id,c.quantity FROM portion_quantity_confirmations c JOIN (SELECT portion_id,MAX(recorded_at) AS max_at FROM portion_quantity_confirmations WHERE tenant_id=$1 AND portion_id=ANY($2::uuid[]) AND source='CUSTOMER_SC' GROUP BY portion_id) m ON m.portion_id=c.portion_id AND m.max_at=c.recorded_at WHERE c.tenant_id=$1 AND c.source='CUSTOMER_SC'", [t, portions.map(p => p.id)]) : [];
-        const customerScResolutionByPortion = new Map<string, ReturnType<typeof resolveCustomerScLatestGroup>>(portions.map(p => [p.id, resolveCustomerScLatestGroup(customerScLatestGroupRows.filter(r => r.portionId === p.id).map(r => r.quantity))]));
+        // GPR-2 R02: the latest RP_FACT, INTERNAL_SC and the whole CUSTOMER_SC timestamp group of every portion come from the ONE fact resolver
+        // (apps/backend/src/fact-resolver.ts), the same loader the guards and the other readers use — the group is still selected inside
+        // PostgreSQL on the native timestamptz and resolved by resolveCustomerScLatestGroup() exactly as before (F12.1), and an exact tie of RP/INTERNAL
+        // rows is ordered by the confirmation sequence or reported as unknown instead of being decided by array order.
+        const portionFigures = await loadPortionFigures(pool, t, portions.map(p => p.id));
+        const customerScResolutionByPortion = new Map<string, { ready: boolean; quantity: string | null }>(portions.map(p => [p.id, portionFigures.get(p.id)!.customer]));
+        const workFacts = await loadWorkFacts(pool, t, works.map(w => w.id));
         // F8.2 PTO / Executive Documentation Foundation. Scoped by work id, the
         // same as execution units above — a Documentation Package hangs off a
         // work, never directly off an object. Fetched unconditionally;
@@ -172,7 +178,7 @@ export class ReadService {
         // — CUSTOMER_SC reads its own latest-timestamp-GROUP resolution
         // (customerScResolutionByPortion) above instead; a single "last row"
         // is never a valid reading for CUSTOMER_SC (F12.1-R01).
-        const latestConfirmation = (portionId: string, source: string) => { const own = portionConfirmations.filter(c => c.portionId === portionId && c.source === source); return own.length ? own[own.length - 1] : undefined; };
+        const latestConfirmation = (portionId: string, source: 'RP_FACT' | 'INTERNAL_SC') => { const f = portionFigures.get(portionId); const quantity = source === 'RP_FACT' ? f?.rpFact : f?.internalSc; return quantity === null || quantity === undefined ? undefined : { quantity }; };
         const sdoPackageReadiness = documentationPackages.map(p => {
             const coveredPortionIds = documentationPackagePortions.filter(link => link.documentationPackageId === p.id).map(link => link.quantityPortionId);
             // F12-QTY-02 (locked F12-D01), F12.1-R01 corrective: satisfied only
@@ -288,13 +294,19 @@ export class ReadService {
         // `factReported` stays a true statement instead of freezing at "never
         // reported" the moment a work adopts the unit/portion model. A work with
         // no execution units is unaffected — both read exactly its own row.
-        const productionFactByWork = new Map<string, { actualQuantity: string; lastReportedAt: string | null }>(works.map(w => {
+        const productionFactByWork = new Map<string, { actualQuantity: string; lastReportedAt: string | null; factState: string; factSourceMode: string; factSourceModeProvenance: string }>(works.map(w => {
             const units = executionUnitsWithTotals.filter(u => u.objectWorkId === w.id);
-            if (!units.length)
-                return [w.id, { actualQuantity: w.actualQuantity, lastReportedAt: w.lastReportedAt }];
+            // GPR-2 R02b: the Work's actual quantity is read from its PERSISTED fact source (LEGACY_WORK | PORTION) by the one resolver. Creating an
+            // execution unit no longer takes the legacy figure away (300 stays 300); a figure the resolver cannot state (an unorderable tie) is shown as
+            // 0 here with `factState` saying so — never as a guess.
+            const fact = workFacts.get(w.id)!;
+            const actualQuantity = fact.quantity ?? '0.0000';
+            const factInfo = { factState: fact.state, factSourceMode: fact.mode, factSourceModeProvenance: fact.modeProvenance };
+            if (!units.length || fact.mode === 'LEGACY_WORK')
+                return [w.id, { actualQuantity, lastReportedAt: w.lastReportedAt, ...factInfo }];
             const ownPortionIds = new Set(portionsWithStatus.filter(p => units.some(u => u.id === p.executionUnitId)).map(p => p.id));
             const factTimestamps = portionConfirmations.filter(c => c.source === 'RP_FACT' && ownPortionIds.has(c.portionId)).map(c => c.recordedAt).sort();
-            return [w.id, { actualQuantity: resolveActualQuantity(w.actualQuantity, w.unit, units.map(u => ({ unit: u.unit, actualQuantity: u.actualQuantity }))), lastReportedAt: factTimestamps.length ? factTimestamps[factTimestamps.length - 1] : null }];
+            return [w.id, { actualQuantity, lastReportedAt: factTimestamps.length ? factTimestamps[factTimestamps.length - 1] : null, ...factInfo }];
         }));
         const workScStatus = new Map<string, { internalScComplete: boolean; customerScAccepted: boolean | null }>(works.map(w => {
             const units = executionUnitsWithTotals.filter(u => u.objectWorkId === w.id);
@@ -308,7 +320,7 @@ export class ReadService {
             reasons.push(`${before.name}: не завершена`); if (d.requiresAcceptance && !workScStatus.get(d.predecessorWorkId)?.internalScComplete)
             reasons.push('Нет допуска строительного контроля'); if (issues.some(i => i.objectWorkId === d.predecessorWorkId && i.severity === 'CRITICAL' && i.status !== 'CLOSED'))
             reasons.push('Критическое замечание'); if (d.requiresDocument && !documents.some(x => x.objectWorkId === d.predecessorWorkId && x.status === 'APPROVED'))
-            reasons.push('Не подтверждён обязательный документ'); return reasons; }); return { ...w, ...status, actualQuantity, lastReportedAt, accepted, customerScAccepted, docsReady, closed, financial, blockers, stale: !lastReportedAt || age(lastReportedAt) > Number(risk.staleDays) }; });
+            reasons.push('Не подтверждён обязательный документ'); return reasons; }); return { ...w, ...status, actualQuantity, lastReportedAt, factState: productionFact.factState, factSourceMode: productionFact.factSourceMode, factSourceModeProvenance: productionFact.factSourceModeProvenance, accepted, customerScAccepted, docsReady, closed, financial, blockers, stale: !lastReportedAt || age(lastReportedAt) > Number(risk.staleDays) }; });
         const attentionRequired: any[] = [];
         for (const w of enriched) {
             const o = objects.find(x => x.id === w.objectId);

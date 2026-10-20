@@ -1,5 +1,5 @@
 import { one, rows } from './db';
-import { resolveCustomerScLatestGroup } from '../../../packages/domain';
+import { loadPortionFigures } from './fact-resolver';
 import { buildPackageScope, type PackageScopeView, type ScopePortionInput } from '../../../packages/domain/package-scope';
 
 /**
@@ -11,14 +11,12 @@ import { buildPackageScope, type PackageScopeView, type ScopePortionInput } from
 export async function scopePortionInputs(c: any, tenantId: string, portionIds: string[]): Promise<ScopePortionInput[]> {
     if (!portionIds.length) return [];
     const portions = await rows(c, 'SELECT p.id,p.label,p.planned_quantity,u.location,u.unit FROM quantity_portions p JOIN work_execution_units u ON u.tenant_id=p.tenant_id AND u.id=p.execution_unit_id WHERE p.tenant_id=$1 AND p.id=ANY($2::uuid[]) ORDER BY p.created_at,p.id', [tenantId, portionIds]);
-    const latest = async (source: string) => rows(c, 'SELECT DISTINCT ON (portion_id) portion_id,quantity FROM portion_quantity_confirmations WHERE tenant_id=$1 AND portion_id=ANY($2::uuid[]) AND source=$3 ORDER BY portion_id,recorded_at DESC', [tenantId, portionIds, source]);
-    const rp = await latest('RP_FACT'), internal = await latest('INTERNAL_SC');
-    const customerRows = await rows(c, "SELECT c.portion_id,c.quantity FROM portion_quantity_confirmations c JOIN (SELECT portion_id,MAX(recorded_at) AS max_at FROM portion_quantity_confirmations WHERE tenant_id=$1 AND portion_id=ANY($2::uuid[]) AND source='CUSTOMER_SC' GROUP BY portion_id) m ON m.portion_id=c.portion_id AND m.max_at=c.recorded_at WHERE c.tenant_id=$1 AND c.source='CUSTOMER_SC'", [tenantId, portionIds]);
+    const figures = await loadPortionFigures(c, tenantId, portionIds);
     return portions.map((p: any) => ({
         id: p.id, label: p.label, location: p.location, unit: p.unit, plannedQuantity: p.plannedQuantity,
-        rpFact: rp.find((r: any) => r.portionId === p.id)?.quantity ?? null,
-        internalSc: internal.find((r: any) => r.portionId === p.id)?.quantity ?? null,
-        customerAccepted: resolveCustomerScLatestGroup(customerRows.filter((r: any) => r.portionId === p.id).map((r: any) => r.quantity)).quantity ?? null,
+        rpFact: figures.get(p.id)?.rpFact ?? null,
+        internalSc: figures.get(p.id)?.internalSc ?? null,
+        customerAccepted: figures.get(p.id)?.customerAccepted ?? null,
     }));
 }
 

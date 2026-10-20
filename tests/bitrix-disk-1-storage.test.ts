@@ -435,7 +435,7 @@ test('non-empty requirement: zero-byte input is refused, and the database cannot
 test('migration 024: numbered, applied exactly once by the ordinary runner, idempotent and additive; no pending-SQL execution remains', async () => {
   const numbered = fs.readdirSync('infra').filter(f => /^\d+_.*\.sql$/.test(f)).sort();
   assert.ok(numbered.includes('024_bitrix_disk_file_storage.sql'));
-  assert.equal(Number(numbered.at(-1)!.split('_')[0]), 25, 'the chain ends at 025 (GPR schedule) after 024 (Bitrix Disk)');
+  assert.equal(Number(numbered[24].split('_')[0]), 25, '025 (GPR schedule) follows 024 (Bitrix Disk)'); // GPR-2 R02: was numbered.at(-1) === 25; later additive migrations are numbered after it
   assert.ok(!fs.existsSync('infra/pending'), 'infra/pending is gone');
   assert.doesNotMatch(fs.readFileSync('scripts/migrate.ts', 'utf8'), /pending/i, 'the production runner executes no pending SQL');
   const sql = fs.readFileSync('infra/024_bitrix_disk_file_storage.sql', 'utf8');
@@ -444,7 +444,7 @@ test('migration 024: numbered, applied exactly once by the ordinary runner, idem
   await migrate();
   await migrate();
   assert.equal(Number((await ctx.db.pool.query('SELECT count(*)::int n FROM schema_migrations WHERE version=24')).rows[0].n), 1, 'recorded once');
-  assert.equal(Number((await ctx.db.pool.query('SELECT max(version)::int v FROM schema_migrations')).rows[0].v), 25);
+  assert.equal(Number((await ctx.db.pool.query('SELECT max(version)::int v FROM schema_migrations')).rows[0].v), fs.readdirSync('infra').filter(f => /^\d+_.*\.sql$/.test(f)).length); // GPR-2 R02: the head is the number of numbered files (was a literal 25)
   assert.equal((await ctx.db.pool.query("SELECT 1 FROM information_schema.tables WHERE table_name='schema_pending_migrations'")).rows.length, 0, 'no pending-migration bookkeeping table');
   await ctx.db.pool.query(sql); // the SQL is idempotent: a further application is a no-op
   const cols = (await ctx.db.pool.query("SELECT column_name FROM information_schema.columns WHERE table_name='attachments'")).rows.map((r: any) => r.column_name);

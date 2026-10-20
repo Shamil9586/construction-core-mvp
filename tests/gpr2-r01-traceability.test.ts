@@ -84,8 +84,10 @@ test('protected and registered suites are byte-identical to the base commit — 
 
 test('R01 adds no migration (no number is reserved in advance) and commits no normative document', () => {
   const numbered = fs.readdirSync('infra').filter(f => /^\d+_.*\.sql$/.test(f)).sort();
-  assert.equal(numbered.length, 25);
-  assert.equal(numbered.at(-1), '025_production_schedule.sql', 'the chain still ends at 025; the next number is decided by the real branch and ledger, not here');
+  // R02 / R03 (GPR-2 P1) legitimately add migrations after 025. What this test still pins is R01's own claim: the baseline chain through 025 is the
+  // one R01 found, and whatever follows it belongs to a later stage and is numbered in sequence from the real ledger, not reserved in advance.
+  assert.equal(numbered[24], '025_production_schedule.sql', 'the baseline chain still ends at 025');
+  numbered.slice(25).forEach((f, i) => assert.equal(Number(f.split('_')[0]), 26 + i, f + ' follows the chain without a gap'));
   const offenders: string[] = [];
   const walk = (dir: string) => { for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     if (entry.name === 'node_modules' || entry.name === '.git') continue;

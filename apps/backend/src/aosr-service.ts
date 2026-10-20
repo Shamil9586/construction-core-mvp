@@ -2,6 +2,7 @@ import { Injectable, ForbiddenException, NotFoundException } from '@nestjs/commo
 import { packageSchemes, currentAosrMethod, forwardGateViolation } from './documentation-evidence';
 import Decimal from 'decimal.js';
 import { pool, one, rows, insert, transaction } from './db';
+import { loadPortionFigures } from './fact-resolver';
 import { ensurePackageNotArchived } from './documentation-archive';
 import { Actor, requirePermission, checkVersion, scoped, audit, ensure, workAccess, packageMutationAccess, claimIdempotentCommand, completeIdempotentCommand } from './security';
 import { Permission as P, isPtoRole, canAccessDocumentation, canMutateDocumentationPackageContent, resolveCustomerScLatestGroup } from '../../../packages/domain';
@@ -383,10 +384,8 @@ export class AosrService {
         const portions = await rows(c, 'SELECT p.id,p.label,u.unit FROM documentation_package_portions l JOIN quantity_portions p ON p.tenant_id=l.tenant_id AND p.id=l.quantity_portion_id JOIN work_execution_units u ON u.tenant_id=p.tenant_id AND u.id=p.execution_unit_id WHERE l.tenant_id=$1 AND l.documentation_package_id=$2 ORDER BY p.created_at', [tenantId, packageId]);
         if (!portions.length) return [];
         const ids = portions.map((p: any) => p.id);
-        const latest = async (source: string) => rows(c, 'SELECT DISTINCT ON (portion_id) portion_id,quantity FROM portion_quantity_confirmations WHERE tenant_id=$1 AND portion_id=ANY($2::uuid[]) AND source=$3 ORDER BY portion_id,recorded_at DESC', [tenantId, ids, source]);
-        const rp = await latest('RP_FACT'), internal = await latest('INTERNAL_SC');
-        const customerRows = await rows(c, "SELECT c.portion_id,c.quantity FROM portion_quantity_confirmations c JOIN (SELECT portion_id,MAX(recorded_at) AS max_at FROM portion_quantity_confirmations WHERE tenant_id=$1 AND portion_id=ANY($2::uuid[]) AND source='CUSTOMER_SC' GROUP BY portion_id) m ON m.portion_id=c.portion_id AND m.max_at=c.recorded_at WHERE c.tenant_id=$1 AND c.source='CUSTOMER_SC'", [tenantId, ids]);
-        return portions.map((p: any) => ({ portionId: p.id, label: p.label, unit: p.unit, rpFact: rp.find((r: any) => r.portionId === p.id)?.quantity ?? null, internalSc: internal.find((r: any) => r.portionId === p.id)?.quantity ?? null, customerAccepted: resolveCustomerScLatestGroup(customerRows.filter((r: any) => r.portionId === p.id).map((r: any) => r.quantity)).quantity ?? null }));
+        const figures = await loadPortionFigures(c, tenantId, ids);
+        return portions.map((p: any) => ({ portionId: p.id, label: p.label, unit: p.unit, rpFact: figures.get(p.id)?.rpFact ?? null, internalSc: figures.get(p.id)?.internalSc ?? null, customerAccepted: figures.get(p.id)?.customerAccepted ?? null }));
     }
 
     /** Current relevant accepted quantity (for the PTO UI / SDO) and, separately, the full immutable history. */
