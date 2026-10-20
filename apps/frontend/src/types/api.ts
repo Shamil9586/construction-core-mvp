@@ -455,7 +455,14 @@ export interface WorkExecutionUnit extends Versioned {
   contractorId: Uuid;
   unit: string;
   plannedQuantity: Numeric;
-  actualQuantity: Numeric;
+  /**
+   * `null` when one of the unit's portions has an unorderable RP-fact tie (`factState` UNKNOWN_TIE): the portions that ARE known are summed apart in
+   * `actualQuantityKnownPart` and are never the unit's fact. A unit nobody reported on is `"0.0000"` with `factState` NONE_REPORTED.
+   */
+  actualQuantity: Numeric | null;
+  factState?: 'KNOWN' | 'NONE_REPORTED' | 'UNKNOWN_TIE';
+  actualQuantityKnownPart?: Numeric | null;
+  unknownPortionIds?: Uuid[];
   /** F8.1-02 corrective — coverage by accepted portions; see `ScCoverageStatus`. */
   internalScStatus: ScCoverageStatus;
   customerScStatus: ScCoverageStatus;
@@ -482,6 +489,8 @@ export interface QuantityPortion extends Versioned {
   label: string;
   plannedQuantity: Numeric;
   rpFactQuantity: Numeric | null;
+  /** RESOLVED | NONE | UNKNOWN_TIE — `rpFactQuantity === null` alone cannot tell "nothing reported" from an unorderable tie. */
+  rpFactState?: 'RESOLVED' | 'NONE' | 'UNKNOWN_TIE';
   internalScAccepted: boolean;
   internalScConfirmedQuantity: Numeric | null;
   customerScAccepted: boolean;

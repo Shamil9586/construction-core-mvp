@@ -28,8 +28,13 @@ export interface ScopeFacts {
     executor: string;
     unit: string;
     plannedQuantity: string;
-    /** `null` = nothing was ever reported for this scope (a reported 0 is "0.0000"). */
+    /** `null` = nothing was ever reported for this scope (a reported 0 is "0.0000") OR the fact is unknown — `factUnknown` tells the two apart. */
     rpFactQuantity: string | null;
+    /**
+     * GPR1-UNKNOWN-01: the resolver cannot state this scope's fact (an unorderable tie among its confirmations, history unavailable). Not "nothing
+     * reported" and not a zero: the schedule makes no statement about delay, and the sum of the portions that ARE known is never offered as the fact.
+     */
+    factUnknown: boolean;
     /** Latest Internal СК confirmed quantity, summed over the scope's portions; `null` when none was ever accepted. */
     internalScAcceptedQuantity: string | null;
     /** The work has execution units: it is planned through them, so its own whole-work scope is not offered or counted as unscheduled. */
@@ -40,6 +45,9 @@ export interface ScopeFacts {
 }
 
 export const scopeKey = (objectWorkId: string, executionUnitId: string | null): string => (executionUnitId ? 'U:' + executionUnitId : 'W:' + objectWorkId);
+
+/** The resolver's own verdicts that mean "no quantity can be stated" (as against NONE_REPORTED, a stated nothing). */
+const UNKNOWN_FACT_STATES = new Set(['UNKNOWN_TIE', 'HISTORY_UNAVAILABLE', 'NOT_YET_KNOWN']);
 
 const sumOrNull = (values: (string | null)[]): string | null => {
     const present = values.filter((v): v is string => v !== null && v !== undefined);
@@ -65,10 +73,12 @@ export async function loadObjectScopes(c: any, tenantId: string, objectId: strin
     const workFacts = await loadWorkFacts(c, tenantId, workIds);
 
     const scopes = new Map<string, ScopeFacts>();
-    const unitFacts = new Map<string, { rpFact: string | null; internalSc: string | null }>();
+    const unitFacts = new Map<string, { rpFact: string | null; internalSc: string | null; factUnknown: boolean }>();
     for (const u of units) {
         const own = portions.filter((p: any) => p.executionUnitId === u.id);
-        unitFacts.set(u.id, { rpFact: sumOrNull(own.map((p: any) => p.rpFact)), internalSc: sumOrNull(own.map((p: any) => p.internalSc)) });
+        // A unit with one portion in UNKNOWN_TIE has no stated fact: the other portions' sum is a partial figure and is never passed off as the unit's.
+        const factUnknown = own.some((p: any) => figures.get(p.id)?.rp.state === 'UNKNOWN_TIE');
+        unitFacts.set(u.id, { rpFact: factUnknown ? null : sumOrNull(own.map((p: any) => p.rpFact)), internalSc: sumOrNull(own.map((p: any) => p.internalSc)), factUnknown });
     }
     for (const w of works) {
         const ownUnits = units.filter((u: any) => u.objectWorkId === w.id);
@@ -78,11 +88,13 @@ export async function loadObjectScopes(c: any, tenantId: string, objectId: strin
         // has execution units (creating one never takes 300 away); a Work on the portion source reports the portions' sum, null while nothing is reported.
         const fact = workFacts.get(w.id)!;
         const legacyFact = w.hasProgress || new Decimal(w.actualQuantity).gt(0) ? new Decimal(w.actualQuantity).toFixed(4) : null;
-        const wholeFact = fact.mode === 'LEGACY_WORK' ? legacyFact : fact.state === 'NONE_REPORTED' ? null : fact.quantity;
+        // Whatever the mode, a verdict of "cannot state" from the resolver is honoured: it is never replaced by the works.actual_quantity column.
+        const wholeUnknown = UNKNOWN_FACT_STATES.has(fact.state);
+        const wholeFact = wholeUnknown ? null : fact.mode === 'LEGACY_WORK' ? legacyFact : fact.state === 'NONE_REPORTED' ? null : fact.quantity;
         scopes.set(scopeKey(w.id, null), {
             ...base, key: scopeKey(w.id, null), executionUnitId: null, zone: null, finishType: null, conditions: null,
             contractorId: w.contractorId, executor: w.contractorName, unit: w.unit, plannedQuantity: new Decimal(w.plannedQuantity).toFixed(4),
-            rpFactQuantity: wholeFact,
+            rpFactQuantity: wholeFact, factUnknown: wholeUnknown,
             internalScAcceptedQuantity: ownUnits.length ? sumOrNull(ownUnits.filter((u: any) => u.unit === w.unit).map((u: any) => unitFacts.get(u.id)!.internalSc)) : null,
         });
         for (const u of ownUnits) {
@@ -90,7 +102,7 @@ export async function loadObjectScopes(c: any, tenantId: string, objectId: strin
             scopes.set(scopeKey(w.id, u.id), {
                 ...base, key: scopeKey(w.id, u.id), executionUnitId: u.id, zone: u.location ?? null, finishType: u.finishTypeName ?? null, conditions: u.executionConditions ?? null,
                 contractorId: u.contractorId, executor: u.contractorName, unit: u.unit, plannedQuantity: new Decimal(u.plannedQuantity).toFixed(4),
-                rpFactQuantity: facts.rpFact, internalScAcceptedQuantity: facts.internalSc,
+                rpFactQuantity: facts.rpFact, factUnknown: facts.factUnknown, internalScAcceptedQuantity: facts.internalSc,
             });
         }
     }

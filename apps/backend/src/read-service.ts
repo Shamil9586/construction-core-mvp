@@ -17,6 +17,21 @@ function unknownScheduleStatus(start: any, finish: any, today: Date, risk: any) 
     return { ...planOnly, actualProgress: null, variance: null, delayDays: 0, scheduleStatus: 'GRAY' };
 }
 /** Financial funnel of a Work whose fact is unknown: what was already closed is known; everything that needs the physical fact is null. */
+/**
+ * R02-001-R1: the actual quantity of an execution unit from its portions' RP facts, by the resolver's own state per portion
+ * (RESOLVED | NONE | UNKNOWN_TIE) — not by `quantity === null`, which is also "nothing reported".
+ *   * any portion UNKNOWN_TIE -> the unit's total is NOT stated (`actualQuantity: null`, factState UNKNOWN_TIE); the sum of the portions that ARE known is
+ *     shown apart as `actualQuantityKnownPart` and is never the unit's fact;
+ *   * otherwise the sum of the resolved portions; a unit nobody reported on keeps "0.0000" with factState NONE_REPORTED (the pre-R02 reading);
+ *   * a confirmed 0 is a RESOLVED portion: "0.0000", factState KNOWN.
+ */
+function unitRpFact(portions: { id: string; rpFactQuantity: string | null; rpFactState: 'RESOLVED' | 'NONE' | 'UNKNOWN_TIE' }[]) {
+    const knownSum = portions.reduce((sum, p) => (p.rpFactState === 'RESOLVED' ? sum.add(p.rpFactQuantity ?? 0) : sum), new Decimal(0)).toFixed(4);
+    const unknownPortionIds = portions.filter(p => p.rpFactState === 'UNKNOWN_TIE').map(p => p.id);
+    if (unknownPortionIds.length)
+        return { actualQuantity: null as string | null, factState: 'UNKNOWN_TIE', knownPart: knownSum as string | null, unknownPortionIds };
+    return { actualQuantity: knownSum as string | null, factState: portions.some(p => p.rpFactState === 'RESOLVED') ? 'KNOWN' : 'NONE_REPORTED', knownPart: null as string | null, unknownPortionIds };
+}
 function unknownFinancial(closed: string) {
     return { physical: null, closed, potential: null, buckets: null, factUnknown: true };
 }@Injectable()
@@ -294,8 +309,8 @@ export class ReadService {
         // pick — a tied group with more than one distinct value displays
         // null/unknown rather than inventing a figure (0 remains a real,
         // displayable value, distinct from unknown).
-        const portionsWithStatus = portions.map(p => ({ ...p, rpFactQuantity: latestConfirmation(p.id, 'RP_FACT')?.quantity ?? null, internalScAccepted: portionAccepted(p.id, 'INTERNAL_SC'), internalScConfirmedQuantity: latestConfirmation(p.id, 'INTERNAL_SC')?.quantity ?? null, customerScAccepted: portionAccepted(p.id, 'CUSTOMER_SC'), customerScConfirmedQuantity: customerScResolutionByPortion.get(p.id)?.quantity ?? null }));
-        const executionUnitsWithTotals = executionUnits.map(u => { const ownPortions = portionsWithStatus.filter(p => p.executionUnitId === u.id); return { ...u, actualQuantity: ownPortions.reduce((s, p) => s.add(p.rpFactQuantity ?? 0), new Decimal(0)).toFixed(4), internalScStatus: scCompletion.unitCoverage(u.plannedQuantity, ownPortions.map(p => ({ confirmedQuantity: p.internalScConfirmedQuantity }))), customerScStatus: scCompletion.unitCoverage(u.plannedQuantity, ownPortions.map(p => ({ confirmedQuantity: p.customerScConfirmedQuantity }))) }; });
+        const portionsWithStatus = portions.map(p => ({ ...p, rpFactQuantity: latestConfirmation(p.id, 'RP_FACT')?.quantity ?? null, rpFactState: (portionFigures.get(p.id)?.rp.state ?? 'NONE') as 'RESOLVED' | 'NONE' | 'UNKNOWN_TIE', internalScAccepted: portionAccepted(p.id, 'INTERNAL_SC'), internalScConfirmedQuantity: latestConfirmation(p.id, 'INTERNAL_SC')?.quantity ?? null, customerScAccepted: portionAccepted(p.id, 'CUSTOMER_SC'), customerScConfirmedQuantity: customerScResolutionByPortion.get(p.id)?.quantity ?? null }));
+        const executionUnitsWithTotals = executionUnits.map(u => { const ownPortions = portionsWithStatus.filter(p => p.executionUnitId === u.id); const unit = unitRpFact(ownPortions); return { ...u, actualQuantity: unit.actualQuantity, factState: unit.factState, actualQuantityKnownPart: unit.knownPart, unknownPortionIds: unit.unknownPortionIds, internalScStatus: scCompletion.unitCoverage(u.plannedQuantity, ownPortions.map(p => ({ confirmedQuantity: p.internalScConfirmedQuantity }))), customerScStatus: scCompletion.unitCoverage(u.plannedQuantity, ownPortions.map(p => ({ confirmedQuantity: p.customerScConfirmedQuantity }))) }; });
         // F8.1-04 corrective (Independent Review, not accepted first pass): a
         // work with any execution unit treats them as its sole production fact
         // source — resolveActualQuantity() (packages/domain), the same function

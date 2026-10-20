@@ -101,7 +101,7 @@ Independent acceptance found that `ReadService.snapshot()` replaced the resolver
 
 When no Work of the object / portfolio is unknown the aggregates are exactly what they were. A Work nobody has reported on keeps its previous reading (`"0.0000"`, GRAY); a confirmed zero is a real zero (RED when overdue, `potential "0.00"`). Frontend: `Work.actualQuantity` is `string | null`; `workExecutionState` has a fourth value `UNKNOWN` («Факт не определён») instead of constructing a `Decimal` from `null`; the existing formatters already print `—` for `null`.
 
-**Not changed (limitation, needs a decision):** the GPR-1 schedule module (`packages/domain/schedule.ts`, `schedule-scope.ts`) has no «unknown» state — four management states only. A scope whose fact is unknown there is still read as «nothing reported» (for a PORTION Work) or from the legacy column (for a LEGACY_WORK Work with a tie), exactly as before R02-001; giving it a fifth state changes the GPR-1 contract, its frontend validation and the object conclusion, which is outside this corrective.
+**Follow-up:** the execution-unit snapshot and the GPR-1 schedule had the same defect and are corrected in R02-001-R1 / GPR1-UNKNOWN-01 below.
    New additive fields on every Work: `factState`, `factSourceMode`, `factSourceModeProvenance`.
 4. **Ties.** An exact tie needs identical `recorded_at`, i.e. rows of one transaction (or legacy data). `confirmation_seq` orders rows of one transaction by statement order.
 5. **Existing tests changed — six, all because they pinned the END of the migration chain** (any additive migration invalidates that, C17 numbers migrations from the real ledger): `gpr2-r01-traceability` (exactly 25 files → the baseline chain through 025 intact, later files gap-free); `gpr-1-schedule-postgres` A1 (`files.at(-1) === 025` → 025 directly follows 024; its pinned hash in `tests/helpers/gpr2-decision-index.ts` is updated deliberately, citing C17); `org1-company-structure-postgres` (`slice(17)` → `slice(17, 25)`); `pbx5a-bitrix-notifications-postgres` (exactly 1–25 → 1–25 intact and gap-free); `role-cleanup-migration-postgres` and `bitrix-disk-1-storage` (literal head `25` → number of numbered files). No business assertion was weakened; the first R02 candidate failed these five and the failing run is kept as evidence.
@@ -127,3 +127,25 @@ environment at baseline and after R02; that is an observation, not a fix).
 
 Run (pure + PGlite): `node --import tsx --test tests/gpr2-r02-fact-resolver.test.ts tests/gpr2-r02-consumers.test.ts tests/gpr2-r02-single-resolver.test.ts`.
 Native: `GPR2_ISOLATED_PG_URL=postgresql://…@127.0.0.1:<port>/postgres node --import tsx --test tests/gpr2-r02-fact-resolver-pg.test.ts` (refuses any server whose `cluster_name` is not `gpr2-p1-isolated`).
+
+## R02-001-R1 / GPR1-UNKNOWN-01 — unknown facts in execution units and in GPR-1 (corrective)
+
+**Three things, kept apart.** The resolver already distinguishes them per portion (`RESOLVED` / `NONE` / `UNKNOWN_TIE`); `quantity === null` alone cannot (it is also «nothing reported»), so nothing below is decided from it.
+
+| | portion | execution unit (`executionUnits[]`) | GPR-1 entry |
+|---|---|---|---|
+| **Confirmed zero** | `RESOLVED`, `"0.0000"` | `actualQuantity "0.0000"`, `factState KNOWN` | `factReliability REPORTED`, a state is computed (a real delay once overdue) |
+| **Nothing reported** | `NONE`, quantity `null` | `"0.0000"`, `factState NONE_REPORTED` (the pre-R02 reading) | `factReliability NOT_REPORTED`, as before (delayed once the dates have passed, `NOT_STARTED` before) |
+| **Unknown** | `UNKNOWN_TIE`, quantity `null` | `actualQuantity null`, `factState UNKNOWN_TIE`, `unknownPortionIds`, and the sum of the portions that ARE known apart as `actualQuantityKnownPart` (never the unit's fact) | `factReliability UNKNOWN`, `assessable false`, `state null`, `delayDays 0`, `delayKind null`, `actualProgress null`, `rpFactQuantity null` |
+
+**Execution-unit snapshot** (`read-service.ts`): one `UNKNOWN_TIE` portion makes the unit total unknown; known portions are no longer summed into a «total» (400 + unknown no longer reads `"400.0000"`).
+
+**GPR-1** (`schedule-scope.ts`, `packages/domain/schedule.ts`, `schedule-service.ts`): the scope carries `factUnknown` (a unit with any `UNKNOWN_TIE` portion; a Work whose resolver verdict is `UNKNOWN_TIE` / `HISTORY_UNAVAILABLE` / `NOT_YET_KNOWN`, in any source mode). `deriveScheduleEntryStatus` then states only the calendar (`plannedProgress`, `expectedPhase`) — no state, no delay, no progress. The four production states are unchanged; the unknown is a separate, mandatory pair of fields (`factReliability`, `assessable`) and the state is `null`, because none of the four is true of it.
+* Work summary: a proved delay wins (`DELAYED`, `assessable false` if another entry is unknown); otherwise any unknown entry makes the state `null` with `assessable false` — a scheduled Work, not «not scheduled».
+* Object conclusion: a new `UNDETERMINED` status (no proved delay, ≥1 unassessed entry) and `unassessedCount`; `ON_TRACK` is only claimed when every entry is assessable. A proved delay elsewhere still reads `DELAYED`.
+* Delay reasons: recording one against an unassessable entry is refused on the server (`UNKNOWN_FACT_DELAY_MESSAGE`). Existing reasons are not touched; approved revisions are not touched.
+* Frontend: the response guards accept `state: null` / `UNDETERMINED`; the rows say «Факт не определён», offer no delay-reason form and are not counted as delays; O01 / W01 never print «По графику» or «Отставаний нет» for incomplete data; `validateSnapshot` accepts a `null` unit `actualQuantity`.
+
+**LEGACY_WORK (T13).** The resolver reads the legacy figure from `works.actual_quantity` in a current-state read and returns `UNKNOWN_TIE` / `HISTORY_UNAVAILABLE` for the legacy source only «as known at» an earlier instant. GPR-1 never asks that question, so `LEGACY_WORK` + `UNKNOWN_TIE` is **not reachable in GPR-1 today** (proved in `tests/gpr2-r02-r1-unknown-gpr1.test.ts` T13 with tied `work_progress` rows). The unknown verdict is nevertheless honoured before the mode is consulted, so the legacy branch cannot bypass the resolver if a future reader adds a known-at query.
+
+**Remaining limits.** An `UNKNOWN_TIE` of an *Internal СК* confirmation is not a schedule input and is unchanged. The execution-unit `actualQuantityKnownPart` is a labelled partial figure for display only. Older API clients that validate `state` as one of four strings will reject an entry with an unknown fact — the frontend shipped here is updated; the field is not hidden to protect an old client.

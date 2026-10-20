@@ -308,7 +308,8 @@ function buildW01ExecutionUnitViewModel(
     id: unit.id,
     location: unit.location,
     plan: formatMeasure(unit.plannedQuantity, unit.unit, 'плановый объём единицы'),
-    actual: formatMeasure(unit.actualQuantity, unit.unit, 'факт по участкам'),
+    // null = one of the unit's portions has an unorderable fact tie: say so; never a dash that reads as "nothing reported" and never a partial sum
+    actual: unit.actualQuantity === null ? { value: 'Не определён', meta: `${unit.unit} · факт по участкам: есть неоднозначное подтверждение` } : formatMeasure(unit.actualQuantity, unit.unit, 'факт по участкам'),
     remainingForNewPortion: formatQuantityWithUnit(remaining.toFixed(4), unit.unit),
     portions: ownPortions.map((portion) => buildW01PortionViewModel(portion, unit.unit, inspections)),
   };

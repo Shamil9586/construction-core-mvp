@@ -1,0 +1,358 @@
+TAP version 13
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[NestFactory] [39m[32mStarting Nest application...[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mAppModule dependencies initialized[39m[38;5;3m +49ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mCoreModule dependencies initialized[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mHealthModule dependencies initialized[39m[38;5;3m +3ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mAuthModule dependencies initialized[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mBitrixModule dependencies initialized[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mAttachmentsModule dependencies initialized[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mDictionariesModule dependencies initialized[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mUsersModule dependencies initialized[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mAuditModule dependencies initialized[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mNotificationsModule dependencies initialized[39m[38;5;3m +1ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mImportsModule dependencies initialized[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mFunctionTeamsModule dependencies initialized[39m[38;5;3m +1ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mOrgStructureModule dependencies initialized[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mProductionScheduleModule dependencies initialized[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mDashboardModule dependencies initialized[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mObjectsModule dependencies initialized[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mWorksModule dependencies initialized[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mInspectionsModule dependencies initialized[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mExecutionUnitsModule dependencies initialized[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mDocumentationModule dependencies initialized[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mPtoModule dependencies initialized[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mSdoModule dependencies initialized[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mSdoClosingModule dependencies initialized[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mFinancialModule dependencies initialized[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mContractorsModule dependencies initialized[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mMaterialsModule dependencies initialized[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mHealthController {/}:[39m[38;5;3m +61ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/health, GET} route[39m[38;5;3m +3ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/ready, GET} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mAuthController {/}:[39m[38;5;3m +1ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/auth/mock, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/auth/bitrix, POST} route[39m[38;5;3m +1ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/auth/bitrix/install, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/auth/bitrix/launch, POST} route[39m[38;5;3m +1ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/auth/logout, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/me, GET} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mBitrixController {/}:[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/bitrix/onappinstall, POST} route[39m[38;5;3m +1ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/bitrix/directory/users, GET} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/bitrix/directory/departments, GET} route[39m[38;5;3m +1ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/bitrix/directory/org-structure, GET} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mDashboardController {/}:[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/snapshot, GET} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/dashboard/executive, GET} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mObjectsController {/}:[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/objects, GET} route[39m[38;5;3m +1ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/object-create-options, GET} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/objects/:id, GET} route[39m[38;5;3m +1ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/objects, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/objects/:id/works, GET} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/objects/:id/contractors, GET} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/objects/:id/contractors, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/objects/:id/edit, POST} route[39m[38;5;3m +1ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mWorksController {/}:[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/works, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/works/:id, GET} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/works/:id/transition, GET} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/work-dependencies, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/works/:id/progress, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/works/:id/progress, GET} route[39m[38;5;3m +1ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/works/:id/start, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/works/:id/inspection-request, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mInspectionsController {/}:[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/inspections, GET} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/inspections/:id/issues, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/issues/:id/resolve, POST} route[39m[38;5;3m +1ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/issues/:id/verify, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/inspections/:id/accept, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/inspections/:id/reject, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/inspections/:id/photos, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mExecutionUnitsController {/}:[39m[38;5;3m +1ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/execution-units, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/execution-units/:id/layers, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/execution-units/:id/portions, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/portions/:id/fact, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/portions/:id/inspection-request, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mDocumentationController {/}:[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/works/:id/pto-assignment, GET} route[39m[38;5;3m +1ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/works/:id/pto-assignment, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/documentation-packages, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/documentation-packages, GET} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/documentation-packages/:id/edit, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/documentation-packages/:id/portions, POST} route[39m[38;5;3m +1ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/documentation-packages/:id/documents, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/documentation-documents/:id/versions, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/documentation-packages/:id/archive, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/documentation-packages/:id/status, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/documentation-packages/:id/customer-acceptance, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/documentation-packages/:id/handoff-to-sdo, POST} route[39m[38;5;3m +1ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/documentation-packages/:id/correction, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mAosrController {/}:[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/documentation-packages/:id/aosr, GET} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/documentation-packages/:id/aosr, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/documentation-packages/:id/aosr-suggestions/dismiss, POST} route[39m[38;5;3m +1ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/documentation-packages/:id/aosr-parties, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/documentation-packages/:id/aosr-materials, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/documentation-packages/:id/aosr-materials/:materialId/quality-documents, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/documentation-packages/:id/aosr-method, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/documentation-packages/:id/executive-schemes, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/documentation-packages/:id/executive-schemes/:schemeId/file, POST} route[39m[38;5;3m +1ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/documentation-packages/:id/executive-schemes/:schemeId/file, GET} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/documentation-packages/:id/quantity, GET} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/documentation-packages/:id/customer-accepted-quantity, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/aosr/:id, GET} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/aosr/:id/edit, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/aosr/:id/delete, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/aosr/:id/links, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/aosr/:id/generate, POST} route[39m[38;5;3m +1ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/aosr/:id/docx, GET} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mDocumentationRegistryController {/}:[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/objects/:id/documentation-registry, GET} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mAttachmentsController {/}:[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/attachments, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/attachments/:id, GET} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mPtoController {/}:[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/executive-packages, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/executive-packages, GET} route[39m[38;5;3m +1ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/executive-documents, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/executive-documents/:id/approve, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/executive-packages/:id/validation, GET} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/executive-packages/:id/ready, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/executive-packages/:id/transfer-sdo, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mSdoController {/}:[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/sdo, GET} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/sdo/:id/calculate, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mSdoClosingController {/}:[39m[38;5;3m +1ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/sdo-closing-cases, GET} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/sdo-closing-cases/:id/return-to-pto, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/sdo-closing-cases/:id/responsible, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/sdo-closing-cases/:id/status, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/sdo-closing-cases/:id/amount, POST} route[39m[38;5;3m +1ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/sdo-closing-cases/:id/allocations, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/sdo-closing-cases/:id/allocations/:portionId/cancel, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mFinancialController {/}:[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/financial-closings, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mContractorsController {/}:[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/contractors, GET} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/contractors, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mDictionariesController {/}:[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/dictionaries, GET} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/dictionaries/categories, POST} route[39m[38;5;3m +1ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/dictionaries/work-types, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/settings/risk, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mUsersController {/}:[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/users, GET} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/users, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mAdminUsersController {/}:[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/admin/users, GET} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/admin/users, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/admin/users/:id, PATCH} route[39m[38;5;3m +1ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mMaterialsController {/}:[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/materials, GET} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/materials/bind, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mAuditController {/}:[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/audit, GET} route[39m[38;5;3m +1ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mNotificationsController {/}:[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/notifications, GET} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mImportsController {/}:[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/imports/preview, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/imports/:id/commit, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mFunctionTeamsController {/}:[39m[38;5;3m +1ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/function-teams/pto/overview, GET} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/function-teams/pto/my-team, GET} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/objects/:id/function-team/pto, GET} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/function-teams/pto/org-members, POST} route[39m[38;5;3m +1ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/objects/:id/function-team/pto/lead, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/objects/:id/function-team/pto/members, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/objects/:id/function-team/pto/members/:memberUserId/end, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/function-teams/pto/redistribute, POST} route[39m[38;5;3m +1ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/function-handovers, GET} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/function-handovers/:id/acknowledge, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/function-handovers/:id/admin-complete, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mOrgStructureController {/}:[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/org-structure, GET} route[39m[38;5;3m +1ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/org-structure/history, GET} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/org-structure/:fn/assign, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/org-structure/:fn/transfer, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/org-structure/:fn/end, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mScheduleController {/}:[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/objects/:objectId/schedule, GET} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/works/:workId/schedule, GET} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/objects/:objectId/schedule/draft, POST} route[39m[38;5;3m +1ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/objects/:objectId/schedule/draft/entries, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/objects/:objectId/schedule/draft/entries/:entryId/edit, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/objects/:objectId/schedule/draft/entries/:entryId/remove, POST} route[39m[38;5;3m +1ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/objects/:objectId/schedule/draft/discard, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/objects/:objectId/schedule/draft/approve, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/objects/:objectId/schedule/delay-reasons, POST} route[39m[38;5;3m +1ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/objects/:objectId/schedule/delay-reasons/:reasonId/resolve, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/schedule/delay-categories, POST} route[39m[38;5;3m +0ms[39m
+# [32m[Nest] 3018  - [39m10/20/2026, 3:39:12 PM [32m    LOG[39m [38;5;3m[NestApplication] [39m[32mNest application successfully started[39m[38;5;3m +8ms[39m
+# {"level":"info","requestId":"dd0544d0-ea89-41cc-b8d1-6a3b436e5e7d","method":"POST","path":"/auth/mock","status":201,"durationMs":17}
+# {"level":"info","requestId":"67f4b54d-3022-4b0e-aa43-821c41a46ee9","method":"GET","path":"/dictionaries","status":200,"durationMs":18}
+# {"level":"info","requestId":"c020edf2-2a5a-46b7-8c71-22a7dbfae17a","method":"GET","path":"/contractors","status":200,"durationMs":131}
+# {"level":"info","requestId":"5d04e165-5e3d-445b-bf6f-07e4b21911fd","method":"POST","path":"/auth/mock","status":201,"durationMs":8}
+# {"level":"info","requestId":"6a169b41-1833-457c-90f4-eaf58c707d9a","method":"POST","path":"/objects","status":201,"durationMs":35}
+# {"level":"info","requestId":"9321abc0-8cce-4dd9-ae58-887f8f381826","method":"POST","path":"/objects","status":201,"durationMs":18}
+# {"level":"info","requestId":"6e70b58e-ed46-4a2f-9edf-86961905b877","method":"POST","path":"/works","status":201,"durationMs":27}
+# {"level":"info","requestId":"4b653558-8364-47e7-aa12-51a82f1f8d40","method":"POST","path":"/execution-units","status":201,"durationMs":56}
+# {"level":"info","requestId":"dba8c91a-87f1-456e-b0d3-bb8fe87b2eab","method":"POST","path":"/execution-units/27cb1938-bee2-4670-9027-5b4adbbbfdfd/portions","status":201,"durationMs":26}
+# {"level":"info","requestId":"ec12c508-6260-474e-a9c4-b697dba2f784","method":"POST","path":"/execution-units","status":201,"durationMs":51}
+# {"level":"info","requestId":"dc2d3d5b-618b-4d53-ae06-4d333bdb2568","method":"POST","path":"/execution-units/b46baa10-4c7e-445e-9ada-fc267fa139e9/portions","status":201,"durationMs":18}
+# {"level":"info","requestId":"50356059-eb00-43a5-8853-ad882b22d6a9","method":"POST","path":"/works","status":201,"durationMs":16}
+# {"level":"info","requestId":"09fc3f60-9e24-4f57-ae33-28d8f956d0cd","method":"POST","path":"/execution-units","status":201,"durationMs":58}
+# {"level":"info","requestId":"80847177-2eae-4528-8f98-8c7b5e48d382","method":"POST","path":"/execution-units/21df60a4-24d5-49dc-afcb-a9cc33ab5cec/portions","status":201,"durationMs":32}
+# {"level":"info","requestId":"157499bc-3c93-4410-88b7-826b81a8b5fc","method":"POST","path":"/works","status":201,"durationMs":14}
+# {"level":"info","requestId":"ed38634d-ea93-40b5-8880-e106b0edb052","method":"POST","path":"/execution-units","status":201,"durationMs":33}
+# {"level":"info","requestId":"ff4bf139-909e-4f4c-bf16-c8d6697c1538","method":"POST","path":"/execution-units/57983a89-b86a-4b74-8b57-ecfcfdc15302/portions","status":201,"durationMs":17}
+# {"level":"info","requestId":"350fda8c-aa4e-4a55-845f-e066f8fd107a","method":"POST","path":"/execution-units/57983a89-b86a-4b74-8b57-ecfcfdc15302/portions","status":201,"durationMs":17}
+# {"level":"info","requestId":"e673407e-ea0b-4235-ad89-0d90cd917479","method":"POST","path":"/execution-units","status":201,"durationMs":31}
+# {"level":"info","requestId":"1d6916d2-c387-42a6-bbee-dc8ea1dfe647","method":"POST","path":"/execution-units/a49c8263-aa5c-4b4d-a7d2-55e3080fc975/portions","status":201,"durationMs":16}
+# {"level":"info","requestId":"8a769cf0-5219-434d-a0cb-97e6fc8b8861","method":"POST","path":"/execution-units","status":201,"durationMs":55}
+# {"level":"info","requestId":"3db10cd4-8b04-4f8a-9484-56e596edd762","method":"POST","path":"/execution-units/6e9df1cf-ea60-43cc-bce8-86e673cc9014/portions","status":201,"durationMs":15}
+# {"level":"info","requestId":"6c87fb91-c75a-4507-bf53-14363f3626f6","method":"POST","path":"/execution-units/6e9df1cf-ea60-43cc-bce8-86e673cc9014/portions","status":201,"durationMs":15}
+# {"level":"info","requestId":"96ae3286-fe4b-41b4-ad06-16ab63561df8","method":"GET","path":"/snapshot","status":200,"durationMs":62}
+# {"level":"info","requestId":"31d7a590-bd04-4c54-aabb-f85d25ebf503","method":"POST","path":"/portions/dfdba732-f02a-46e0-aca9-d169c44a89ec/fact","status":201,"durationMs":45}
+# {"level":"info","requestId":"6dcacb7d-8008-4ca4-9ffd-127096dd955a","method":"GET","path":"/snapshot","status":200,"durationMs":81}
+# {"level":"info","requestId":"fd089a60-baa8-46c2-9c8f-57db97faeb42","method":"POST","path":"/portions/ce389eaf-c8ba-49b0-bd25-0be93fe37d39/fact","status":201,"durationMs":57}
+# {"level":"info","requestId":"6d555a91-1673-48a3-bb93-fbcb78a0d792","method":"GET","path":"/snapshot","status":200,"durationMs":78}
+# {"level":"info","requestId":"0eb303af-8c99-496f-a865-e5405432a2cc","method":"POST","path":"/portions/2bdaa17f-965e-4cbd-8f88-eb30b861b501/fact","status":201,"durationMs":37}
+# {"level":"info","requestId":"764adc38-06b1-4dfd-b1ec-bf4046773968","method":"GET","path":"/snapshot","status":200,"durationMs":61}
+# {"level":"info","requestId":"cbd06704-8646-4615-abf3-b4ee3ec0d5c9","method":"POST","path":"/portions/99c55b82-72db-4312-b9d6-26baab7657cb/fact","status":201,"durationMs":42}
+# {"level":"info","requestId":"b0d11d57-84ae-4653-8fec-c151b85bf539","method":"POST","path":"/objects/f814030f-d461-4a65-8319-a4e747940806/schedule/draft","status":201,"durationMs":28}
+# {"level":"info","requestId":"dae4c02b-f3c1-4f38-830c-8595a312b29d","method":"POST","path":"/objects/f814030f-d461-4a65-8319-a4e747940806/schedule/draft/entries","status":201,"durationMs":32}
+# {"level":"info","requestId":"f9edb69e-e10a-473f-b814-35f93646eaf7","method":"POST","path":"/objects/f814030f-d461-4a65-8319-a4e747940806/schedule/draft/entries","status":201,"durationMs":24}
+# {"level":"info","requestId":"0a64fa42-79b7-484b-b41e-00bb0d7e6371","method":"POST","path":"/objects/f814030f-d461-4a65-8319-a4e747940806/schedule/draft/entries","status":201,"durationMs":26}
+# {"level":"info","requestId":"3cf3bd96-7422-4d64-980e-726461270f70","method":"POST","path":"/objects/f814030f-d461-4a65-8319-a4e747940806/schedule/draft/entries","status":201,"durationMs":22}
+# {"level":"info","requestId":"97175427-a8c1-4bc5-8b07-f56cf69a0a4c","method":"POST","path":"/objects/f814030f-d461-4a65-8319-a4e747940806/schedule/draft/entries","status":201,"durationMs":24}
+# {"level":"info","requestId":"df7ee3c6-455a-4a70-9698-24d08f2b95fe","method":"POST","path":"/auth/mock","status":201,"durationMs":6}
+# {"level":"info","requestId":"a2a7934d-bd92-4264-971c-2c025278726c","method":"GET","path":"/objects/f814030f-d461-4a65-8319-a4e747940806/schedule","status":200,"durationMs":44}
+# {"level":"info","requestId":"8c5b00a2-7293-4676-be49-858ff21f32f3","method":"POST","path":"/objects/f814030f-d461-4a65-8319-a4e747940806/schedule/draft/approve","status":201,"durationMs":22}
+# {"level":"info","requestId":"28f00711-ba10-4383-abcb-ed912003bd4f","method":"GET","path":"/snapshot","status":200,"durationMs":79}
+# {"level":"info","requestId":"c9f6fafd-add8-4d9a-a5b6-ae2d3eae2b7f","method":"GET","path":"/snapshot","status":200,"durationMs":76}
+# Subtest: T01 one unit, one UNKNOWN_TIE portion: the unit total is NOT stated — null with its reason, not 0 and not a guess
+ok 1 - T01 one unit, one UNKNOWN_TIE portion: the unit total is NOT stated — null with its reason, not 0 and not a guess
+  ---
+  duration_ms: 10611.900931
+  type: 'test'
+  ...
+# {"level":"info","requestId":"1a27aad6-baa2-4294-a4c6-fabef530760a","method":"GET","path":"/snapshot","status":200,"durationMs":90}
+# {"level":"info","requestId":"6c9200d2-1e1f-4ddd-9ffc-753ba524a245","method":"GET","path":"/objects/f814030f-d461-4a65-8319-a4e747940806/schedule","status":200,"durationMs":42}
+# Subtest: T02 a unit with KNOWN 400 and an UNKNOWN_TIE portion: the total is null — 400 is only ever the labelled partial figure
+ok 2 - T02 a unit with KNOWN 400 and an UNKNOWN_TIE portion: the total is null — 400 is only ever the labelled partial figure
+  ---
+  duration_ms: 147.842977
+  type: 'test'
+  ...
+# {"level":"info","requestId":"f4e4710b-3dcb-4a80-abae-e3f1fd4ef142","method":"GET","path":"/snapshot","status":200,"durationMs":74}
+# Subtest: T03 a CONFIRMED zero stays a real 0.0000 — a stated fact, not an unknown
+ok 3 - T03 a CONFIRMED zero stays a real 0.0000 — a stated fact, not an unknown
+  ---
+  duration_ms: 87.929563
+  type: 'test'
+  ...
+# {"level":"info","requestId":"59177545-0c1f-4c90-9640-5570b2c0b529","method":"GET","path":"/snapshot","status":200,"durationMs":72}
+# {"level":"info","requestId":"3873ab6c-1730-4d79-bfb6-c8d016153079","method":"GET","path":"/snapshot","status":200,"durationMs":72}
+# Subtest: T04 a unit nobody reported on keeps the pre-R02 reading: "0.0000", NONE_REPORTED — told apart from an unknown by its state
+ok 4 - T04 a unit nobody reported on keeps the pre-R02 reading: "0.0000", NONE_REPORTED — told apart from an unknown by its state
+  ---
+  duration_ms: 157.723053
+  type: 'test'
+  ...
+# {"level":"info","requestId":"dab44dd2-cadc-4ae5-b560-b228bb70b31f","method":"GET","path":"/snapshot","status":200,"durationMs":68}
+# {"level":"info","requestId":"dc425fdf-f666-4254-b1cb-7ac5a4c46d8d","method":"GET","path":"/objects/f814030f-d461-4a65-8319-a4e747940806/schedule","status":200,"durationMs":39}
+# Subtest: T05 several KNOWN portions still add up (150 + 250), unchanged
+ok 5 - T05 several KNOWN portions still add up (150 + 250), unchanged
+  ---
+  duration_ms: 129.885395
+  type: 'test'
+  ...
+# {"level":"info","requestId":"53a4ca19-84eb-41fa-9878-830126c14b99","method":"GET","path":"/snapshot","status":200,"durationMs":84}
+# Subtest: T06 the resolver, the snapshot and GPR-1 agree about the same Work
+ok 6 - T06 the resolver, the snapshot and GPR-1 agree about the same Work
+  ---
+  duration_ms: 139.277959
+  type: 'test'
+  ...
+# {"level":"info","requestId":"e5a3a205-a961-4911-a5f7-4da406cb5dae","method":"GET","path":"/objects/f814030f-d461-4a65-8319-a4e747940806/schedule","status":200,"durationMs":45}
+# {"level":"info","requestId":"b1c5f18f-ec6a-4d1d-a712-fca1763a4cf9","method":"GET","path":"/objects/f814030f-d461-4a65-8319-a4e747940806/schedule","status":200,"durationMs":22}
+# {"level":"info","requestId":"076afaf9-4d65-4566-a599-c23fbaddf1db","method":"GET","path":"/objects/f814030f-d461-4a65-8319-a4e747940806/schedule","status":200,"durationMs":23}
+# {"level":"info","requestId":"947baf90-6258-4b15-b72f-786e29a44ac6","method":"GET","path":"/objects/f814030f-d461-4a65-8319-a4e747940806/schedule","status":200,"durationMs":23}
+# Subtest: T07 + T08 an UNKNOWN_TIE on an overdue entry is not DELAYED and has no days of delay; the calendar part is still stated
+ok 7 - T07 + T08 an UNKNOWN_TIE on an overdue entry is not DELAYED and has no days of delay; the calendar part is still stated
+  ---
+  duration_ms: 124.741284
+  type: 'test'
+  ...
+# {"level":"info","requestId":"e8ebf001-f89d-40a1-9b0b-935179edcb94","method":"GET","path":"/objects/f814030f-d461-4a65-8319-a4e747940806/schedule","status":200,"durationMs":24}
+# {"level":"info","requestId":"82382310-85df-4885-8494-7cc93352a7c8","method":"GET","path":"/objects/f814030f-d461-4a65-8319-a4e747940806/schedule","status":200,"durationMs":25}
+# {"level":"info","requestId":"1a0899d3-3cad-4b43-9ceb-3bf8de4f0232","method":"GET","path":"/works/313ecd82-5c0d-495c-b393-12e36e404d6b/schedule","status":200,"durationMs":25}
+# {"level":"info","requestId":"0506d216-d9b6-4aac-8896-e6398147c294","method":"GET","path":"/works/313ecd82-5c0d-495c-b393-12e36e404d6b/schedule","status":200,"durationMs":24}
+# Subtest: T09 the object schedule is never ON_TRACK on incomplete data — and a PROVED delay elsewhere still reads DELAYED
+ok 8 - T09 the object schedule is never ON_TRACK on incomplete data — and a PROVED delay elsewhere still reads DELAYED
+  ---
+  duration_ms: 118.09483
+  type: 'test'
+  ...
+# {"level":"info","requestId":"cf534eb3-43d8-43db-b11d-2f7defcc6d1a","method":"GET","path":"/objects/f814030f-d461-4a65-8319-a4e747940806/schedule","status":200,"durationMs":22}
+# {"level":"info","requestId":"d2796be8-cc8e-4879-8bb3-a4ab9bc4f543","method":"POST","path":"/objects/f814030f-d461-4a65-8319-a4e747940806/schedule/delay-reasons","status":400,"durationMs":27}
+# {"level":"info","requestId":"52e2d362-9f9a-4039-8dad-537387688556","method":"POST","path":"/objects/f814030f-d461-4a65-8319-a4e747940806/schedule/delay-reasons","status":400,"durationMs":24}
+# {"level":"info","requestId":"ed034367-bf6d-4f67-98a3-335c4f8a3598","method":"POST","path":"/objects/f814030f-d461-4a65-8319-a4e747940806/schedule/delay-reasons","status":201,"durationMs":30}
+# Subtest: T10 a delay reason cannot be recorded when the only ground is an unknown fact (server-side); a genuinely delayed entry still accepts one
+ok 9 - T10 a delay reason cannot be recorded when the only ground is an unknown fact (server-side); a genuinely delayed entry still accepts one
+  ---
+  duration_ms: 133.9975
+  type: 'test'
+  ...
+# {"level":"info","requestId":"4798ceb0-2ed2-4a29-9d57-20c678bf7e00","method":"GET","path":"/objects/f814030f-d461-4a65-8319-a4e747940806/schedule","status":200,"durationMs":25}
+# Subtest: T11 a CONFIRMED zero on an overdue entry keeps the earlier behaviour: a real delay
+ok 10 - T11 a CONFIRMED zero on an overdue entry keeps the earlier behaviour: a real delay
+  ---
+  duration_ms: 29.804371
+  type: 'test'
+  ...
+# {"level":"info","requestId":"5a59d152-8c8e-49b3-8b62-767dcdf8e53d","method":"GET","path":"/objects/f814030f-d461-4a65-8319-a4e747940806/schedule","status":200,"durationMs":24}
+# {"level":"info","requestId":"19a7e9e6-1d91-456d-882b-c19baa67bc30","method":"GET","path":"/objects/f814030f-d461-4a65-8319-a4e747940806/schedule","status":200,"durationMs":24}
+# Subtest: T12 "nothing reported" keeps its own semantics: NOT_REPORTED, no progress figure, a delay once the dates have passed — and NOT_STARTED before them
+ok 11 - T12 "nothing reported" keeps its own semantics: NOT_REPORTED, no progress figure, a delay once the dates have passed — and NOT_STARTED before them
+  ---
+  duration_ms: 53.7236
+  type: 'test'
+  ...
+# {"level":"info","requestId":"c78b50e7-9d6a-4df6-8103-8b9e21da8745","method":"POST","path":"/works","status":201,"durationMs":15}
+# Subtest: T13 LEGACY_WORK cannot reach UNKNOWN_TIE in a current-state read, so GPR-1 cannot bypass the resolver there — proved, not assumed
+ok 12 - T13 LEGACY_WORK cannot reach UNKNOWN_TIE in a current-state read, so GPR-1 cannot bypass the resolver there — proved, not assumed
+  ---
+  duration_ms: 96.206457
+  type: 'test'
+  ...
+# {"level":"info","requestId":"7302ba30-edcc-4b98-ae99-4f92b599b38c","method":"GET","path":"/objects/f814030f-d461-4a65-8319-a4e747940806/schedule","status":200,"durationMs":37}
+# {"level":"info","requestId":"a95511e7-f628-46ac-a7dd-f5db9140e9a0","method":"GET","path":"/objects/f814030f-d461-4a65-8319-a4e747940806/schedule","status":200,"durationMs":37}
+# {"level":"info","requestId":"4ee4251f-68e1-4edb-a3fd-ca7b69b3a002","method":"GET","path":"/works/313ecd82-5c0d-495c-b393-12e36e404d6b/schedule","status":200,"durationMs":27}
+# {"level":"info","requestId":"00eb4677-9e85-4625-bf16-18d6a9d1e275","method":"GET","path":"/snapshot","status":200,"durationMs":64}
+# Subtest: T14 the real API payloads, through the frontend: guards accept them and every consumer says "fact not determined" in words
+ok 13 - T14 the real API payloads, through the frontend: guards accept them and every consumer says "fact not determined" in words
+  ---
+  duration_ms: 247.81153
+  type: 'test'
+  ...
+# {"level":"info","requestId":"22318c50-cfe7-4d70-b5a1-ba469d18b661","method":"GET","path":"/snapshot","status":200,"durationMs":58}
+# {"level":"info","requestId":"5df1e7de-97cb-454b-8348-9735b764faf7","method":"GET","path":"/snapshot","status":200,"durationMs":115}
+# Subtest: T15 the protected F8 / F12 semantics did not move: a CUSTOMER_SC group of two different values is still unknown, a KNOWN figure is still the figure
+ok 14 - T15 the protected F8 / F12 semantics did not move: a CUSTOMER_SC group of two different values is still unknown, a KNOWN figure is still the figure
+  ---
+  duration_ms: 196.615993
+  type: 'test'
+  ...
+1..14
+# tests 14
+# suites 0
+# pass 14
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 22245.007482

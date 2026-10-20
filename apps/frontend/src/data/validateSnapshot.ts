@@ -276,7 +276,7 @@ export function validateSnapshot(value: unknown): Snapshot {
       if (!hasStringOrNullField(unit, 'location')) fail();
       if (!hasStringOrNullField(unit, 'executionConditions')) fail();
       if (!hasNumericField(unit, 'plannedQuantity')) fail();
-      if (!hasNumericField(unit, 'actualQuantity')) fail();
+      if (!hasNumericOrNullField(unit, 'actualQuantity')) fail(); // null = an unknown fact (UNKNOWN_TIE), see WorkExecutionUnit
       if (!hasScCoverageStatusField(unit, 'internalScStatus')) fail();
       if (!hasScCoverageStatusField(unit, 'customerScStatus')) fail();
     }

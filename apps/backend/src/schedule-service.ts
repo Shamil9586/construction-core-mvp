@@ -7,7 +7,7 @@ import {
     SCHEDULE_PROGRESS_SOURCE, DEFAULT_DELAY_REASON_CATEGORIES,
     PREDECESSOR_CYCLE_MESSAGE, PREDECESSOR_IN_USE_MESSAGE, PREDECESSOR_NOT_IN_DRAFT_MESSAGE, PREDECESSOR_SELF_MESSAGE,
     SCOPE_ALREADY_SCHEDULED_MESSAGE, WORK_HAS_UNITS_MESSAGE, WORK_SCHEDULED_AS_WHOLE_MESSAGE,
-    aggregateScheduleStates, civilDayNumber, deriveScheduleEntryStatus, delayReasonViolation, diffScheduleEntries,
+    aggregateScheduleAssessment, civilDayNumber, deriveScheduleEntryStatus, delayReasonViolation, diffScheduleEntries,
     effectiveDelayCategories, hasPredecessorCycle, isCivilDate, nextScheduleSequence, resolveObjectScheduleConclusion, scheduleApprovalViolations,
     scheduleDatesViolation, startsBeforePredecessorFinish, todayCivil,
     type DelayCategoryOverride, type ScheduleChange, type ScheduleEntrySnapshot, type ScheduleEntryStatus,
@@ -200,7 +200,7 @@ export class ScheduleService {
         const reasons = await this.reasonViews(pool, t, w.objectId, catNames);
         const own = currentEntries.filter((e: any) => e.objectWorkId === workId);
         const views = own.map((e: any) => this.entryView(e, scopes, today, currentEntries, reasons, undefined, current.id, workId));
-        const states = views.map(v => v.status.state);
+        const assessment = aggregateScheduleAssessment(views.map(v => v.status.state));
         return {
             objectId: w.objectId, objectWorkId: workId, asOf: today, progressSource: SCHEDULE_PROGRESS_SOURCE,
             // A PTO engineer holding only this work's handoff may read the work's summary but not the object's whole plan (403): say so.
@@ -208,7 +208,7 @@ export class ScheduleService {
             hasBaseline: !!current, revisionNo: current ? current.revisionNo : null,
             summary: views.length ? {
                 plannedStart: views.map(v => v.view.plannedStart).sort()[0], plannedFinish: views.map(v => v.view.plannedFinish).sort().slice(-1)[0],
-                state: aggregateScheduleStates(states), delayDays: views.reduce((m, v) => Math.max(m, v.status.delayDays), 0), entryCount: views.length,
+                state: assessment.state, assessable: assessment.assessable, delayDays: views.reduce((m, v) => Math.max(m, v.status.delayDays), 0), entryCount: views.length,
             } : null,
             entries: views.map(v => v.view),
         };
@@ -234,7 +234,7 @@ export class ScheduleService {
         const scope = scopes.get(scopeKey(e.objectWorkId, e.executionUnitId));
         if (!scope)
             throw new Error('Schedule entry without a production scope'); // unreachable: works / units are never deleted and the FK guards the item
-        const status = deriveScheduleEntryStatus({ plannedStart: e.plannedStart, plannedFinish: e.plannedFinish, plannedQuantity: scope.plannedQuantity, rpFactQuantity: scope.rpFactQuantity }, today);
+        const status = deriveScheduleEntryStatus({ plannedStart: e.plannedStart, plannedFinish: e.plannedFinish, plannedQuantity: scope.plannedQuantity, rpFactQuantity: scope.rpFactQuantity, factUnknown: scope.factUnknown }, today);
         const pred = e.predecessorItemId ? siblings.find((x: any) => x.itemId === e.predecessorItemId) : undefined;
         // The work-level view (W01, `onlyWork`) is scoped to ONE work: a predecessor that belongs to ANOTHER work is neither named nor
         // referenced — not its label, not its item id, not whether this entry starts before its finish. A PTO engineer holding only that
@@ -250,7 +250,7 @@ export class ScheduleService {
             predecessorItemId: foreign ? null : e.predecessorItemId ?? null, predecessorLabel: predScope ? label(predScope.workName, predScope.zone) : null,
             followsPredecessor: visiblePred ? !startsBeforePredecessorFinish(e.plannedStart, visiblePred.plannedFinish) : null,
             rpFactQuantity: scope.rpFactQuantity, internalScAcceptedQuantity: scope.internalScAcceptedQuantity,
-            plannedProgress: status.plannedProgress, actualProgress: status.actualProgress, factReported: status.factReported, overperformed: status.overperformed,
+            plannedProgress: status.plannedProgress, actualProgress: status.actualProgress, factReported: status.factReported, factReliability: status.factReliability, assessable: status.assessable, overperformed: status.overperformed,
             expectedPhase: status.expectedPhase, state: status.state, delayDays: status.delayDays, delayKind: status.delayKind,
             baselineShift: shifted && (shifted.startDays !== 0 || shifted.finishDays !== 0) ? shifted : null,
             workNowHasUnits: e.executionUnitId === null && scope.workHasUnits,
@@ -499,7 +499,7 @@ export class ScheduleService {
             const scope = (await loadObjectScopes(c, a.tenantId, objectId)).get(scopeKey(entry.objectWorkId, entry.executionUnitId));
             if (!scope)
                 throw new NotFoundException(NOT_FOUND);
-            const status = deriveScheduleEntryStatus({ plannedStart: entry.plannedStart, plannedFinish: entry.plannedFinish, plannedQuantity: scope.plannedQuantity, rpFactQuantity: scope.rpFactQuantity }, todayCivil());
+            const status = deriveScheduleEntryStatus({ plannedStart: entry.plannedStart, plannedFinish: entry.plannedFinish, plannedQuantity: scope.plannedQuantity, rpFactQuantity: scope.rpFactQuantity, factUnknown: scope.factUnknown }, todayCivil());
             const violation = delayReasonViolation(status.state);
             ensure(!violation, violation!);
             ensure(effectiveDelayCategories(await categoryOverrides(c, a.tenantId)).some(cat => cat.code === d.categoryCode), 'Неизвестная или отключённая категория причины отставания');
