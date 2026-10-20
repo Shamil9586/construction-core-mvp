@@ -2,6 +2,7 @@ import { Controller, Post, Get, Body, Req, Inject } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { z } from 'zod';
 import { pool, rows, transaction, insert } from '../../db';
+import { coordinate } from '../../coordination-lock';
 import { ReadService } from '../../read-service';
 import { authenticate, requirePermission, scoped, objectAccess, audit } from '../../security';
 import { Permission as P } from '../../../../../packages/domain';
@@ -20,5 +21,5 @@ export class MaterialsController {
     @Req()
     r: any,
     @Body()
-    b: any) { const a = await authenticate(r); requirePermission(a, P.PTO_EDIT); const d = z.object({ objectWorkId: V.uuid, name: V.text, manufacturer: V.text, batchNumber: V.text, quantity: V.qty.refine(v => Number(v) > 0), documentNumber: V.text, fileId: V.uuid, validUntil: V.date }).strict().parse(b); return transaction(async (c) => { const w = await scoped(c, 'works', d.objectWorkId, a); await objectAccess(c, a, w.objectId); await scoped(c, 'attachments', d.fileId, a); const material = await insert(c, 'materials', a.tenantId, { name: d.name, manufacturer: d.manufacturer }); const batch = await insert(c, 'material_batches', a.tenantId, { materialId: material.id, objectId: w.objectId, batchNumber: d.batchNumber }); await insert(c, 'material_documents', a.tenantId, { materialBatchId: batch.id, type: 'PASSPORT', number: d.documentNumber, fileId: d.fileId, validUntil: d.validUntil }); const link = await insert(c, 'work_materials', a.tenantId, { objectWorkId: w.id, materialBatchId: batch.id, quantity: d.quantity }); await audit(c, a, 'Work', w.id, 'MATERIAL', null, { material, batch, link }); return link; }); }
+    b: any) { const a = await authenticate(r); requirePermission(a, P.PTO_EDIT); const d = z.object({ objectWorkId: V.uuid, name: V.text, manufacturer: V.text, batchNumber: V.text, quantity: V.qty.refine(v => Number(v) > 0), documentNumber: V.text, fileId: V.uuid, validUntil: V.date }).strict().parse(b); return transaction(async (c) => { await coordinate(c, 'modules/materials/materials.controller.ts#bindMaterial', a.tenantId, { work: d.objectWorkId }); const w = await scoped(c, 'works', d.objectWorkId, a); await objectAccess(c, a, w.objectId); await scoped(c, 'attachments', d.fileId, a); const material = await insert(c, 'materials', a.tenantId, { name: d.name, manufacturer: d.manufacturer }); const batch = await insert(c, 'material_batches', a.tenantId, { materialId: material.id, objectId: w.objectId, batchNumber: d.batchNumber }); await insert(c, 'material_documents', a.tenantId, { materialBatchId: batch.id, type: 'PASSPORT', number: d.documentNumber, fileId: d.fileId, validUntil: d.validUntil }); const link = await insert(c, 'work_materials', a.tenantId, { objectWorkId: w.id, materialBatchId: batch.id, quantity: d.quantity }); await audit(c, a, 'Work', w.id, 'MATERIAL', null, { material, batch, link }); return link; }); }
 }

@@ -28,11 +28,14 @@ export const pool: any = new Proxy(rawPool, {
 });
 /** A connection that bypasses the guard: for the transaction context itself, which owns its connection. */
 export const connectUnguarded = (): Promise<PoolClient> => rawPool.connect();
-// Clients that are inside an explicit transaction block (BEGIN issued by transaction() or the transaction context). A transaction-scoped
-// advisory lock taken outside one is released at the end of its own statement, so coordination-lock.ts refuses any other client.
-const transactionClients = new WeakSet<object>();
-export const markTransactionClient = <T extends object>(c: T): T => { transactionClients.add(c); return c; };
-export const isTransactionClient = (c: unknown): boolean => typeof c === 'object' && c !== null && transactionClients.has(c);
+// Clients that are inside an explicit transaction block, each with a token that is NEW for every transaction. A pooled client object outlives its
+// transactions, so anything remembered about "this client" must be tied to the token, never to the object alone (coordination-lock.ts does). A
+// transaction-scoped advisory lock taken outside a transaction block is released at the end of its own statement, so it refuses any other client.
+const transactionClients = new WeakMap<object, symbol>();
+export const markTransactionClient = <T extends object>(c: T): T => { transactionClients.set(c, Symbol('transaction')); return c; };
+export const unmarkTransactionClient = (c: object): void => { transactionClients.delete(c); };
+export const transactionToken = (c: unknown): symbol | undefined => (typeof c === 'object' && c !== null ? transactionClients.get(c) : undefined);
+export const isTransactionClient = (c: unknown): boolean => transactionToken(c) !== undefined;
 export async function transaction<T>(fn: (c: PoolClient) => Promise<T>) { const c = await pool.connect(); try {
     await c.query('BEGIN');
     markTransactionClient(c);
@@ -45,6 +48,7 @@ catch (e) {
     throw e;
 }
 finally {
+    unmarkTransactionClient(c);
     c.release();
 } }
 export const camel = (row: any): any => row && Object.fromEntries(Object.entries(row).map(([k, v]) => [k.replace(/_([a-z])/g, (_, x) => x.toUpperCase()), v]));

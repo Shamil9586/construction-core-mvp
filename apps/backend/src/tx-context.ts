@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { connectUnguarded, markTransactionClient, poolGuard } from './db';
+import { connectUnguarded, markTransactionClient, poolGuard, unmarkTransactionClient } from './db';
 
 /**
  * GPR-2 R03a — one transaction context for a business operation (Technical Design §12.2; decision C16; scenario A30).
@@ -60,6 +60,7 @@ async function runOnce<T>(kind: TxContext['kind'], isolation: Isolation, attempt
         return result;
     }
     finally {
+        unmarkTransactionClient(c);
         c.release();
     }
 }

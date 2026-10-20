@@ -31,3 +31,58 @@ onto the context — they are brought under the lock protocol by R03b; the conte
 | retry: only 40001/40P01, bounded, business errors final | `gpr2-r03a-tx-context`; a **real** 40001 in `gpr2-r03a-snapshot-pg` (attempt 1 fails, attempt 2 re-runs on a fresh snapshot, effect applied once) |
 | **A30** snapshot across a concurrent commit (native PG, commit forced *between* the two statements by a barrier) | `gpr2-r03a-snapshot-pg` |
 | **A30** aborted command leaves nothing, including when the failure is the `COMMIT` (deferred FK) | `gpr2-r03a-snapshot-pg` |
+
+---
+
+## R03b — the object coordination lock and the writer register
+
+`apps/backend/src/coordination-lock.ts`, `apps/backend/src/writer-registry.ts`, and one first statement in every coordinated writer. **Reviewed apart from a/c/d: this is the blast radius.**
+
+### The protocol (TD §12.3)
+
+One transaction-scoped PostgreSQL advisory lock per `(tenant, object)`, in two modes:
+
+| Mode | Taken by | Excludes |
+|---|---|---|
+| `SHARED` (`pg_advisory_xact_lock_shared`) | every ordinary fact / SC / issue / PTO / SDO / AOSR writer, GPR-1 draft edits | only EXCLUSIVE |
+| `EXCLUSIVE` (`pg_advisory_xact_lock`) | scope-changing writers: `createWork` (Work generation), `dependency` (topology), GPR-1 `approveDraft` (baseline switch). Quantity approval and GPR-2 approval join in R07/R12 | everything on that object |
+
+* **First, before any row lock.** `acquireCoordination()` asks PostgreSQL whether the transaction has an id yet (`pg_current_xact_id_if_assigned()` — it has one as soon as it writes **or row-locks** anything) and throws `COORDINATION_AFTER_ROW_LOCK` if so. A writer can therefore never queue the coordination lock behind a package / case / portion lock it took first (TD §12.3 item 2): the F12 order *package → case → portion* is untouched, the new lock simply precedes it.
+* **Resolving the object takes no lock.** `coordinate()` finds the object with one plain `SELECT` (work → object, portion → unit → work, package → work, SDO case → package → work, …) — no `FOR UPDATE`, no transaction id. An id that resolves to nothing takes no lock and the writer's own `scoped()` answers 404 as before.
+* **One object per transaction; no upgrade.** A second object, or `SHARED → EXCLUSIVE` inside one transaction, throws (the two ways an advisory protocol deadlocks with itself). `EXCLUSIVE` then `SHARED` is a no-op.
+* **Bounded wait.** `lock_timeout` (default 15 s, `GPR2_COORDINATION_WAIT_MS` or `waitMs`) turns an unbounded queue into `COORDINATION_TIMEOUT`; the setting is restored after a successful acquire.
+* **Key.** `sha256("construction-core:gpr2:object-coordination:v1" \0 tenant \0 object)` → signed 64-bit; a collision can only over-serialise two objects, never admit one that should wait; never equals the migration lock `830017`.
+* **Held state belongs to the transaction.** A pooled connection outlives its transactions; what a transaction holds is remembered with a per-transaction token (`db.ts markTransactionClient` / `transactionToken`). *The native test found this defect in the first version:* keyed by the client object alone, a later transaction on a reused connection believed it already held the lock and skipped it. `transaction()` and `runCommandTx()` now mint a token per transaction and drop it at the end; a regression test reuses a pooled connection while another session holds EXCLUSIVE and proves it waits.
+
+### The register — complete, and closed by a test
+
+`writer-registry.ts` has one row per code path that writes to the database (**90**): mode `SHARED` / `EXCLUSIVE` / `NONE` and a reason. `NONE` is a decision a reviewer can contest, not an omission — e.g. `createObject` and `commitImport` (they create *new* objects and no Work: nothing can contend for an object that does not exist yet), team and organisation assignment (they change who may act; every command re-authorises against the current rows), tenant dictionaries, Bitrix installation state, the outbox, the risk worker.
+
+`tests/gpr2-r03b-writer-registry.test.ts` reads `apps/backend/src` with the TypeScript compiler and fails when
+* a `transaction(…)` / `getFileStore().transaction(…)` call or a write issued straight on the pool (`pool.query('INSERT …')`, `insert(pool, …)`, `one/rows(pool, 'UPDATE …')`) exists and is **not a row** — the *bypass-path check*: a new writer, a legacy endpoint, an importer, a controller cannot appear unclassified;
+* a row names a writer that no longer exists, or two sites share a key;
+* a `SHARED`/`EXCLUSIVE` writer does not call `await coordinate(c, <its own id>, …)` as the **first statement** of its transaction callback (the checker is itself tested: a late, misnamed, un-awaited or missing call is caught);
+* the `EXCLUSIVE` set differs from `createWork`, `dependency`, `approveDraft`, or a fact/SC/PTO/SDO writer named by the Technical Design is not `SHARED`.
+
+**Bypass paths examined and their classification:** the legacy HTTP endpoints (all reach `service.ts` / `aosr-service.ts` / `schedule-service.ts` writers, all registered), the financial importer (`importer.ts`: `commitImport` creates objects only → `NONE`, `previewImport` writes a report → `NONE`), the controllers that open their own transaction (`inspections#photo`, `materials#bindMaterial` → `SHARED`; users, contractors, dictionaries → `NONE`), the AOSR file-store transactions (`getFileStore().transaction`, 4 sites → `SHARED`), the background workers (`risk-worker`, Bitrix outbox → `NONE`). `scripts/seed.ts` and `scripts/migrate.ts` are operator tooling run outside the application, not request-time writers. **The new scope-changing GPR-2 endpoints stay off:** the R01 `/v2` surface is still flag-gated and answers `501`, so no new scope-changing command can run before this register is accepted.
+
+### Interpretations and limits to confirm at acceptance
+
+1. **Lock before object authorisation.** `coordinate()` runs as the first statement, i.e. before `objectAccess()`. A caller who holds the *permission* but not the object can therefore take the object's lock for the few milliseconds until their request is refused and rolled back (the key includes the tenant, so never across tenants). It is a short, rate-limited griefing window, not a data exposure. Moving authorisation ahead of the lock is impossible without a row lock or a second round trip (the very thing the protocol forbids); the alternative — resolving and authorising through a plain `SELECT` first — is a design change for the reviewer to choose.
+2. **`NONE` rows are decisions.** Team/organisation assignment is `NONE` on the reasoning that every command re-authorises against current rows; a reviewer who wants assignment changes serialised with fact writers can flip a row to `SHARED` (one registry line, one `coordinate()` call — the static test then enforces the call).
+3. **`commitImport` creates objects only** (checked in the code: `insert(objects)`, `object_contractors`, `monthly_plans`; no Work) — hence `NONE`. If a later change makes it generate Works on an existing object it must become `EXCLUSIVE`; the registry test cannot know that, a reviewer of that change must.
+4. **Quantity approval is not wired** (R07). The EXCLUSIVE section used in the A06 test is a probe taking the same lock; the register's EXCLUSIVE set is exactly the three scope-changing writers that exist today.
+5. **The wait bound (15 s) is a default**, not a measured value; the release plan should set `GPR2_COORDINATION_WAIT_MS` after load measurements (R21/R22).
+
+### Evidence (native PostgreSQL 16, isolated cluster; each race staged with a barrier PostgreSQL reports)
+
+| Claim | Test (`gpr2-r03b-coordination-pg`) |
+|---|---|
+| S+S coexist; X waits for S; a *waiting* X holds a later S back (no starvation); X excludes X and S; released by commit, by rollback and by a dead connection; other objects and other tenants never interact | lock matrix |
+| bounded wait → `COORDINATION_TIMEOUT`, nothing left queued | bounded wait |
+| after-row-lock, second object, upgrade, outside a transaction all refused and take no lock | misuse |
+| pooled connection reused by a later transaction takes the lock again | pooled reuse |
+| **A06**: an in-flight fact writer (stopped on its portion row by a barrier) holds SHARED; the scope-change EXCLUSIVE is proved blocked, runs after the writer committed, sees its fact; while it is open a new fact writer is proved blocked, the protected floor read inside the section is unchanged at its end, and the fact lands strictly after the section's commit | A06 |
+| all three EXCLUSIVE writers (through `createWork`, `dependency`, GPR-1 `approveDraft`) and a SHARED writer wait together behind an open scope-changing section; nothing applied while it was open | exclusive writers |
+| 18 facts on 6 portions + 3 exclusive sections at random moments: no deadlock, no lost write, no timeout | stress |
+| existing package-first / F12 ordering unchanged | the unmodified native suites `f8.3-postgres-concurrency`, `f12-final-corrective-postgres-concurrency` and the rest, run per file on the isolated cluster (P1-B package) |

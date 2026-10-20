@@ -1,5 +1,6 @@
 import { ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { pool, one, rows, transaction } from './db';
+import { coordinate } from './coordination-lock';
 import { Actor, requirePermission, scoped, objectAccess, workAccess, audit, ensure, checkVersion, isCurrentPtoMember } from './security';
 import { Permission as P, hasPermission } from '../../../packages/domain';
 import {
@@ -309,6 +310,7 @@ export class ScheduleService {
     async createDraft(a: Actor, objectId: string) {
         requirePermission(a, P.SCHEDULE_EDIT);
         return transaction(async (c) => {
+            await coordinate(c, 'schedule-service.ts#createDraft', a.tenantId, { object: objectId });
             await lockObject(c, a, objectId);
             if (await revisionOf(c, a.tenantId, objectId, 'DRAFT'))
                 throw new ConflictException(DRAFT_EXISTS_MESSAGE);
@@ -326,6 +328,7 @@ export class ScheduleService {
     async addEntry(a: Actor, objectId: string, d: { objectWorkId: string; executionUnitId?: string | null; plannedStart: string; plannedFinish: string; sequence?: number; predecessorItemId?: string | null }) {
         requirePermission(a, P.SCHEDULE_EDIT);
         return transaction(async (c) => {
+            await coordinate(c, 'schedule-service.ts#addEntry', a.tenantId, { object: objectId });
             await lockObject(c, a, objectId);
             const draft = await revisionOf(c, a.tenantId, objectId, 'DRAFT', true);
             if (!draft)
@@ -367,6 +370,7 @@ export class ScheduleService {
     async editEntry(a: Actor, objectId: string, entryId: string, d: { version: number; plannedStart?: string; plannedFinish?: string; sequence?: number; predecessorItemId?: string | null }) {
         requirePermission(a, P.SCHEDULE_EDIT);
         return transaction(async (c) => {
+            await coordinate(c, 'schedule-service.ts#editEntry', a.tenantId, { object: objectId });
             await lockObject(c, a, objectId);
             const { entry, draft } = await this.draftEntry(c, a, objectId, entryId);
             checkVersion(entry, d.version);
@@ -395,6 +399,7 @@ export class ScheduleService {
     async removeEntry(a: Actor, objectId: string, entryId: string, d: { version: number }) {
         requirePermission(a, P.SCHEDULE_EDIT);
         return transaction(async (c) => {
+            await coordinate(c, 'schedule-service.ts#removeEntry', a.tenantId, { object: objectId });
             await lockObject(c, a, objectId);
             const { entry, draft } = await this.draftEntry(c, a, objectId, entryId);
             checkVersion(entry, d.version);
@@ -409,6 +414,7 @@ export class ScheduleService {
     async discardDraft(a: Actor, objectId: string, d: { version: number }) {
         requirePermission(a, P.SCHEDULE_EDIT);
         return transaction(async (c) => {
+            await coordinate(c, 'schedule-service.ts#discardDraft', a.tenantId, { object: objectId });
             await lockObject(c, a, objectId);
             const draft = await revisionOf(c, a.tenantId, objectId, 'DRAFT', true);
             if (!draft)
@@ -432,6 +438,7 @@ export class ScheduleService {
     async approveDraft(a: Actor, objectId: string, d: { version: number; comment?: string; correctionReason?: string }) {
         requirePermission(a, P.SCHEDULE_APPROVE);
         return transaction(async (c) => {
+            await coordinate(c, 'schedule-service.ts#approveDraft', a.tenantId, { object: objectId });
             await lockObject(c, a, objectId);
             const draft = await revisionOf(c, a.tenantId, objectId, 'DRAFT', true);
             if (!draft)
@@ -481,6 +488,7 @@ export class ScheduleService {
     async recordDelayReason(a: Actor, objectId: string, d: { itemId: string; categoryCode: string; comment: string; responsibleUserId?: string; responsibleContractorId?: string }) {
         requirePermission(a, P.SCHEDULE_DELAY_REASON);
         return transaction(async (c) => {
+            await coordinate(c, 'schedule-service.ts#recordDelayReason', a.tenantId, { object: objectId });
             await lockObject(c, a, objectId);
             const current = await revisionOf(c, a.tenantId, objectId, 'APPROVED');
             if (!current)
@@ -513,6 +521,7 @@ export class ScheduleService {
     async resolveDelayReason(a: Actor, objectId: string, reasonId: string, d: { version: number; comment?: string }) {
         requirePermission(a, P.SCHEDULE_DELAY_REASON);
         return transaction(async (c) => {
+            await coordinate(c, 'schedule-service.ts#resolveDelayReason', a.tenantId, { object: objectId });
             await lockObject(c, a, objectId);
             const reason = await one(c, 'SELECT * FROM schedule_delay_reasons WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [a.tenantId, reasonId]);
             if (!reason || reason.objectId !== objectId)

@@ -3,6 +3,7 @@ import { packageSchemes, currentAosrMethod, forwardGateViolation } from './docum
 import Decimal from 'decimal.js';
 import { pool, one, rows, insert, transaction } from './db';
 import { loadPortionFigures } from './fact-resolver';
+import { coordinate } from './coordination-lock';
 import { ensurePackageNotArchived } from './documentation-archive';
 import { Actor, requirePermission, checkVersion, scoped, audit, ensure, workAccess, packageMutationAccess, claimIdempotentCommand, completeIdempotentCommand } from './security';
 import { Permission as P, isPtoRole, canAccessDocumentation, canMutateDocumentationPackageContent, resolveCustomerScLatestGroup } from '../../../packages/domain';
@@ -125,6 +126,7 @@ export class AosrService {
      */
     async setMethod(a: Actor, packageId: string, d: { method: 'CORE' | 'EXTERNAL'; comment?: string }) {
         return transaction(async (c) => {
+            await coordinate(c, 'aosr-service.ts#setMethod', a.tenantId, { documentationPackage: packageId });
             const { pkg } = await this.writeContext(c, a, packageId, { content: false });
             const sdoCase = await one(c, 'SELECT package_locked FROM sdo_closing_cases WHERE tenant_id=$1 AND documentation_package_id=$2', [a.tenantId, packageId]);
             ensure(!sdoCase?.packageLocked, 'Пакет передан в СДО: способ подготовки АОСР изменить нельзя');
@@ -142,6 +144,7 @@ export class AosrService {
 
     async create(a: Actor, packageId: string, d: any) {
         return transaction(async (c) => {
+            await coordinate(c, 'aosr-service.ts#create', a.tenantId, { documentationPackage: packageId });
             const { pkg, work } = await this.writeContext(c, a, packageId, { content: true });
             await this.requireCoreMethod(c, a, packageId);
             let title: string = d.title, point1: string | null = d.workDescription ?? null, normative: string | null = null, subsequent: string | null = null, code: string | null = null;
@@ -163,6 +166,7 @@ export class AosrService {
 
     async dismissSuggestion(a: Actor, packageId: string, suggestionCode: string) {
         return transaction(async (c) => {
+            await coordinate(c, 'aosr-service.ts#dismissSuggestion', a.tenantId, { documentationPackage: packageId });
             await this.writeContext(c, a, packageId, { content: true });
             await this.requireCoreMethod(c, a, packageId);
             ensure(!!findTypicalItem(suggestionCode), 'Неизвестная типовая позиция');
@@ -173,6 +177,7 @@ export class AosrService {
 
     async edit(a: Actor, id: string, d: any) {
         return transaction(async (c) => {
+            await coordinate(c, 'aosr-service.ts#edit', a.tenantId, { aosrDocument: id });
             const aosr = await this.aosrOf(c, a, id);
             await this.writeContext(c, a, aosr.documentationPackageId, { content: true });
             await c.query('SELECT 1 FROM aosr_documents WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [a.tenantId, id]);
@@ -190,6 +195,7 @@ export class AosrService {
     /** Only a draft that never consumed an official number can be removed. */
     async remove(a: Actor, id: string) {
         return transaction(async (c) => {
+            await coordinate(c, 'aosr-service.ts#remove', a.tenantId, { aosrDocument: id });
             const aosr = await this.aosrOf(c, a, id);
             await this.writeContext(c, a, aosr.documentationPackageId, { content: true });
             ensure(aosr.officialNumber === null && !aosr.documentationDocumentId, 'АОСР с присвоенным номером удалить нельзя');
@@ -211,6 +217,7 @@ export class AosrService {
     /** Replaces the given link sets (each optional). Provenance / materials / schemes — many-to-many on every side. */
     async setLinks(a: Actor, id: string, d: any) {
         return transaction(async (c) => {
+            await coordinate(c, 'aosr-service.ts#setLinks', a.tenantId, { aosrDocument: id });
             const aosr0 = await this.aosrOf(c, a, id);
             const { pkg, work } = await this.writeContext(c, a, aosr0.documentationPackageId, { content: true });
             await c.query('SELECT 1 FROM aosr_documents WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [a.tenantId, id]);
@@ -269,6 +276,7 @@ export class AosrService {
     }
     async createScheme(a: Actor, packageId: string, d: any) {
         return getFileStore().transaction(async (c, files) => {
+            await coordinate(c, 'aosr-service.ts#createScheme', a.tenantId, { documentationPackage: packageId });
             const { pkg } = await this.writeContext(c, a, packageId, { content: true });
             const doc = await insert(c, 'documentation_documents', a.tenantId, { documentationPackageId: packageId, type: 'EXECUTIVE_SCHEME', title: d.title, createdBy: a.id });
             await audit(c, a, 'DocumentationDocument', doc.id, 'CREATE', null, doc);
@@ -279,6 +287,7 @@ export class AosrService {
     /** Attaches (or replaces — a new version) the file of an existing scheme, e.g. one that so far had metadata only. */
     async attachSchemeFile(a: Actor, packageId: string, schemeId: string, d: any) {
         return getFileStore().transaction(async (c, files) => {
+            await coordinate(c, 'aosr-service.ts#attachSchemeFile', a.tenantId, { documentationPackage: packageId });
             const { pkg } = await this.writeContext(c, a, packageId, { content: true });
             const doc = await scoped(c, 'documentation_documents', schemeId, a, true);
             ensure(doc.type === 'EXECUTIVE_SCHEME' && doc.documentationPackageId === packageId, 'Исполнительная схема не относится к пакету');
@@ -300,6 +309,7 @@ export class AosrService {
 
     async saveParty(a: Actor, packageId: string, d: any) {
         return transaction(async (c) => {
+            await coordinate(c, 'aosr-service.ts#saveParty', a.tenantId, { documentationPackage: packageId });
             const { pkg } = await this.writeContext(c, a, packageId, { content: false });
             const existing = await one(c, 'SELECT * FROM aosr_party_records WHERE tenant_id=$1 AND object_id=$2 AND party_role=$3 FOR UPDATE', [a.tenantId, pkg.objectId, d.partyRole]);
             if (existing) checkVersion(existing, d.version ?? -1);
@@ -315,6 +325,7 @@ export class AosrService {
 
     async createMaterial(a: Actor, packageId: string, d: any) {
         return transaction(async (c) => {
+            await coordinate(c, 'aosr-service.ts#createMaterial', a.tenantId, { documentationPackage: packageId });
             const { pkg } = await this.writeContext(c, a, packageId, { content: false });
             if (d.materialId) await scoped(c, 'materials', d.materialId, a);
             const m = await insert(c, 'aosr_material_records', a.tenantId, { objectId: pkg.objectId, materialId: d.materialId ?? null, name: d.name, createdBy: a.id });
@@ -325,6 +336,7 @@ export class AosrService {
     }
     async addQualityDocument(a: Actor, packageId: string, materialRecordId: string, q: any) {
         return transaction(async (c) => {
+            await coordinate(c, 'aosr-service.ts#addQualityDocument', a.tenantId, { documentationPackage: packageId });
             const { pkg } = await this.writeContext(c, a, packageId, { content: false });
             const m = await scoped(c, 'aosr_material_records', materialRecordId, a);
             ensure(m.objectId === pkg.objectId, 'Материал относится к другому объекту');
@@ -342,6 +354,7 @@ export class AosrService {
      */
     async generate(a: Actor, id: string, version: number) {
         return getFileStore().transaction(async (c, files) => {
+            await coordinate(c, 'aosr-service.ts#generate', a.tenantId, { aosrDocument: id });
             const aosr0 = await this.aosrOf(c, a, id);
             const { pkg, work } = await this.writeContext(c, a, aosr0.documentationPackageId, { content: true });
             await this.requireCoreMethod(c, a, pkg.id);
@@ -403,6 +416,7 @@ export class AosrService {
         requirePermission(a, P.DOCUMENTATION_MANAGE);
         if (!isPtoRole(a.role)) throw new ForbiddenException('Объём, принятый заказчиком, фиксирует только ПТО');
         return transaction(async (c) => {
+            await coordinate(c, 'aosr-service.ts#recordCustomerAcceptedQuantity', a.tenantId, { documentationPackage: packageId });
             const { pkg } = await this.writeContext(c, a, packageId, { content: false });
             const sdoCase = await one(c, 'SELECT package_locked FROM sdo_closing_cases WHERE tenant_id=$1 AND documentation_package_id=$2', [a.tenantId, packageId]);
             ensure(!sdoCase?.packageLocked, 'Пакет передан в СДО: объём изменить нельзя');
