@@ -59,10 +59,6 @@ const HELD = new WeakMap<object, Held>();
 export const heldCoordination = (c: object): Readonly<Held> | undefined => { const h = HELD.get(c); return h && h.token === transactionToken(c) ? h : undefined; };
 
 /**
- * Take the coordination lock of one object for the rest of the transaction.
- * Re-acquiring what is already held (same object; EXCLUSIVE held, or SHARED wanted) is a no-op and returns 'ALREADY_HELD'.
- */
-/**
  * A wait for the lock is BOUNDED (lock_timeout, transaction-local): a scope-changing section is short, so a wait that is not is a fault to report, not a
  * queue to join forever. The default can be set with GPR2_COORDINATION_WAIT_MS; an explicit `waitMs` wins. On expiry the statement fails with 55P03,
  * which becomes COORDINATION_TIMEOUT — the caller's transaction is aborted and rolled back as for any other error.
@@ -70,6 +66,10 @@ export const heldCoordination = (c: object): Readonly<Held> | undefined => { con
 export const DEFAULT_COORDINATION_WAIT_MS = 15000;
 const waitMsFromEnvironment = (): number => { const n = Number(process.env.GPR2_COORDINATION_WAIT_MS); return Number.isInteger(n) && n > 0 && n <= 600000 ? n : DEFAULT_COORDINATION_WAIT_MS; };
 
+/**
+ * Take the coordination lock of one object for the rest of the transaction.
+ * Re-acquiring what is already held (same object; EXCLUSIVE held, or SHARED wanted) is a no-op and returns 'ALREADY_HELD'.
+ */
 export async function acquireCoordination(c: any, tenantId: string, objectId: string, mode: CoordinationMode, opts: { waitMs?: number } = {}): Promise<'ACQUIRED' | 'ALREADY_HELD'> {
     const token = transactionToken(c);
     if (!token)
