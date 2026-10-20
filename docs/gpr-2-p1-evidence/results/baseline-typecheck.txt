@@ -1,0 +1,6 @@
+tsc --noEmit exit=0
+
+> construction-core@0.1.0 typecheck:strict
+> tsc --noEmit -p apps/frontend/tsconfig.strict.json
+
+typecheck:strict exit=0

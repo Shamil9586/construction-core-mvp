@@ -86,7 +86,7 @@ Creating an execution unit, a layer or a portion is never a transition and never
 3. **Read model.** `works[].actualQuantity` is `0.0000` when the resolver cannot state a figure (`UNKNOWN_TIE`), with `factState` saying so; guards use `null` and fail closed.
    New additive fields on every Work: `factState`, `factSourceMode`, `factSourceModeProvenance`.
 4. **Ties.** An exact tie needs identical `recorded_at`, i.e. rows of one transaction (or legacy data). `confirmation_seq` orders rows of one transaction by statement order.
-5. **R01 test touched.** `gpr2-r01-traceability` asserted "exactly 25 migrations"; it now asserts the baseline chain through 025 is intact and later files are gap-free. Nothing else of R01 changed.
+5. **Existing tests changed — six, all because they pinned the END of the migration chain** (any additive migration invalidates that, C17 numbers migrations from the real ledger): `gpr2-r01-traceability` (exactly 25 files → the baseline chain through 025 intact, later files gap-free); `gpr-1-schedule-postgres` A1 (`files.at(-1) === 025` → 025 directly follows 024; its pinned hash in `tests/helpers/gpr2-decision-index.ts` is updated deliberately, citing C17); `org1-company-structure-postgres` (`slice(17)` → `slice(17, 25)`); `pbx5a-bitrix-notifications-postgres` (exactly 1–25 → 1–25 intact and gap-free); `role-cleanup-migration-postgres` and `bitrix-disk-1-storage` (literal head `25` → number of numbered files). No business assertion was weakened; the first R02 candidate failed these five and the failing run is kept as evidence.
 
 ## Not done in R02 (by design)
 

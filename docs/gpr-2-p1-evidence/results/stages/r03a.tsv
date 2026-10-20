@@ -1,0 +1,11 @@
+file	exit	tests	pass	fail	seconds
+tests/gpr2-r03a-tx-context.test.ts	0	6	6	0	14
+tests/gpr2-r03a-snapshot-pg.test.ts	0	4	4	0	0
+tests/gpr2-r02-fact-resolver.test.ts	0	24	24	0	1
+tests/gpr2-r02-consumers.test.ts	0	1	1	0	16
+tests/gpr2-r02-single-resolver.test.ts	0	4	4	0	0
+tests/gpr2-r02-fact-resolver-pg.test.ts	0	2	2	0	3
+tests/execution-units.test.ts	0	1	1	0	5
+tests/production-execution.test.ts	0	19	19	0	1
+tests/f12.1-customer-sc-zero-accept.test.ts	0	1	1	0	5
+tests/f12.1-fact-freeze-customer-sc.test.ts	0	1	1	0	5

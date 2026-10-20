@@ -1,0 +1,14 @@
+{
+  "blockedWhileHeld": [
+    "shared: recordPortionFact",
+    "exclusive: createWork",
+    "exclusive: dependency",
+    "exclusive: GPR-1 approveDraft"
+  ],
+  "afterRelease": {
+    "shared: recordPortionFact": "applied",
+    "exclusive: createWork": "applied",
+    "exclusive: dependency": "applied",
+    "exclusive: GPR-1 approveDraft": "refused by its own rule"
+  }
+}

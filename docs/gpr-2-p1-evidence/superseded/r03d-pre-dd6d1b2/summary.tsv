@@ -1,0 +1,14 @@
+file	exit	tests	pass	fail	seconds
+tests/gpr2-r03d-migration-runner.test.ts	0	15	15	0	17
+tests/gpr2-r03d-migration-pg.test.ts	0	6	6	0	8
+tests/gpr2-r03c-command-ledger.test.ts	0	11	11	0	18
+tests/gpr2-r03c-ledger-pg.test.ts	0	5	5	0	5
+tests/gpr2-r03b-writer-registry.test.ts	0	10	10	0	2
+tests/gpr2-r03b-coordination-pg.test.ts	0	8	8	0	6
+tests/gpr2-r03a-tx-context.test.ts	0	6	6	0	17
+tests/gpr2-r03a-snapshot-pg.test.ts	0	4	4	0	1
+tests/gpr2-r02-fact-resolver.test.ts	0	24	24	0	1
+tests/gpr2-r02-consumers.test.ts	0	1	1	0	19
+tests/gpr2-r02-single-resolver.test.ts	0	4	4	0	1
+tests/gpr2-r02-fact-resolver-pg.test.ts	0	2	2	0	3
+tests/gpr2-r01-traceability.test.ts	0	7	7	0	0

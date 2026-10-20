@@ -1,0 +1,12 @@
+{
+  "serverVersion": "PostgreSQL 16.15 (Ubuntu 16.15-0ubuntu0.24.04.1) on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit",
+  "serverVersionNum": 160015,
+  "clusterName": "gpr2-p1-isolated",
+  "port": 54329,
+  "host": "127.0.0.1",
+  "serverAddr": "127.0.0.1/32",
+  "dataDirectory": "/var/tmp/gpr2-isolated-pg/data",
+  "database": "gpr2_p1_r03a_7626b429",
+  "productionCredentialsUsed": false,
+  "checkedAt": "2026-10-20T08:42:43.743Z"
+}
