@@ -29,13 +29,13 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           fetch-depth: 1
           persist-credentials: false
 
       - name: Run Claude Code (read-only)
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-action@a5a423f75c251dcbff8a74e99f83b2cb03c72bfa # v1
         with:
           # PR-write covers PR conversation and inline comments; no Issues grant.
           # The explicit job-scoped token avoids the default App OIDC exchange.
