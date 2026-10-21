@@ -4,6 +4,7 @@ import json
 import os
 import re
 import sys
+import unicodedata
 from urllib.request import Request, urlopen
 
 from claude_phase2_context import OWNER_ID, OWNER_LOGIN, event_pr_number
@@ -13,18 +14,27 @@ MAX_SUMMARY_CHARS = 3000
 MAX_FINDINGS = 8
 MAX_FINDING_CHARS = 900
 ALLOWED_SEVERITIES = {"high", "medium", "low", "info"}
-# Defense in depth: reject obvious credential, outbound-link and mention payloads.
-UNSAFE = re.compile(r"https?://|!\[|@|github_pat_|gh[psuro]_|sk-ant-", re.I)
+# Untrusted report text is emitted only as literal fenced code, never GFM syntax.
 
 
 def safe_text(value, maximum):
     if not isinstance(value, str) or not value.strip() or len(value) > maximum:
         raise ValueError("invalid or oversized report text")
-    if any(ord(char) < 32 and char not in "\n\t" for char in value):
-        raise ValueError("control characters in report")
-    if UNSAFE.search(value):
-        raise ValueError("disallowed link, mention or token-shaped text")
+    if any(
+        unicodedata.category(char) in {"Cf", "Cs", "Co", "Cn", "Zl", "Zp"}
+        or (unicodedata.category(char) == "Cc" and char not in "\n\t")
+        for char in value
+    ):
+        raise ValueError("control or misleading Unicode in report")
     return value.strip()
+
+
+def inert_markdown(text):
+    """Wrap text in a dynamic GFM fence longer than any delimiter in text."""
+    backticks = max(4, max((len(m.group()) for m in re.finditer(r"\x60+", text)), default=0) + 1)
+    tildes = max(4, max((len(m.group()) for m in re.finditer(r"~+", text)), default=0) + 1)
+    fence = ("\x60" * backticks) if backticks <= tildes else ("~" * tildes)
+    return fence + "text\n" + text + "\n" + fence
 
 
 def render_report(raw):
@@ -43,7 +53,8 @@ def render_report(raw):
         "**AI-generated assessment. PR text and patches were treated as untrusted data.**",
         "",
         "**Summary**",
-        summary,
+        "",
+        inert_markdown(summary),
         "",
         "**Findings**",
     ]
@@ -54,7 +65,7 @@ def render_report(raw):
         if severity not in ALLOWED_SEVERITIES:
             raise ValueError("invalid finding severity")
         description = safe_text(item["description"], MAX_FINDING_CHARS)
-        lines.append(f"- **{severity.upper()}**: {description}")
+        lines.extend(["", f"**{severity.upper()}**", "", inert_markdown(description)])
     if not findings:
         lines.append("- No findings stated; this does not imply security acceptance.")
     lines.extend(["", "_No code or PR configuration was modified by the analysis job._"])
