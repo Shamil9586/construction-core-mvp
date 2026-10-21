@@ -41,13 +41,17 @@ def report(summary="No unexpected behavior"):
 
 class SecurityTests(unittest.TestCase):
     def test_owner_only_and_pr_only(self):
-        for kind in ("issue_comment", "pull_request_review_comment"):
-            with self.subTest(kind=kind):
-                self.assertEqual(context.event_pr_number(event(kind=kind), kind), 4)
-                for attrs in ({"login": "attacker"}, {"user_id": 123},
-                              {"state": "closed"}, {"mention": "hello"}):
-                    with self.assertRaises(ValueError):
-                        context.event_pr_number(event(kind=kind, **attrs), kind)
+        kind = "issue_comment"
+        self.assertEqual(context.event_pr_number(event(kind=kind), kind), 4)
+        for attrs in ({"login": "attacker"}, {"user_id": 123},
+                      {"state": "closed"}, {"mention": "hello"}):
+            with self.assertRaises(ValueError):
+                context.event_pr_number(event(kind=kind, **attrs), kind)
+        with self.assertRaises(ValueError):
+            context.event_pr_number(
+                event(kind="pull_request_review_comment"),
+                "pull_request_review_comment",
+            )
         with self.assertRaises(ValueError):
             context.event_pr_number({"comment": event()["comment"],
                                     "issue": {"number": 4, "state": "open"}}, "issue_comment")
@@ -138,7 +142,9 @@ class SecurityTests(unittest.TestCase):
             self.assertIn("github.event.comment.user.id == 329431095", job)
             self.assertIn("github.event.comment.user.login == 'Shamil9586'", job)
             self.assertIn("github.event.issue.pull_request != null", job)
-            self.assertIn("github.event.pull_request.state == 'open'", job)
+            self.assertIn("github.event.issue.state == 'open'", job)
+        self.assertNotIn("pull_request_review_comment", workflow)
+        self.assertEqual(workflow.count("          ref: main"), 2)
         for uses in re.findall(r"uses:\s+([^\s]+)", workflow):
             self.assertRegex(uses, r"@[0-9a-f]{40}$")
 
