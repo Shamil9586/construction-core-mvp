@@ -25,7 +25,6 @@ jobs:
 
     permissions:
       contents: read
-      issues: write
       pull-requests: write
 
     steps:
@@ -38,6 +37,7 @@ jobs:
       - name: Run Claude Code (read-only)
         uses: anthropics/claude-code-action@v1
         with:
+          # PR-write covers PR conversation and inline comments; no Issues grant.
           # The explicit job-scoped token avoids the default App OIDC exchange.
           github_token: ${{ github.token }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
