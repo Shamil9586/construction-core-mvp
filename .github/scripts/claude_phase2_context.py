@@ -25,11 +25,6 @@ def event_pr_number(event, event_name):
         if not issue.get("pull_request") or issue.get("state") != "open":
             raise ValueError("not an open PR discussion")
         number = issue.get("number")
-    elif event_name == "pull_request_review_comment":
-        pr = event.get("pull_request") or {}
-        if pr.get("state") != "open":
-            raise ValueError("not an open PR inline discussion")
-        number = pr.get("number")
     else:
         raise ValueError("unsupported event")
     if type(number) is not int or number < 1:
