@@ -29,14 +29,14 @@ jobs:
       - name: Checkout verification-only commit
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          fetch-depth: 2
+          fetch-depth: 3
           persist-credentials: false
       - name: Verify scope, immutable candidate and detached checkout
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD^)" = "$CANDIDATE_SHA"
-          test "$(git diff --name-only HEAD^ HEAD)" = ".github/workflows/p1b-one-time-independent-ci.yml"
+          test "$(git rev-parse HEAD^^)" = "$CANDIDATE_SHA"
+          test "$(git diff --name-only "$CANDIDATE_SHA" HEAD)" = ".github/workflows/p1b-one-time-independent-ci.yml"
           test "$(git rev-parse "$CANDIDATE_SHA^{tree}")" = "$CANDIDATE_TREE"
           git checkout --detach "$CANDIDATE_SHA"
           test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
@@ -83,14 +83,14 @@ jobs:
       - name: Checkout verification-only commit
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          fetch-depth: 2
+          fetch-depth: 3
           persist-credentials: false
       - name: Verify scope and detached candidate
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD^)" = "$CANDIDATE_SHA"
-          test "$(git diff --name-only HEAD^ HEAD)" = ".github/workflows/p1b-one-time-independent-ci.yml"
+          test "$(git rev-parse HEAD^^)" = "$CANDIDATE_SHA"
+          test "$(git diff --name-only "$CANDIDATE_SHA" HEAD)" = ".github/workflows/p1b-one-time-independent-ci.yml"
           test "$(git rev-parse "$CANDIDATE_SHA^{tree}")" = "$CANDIDATE_TREE"
           git checkout --detach "$CANDIDATE_SHA"
           test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
@@ -127,7 +127,7 @@ jobs:
           test "$ready" = 1
           marker="$(docker exec gpr2-p1-verify psql "$GPR2_ISOLATED_PG_URL" -X -Atc "SELECT current_setting('cluster_name') || '|' || inet_server_addr()::text || '|' || current_setting('port')")"
           printf '%s\n' "$marker" | tee .p1b-evidence/r03b/isolation.txt
-          test "$marker" = "gpr2-p1-isolated|127.0.0.1|54329"
+          test "$marker" = "gpr2-p1-isolated|127.0.0.1/32|54329" || test "$marker" = "gpr2-p1-isolated|127.0.0.1|54329"
       - name: Native R03b lock protocol / writer registry / isolation guards
         shell: bash
         run: |
