@@ -1,0 +1,170 @@
+name: GPR-2 P1-B One-Time Independent CI
+
+on:
+  push:
+    branches:
+      - verify/p1b-3f047344-20261021
+    paths:
+      - .github/workflows/p1b-one-time-independent-ci.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: p1b-one-time-independent-3f047344
+  cancel-in-progress: false
+
+env:
+  CI: "true"
+  NODE_ENV: test
+  CANDIDATE_SHA: 3f0473447d8d1534bb99a54b406a9e879c0ebaf5
+  CANDIDATE_TREE: 2ab77b37c805aaba4eb2127aa157159caa1ae278
+
+jobs:
+  r02-corrective:
+    name: R02 / GPR-1 corrective — exact candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - name: Checkout verification-only commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Verify scope, immutable candidate and detached checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "$CANDIDATE_SHA"
+          test "$(git diff --name-only HEAD^ HEAD)" = ".github/workflows/p1b-one-time-independent-ci.yml"
+          test "$(git rev-parse "$CANDIDATE_SHA^{tree}")" = "$CANDIDATE_TREE"
+          git checkout --detach "$CANDIDATE_SHA"
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test -z "$(git status --porcelain)"
+          mkdir -p .p1b-evidence/r02
+          printf 'candidate=%s\ntree=%s\n' "$CANDIDATE_SHA" "$CANDIDATE_TREE" > .p1b-evidence/r02/provenance.txt
+      - name: Set up Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install exact locked dependencies (no package lifecycle scripts)
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund 2>&1 | tee .p1b-evidence/r02/npm-ci.log
+      - name: TypeScript, strict frontend, and build
+        shell: bash
+        run: |
+          set -euo pipefail
+          { npx --no-install tsc --noEmit && npm run typecheck:strict && npm run build; } 2>&1 | tee .p1b-evidence/r02/build-and-typecheck.log
+      - name: Independent R02-001-R1 / GPR1-UNKNOWN-01 regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --import tsx --test tests/gpr2-r02-r1-unknown-gpr1.test.ts 2>&1 | tee .p1b-evidence/r02/r02-unknown-gpr1.tap
+      - name: Preserve independent R02 evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: p1b-r02-independent-3f047344
+          path: .p1b-evidence/r02/
+          if-no-files-found: warn
+          retention-days: 30
+
+  r03b-native:
+    name: R03b native PostgreSQL / protected F8-F12 — exact candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      GPR2_ISOLATED_PG_URL: postgresql://postgres:ci-local-only@127.0.0.1:54329/postgres
+      TZ: UTC
+    steps:
+      - name: Checkout verification-only commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - name: Verify scope and detached candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "$CANDIDATE_SHA"
+          test "$(git diff --name-only HEAD^ HEAD)" = ".github/workflows/p1b-one-time-independent-ci.yml"
+          test "$(git rev-parse "$CANDIDATE_SHA^{tree}")" = "$CANDIDATE_TREE"
+          git checkout --detach "$CANDIDATE_SHA"
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test -z "$(git status --porcelain)"
+          mkdir -p .p1b-evidence/r03b
+          printf 'candidate=%s\ntree=%s\n' "$CANDIDATE_SHA" "$CANDIDATE_TREE" > .p1b-evidence/r03b/provenance.txt
+      - name: Set up Node.js 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Install exact locked dependencies (no package lifecycle scripts)
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts --no-audit --no-fund 2>&1 | tee .p1b-evidence/r03b/npm-ci.log
+      - name: Start isolated PostgreSQL 16 on runner loopback only
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --detach --rm --name gpr2-p1-verify --network host \
+            --env POSTGRES_USER=postgres \
+            --env POSTGRES_PASSWORD=ci-local-only \
+            --env POSTGRES_DB=postgres \
+            postgres:16 \
+            -c cluster_name=gpr2-p1-isolated \
+            -c listen_addresses=127.0.0.1 \
+            -c port=54329
+          ready=0
+          for i in $(seq 1 45); do
+            if docker exec gpr2-p1-verify pg_isready -h 127.0.0.1 -p 54329 -U postgres >/dev/null 2>&1; then ready=1; break; fi
+            sleep 2
+          done
+          test "$ready" = 1
+          marker="$(docker exec gpr2-p1-verify psql "$GPR2_ISOLATED_PG_URL" -X -Atc "SELECT current_setting('cluster_name') || '|' || inet_server_addr()::text || '|' || current_setting('port')")"
+          printf '%s\n' "$marker" | tee .p1b-evidence/r03b/isolation.txt
+          test "$marker" = "gpr2-p1-isolated|127.0.0.1|54329"
+      - name: Native R03b lock protocol / writer registry / isolation guards
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 900s node --import tsx --test --test-concurrency=1 \
+            tests/gpr2-p1-isolation-guard.test.ts \
+            tests/gpr2-r03b-coordination-pg.test.ts \
+            tests/gpr2-r03b-writer-registry.test.ts \
+            2>&1 | tee .p1b-evidence/r03b/r03b-native.tap
+      - name: Protected native F8/F12 suites (fresh database per file)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/p1b-psql" <<'EOS'
+          #!/usr/bin/env bash
+          exec docker exec -i gpr2-p1-verify psql "$@"
+          EOS
+          chmod +x "$RUNNER_TEMP/p1b-psql"
+          PSQL="$RUNNER_TEMP/p1b-psql" FILE_TIMEOUT=600 \
+            bash scripts/gpr2-p1-run-tests.sh ".p1b-evidence/r03b/protected" \
+              tests/f8.3-postgres-concurrency.test.ts \
+              tests/f12-final-corrective-postgres-concurrency.test.ts \
+              tests/f12-final-r06-auth-safe-idempotency.test.ts \
+              tests/f12-sdo-03-retry-safety.test.ts \
+            2>&1 | tee .p1b-evidence/r03b/protected-run.log
+          cat .p1b-evidence/r03b/protected/total.txt
+          grep -q "TOTAL files=4 nonzero_exit=0 " .p1b-evidence/r03b/protected/total.txt
+          grep -q "fail=0 " .p1b-evidence/r03b/protected/total.txt
+      - name: Stop disposable PostgreSQL
+        if: always()
+        shell: bash
+        run: docker stop gpr2-p1-verify >/dev/null 2>&1 || true
+      - name: Preserve independent native R03b evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: p1b-r03b-native-independent-3f047344
+          path: .p1b-evidence/r03b/
+          if-no-files-found: warn
+          retention-days: 30
