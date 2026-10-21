@@ -25,6 +25,12 @@ or Render changes.
   file changes, commits, branches, pushes, PR creation, merge, deployment,
   migrations and credential access.
 - Checkout does not persist credentials. A timeout and turn cap apply.
+- Action supply chain: `actions/checkout` is pinned to its verified
+  upstream `v6` commit `d23441a48e516b6c34aea4fa41551a30e30af803`;
+  `anthropics/claude-code-action` is pinned to the verified annotated `v1`
+  target commit `a5a423f75c251dcbff8a74e99f83b2cb03c72bfa`.
+  Updates require a separate review and commit; this does not lock all
+  transitive dependencies.
 
 Read-only here means **repository contents cannot be modified**; writing
 the reply comment remains intentionally possible. Tool filtering is defence
