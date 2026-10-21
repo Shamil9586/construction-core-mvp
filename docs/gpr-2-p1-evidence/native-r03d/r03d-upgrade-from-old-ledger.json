@@ -1,0 +1,7 @@
+{
+  "unverifiedInLedger": 25,
+  "newlyApplied": [
+    "026_gpr2_fact_source.sql",
+    "027_gpr2_command_ledger.sql"
+  ]
+}

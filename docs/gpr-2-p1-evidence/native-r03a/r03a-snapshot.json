@@ -1,0 +1,18 @@
+{
+  "independentReads": {
+    "pointer": 1,
+    "versions": [
+      1,
+      2
+    ]
+  },
+  "snapshotRead": {
+    "pointer": 2,
+    "versions": [
+      1,
+      2
+    ]
+  },
+  "commitLandedBetween": true,
+  "livePointerAfter": 3
+}

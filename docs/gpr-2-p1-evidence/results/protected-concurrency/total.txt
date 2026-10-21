@@ -1,0 +1,1 @@
+TOTAL files=4 nonzero_exit=0 tests=18 pass=18 fail=0 cancelled=0 skipped=0

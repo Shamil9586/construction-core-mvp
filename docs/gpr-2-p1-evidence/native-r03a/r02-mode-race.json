@@ -1,0 +1,10 @@
+{
+  "history": [
+    {
+      "from_mode": "LEGACY_WORK",
+      "to_mode": "PORTION",
+      "basis": "NO_LEGACY_FACT_AT_FIRST_PORTION_FACT"
+    }
+  ],
+  "writersBlockedBeforeRelease": 2
+}

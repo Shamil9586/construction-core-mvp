@@ -165,7 +165,7 @@ test('017 via the real runner on a fresh database: full chain applies and re-run
   try {
     await migrate();
     await migrate();
-    assert.equal((await client.query('SELECT max(version)::int v FROM schema_migrations')).rows[0].v, 25); // head is now 025 (024 Bitrix Disk, 025 GPR schedule; 023 package soft archive, after 022 scope no-overlap / 021 AOSR method / 020 AOSR foundation); 017's effects are asserted below
+    assert.equal((await client.query('SELECT max(version)::int v FROM schema_migrations')).rows[0].v, fs.readdirSync('infra').filter((f) => /^\d+_.*\.sql$/.test(f)).length); // GPR-2 R02: the head is the number of numbered files (was a literal 25); 025 was the head at the time of writing // head is now 025 (024 Bitrix Disk, 025 GPR schedule; 023 package soft archive, after 022 scope no-overlap / 021 AOSR method / 020 AOSR foundation); 017's effects are asserted below
     const cols = await riskColumns(client);
     assert.ok(cols.includes('escalate_deputy_days'));
     assert.equal(cols.includes('escalate_technical_days'), false);

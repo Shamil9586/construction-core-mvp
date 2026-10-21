@@ -73,7 +73,7 @@ test('A1 fresh native chain: migration 025 (numbered) adds exactly the five sche
   const c = await client();
   try {
     const files = fs.readdirSync('infra').filter((f) => /^\d+_.*\.sql$/.test(f)).sort();
-    assert.ok(files.includes('025_production_schedule.sql') && files.includes('024_bitrix_disk_file_storage.sql') && files.at(-1) === '025_production_schedule.sql', 'chain ends 024 disk, 025 schedule');
+    assert.ok(files.includes('025_production_schedule.sql') && files.includes('024_bitrix_disk_file_storage.sql') && files.indexOf('025_production_schedule.sql') === files.indexOf('024_bitrix_disk_file_storage.sql') + 1, 'chain: 024 disk, then 025 schedule'); // GPR-2 R02: was `files.at(-1) === 025`, which any later (additive, numbered) migration invalidates — the pin is the ORDER of 024/025, not that nothing follows
     const versions = (await c.query('SELECT version FROM schema_migrations ORDER BY version')).rows.map((r) => r.version);
     assert.deepEqual(versions, files.map((f) => Number(f.split('_')[0])), 'schema_migrations records exactly the numbered chain, each version once');
     const tables = (await c.query("SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_name LIKE 'schedule\\_%' ORDER BY 1")).rows.map((r) => r.table_name);

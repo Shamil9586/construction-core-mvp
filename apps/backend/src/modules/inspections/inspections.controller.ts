@@ -2,6 +2,7 @@ import { Controller, Post, Get, Param, Body, Req, Inject } from '@nestjs/common'
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { z } from 'zod';
 import { transaction, insert } from '../../db';
+import { coordinate } from '../../coordination-lock';
 import { ProductionService } from '../../service';
 import { ReadService } from '../../read-service';
 import { authenticate, requirePermission, scoped, audit, ensure, ensureAttachmentObjectScope } from '../../security';
@@ -68,7 +69,7 @@ export class InspectionsController {
     // additionally refuses one already used as evidence for a different object,
     // while leaving same-object reuse (a second inspection on the same object
     // reusing an already-uploaded photo) unaffected.
-    b: any) { const a = await authenticate(r); requirePermission(a, P.ISSUE_CREATE); const d = z.object({ attachmentId: V.uuid, issueId: V.uuid.optional() }).strict().parse(b); return transaction(async (c) => { const i = await scoped(c, 'inspections', V.uuid.parse(id), a, true); ensure(i.status !== 'ACCEPTED', 'Проверка завершена'); const f = await scoped(c, 'attachments', d.attachmentId, a); ensure(f.mimeType.startsWith('image/'), 'Требуется фото'); await ensureAttachmentObjectScope(c, a, d.attachmentId, i.objectId); if (d.issueId) {
+    b: any) { const a = await authenticate(r); requirePermission(a, P.ISSUE_CREATE); const d = z.object({ attachmentId: V.uuid, issueId: V.uuid.optional() }).strict().parse(b); return transaction(async (c) => { await coordinate(c, 'modules/inspections/inspections.controller.ts#photo', a.tenantId, { inspection: id }); const i = await scoped(c, 'inspections', V.uuid.parse(id), a, true); ensure(i.status !== 'ACCEPTED', 'Проверка завершена'); const f = await scoped(c, 'attachments', d.attachmentId, a); ensure(f.mimeType.startsWith('image/'), 'Требуется фото'); await ensureAttachmentObjectScope(c, a, d.attachmentId, i.objectId); if (d.issueId) {
         const issue = await scoped(c, 'issues', d.issueId, a);
         ensure(issue.inspectionId === id, 'Замечание другой проверки');
     } const photo = await insert(c, 'inspection_photos', a.tenantId, { inspectionId: id, ...d, uploadedBy: a.id }); await audit(c, a, 'Inspection', id, 'PHOTO', null, { photoId: photo.id }); return photo; }); }

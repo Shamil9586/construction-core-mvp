@@ -211,7 +211,9 @@ export const CANCELLED_EXPECTATIONS: CancelledExpectation[] = [
 export const PINNED_SUITES: Record<string, string> = {
   'tests/gpr-1-schedule-domain.test.ts': '6aba942c222ff1b7f24765db7878b8213608204a60d26fedcdb5677252a53acc',
   'tests/gpr-1-schedule-http.test.ts': '5f3c60edd1f3ccf20a04f940dad289bae94cd595b9acbeb8602606fca266a013',
-  'tests/gpr-1-schedule-postgres.test.ts': 'f26798bd810d9d886f2bb826d5512fb5a1de560e4db30f365930a33cb7cf4614',
+  // GPR-2 R02 deliberately changed ONE assertion of this suite (A1: `files.at(-1) === 025` became "025 directly follows 024"). The old form fails for ANY later
+  // additive migration, so it can express no business expectation of GPR-1; the decision that licenses it is C17 (numbered additive migrations, no pinned chain end).
+  'tests/gpr-1-schedule-postgres.test.ts': '8e9a396f38fedc682583ba0330b95dea7e9edc00da4e12eabdd744342a5ee020',
   'tests/gpr-ux-d01-viewmodel.test.ts': '476206b3c18f63b3b57ad1160a5c8d5dc9d623bb64a0eff11c00514037e65536',
   'tests/view-models.test.ts': 'ac13da352da657458a045b1b4888f972a1c18fffdf49bfbc63ad0c65b4713d5d',
   'tests/production-execution.test.ts': 'af3e6afcd186602199a882fccb0075efaf57e91c663fb647c12e18802dd6f7d8',

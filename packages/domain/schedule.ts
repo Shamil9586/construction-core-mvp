@@ -118,7 +118,19 @@ export type ScheduleExpectedPhase = 'NOT_DUE' | 'UNDERWAY' | 'DUE_COMPLETE';
 /** Why a delayed entry is delayed — the label of the cause, not a second delay figure. */
 export type ScheduleDelayKind = 'START' | 'PROGRESS' | 'FINISH';
 
-export type ObjectScheduleStatus = 'NO_BASELINE' | 'ON_TRACK' | 'DELAYED';
+/**
+ * `UNDETERMINED` (GPR1-UNKNOWN-01): no entry is provably delayed, but at least one entry's fact is unknown — "on track" cannot be claimed from
+ * incomplete data, and neither can a delay. A delay that IS proved by other entries still reads DELAYED.
+ */
+export type ObjectScheduleStatus = 'NO_BASELINE' | 'ON_TRACK' | 'DELAYED' | 'UNDETERMINED';
+
+/**
+ * How trustworthy the fact behind an entry is — kept apart from the four production states on purpose:
+ *   REPORTED     a fact exists (a reported 0 counts) and the state is computed from it;
+ *   NOT_REPORTED nothing was ever reported (a stated nothing; the schedule treats it as 0 done, as it always did);
+ *   UNKNOWN      the resolver cannot state the fact (unorderable tie, history unavailable): NO state, NO delay, NO progress is claimed.
+ */
+export type ScheduleFactReliability = 'REPORTED' | 'NOT_REPORTED' | 'UNKNOWN';
 
 // ---------------------------------------------------------------------------------------------------------------------------------
 // Plan versus fact for ONE entry
@@ -131,6 +143,8 @@ export interface ScheduleEntryFacts {
     plannedQuantity: string | number;
     /** Latest RP fact of the scope. `null` = nothing was ever reported — a different fact from a reported 0. */
     rpFactQuantity: string | number | null;
+    /** The fact cannot be stated (see ScheduleFactReliability). Never inferred from `rpFactQuantity === null`, which also means "nothing reported". */
+    factUnknown?: boolean;
 }
 
 export interface ScheduleEntryStatus {
@@ -143,7 +157,11 @@ export interface ScheduleEntryStatus {
     /** Reported quantity above the plan — a visible signal, kept apart from the clamped percentage. */
     overperformed: boolean;
     expectedPhase: ScheduleExpectedPhase;
-    state: ScheduleEntryState;
+    /** `null` only when `assessable` is false: an unknown fact has no production state — none of the four is true of it. */
+    state: ScheduleEntryState | null;
+    factReliability: ScheduleFactReliability;
+    /** `false` = the schedule cannot be assessed against this entry (unknown fact): no delay, no progress, no «по графику». */
+    assessable: boolean;
     /** Whole calendar days; 0 unless the state is DELAYED. */
     delayDays: number;
     delayKind: ScheduleDelayKind | null;
@@ -189,11 +207,15 @@ export function deriveScheduleEntryStatus(facts: ScheduleEntryFacts, today: stri
     const start = civilDayNumber(facts.plannedStart), finish = civilDayNumber(facts.plannedFinish), t = civilDayNumber(today);
     const plannedProgress = plannedProgressOn(facts.plannedStart, facts.plannedFinish, today);
     const expectedPhase = expectedPhaseOn(facts.plannedStart, facts.plannedFinish, today);
+    if (facts.factUnknown) {
+        // The calendar part is still true and still stated; everything that needs the fact is not.
+        return { plannedProgress, actualProgress: null, factReported: false, overperformed: false, expectedPhase, factReliability: 'UNKNOWN', assessable: false, state: null, delayDays: 0, delayKind: null };
+    }
     const plan = new Decimal(facts.plannedQuantity);
     const factReported = facts.rpFactQuantity !== null && facts.rpFactQuantity !== undefined;
     const fact = new Decimal(factReported ? facts.rpFactQuantity! : 0);
     const actualProgress = new ProgressCalculationService().calculate(fact, plan);
-    const base = { plannedProgress, actualProgress, factReported, overperformed: plan.gt(0) && fact.gt(plan), expectedPhase };
+    const base = { plannedProgress, actualProgress, factReported, overperformed: plan.gt(0) && fact.gt(plan), expectedPhase, factReliability: (factReported ? 'REPORTED' : 'NOT_REPORTED') as ScheduleFactReliability, assessable: true };
     if (!plan.gt(0)) {
         // Defensive only: the schema forbids a non-positive planned quantity. Nothing can be measured, so nothing is claimed.
         return { ...base, state: 'NOT_STARTED', delayDays: 0, delayKind: null };
@@ -224,6 +246,19 @@ export function aggregateScheduleStates(states: ScheduleEntryState[]): ScheduleE
     return 'IN_PROGRESS';
 }
 
+/**
+ * The state of a Work from its entries when some of them may be unassessable. `state`: any proved delay wins; otherwise one unassessable entry
+ * makes the Work's state `null` (not a guess); otherwise `aggregateScheduleStates`. `assessable` is false when any entry is unassessable.
+ * With no entries: `{ state: null, assessable: true }` (the Work is simply not scheduled).
+ */
+export function aggregateScheduleAssessment(states: (ScheduleEntryState | null)[]): { state: ScheduleEntryState | null; assessable: boolean } {
+    const known = states.filter((s): s is ScheduleEntryState => s !== null);
+    const assessable = known.length === states.length;
+    if (known.includes('DELAYED'))
+        return { state: 'DELAYED', assessable };
+    return { state: assessable ? aggregateScheduleStates(known) : null, assessable };
+}
+
 // ---------------------------------------------------------------------------------------------------------------------------------
 // The Object conclusion — «По графику» / «Есть отставание»
 // ---------------------------------------------------------------------------------------------------------------------------------
@@ -236,6 +271,8 @@ export interface ObjectScheduleConclusion {
     completedCount: number;
     inProgressCount: number;
     notStartedCount: number;
+    /** Entries whose fact is unknown (GPR1-UNKNOWN-01): they are in none of the counts above and are never counted as on track. */
+    unassessedCount: number;
     /** What the calendar expects on the day: not yet due / should be underway / should already be finished. */
     expected: { notDue: number; underway: number; dueComplete: number };
 }
@@ -243,7 +280,8 @@ export interface ObjectScheduleConclusion {
 /**
  * The production-level conclusion of one Object, from the entries of its APPROVED baseline (`null` = there is no approved baseline).
  *  * no approved baseline (or one with no entries) → NO_BASELINE: nothing is claimed — neither «По графику» nor a delay;
- *  * any entry delayed    → DELAYED;
+ *  * any entry delayed    → DELAYED (a proved delay stands even if another entry is unassessable);
+ *  * else any entry with an unknown fact → UNDETERMINED: neither «по графику» nor a delay can be claimed from incomplete data;
  *  * otherwise            → ON_TRACK.
  * No finance, ИД, ПТО or СДО input exists in this function, by construction.
  */
@@ -252,14 +290,16 @@ export function resolveObjectScheduleConclusion(statuses: ScheduleEntryStatus[] 
     const count = (state: ScheduleEntryState) => list.filter(s => s.state === state).length;
     const phase = (p: ScheduleExpectedPhase) => list.filter(s => s.expectedPhase === p).length;
     const delayedCount = count('DELAYED');
+    const unassessedCount = list.filter(s => !s.assessable).length;
     return {
-        status: list.length === 0 ? 'NO_BASELINE' : delayedCount > 0 ? 'DELAYED' : 'ON_TRACK',
+        status: list.length === 0 ? 'NO_BASELINE' : delayedCount > 0 ? 'DELAYED' : unassessedCount > 0 ? 'UNDETERMINED' : 'ON_TRACK',
         entryCount: list.length,
         delayedCount,
         maxDelayDays: list.reduce((max, s) => Math.max(max, s.delayDays), 0),
         completedCount: count('COMPLETED'),
         inProgressCount: count('IN_PROGRESS'),
         notStartedCount: count('NOT_STARTED'),
+        unassessedCount,
         expected: { notDue: phase('NOT_DUE'), underway: phase('UNDERWAY'), dueComplete: phase('DUE_COMPLETE') },
     };
 }
@@ -324,6 +364,7 @@ export const PREDECESSOR_IN_USE_MESSAGE = 'Этот участок указан 
 export const EMPTY_SCHEDULE_MESSAGE = 'Пустой график нельзя утвердить: добавьте хотя бы один участок производства.';
 export const NO_CHANGES_MESSAGE = 'В черновике нет изменений относительно утверждённого графика.';
 export const CORRECTION_REASON_REQUIRED_MESSAGE = 'Укажите причину корректировки утверждённого графика.';
+export const UNKNOWN_FACT_DELAY_MESSAGE = 'Причину отставания указать нельзя: факт выполнения по этому участку не определён, отставание не установлено.';
 export const DELAY_ONLY_MESSAGE = 'Причину отставания можно указать только для участка, по которому есть отставание.';
 
 export function scheduleDatesViolation(plannedStart: string, plannedFinish: string): string | null {
@@ -439,6 +480,8 @@ export function effectiveDelayCategories(overrides: DelayCategoryOverride[]): { 
 }
 
 /** A reason explains a REAL delay: recording one against an entry that is on schedule (or finished) would only create noise. */
-export function delayReasonViolation(state: ScheduleEntryState): string | null {
+export function delayReasonViolation(state: ScheduleEntryState | null): string | null {
+    if (state === null)
+        return UNKNOWN_FACT_DELAY_MESSAGE; // an unknown fact proves no delay, so it can explain none
     return state === 'DELAYED' ? null : DELAY_ONLY_MESSAGE;
 }

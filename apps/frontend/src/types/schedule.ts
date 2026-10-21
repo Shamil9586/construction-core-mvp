@@ -20,7 +20,11 @@ export type ScheduleExpectedPhase = 'NOT_DUE' | 'UNDERWAY' | 'DUE_COMPLETE';
 export type ScheduleDelayKind = 'START' | 'PROGRESS' | 'FINISH';
 
 /** The production-level conclusion of one object. `NO_BASELINE` claims nothing: there is no approved schedule to be on or off. */
-export type ObjectScheduleStatus = 'NO_BASELINE' | 'ON_TRACK' | 'DELAYED';
+/** `UNDETERMINED`: no proved delay, but an entry's fact is unknown — neither «по графику» nor a delay is claimed. */
+export type ObjectScheduleStatus = 'NO_BASELINE' | 'ON_TRACK' | 'DELAYED' | 'UNDETERMINED';
+
+/** REPORTED = a fact exists; NOT_REPORTED = nothing was ever reported; UNKNOWN = the fact cannot be stated (no state, no delay, no progress). */
+export type ScheduleFactReliability = 'REPORTED' | 'NOT_REPORTED' | 'UNKNOWN';
 
 export type ScheduleRevisionStatus = 'DRAFT' | 'APPROVED' | 'SUPERSEDED' | 'DISCARDED';
 
@@ -90,7 +94,12 @@ export interface ScheduleEntry extends ScheduleScope {
   factReported: boolean;
   overperformed: boolean;
   expectedPhase: ScheduleExpectedPhase;
-  state: ScheduleEntryState;
+  /** `null` when `assessable` is false (unknown fact): none of the four states is true of such an entry. */
+  state: ScheduleEntryState | null;
+  /** Absent (an older server) reads as REPORTED / NOT_REPORTED by `factReported`. */
+  factReliability?: ScheduleFactReliability;
+  /** `false` = the entry cannot be assessed against the schedule (unknown fact). Absent reads as `true`. */
+  assessable?: boolean;
   /** Whole calendar days; 0 unless `state` is `DELAYED`. */
   delayDays: number;
   delayKind: ScheduleDelayKind | null;
@@ -187,6 +196,8 @@ export interface ObjectScheduleConclusion {
   completedCount: number;
   inProgressCount: number;
   notStartedCount: number;
+  /** Entries whose fact is unknown: in none of the counts above, never counted as on track. */
+  unassessedCount?: number;
   expected: { notDue: number; underway: number; dueComplete: number };
   /** Production scopes of the object that are not part of the approved schedule. */
   unscheduledCount: number;
@@ -242,6 +253,8 @@ export interface WorkSchedule {
     plannedStart: CivilDate;
     plannedFinish: CivilDate;
     state: ScheduleEntryState | null;
+    /** `false` = at least one of the work's entries has an unknown fact (then `state` is `null` unless a delay is proved). */
+    assessable?: boolean;
     delayDays: number;
     entryCount: number;
   } | null;

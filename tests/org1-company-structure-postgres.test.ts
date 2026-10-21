@@ -47,7 +47,7 @@ const active = async (member: string, fn: string) => (await ctx.db.pool.query("S
 test('A no ORG-1 migration: ORG-1 adds none (017 stays the last pre-PBX-5A file), and the existing table already admits every function code', async () => {
   const files = (await import('node:fs')).readdirSync('infra').filter((f) => /^\d+_.*\.sql$/.test(f)).sort();
   assert.equal(files[16], '017_remove_legacy_director_roles.sql');
-  assert.deepEqual(files.slice(17), ['018_bitrix_notification_outbox.sql', '019_pto_work_assignments.sql', '020_aosr_foundation.sql', '021_aosr_method_and_scheme_files.sql', '022_package_scope_no_overlap.sql', '023_package_soft_archive.sql', '024_bitrix_disk_file_storage.sql', '025_production_schedule.sql']); // 019: PILOT-W01 PTO work handoff; 020/021: ID-AUTO-1 AOSR; 022: package scope no-overlap; 023: package soft archive; 024: Bitrix Disk file storage; 025: GPR production schedule
+  assert.deepEqual(files.slice(17, 25), ['018_bitrix_notification_outbox.sql', '019_pto_work_assignments.sql', '020_aosr_foundation.sql', '021_aosr_method_and_scheme_files.sql', '022_package_scope_no_overlap.sql', '023_package_soft_archive.sql', '024_bitrix_disk_file_storage.sql', '025_production_schedule.sql']); // 019: PILOT-W01 PTO work handoff; 020/021: ID-AUTO-1 AOSR; 022: package scope no-overlap; 023: package soft archive; 024: Bitrix Disk file storage; 025: GPR production schedule; GPR-2 R02: files after 025 belong to later stages and are not ORG-1's concern
   const c = await client();
   try {
     for (const fn of ['PTO', 'CONSTRUCTION_CONTROL', 'SDO', 'PROJECT_MANAGEMENT']) {

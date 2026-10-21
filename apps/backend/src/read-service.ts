@@ -4,9 +4,37 @@ import { Injectable } from '@nestjs/common';
 import { buildPackageScope } from '../../../packages/domain/package-scope';
 import Decimal from 'decimal.js';
 import { pool, rows, one } from './db';
+import { loadPortionFigures, loadWorkFacts } from './fact-resolver';
 import { Actor, requirePermission, objectAccess, effectivePtoAssignedWork } from './security';
 import { Permission as P, ProgressCalculationService, ScheduleStatusService, PotentialClosingService, ObjectHealthService, PortionCompletionService, defaultRisk, resolveInternalScAccepted, resolveActualQuantity, canAccessDocumentation, resolveDocumentationAttention, resolvePackageSdoReadiness, isCustomerAcceptanceSnapshotCurrent, resolveCustomerScLatestGroup } from '../../../packages/domain';
-@Injectable()
+
+
+// R02-001: a quantity the fact resolver cannot state (UNKNOWN_TIE, HISTORY_UNAVAILABLE, NOT_YET_KNOWN) is NULL all the way to the read model. These two
+// build the work-level outputs for that case WITHOUT inventing a figure: the plan-only part survives, every fact-derived number is null.
+/** Schedule status of a Work whose fact is unknown: GRAY, no actual progress, no variance, no delay — only the plan is stated. */
+function unknownScheduleStatus(start: any, finish: any, today: Date, risk: any) {
+    const planOnly = new ScheduleStatusService().calculate(start, finish, 0, today, risk);
+    return { ...planOnly, actualProgress: null, variance: null, delayDays: 0, scheduleStatus: 'GRAY' };
+}
+/** Financial funnel of a Work whose fact is unknown: what was already closed is known; everything that needs the physical fact is null. */
+/**
+ * R02-001-R1: the actual quantity of an execution unit from its portions' RP facts, by the resolver's own state per portion
+ * (RESOLVED | NONE | UNKNOWN_TIE) — not by `quantity === null`, which is also "nothing reported".
+ *   * any portion UNKNOWN_TIE -> the unit's total is NOT stated (`actualQuantity: null`, factState UNKNOWN_TIE); the sum of the portions that ARE known is
+ *     shown apart as `actualQuantityKnownPart` and is never the unit's fact;
+ *   * otherwise the sum of the resolved portions; a unit nobody reported on keeps "0.0000" with factState NONE_REPORTED (the pre-R02 reading);
+ *   * a confirmed 0 is a RESOLVED portion: "0.0000", factState KNOWN.
+ */
+function unitRpFact(portions: { id: string; rpFactQuantity: string | null; rpFactState: 'RESOLVED' | 'NONE' | 'UNKNOWN_TIE' }[]) {
+    const knownSum = portions.reduce((sum, p) => (p.rpFactState === 'RESOLVED' ? sum.add(p.rpFactQuantity ?? 0) : sum), new Decimal(0)).toFixed(4);
+    const unknownPortionIds = portions.filter(p => p.rpFactState === 'UNKNOWN_TIE').map(p => p.id);
+    if (unknownPortionIds.length)
+        return { actualQuantity: null as string | null, factState: 'UNKNOWN_TIE', knownPart: knownSum as string | null, unknownPortionIds };
+    return { actualQuantity: knownSum as string | null, factState: portions.some(p => p.rpFactState === 'RESOLVED') ? 'KNOWN' : 'NONE_REPORTED', knownPart: null as string | null, unknownPortionIds };
+}
+function unknownFinancial(closed: string) {
+    return { physical: null, closed, potential: null, buckets: null, factUnknown: true };
+}@Injectable()
 export class ReadService {
     async snapshot(a: Actor, filters: { contractorId?: string } = {}) {
         requirePermission(a, P.OBJECT_VIEW);
@@ -83,8 +111,13 @@ export class ReadService {
         // A dedicated query, scoped to CUSTOMER_SC alone: RP_FACT/INTERNAL_SC
         // keep the plain single-latest-wins reading above (portionConfirmations
         // + latestConfirmation() below), unaffected by R01.
-        const customerScLatestGroupRows = portions.length ? await rows(pool, "SELECT c.portion_id,c.quantity FROM portion_quantity_confirmations c JOIN (SELECT portion_id,MAX(recorded_at) AS max_at FROM portion_quantity_confirmations WHERE tenant_id=$1 AND portion_id=ANY($2::uuid[]) AND source='CUSTOMER_SC' GROUP BY portion_id) m ON m.portion_id=c.portion_id AND m.max_at=c.recorded_at WHERE c.tenant_id=$1 AND c.source='CUSTOMER_SC'", [t, portions.map(p => p.id)]) : [];
-        const customerScResolutionByPortion = new Map<string, ReturnType<typeof resolveCustomerScLatestGroup>>(portions.map(p => [p.id, resolveCustomerScLatestGroup(customerScLatestGroupRows.filter(r => r.portionId === p.id).map(r => r.quantity))]));
+        // GPR-2 R02: the latest RP_FACT, INTERNAL_SC and the whole CUSTOMER_SC timestamp group of every portion come from the ONE fact resolver
+        // (apps/backend/src/fact-resolver.ts), the same loader the guards and the other readers use — the group is still selected inside
+        // PostgreSQL on the native timestamptz and resolved by resolveCustomerScLatestGroup() exactly as before (F12.1), and an exact tie of RP/INTERNAL
+        // rows is ordered by the confirmation sequence or reported as unknown instead of being decided by array order.
+        const portionFigures = await loadPortionFigures(pool, t, portions.map(p => p.id));
+        const customerScResolutionByPortion = new Map<string, { ready: boolean; quantity: string | null }>(portions.map(p => [p.id, portionFigures.get(p.id)!.customer]));
+        const workFacts = await loadWorkFacts(pool, t, works.map(w => w.id));
         // F8.2 PTO / Executive Documentation Foundation. Scoped by work id, the
         // same as execution units above — a Documentation Package hangs off a
         // work, never directly off an object. Fetched unconditionally;
@@ -172,7 +205,7 @@ export class ReadService {
         // — CUSTOMER_SC reads its own latest-timestamp-GROUP resolution
         // (customerScResolutionByPortion) above instead; a single "last row"
         // is never a valid reading for CUSTOMER_SC (F12.1-R01).
-        const latestConfirmation = (portionId: string, source: string) => { const own = portionConfirmations.filter(c => c.portionId === portionId && c.source === source); return own.length ? own[own.length - 1] : undefined; };
+        const latestConfirmation = (portionId: string, source: 'RP_FACT' | 'INTERNAL_SC') => { const f = portionFigures.get(portionId); const quantity = source === 'RP_FACT' ? f?.rpFact : f?.internalSc; return quantity === null || quantity === undefined ? undefined : { quantity }; };
         const sdoPackageReadiness = documentationPackages.map(p => {
             const coveredPortionIds = documentationPackagePortions.filter(link => link.documentationPackageId === p.id).map(link => link.quantityPortionId);
             // F12-QTY-02 (locked F12-D01), F12.1-R01 corrective: satisfied only
@@ -276,8 +309,8 @@ export class ReadService {
         // pick — a tied group with more than one distinct value displays
         // null/unknown rather than inventing a figure (0 remains a real,
         // displayable value, distinct from unknown).
-        const portionsWithStatus = portions.map(p => ({ ...p, rpFactQuantity: latestConfirmation(p.id, 'RP_FACT')?.quantity ?? null, internalScAccepted: portionAccepted(p.id, 'INTERNAL_SC'), internalScConfirmedQuantity: latestConfirmation(p.id, 'INTERNAL_SC')?.quantity ?? null, customerScAccepted: portionAccepted(p.id, 'CUSTOMER_SC'), customerScConfirmedQuantity: customerScResolutionByPortion.get(p.id)?.quantity ?? null }));
-        const executionUnitsWithTotals = executionUnits.map(u => { const ownPortions = portionsWithStatus.filter(p => p.executionUnitId === u.id); return { ...u, actualQuantity: ownPortions.reduce((s, p) => s.add(p.rpFactQuantity ?? 0), new Decimal(0)).toFixed(4), internalScStatus: scCompletion.unitCoverage(u.plannedQuantity, ownPortions.map(p => ({ confirmedQuantity: p.internalScConfirmedQuantity }))), customerScStatus: scCompletion.unitCoverage(u.plannedQuantity, ownPortions.map(p => ({ confirmedQuantity: p.customerScConfirmedQuantity }))) }; });
+        const portionsWithStatus = portions.map(p => ({ ...p, rpFactQuantity: latestConfirmation(p.id, 'RP_FACT')?.quantity ?? null, rpFactState: (portionFigures.get(p.id)?.rp.state ?? 'NONE') as 'RESOLVED' | 'NONE' | 'UNKNOWN_TIE', internalScAccepted: portionAccepted(p.id, 'INTERNAL_SC'), internalScConfirmedQuantity: latestConfirmation(p.id, 'INTERNAL_SC')?.quantity ?? null, customerScAccepted: portionAccepted(p.id, 'CUSTOMER_SC'), customerScConfirmedQuantity: customerScResolutionByPortion.get(p.id)?.quantity ?? null }));
+        const executionUnitsWithTotals = executionUnits.map(u => { const ownPortions = portionsWithStatus.filter(p => p.executionUnitId === u.id); const unit = unitRpFact(ownPortions); return { ...u, actualQuantity: unit.actualQuantity, factState: unit.factState, actualQuantityKnownPart: unit.knownPart, unknownPortionIds: unit.unknownPortionIds, internalScStatus: scCompletion.unitCoverage(u.plannedQuantity, ownPortions.map(p => ({ confirmedQuantity: p.internalScConfirmedQuantity }))), customerScStatus: scCompletion.unitCoverage(u.plannedQuantity, ownPortions.map(p => ({ confirmedQuantity: p.customerScConfirmedQuantity }))) }; });
         // F8.1-04 corrective (Independent Review, not accepted first pass): a
         // work with any execution unit treats them as its sole production fact
         // source — resolveActualQuantity() (packages/domain), the same function
@@ -288,13 +321,19 @@ export class ReadService {
         // `factReported` stays a true statement instead of freezing at "never
         // reported" the moment a work adopts the unit/portion model. A work with
         // no execution units is unaffected — both read exactly its own row.
-        const productionFactByWork = new Map<string, { actualQuantity: string; lastReportedAt: string | null }>(works.map(w => {
+        const productionFactByWork = new Map<string, { actualQuantity: string | null; lastReportedAt: string | null; factState: string; factSourceMode: string; factSourceModeProvenance: string }>(works.map(w => {
             const units = executionUnitsWithTotals.filter(u => u.objectWorkId === w.id);
-            if (!units.length)
-                return [w.id, { actualQuantity: w.actualQuantity, lastReportedAt: w.lastReportedAt }];
+            // GPR-2 R02b: the Work's actual quantity is read from its PERSISTED fact source (LEGACY_WORK | PORTION) by the one resolver. Creating an
+            // execution unit no longer takes the legacy figure away (300 stays 300); a figure the resolver cannot state (an unorderable tie, history unavailable) stays NULL here, with `factState` saying why:
+            // an unknown quantity is never a confirmed zero (R02-001). A reported or implied zero (`NONE_REPORTED`, a confirmed 0) keeps "0.0000".
+            const fact = workFacts.get(w.id)!;
+            const actualQuantity = fact.quantity;
+            const factInfo = { factState: fact.state, factSourceMode: fact.mode, factSourceModeProvenance: fact.modeProvenance };
+            if (!units.length || fact.mode === 'LEGACY_WORK')
+                return [w.id, { actualQuantity, lastReportedAt: w.lastReportedAt, ...factInfo }];
             const ownPortionIds = new Set(portionsWithStatus.filter(p => units.some(u => u.id === p.executionUnitId)).map(p => p.id));
             const factTimestamps = portionConfirmations.filter(c => c.source === 'RP_FACT' && ownPortionIds.has(c.portionId)).map(c => c.recordedAt).sort();
-            return [w.id, { actualQuantity: resolveActualQuantity(w.actualQuantity, w.unit, units.map(u => ({ unit: u.unit, actualQuantity: u.actualQuantity }))), lastReportedAt: factTimestamps.length ? factTimestamps[factTimestamps.length - 1] : null }];
+            return [w.id, { actualQuantity, lastReportedAt: factTimestamps.length ? factTimestamps[factTimestamps.length - 1] : null, ...factInfo }];
         }));
         const workScStatus = new Map<string, { internalScComplete: boolean; customerScAccepted: boolean | null }>(works.map(w => {
             const units = executionUnitsWithTotals.filter(u => u.objectWorkId === w.id);
@@ -304,11 +343,13 @@ export class ReadService {
             const shape = units.map(u => ({ plannedQuantity: u.plannedQuantity, portions: portionsWithStatus.filter(p => p.executionUnitId === u.id).map(p => ({ internalScConfirmedQuantity: p.internalScConfirmedQuantity, customerScConfirmedQuantity: p.customerScConfirmedQuantity })) }));
             return [w.id, { internalScComplete: resolveInternalScAccepted(wholeWorkAccepted, shape), customerScAccepted: scCompletion.customerScAccepted(shape) }];
         }));
-        const enriched = works.map(w => { const accepted = workScStatus.get(w.id)!.internalScComplete; const customerScAccepted = workScStatus.get(w.id)!.customerScAccepted; const productionFact = productionFactByWork.get(w.id)!; const actualQuantity = productionFact.actualQuantity; const lastReportedAt = productionFact.lastReportedAt; const docsReady = packages.some(p => p.objectWorkId === w.id && ['READY', 'TRANSFERRED_TO_SDO'].includes(p.status)); const cases = sdo.filter(s => s.objectWorkId === w.id); const closed = closings.filter(f => cases.some(s => s.id === f.sdoCaseId)).reduce((x, f) => x.add(f.amount), new Decimal(0)).toFixed(2); const financial = new PotentialClosingService().calculate([{ cost: w.estimatedCost, actual: actualQuantity, planned: w.plannedQuantity, closed, accepted, requiresInspection: w.requiresInspection, docsReady, transferred: cases.length > 0, calculated: cases.some(s => ['CALCULATED', 'READY_TO_CLOSE', 'CLOSED'].includes(s.status)) }]); const status = new ScheduleStatusService().calculate(w.plannedStartDate, w.plannedFinishDate, (!lastReportedAt && Number(actualQuantity) === 0) ? null : new ProgressCalculationService().calculate(actualQuantity, w.plannedQuantity), today, risk); const blockers = dependencies.filter(d => d.successorWorkId === w.id).flatMap(d => { const before = works.find(x => x.id === d.predecessorWorkId); const beforeActual = before ? productionFactByWork.get(before.id)!.actualQuantity : null; const reasons = []; if (before && Number(beforeActual) < Number(before.plannedQuantity))
+        const enriched = works.map(w => { const accepted = workScStatus.get(w.id)!.internalScComplete; const customerScAccepted = workScStatus.get(w.id)!.customerScAccepted; const productionFact = productionFactByWork.get(w.id)!; const actualQuantity = productionFact.actualQuantity; const lastReportedAt = productionFact.lastReportedAt; const docsReady = packages.some(p => p.objectWorkId === w.id && ['READY', 'TRANSFERRED_TO_SDO'].includes(p.status)); const cases = sdo.filter(s => s.objectWorkId === w.id); const closed = closings.filter(f => cases.some(s => s.id === f.sdoCaseId)).reduce((x, f) => x.add(f.amount), new Decimal(0)).toFixed(2); const factUnknown = actualQuantity === null; const financial = actualQuantity === null ? unknownFinancial(closed) : new PotentialClosingService().calculate([{ cost: w.estimatedCost, actual: actualQuantity, planned: w.plannedQuantity, closed, accepted, requiresInspection: w.requiresInspection, docsReady, transferred: cases.length > 0, calculated: cases.some(s => ['CALCULATED', 'READY_TO_CLOSE', 'CLOSED'].includes(s.status)) }]); const status = actualQuantity === null ? unknownScheduleStatus(w.plannedStartDate, w.plannedFinishDate, today, risk) : new ScheduleStatusService().calculate(w.plannedStartDate, w.plannedFinishDate, (!lastReportedAt && Number(actualQuantity) === 0) ? null : new ProgressCalculationService().calculate(actualQuantity, w.plannedQuantity), today, risk); const blockers = dependencies.filter(d => d.successorWorkId === w.id).flatMap(d => { const before = works.find(x => x.id === d.predecessorWorkId); const beforeFact = before ? productionFactByWork.get(before.id)! : null; const beforeActual = beforeFact ? beforeFact.actualQuantity : null; const reasons = []; if (before && beforeActual === null)
+            reasons.push(`${before.name}: факт выполнения не определён (${beforeFact!.factState}) — следующий переход не разрешён`);
+        else if (before && Number(beforeActual) < Number(before.plannedQuantity))
             reasons.push(`${before.name}: не завершена`); if (d.requiresAcceptance && !workScStatus.get(d.predecessorWorkId)?.internalScComplete)
             reasons.push('Нет допуска строительного контроля'); if (issues.some(i => i.objectWorkId === d.predecessorWorkId && i.severity === 'CRITICAL' && i.status !== 'CLOSED'))
             reasons.push('Критическое замечание'); if (d.requiresDocument && !documents.some(x => x.objectWorkId === d.predecessorWorkId && x.status === 'APPROVED'))
-            reasons.push('Не подтверждён обязательный документ'); return reasons; }); return { ...w, ...status, actualQuantity, lastReportedAt, accepted, customerScAccepted, docsReady, closed, financial, blockers, stale: !lastReportedAt || age(lastReportedAt) > Number(risk.staleDays) }; });
+            reasons.push('Не подтверждён обязательный документ'); return reasons; }); return { ...w, ...status, actualQuantity, factUnknown, lastReportedAt, factState: productionFact.factState, factSourceMode: productionFact.factSourceMode, factSourceModeProvenance: productionFact.factSourceModeProvenance, accepted, customerScAccepted, docsReady, closed, financial, blockers, stale: !lastReportedAt || age(lastReportedAt) > Number(risk.staleDays) }; });
         const attentionRequired: any[] = [];
         for (const w of enriched) {
             const o = objects.find(x => x.id === w.objectId);
@@ -317,7 +358,9 @@ export class ReadService {
                 add('Отставание работ', `Факт ${w.actualProgress.toFixed(0)}%, план ${w.plannedProgress.toFixed(0)}%`, w.scheduleStatus, w.delayDays, 'РП: уточнить ресурсы и план восстановления');
             if (w.blockers.length)
                 add('Технологическая блокировка', w.blockers.join('; '), 'RED', w.delayDays, 'Закрыть замечания и получить допуск СК');
-            if (w.stale && w.actualProgress < 100)
+            if (w.factUnknown)
+                add('Факт выполнения не определён', `Состояние факта: ${w.factState}. Количество не принимается ни за ноль, ни за выполненное`, 'GRAY', age(w.lastReportedAt ?? w.createdAt), 'РП: устранить неоднозначность подтверждений факта');
+            else if (w.stale && w.actualProgress < 100)
                 add('Нет актуального факта', 'Требуется отчёт РП', 'GRAY', age(w.lastReportedAt ?? w.createdAt), 'Внести выполненный физический объём');
         }
         for (const i of issues.filter(i => i.status !== 'CLOSED')) {
@@ -335,16 +378,19 @@ export class ReadService {
             if (w)
                 attentionRequired.push({ entityType: 'SdoCase', entityId: s.id, objectId: s.objectId, objectName: objects.find(o => o.id === s.objectId)?.name, contractor: w.contractor, title: 'Задержка в СДО', reason: 'Не завершено осмечивание/закрытие', severity: 'YELLOW', daysOverdue: age(s.ptoTransferredAt) - Number(risk.sdoDays), moneyImpact: w.financial.potential, responsible: 'СДО', recommendedAction: 'Получить расчёт и зафиксировать закрытие' });
         }
-        const objectList = objects.map(o => { const ws = enriched.filter(w => w.objectId === o.id); const cost = ws.reduce((s, w) => s + Number(w.estimatedCost), 0); const weighted = (field: string) => cost ? ws.reduce((s, w) => s + Number(w.estimatedCost) * (w[field] ?? 0), 0) / cost : ws.length ? ws.reduce((s, w) => s + (w[field] ?? 0), 0) / ws.length : null; const sum = (field: string) => ws.reduce((s, w) => s.add(w.financial[field]), new Decimal(0)).toFixed(2); const active = activeAssignments.filter(x => x.objectId === o.id); return { ...o, contractorIds: active.map(x => x.contractorId), contractors: active.map(x => x.contractorName), actualProgress: weighted('actualProgress'), plannedProgress: weighted('plannedProgress'), closed: sum('closed'), potential: sum('potential'), healthStatus: new ObjectHealthService().calculate({ statuses: ws.map(w => w.scheduleStatus), criticalIssues: issues.filter(i => i.objectId === o.id && i.severity === 'CRITICAL' && i.status !== 'CLOSED').length, overdueIssues: issues.filter(i => i.objectId === o.id && i.status !== 'CLOSED' && age(i.dueDate) > 0).length, stale: ws.some(w => w.stale && w.actualProgress < 100), blocked: ws.some(w => w.blockers.length && w.delayDays > 0), ptoLate: attentionRequired.some(x => x.objectId === o.id && x.entityType === 'Package'), sdoLate: attentionRequired.some(x => x.objectId === o.id && x.entityType === 'SdoCase') }) }; });
+        const objectList = objects.map(o => { const ws = enriched.filter(w => w.objectId === o.id); const cost = ws.reduce((s, w) => s + Number(w.estimatedCost), 0); const unknownFactWorks = ws.filter(w => w.factUnknown).length; const knownWs = ws.filter(w => !w.factUnknown); const weightedOver = (set: any[], field: string) => { const c = set.reduce((s, w) => s + Number(w.estimatedCost), 0); return c ? set.reduce((s, w) => s + Number(w.estimatedCost) * (w[field] ?? 0), 0) / c : set.length ? set.reduce((s, w) => s + (w[field] ?? 0), 0) / set.length : null; }; const weighted = (field: string) => weightedOver(ws, field); const sum = (field: string, set: any[] = ws) => set.reduce((s, w) => w.financial[field] === null ? s : s.add(w.financial[field]), new Decimal(0)).toFixed(2); const active = activeAssignments.filter(x => x.objectId === o.id); return { ...o, contractorIds: active.map(x => x.contractorId), contractors: active.map(x => x.contractorName), actualProgress: unknownFactWorks ? null : weighted('actualProgress'), actualProgressKnownPart: weightedOver(knownWs, 'actualProgress'), plannedProgress: weighted('plannedProgress'), unknownFactWorks, closed: sum('closed'), potential: unknownFactWorks ? null : sum('potential'), potentialKnownPart: sum('potential', knownWs), healthStatus: new ObjectHealthService().calculate({ statuses: ws.map(w => w.scheduleStatus), criticalIssues: issues.filter(i => i.objectId === o.id && i.severity === 'CRITICAL' && i.status !== 'CLOSED').length, overdueIssues: issues.filter(i => i.objectId === o.id && i.status !== 'CLOSED' && age(i.dueDate) > 0).length, stale: ws.some(w => w.stale && w.actualProgress < 100), blocked: ws.some(w => w.blockers.length && w.delayDays > 0), ptoLate: attentionRequired.some(x => x.objectId === o.id && x.entityType === 'Package'), sdoLate: attentionRequired.some(x => x.objectId === o.id && x.entityType === 'SdoCase') }) }; });
         const total = (field: string) => objectList.reduce((s, o) => s.add(o[field]), new Decimal(0)).toFixed(2);
+        const unknownFactWorks = enriched.filter(w => w.factUnknown).length;
+        const bucketKeys = ['notAccepted', 'pto', 'ready', 'sdo', 'calculated'];
+        const bucketsKnownPart = Object.fromEntries(bucketKeys.map(k => [k, enriched.reduce((s, w) => w.financial.buckets === null ? s : s.add(w.financial.buckets[k]), new Decimal(0)).toFixed(2)]));
         const monthly = scopeByWork(await rows(pool, 'SELECT * FROM monthly_plans WHERE tenant_id=$1 AND object_id=ANY($2::uuid[])', [t, ids]));
         const period = today.toISOString().slice(0, 7);
         const closedThisMonth = closings.filter(f => f.period === period).reduce((s, f) => s.add(f.amount), new Decimal(0));
         const available = sdo.filter(s => ['CALCULATED', 'READY_TO_CLOSE'].includes(s.status)).reduce((sum, s) => sum.add(Decimal.max(0, new Decimal(s.acceptedClosingValue ?? 0).minus(closings.filter(f => f.sdoCaseId === s.id).reduce((v, f) => v.add(f.amount), new Decimal(0))))), new Decimal(0));
-        const dashboard = { activeObjects: objects.filter(o => !['ARCHIVED', 'COMPLETED'].includes(o.status)).length, ...Object.fromEntries(['GREEN', 'YELLOW', 'RED', 'GRAY'].map(x => [x.toLowerCase() + 'Objects', objectList.filter(o => o.healthStatus === x).length])), delayedWorks: enriched.filter(w => w.delayDays > 0).length, openInspectionIssues: issues.filter(i => i.status !== 'CLOSED').length, criticalInspectionIssues: issues.filter(i => i.status !== 'CLOSED' && i.severity === 'CRITICAL').length, awaitingInspection: inspections.filter(i => ['WAITING', 'REINSPECTION'].includes(i.status)).length, ptoBacklog: enriched.filter(w => w.accepted && !w.docsReady).length, sdoBacklog: sdo.filter(s => s.status !== 'CLOSED').length, plannedClosing: monthly.filter(p => p.period === period).reduce((s, p) => s.add(p.plannedValue), new Decimal(0)).toFixed(2), closedThisMonth: closedThisMonth.toFixed(2), potentialClosing: total('potential'), forecastClosing: closedThisMonth.add(available).toFixed(2), readyToClose: available.toFixed(2), buckets: Object.fromEntries(['notAccepted', 'pto', 'ready', 'sdo', 'calculated'].map(k => [k, enriched.reduce((s, w) => s.add(w.financial.buckets[k]), new Decimal(0)).toFixed(2)])), attentionRequired: attentionRequired.sort((a, b) => ({ RED: 0, YELLOW: 1, GRAY: 2 }[a.severity] - { RED: 0, YELLOW: 1, GRAY: 2 }[b.severity]) || b.daysOverdue - a.daysOverdue) };
+        const dashboard = { activeObjects: objects.filter(o => !['ARCHIVED', 'COMPLETED'].includes(o.status)).length, ...Object.fromEntries(['GREEN', 'YELLOW', 'RED', 'GRAY'].map(x => [x.toLowerCase() + 'Objects', objectList.filter(o => o.healthStatus === x).length])), delayedWorks: enriched.filter(w => w.delayDays > 0).length, openInspectionIssues: issues.filter(i => i.status !== 'CLOSED').length, criticalInspectionIssues: issues.filter(i => i.status !== 'CLOSED' && i.severity === 'CRITICAL').length, awaitingInspection: inspections.filter(i => ['WAITING', 'REINSPECTION'].includes(i.status)).length, ptoBacklog: enriched.filter(w => w.accepted && !w.docsReady).length, sdoBacklog: sdo.filter(s => s.status !== 'CLOSED').length, plannedClosing: monthly.filter(p => p.period === period).reduce((s, p) => s.add(p.plannedValue), new Decimal(0)).toFixed(2), closedThisMonth: closedThisMonth.toFixed(2), potentialClosing: unknownFactWorks ? null : total('potential'), potentialClosingKnownPart: total('potentialKnownPart'), unknownFactWorks, forecastClosing: closedThisMonth.add(available).toFixed(2), readyToClose: available.toFixed(2), buckets: unknownFactWorks ? Object.fromEntries(bucketKeys.map(k => [k, null])) : bucketsKnownPart, bucketsKnownPart, attentionRequired: attentionRequired.sort((a, b) => ({ RED: 0, YELLOW: 1, GRAY: 2 }[a.severity] - { RED: 0, YELLOW: 1, GRAY: 2 }[b.severity]) || b.daysOverdue - a.daysOverdue) };
         if (a.role === 'CONTRACTOR_VIEWER') {
             const allowed = new Set(enriched.map(w => w.id));
-            return { objects: objectList.map(({ contractValue, closed, potential, ...o }) => o), works: enriched.map(({ estimatedCost, closed, financial, ...w }) => w), contractors, dependencies: dependencies.filter(d => allowed.has(d.successorWorkId) && allowed.has(d.predecessorWorkId)) };
+            return { objects: objectList.map(({ contractValue, closed, potential, potentialKnownPart, ...o }) => o), works: enriched.map(({ estimatedCost, closed, financial, ...w }) => w), contractors, dependencies: dependencies.filter(d => allowed.has(d.successorWorkId) && allowed.has(d.predecessorWorkId)) };
         }
         const documentationVisible = canAccessDocumentation(a.role);
         // Package identity for the cards (what / for which scope / how much / how AOSR is prepared / who created it), read from the existing

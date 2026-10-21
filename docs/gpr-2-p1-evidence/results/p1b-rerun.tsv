@@ -1,0 +1,7 @@
+file	exit	tests	pass	fail	cancelled	skipped	seconds
+tests/acceptance.test.ts	0	8	8	0	0	0	3
+tests/core-2.0-decisions.test.ts	0	1	1	0	0	0	3
+tests/core-2.1-contractors.test.ts	0	1	1	0	0	0	4
+tests/pilot-data-work-category.test.ts	0	1	1	0	0	0	13
+tests/regression-erp-parity.test.ts	0	1	1	0	0	0	4
+tests/workflow.test.ts	0	1	1	0	0	0	5

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { Pool, PoolClient, types } from 'pg';
 // PostgreSQL DATE is a civil date, not a midnight in the host timezone.
 types.setTypeParser(1082, value => value);
@@ -8,9 +9,36 @@ function localPool() { const { PGlite } = require('@electric-sql/pglite'); const
     finally {
         release();
     } }, connect: async () => { const release = await acquire(); return { query, release }; }, end: () => db.close() }; }
-export const pool: any = process.env.DB_MODE === 'pglite' && !process.env.DATABASE_URL ? localPool() : new Pool({ connectionString: process.env.DATABASE_URL, max: 12, connectionTimeoutMillis: 5000, options: '-c timezone=UTC' });
+const rawPool: any = process.env.DB_MODE === 'pglite' && !process.env.DATABASE_URL ? localPool() : new Pool({ connectionString: process.env.DATABASE_URL, max: 12, connectionTimeoutMillis: 5000, options: '-c timezone=UTC' });
+// GPR-2 R03a — while a transaction context (tx-context.ts) is running, the shared pool is off limits: a second, independent connection inside one
+// business operation can neither see the operation's uncommitted writes nor share its snapshot, and can deadlock against its locks. The guard is an
+// AsyncLocalStorage scope set ONLY by runCommandTx()/runSnapshotRead(); every other caller sees the pool exactly as before.
+export class NestedPoolAccessError extends Error {
+    constructor(readonly scope: string, readonly member: string) { super('Nested pool access (' + member + ') inside transaction context ' + scope + ': use the context connection'); this.name = 'NestedPoolAccessError'; }
+}
+export const poolGuard = new AsyncLocalStorage<{ label: string }>();
+export const pool: any = new Proxy(rawPool, {
+    get(target, prop) {
+        const scope = poolGuard.getStore();
+        if (scope && (prop === 'query' || prop === 'connect'))
+            return () => { throw new NestedPoolAccessError(scope.label, String(prop)); };
+        const value = target[prop];
+        return typeof value === 'function' ? value.bind(target) : value;
+    }
+});
+/** A connection that bypasses the guard: for the transaction context itself, which owns its connection. */
+export const connectUnguarded = (): Promise<PoolClient> => rawPool.connect();
+// Clients that are inside an explicit transaction block, each with a token that is NEW for every transaction. A pooled client object outlives its
+// transactions, so anything remembered about "this client" must be tied to the token, never to the object alone (coordination-lock.ts does). A
+// transaction-scoped advisory lock taken outside a transaction block is released at the end of its own statement, so it refuses any other client.
+const transactionClients = new WeakMap<object, symbol>();
+export const markTransactionClient = <T extends object>(c: T): T => { transactionClients.set(c, Symbol('transaction')); return c; };
+export const unmarkTransactionClient = (c: object): void => { transactionClients.delete(c); };
+export const transactionToken = (c: unknown): symbol | undefined => (typeof c === 'object' && c !== null ? transactionClients.get(c) : undefined);
+export const isTransactionClient = (c: unknown): boolean => transactionToken(c) !== undefined;
 export async function transaction<T>(fn: (c: PoolClient) => Promise<T>) { const c = await pool.connect(); try {
     await c.query('BEGIN');
+    markTransactionClient(c);
     const result = await fn(c);
     await c.query('COMMIT');
     return result;
@@ -20,6 +48,7 @@ catch (e) {
     throw e;
 }
 finally {
+    unmarkTransactionClient(c);
     c.release();
 } }
 export const camel = (row: any): any => row && Object.fromEntries(Object.entries(row).map(([k, v]) => [k.replace(/_([a-z])/g, (_, x) => x.toUpperCase()), v]));

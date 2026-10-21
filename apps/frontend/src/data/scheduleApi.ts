@@ -67,7 +67,7 @@ function isEntry(value: unknown): boolean {
   return (
     isString(value.entryId) && isString(value.itemId) && isString(value.objectWorkId) && typeof value.workName === 'string' &&
     isCivil(value.plannedStart) && isCivil(value.plannedFinish) && isNumber(value.sequence) && isNumber(value.plannedProgress) &&
-    typeof value.state === 'string' && (STATES as readonly string[]).includes(value.state) && isNumber(value.delayDays) &&
+    (value.state === null ? value.assessable === false : typeof value.state === 'string' && (STATES as readonly string[]).includes(value.state)) && isNumber(value.delayDays) &&
     typeof value.unit === 'string' && typeof value.plannedQuantity === 'string' && typeof value.executor === 'string' &&
     Array.isArray(value.delayReasons)
   );
@@ -79,7 +79,7 @@ function isAccess(value: unknown): boolean {
 
 function isConclusion(value: unknown): boolean {
   return (
-    isRecord(value) && (value.status === 'NO_BASELINE' || value.status === 'ON_TRACK' || value.status === 'DELAYED') &&
+    isRecord(value) && (value.status === 'NO_BASELINE' || value.status === 'ON_TRACK' || value.status === 'DELAYED' || value.status === 'UNDETERMINED') &&
     ['entryCount', 'delayedCount', 'maxDelayDays', 'unscheduledCount', 'openDelayReasonCount'].every((k) => isNumber(value[k])) &&
     isRecord(value.expected)
   );

@@ -1,0 +1,64 @@
+{
+  "work": "c8156b32-3084-4323-a142-c02c1a1434ff",
+  "portion": "f6ea180c-fa89-429c-bd8d-a0cc83e22d8c",
+  "floorBefore": "40.0000",
+  "floorAfter": "40.0000",
+  "timeline": [
+    {
+      "t": 1162,
+      "event": "S+S coexist"
+    },
+    {
+      "t": 1171,
+      "event": "X blocked behind two S"
+    },
+    {
+      "t": 1306,
+      "event": "S queued behind the waiting X (no starvation of the exclusive)"
+    },
+    {
+      "t": 1361,
+      "event": "X granted after both S released (commit and rollback)"
+    },
+    {
+      "t": 1414,
+      "event": "S granted after X released"
+    },
+    {
+      "t": 1530,
+      "event": "X excludes X and S; a dead connection releases the lock"
+    },
+    {
+      "t": 1551,
+      "event": "independent objects / tenants do not interact"
+    },
+    {
+      "t": 2313,
+      "event": "writer holds SHARED and waits on the portion row"
+    },
+    {
+      "t": 2320,
+      "event": "X blocked while the fact writer is in flight"
+    },
+    {
+      "t": 2391,
+      "event": "writer committed"
+    },
+    {
+      "t": 2392,
+      "event": "X granted only after the writer committed"
+    },
+    {
+      "t": 2422,
+      "event": "second writer blocked behind X"
+    },
+    {
+      "t": 2574,
+      "event": "X committed"
+    },
+    {
+      "t": 2601,
+      "event": "second writer committed"
+    }
+  ]
+}

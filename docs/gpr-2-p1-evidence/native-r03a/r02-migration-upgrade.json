@@ -1,0 +1,178 @@
+{
+  "applyMs": 29,
+  "applied": [
+    26
+  ],
+  "before": {
+    "works": {
+      "count": 60,
+      "md5": "62ef32d3661e043cdcfbbf72dc5bb742"
+    },
+    "work_progress": {
+      "count": 54,
+      "md5": "3a8e34a66e4cee47abe3898a15b32c53"
+    },
+    "work_execution_units": {
+      "count": 1,
+      "md5": "3e0794adae8fe74721d72bd0500db78d"
+    },
+    "quantity_portions": {
+      "count": 1,
+      "md5": "a6c36733b7a831ad8734bae607eccca9"
+    },
+    "portion_quantity_confirmations": {
+      "count": 2,
+      "md5": "5433b98190eaa5448ba7ea368bfcb0b9"
+    },
+    "inspections": {
+      "count": 14,
+      "md5": "b842cf7f28cc17e760e37f4ad7805912"
+    },
+    "issues": {
+      "count": 2,
+      "md5": "d838b602b51a1da67154b1888c2a01f6"
+    },
+    "documentation_packages": {
+      "count": 0,
+      "md5": ""
+    },
+    "documentation_package_portions": {
+      "count": 0,
+      "md5": ""
+    },
+    "documentation_documents": {
+      "count": 0,
+      "md5": ""
+    },
+    "documentation_document_versions": {
+      "count": 0,
+      "md5": ""
+    },
+    "documentation_customer_acceptances": {
+      "count": 0,
+      "md5": ""
+    },
+    "sdo_closing_cases": {
+      "count": 0,
+      "md5": ""
+    },
+    "sdo_closing_portion_allocations": {
+      "count": 0,
+      "md5": ""
+    },
+    "audit_logs": {
+      "count": 0,
+      "md5": ""
+    },
+    "financial_closings": {
+      "count": 2,
+      "md5": "b2d576ff51f7d2de6d21fb1545d06b53"
+    },
+    "schedule_revisions": {
+      "count": 0,
+      "md5": ""
+    },
+    "schedule_revision_entries": {
+      "count": 0,
+      "md5": ""
+    },
+    "schedule_items": {
+      "count": 0,
+      "md5": ""
+    },
+    "users": {
+      "count": 15,
+      "md5": "c919ecf832966b5b1cdee19881dc2440"
+    },
+    "objects": {
+      "count": 10,
+      "md5": "6156b9dae27696e67169d207531b35f7"
+    }
+  },
+  "after": {
+    "works": {
+      "count": 60,
+      "md5": "62ef32d3661e043cdcfbbf72dc5bb742"
+    },
+    "work_progress": {
+      "count": 54,
+      "md5": "3a8e34a66e4cee47abe3898a15b32c53"
+    },
+    "work_execution_units": {
+      "count": 1,
+      "md5": "3e0794adae8fe74721d72bd0500db78d"
+    },
+    "quantity_portions": {
+      "count": 1,
+      "md5": "a6c36733b7a831ad8734bae607eccca9"
+    },
+    "portion_quantity_confirmations": {
+      "count": 2,
+      "md5": "5433b98190eaa5448ba7ea368bfcb0b9"
+    },
+    "inspections": {
+      "count": 14,
+      "md5": "b842cf7f28cc17e760e37f4ad7805912"
+    },
+    "issues": {
+      "count": 2,
+      "md5": "d838b602b51a1da67154b1888c2a01f6"
+    },
+    "documentation_packages": {
+      "count": 0,
+      "md5": ""
+    },
+    "documentation_package_portions": {
+      "count": 0,
+      "md5": ""
+    },
+    "documentation_documents": {
+      "count": 0,
+      "md5": ""
+    },
+    "documentation_document_versions": {
+      "count": 0,
+      "md5": ""
+    },
+    "documentation_customer_acceptances": {
+      "count": 0,
+      "md5": ""
+    },
+    "sdo_closing_cases": {
+      "count": 0,
+      "md5": ""
+    },
+    "sdo_closing_portion_allocations": {
+      "count": 0,
+      "md5": ""
+    },
+    "audit_logs": {
+      "count": 0,
+      "md5": ""
+    },
+    "financial_closings": {
+      "count": 2,
+      "md5": "b2d576ff51f7d2de6d21fb1545d06b53"
+    },
+    "schedule_revisions": {
+      "count": 0,
+      "md5": ""
+    },
+    "schedule_revision_entries": {
+      "count": 0,
+      "md5": ""
+    },
+    "schedule_items": {
+      "count": 0,
+      "md5": ""
+    },
+    "users": {
+      "count": 15,
+      "md5": "c919ecf832966b5b1cdee19881dc2440"
+    },
+    "objects": {
+      "count": 10,
+      "md5": "6156b9dae27696e67169d207531b35f7"
+    }
+  }
+}

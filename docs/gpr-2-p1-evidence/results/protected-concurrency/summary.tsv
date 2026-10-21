@@ -1,0 +1,5 @@
+file	exit	tests	pass	fail	cancelled	skipped	seconds
+tests/f8.3-postgres-concurrency.test.ts	0	8	8	0	0	0	20
+tests/f12-final-corrective-postgres-concurrency.test.ts	0	8	8	0	0	0	16
+tests/f12-final-r06-auth-safe-idempotency.test.ts	0	1	1	0	0	0	13
+tests/f12-sdo-03-retry-safety.test.ts	0	1	1	0	0	0	13

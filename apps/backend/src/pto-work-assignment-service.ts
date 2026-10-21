@@ -1,5 +1,6 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
 import { pool, transaction, one, rows, insert } from './db';
+import { coordinate } from './coordination-lock';
 import { Actor, requirePermission, scoped, objectAccess, workAccess, effectivePtoWorkAssignment, audit, ensure } from './security';
 import { Permission as P, canAccessDocumentation } from '../../../packages/domain';
 import { lockTeamScope } from './team-service';
@@ -66,6 +67,7 @@ export class PtoWorkAssignmentService {
     async assign(a: Actor, workId: string, d: { assigneeUserId: string }) {
         requirePermission(a, P.PTO_OBJECT_TEAM_MANAGE);
         return transaction(async (c) => {
+            await coordinate(c, 'pto-work-assignment-service.ts#assign', a.tenantId, { work: workId });
             const w = await scoped(c, 'works', workId, a, true);
             await objectAccess(c, a, w.objectId, true); // PTO_HEAD: must be the object's CURRENT lead (ensurePtoObjectScope)
             await lockTeamScope(c, a, [w.objectId], [d.assigneeUserId, a.id]);

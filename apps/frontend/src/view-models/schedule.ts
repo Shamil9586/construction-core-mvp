@@ -51,8 +51,11 @@ function formatShift(days: number): string {
  * The management state of one schedule entry. «В работе» and «Выполнено» are on-track facts; «Не начато» before the start date is simply
  * neutral; the delay carries the one amber shared with the rest of the product (D-07) and always its words.
  */
-export function scheduleEntryStatePresentation(state: ScheduleEntryState): StatusPresentation {
+export function scheduleEntryStatePresentation(state: ScheduleEntryState | null): StatusPresentation {
   switch (state) {
+    // An entry whose fact is unknown has no state: stated in words, never «Не начато» and never a delay (GPR1-UNKNOWN-01).
+    case null:
+      return { variant: 'Neutral', label: 'Факт не определён' };
     case 'NOT_STARTED':
       return { variant: 'Neutral', label: 'Не начато' };
     case 'IN_PROGRESS':
@@ -77,6 +80,8 @@ export function objectScheduleStatusPresentation(status: ObjectScheduleStatus): 
       return { variant: 'Delayed', label: 'Есть отставание' };
     case 'NO_BASELINE':
       return { variant: 'Neutral', label: 'График не утверждён' };
+    case 'UNDETERMINED':
+      return { variant: 'Neutral', label: 'Оценка невозможна: факт не определён' };
     default: {
       const exhaustive: never = status;
       return exhaustive;
@@ -208,7 +213,7 @@ function buildRow(entry: ScheduleEntry, access: ScheduleAccess): GprRowViewModel
     plannedFinish: formatDate(entry.plannedFinish),
     planOnDate: formatPercent(entry.plannedProgress),
     progress: { value: entry.factReported ? entry.actualProgress : null, formatted: entry.factReported ? formatPercent(entry.actualProgress) : NO_DATA_DASH },
-    fact: entry.factReported ? formatQuantityWithUnit(entry.rpFactQuantity, entry.unit) : NO_DATA_DASH,
+    fact: entry.factReliability === 'UNKNOWN' ? 'Не определён' : entry.factReported ? formatQuantityWithUnit(entry.rpFactQuantity, entry.unit) : NO_DATA_DASH,
     scAccepted: entry.internalScAcceptedQuantity !== null ? formatQuantityWithUnit(entry.internalScAcceptedQuantity, entry.unit) : null,
     state,
     needsAttention: entry.state === 'DELAYED',
@@ -352,6 +357,8 @@ function conclusionText(schedule: ObjectSchedule): string {
       return `Отстают позиции графика: ${c.delayedCount} из ${c.entryCount}. Наибольшее отставание — ${formatDays(c.maxDelayDays)}.`;
     case 'ON_TRACK':
       return `Отставаний нет. Позиций в графике: ${c.entryCount}, выполнено: ${c.completedCount}.`;
+    case 'UNDETERMINED':
+      return `Отставание не установлено, но и «по графику» утверждать нельзя: по позициям, где факт выполнения не определён (${c.unassessedCount ?? 0} из ${c.entryCount}), оценка невозможна.`;
     default: {
       const exhaustive: never = c.status;
       return exhaustive;
@@ -474,7 +481,11 @@ export function buildO01ScheduleView(load: ScheduleLoad<ObjectSchedule>): O01Sch
   return {
     kind: 'Ready',
     status,
-    text: schedule.conclusion.status === 'DELAYED' ? `Отстают позиции графика: ${schedule.conclusion.delayedCount} из ${schedule.conclusion.entryCount}.` : `Отставаний нет. Позиций в графике: ${schedule.conclusion.entryCount}.`,
+    text: schedule.conclusion.status === 'DELAYED'
+      ? `Отстают позиции графика: ${schedule.conclusion.delayedCount} из ${schedule.conclusion.entryCount}.`
+      : schedule.conclusion.status === 'UNDETERMINED'
+        ? `Отставание не установлено; по позициям с неопределённым фактом (${schedule.conclusion.unassessedCount ?? 0}) оценка графика невозможна.`
+        : `Отставаний нет. Позиций в графике: ${schedule.conclusion.entryCount}.`,
     baseline: `График производства работ, версия №${schedule.current.revisionNo} · расчёт на ${formatDate(schedule.asOf)}`,
     delayed,
     notes,
@@ -490,9 +501,11 @@ export function buildO01ScheduleView(load: ScheduleLoad<ObjectSchedule>): O01Sch
  * The same rule as `aggregateScheduleStates` in `packages/domain/schedule.ts` that the backend applies for W01's summary (parity pinned by
  * tests/gpr-ux-d01-viewmodel.test.ts) — restated here only because the frontend does not import the domain package.
  */
-export function aggregateWorkEntryStates(states: ScheduleEntryState[]): ScheduleEntryState | null {
+export function aggregateWorkEntryStates(states: (ScheduleEntryState | null)[]): ScheduleEntryState | null {
   if (states.length === 0) return null;
   if (states.includes('DELAYED')) return 'DELAYED';
+  // an entry with an unknown fact (state null) makes the Work's state unknown too — it is never absorbed into «По графику»
+  if (states.includes(null)) return null;
   if (states.every((state) => state === 'COMPLETED')) return 'COMPLETED';
   if (states.every((state) => state === 'NOT_STARTED')) return 'NOT_STARTED';
   return 'IN_PROGRESS';
@@ -509,6 +522,8 @@ export type WorkScheduleCompliance =
   | { kind: 'Error'; presentation: StatusPresentation }
   | { kind: 'NoBaseline'; presentation: StatusPresentation }
   | { kind: 'NotScheduled'; presentation: StatusPresentation }
+  /** The work is in the schedule but a fact of one of its entries is unknown: no «По графику», no delay. */
+  | { kind: 'Undetermined'; presentation: StatusPresentation }
   | { kind: 'OnSchedule'; presentation: StatusPresentation }
   | { kind: 'Delayed'; presentation: StatusPresentation };
 
@@ -518,6 +533,7 @@ export const COMPLIANCE_UNAVAILABLE = NEUTRAL('График недоступен
 export const COMPLIANCE_ERROR = NEUTRAL('График не загружен');
 export const COMPLIANCE_NO_BASELINE = NEUTRAL('График не утверждён');
 export const COMPLIANCE_NOT_SCHEDULED = NEUTRAL('Не включена в график');
+export const COMPLIANCE_UNDETERMINED = NEUTRAL('Оценка невозможна: факт не определён');
 
 /**
  * Compliance of every work of ONE object, from that object's schedule load. A schedule that belongs to another object (a stale value held
@@ -531,11 +547,12 @@ export function buildObjectWorkCompliance(load: ScheduleLoad<ObjectSchedule> | u
   const schedule = load.value;
   if (schedule.objectId !== objectId) return constant({ kind: 'Loading', presentation: COMPLIANCE_LOADING });
   if (schedule.conclusion.status === 'NO_BASELINE' || !schedule.current) return constant({ kind: 'NoBaseline', presentation: COMPLIANCE_NO_BASELINE });
-  const statesByWork = new Map<string, ScheduleEntryState[]>();
+  const statesByWork = new Map<string, (ScheduleEntryState | null)[]>();
   for (const entry of schedule.entries) statesByWork.set(entry.objectWorkId, [...(statesByWork.get(entry.objectWorkId) ?? []), entry.state]);
   return (workId) => {
-    const state = aggregateWorkEntryStates(statesByWork.get(workId) ?? []);
-    if (state === null) return { kind: 'NotScheduled', presentation: COMPLIANCE_NOT_SCHEDULED };
+    const states = statesByWork.get(workId) ?? [];
+    const state = aggregateWorkEntryStates(states);
+    if (state === null) return states.length === 0 ? { kind: 'NotScheduled', presentation: COMPLIANCE_NOT_SCHEDULED } : { kind: 'Undetermined', presentation: COMPLIANCE_UNDETERMINED };
     return state === 'DELAYED'
       ? { kind: 'Delayed', presentation: { variant: 'Delayed', label: 'Есть отставание' } }
       : { kind: 'OnSchedule', presentation: { variant: 'OnTrack', label: 'По графику' } };
@@ -567,7 +584,8 @@ export function buildW01ScheduleView(load: ScheduleLoad<WorkSchedule>, workId?: 
   // work's summary but gets a 403 on the object's plan): the way in is offered only when it leads somewhere.
   const canOpenObject = schedule.canOpenObjectSchedule;
   if (!schedule.hasBaseline) return { kind: 'NoBaseline', canOpenObject };
-  if (!schedule.summary || schedule.summary.state === null) return { kind: 'NotScheduled', canOpenObject };
+  // `state: null` with `assessable: false` is a scheduled work whose fact is unknown — not a work outside the schedule.
+  if (!schedule.summary || (schedule.summary.state === null && schedule.summary.assessable !== false)) return { kind: 'NotScheduled', canOpenObject };
   const zones = schedule.entries.map((entry) => entry.zone).filter((zone): zone is string => zone !== null);
   return {
     kind: 'Ready',
