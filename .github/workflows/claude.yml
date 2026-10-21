@@ -1,4 +1,4 @@
-name: Claude Code
+name: Claude Code (read-only)
 
 on:
   issue_comment:
@@ -7,24 +7,42 @@ on:
     types: [created]
 
 jobs:
-  claude:
-    if: contains(github.event.comment.body, '@claude')
+  claude-readonly:
+    # Owner-only PR review; Issue implementation is a separate future workflow.
+    if: >-
+      github.event.comment.user.login == 'Shamil9586' &&
+      github.event.comment.user.id == 329431095 &&
+      contains(github.event.comment.body, '@claude') &&
+      (
+        (github.event_name == 'issue_comment' &&
+         github.event.issue.pull_request != null &&
+         github.event.issue.state == 'open') ||
+        (github.event_name == 'pull_request_review_comment' &&
+         github.event.pull_request.state == 'open')
+      )
     runs-on: ubuntu-latest
+    timeout-minutes: 12
 
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
       issues: write
-      actions: read
-      id-token: write
+      pull-requests: write
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
           fetch-depth: 1
+          persist-credentials: false
 
-      - name: Run Claude Code
+      - name: Run Claude Code (read-only)
         uses: anthropics/claude-code-action@v1
         with:
+          # The explicit job-scoped token avoids the default App OIDC exchange.
+          github_token: ${{ github.token }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          include_comments_by_actor: Shamil9586
+          claude_args: |
+            --max-turns 10
+            --disallowedTools "Bash,Edit,MultiEdit,Write,NotebookEdit,NotebookEditCell"
+            --append-system-prompt "READ-ONLY REVIEW MODE. Analyze and reply only. Never modify files, create commits or branches, push, create PRs, merge, deploy, run migrations, or access credentials."
