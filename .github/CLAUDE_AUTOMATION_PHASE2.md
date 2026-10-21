@@ -11,9 +11,10 @@ or Render changes.
   either in the conversation or inline review; ordinary issues and closed
   pull requests are intentionally excluded.
 - Authorisation: only GitHub account `Shamil9586`, user ID `329431095`.
-- `GITHUB_TOKEN`: `contents: read`, `issues: write`, `pull-requests: write`.
-  Comment-write permissions are required for the Action's response.
-  Neither `actions: read` nor `id-token: write` is granted.
+- `GITHUB_TOKEN`: `contents: read` and `pull-requests: write` only.
+  PR-write covers both conversation comments (GitHub Issues comment API)
+  and inline PR review comments. No `issues: write`, `actions: read`
+  or `id-token: write` is granted.
 - The Action receives the job-scoped `${{ github.token }}` explicitly
   via `github_token`. Without this override, Action v1 obtains a
   separate installed GitHub App token using GitHub OIDC, requiring
