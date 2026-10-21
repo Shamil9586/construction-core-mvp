@@ -87,11 +87,15 @@ def main():
     payload = create_context(
         event, event_name, repository, lambda p: get_json(p, token)
     )
-    destination = Path(os.environ["RUNNER_TEMP"]) / "claude-phase2-pr-context.json"
-    descriptor = os.open(destination, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
-    with os.fdopen(descriptor, "wb") as output:
-        output.write(payload)
-    print("Bounded PR context prepared (no untrusted source executed).")
+    # Pass inert JSON via the step output, not a file that Claude must open.
+    # json.dumps ensures source newlines are escaped inside one output line.
+    value = payload.decode("utf-8")
+    if "\n" in value or "\r" in value:
+        raise ValueError("context must occupy exactly one output line")
+    output_path = Path(os.environ["GITHUB_OUTPUT"])
+    with output_path.open("a", encoding="utf-8") as output:
+        output.write("context=" + value + "\n")
+    print("Bounded, inert PR context passed to the model prompt.")
 
 
 if __name__ == "__main__":
