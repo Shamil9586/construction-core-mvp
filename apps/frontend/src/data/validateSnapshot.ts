@@ -234,6 +234,12 @@ export function validateSnapshot(value: unknown): Snapshot {
     if (!hasStringField(work, 'name')) fail();
     if (!hasStringField(work, 'contractor')) fail();
     if (!hasStringField(work, 'unit')) fail();
+    if (work.productionEligibility !== undefined) {
+      const e = work.productionEligibility;
+      if (!isPlainObject(e) || !['MISSING_ASSIGNMENTS','BLOCKED','READY'].includes(String(e.state)) || !isBoolean(e.allowed) || !isStringArray(e.reasons)) fail();
+      if (e.allowed !== (e.state === 'READY') || e.allowed !== (e.reasons.length === 0)) fail();
+    }
+    if (work.estimatedCost !== undefined && !isNumericStringOrNull(work.estimatedCost)) fail();
     if (!isStringArray(work.blockers)) fail();
     // F8.1-05 — optional (CONTRACTOR_VIEWER/pre-F8.1 fixtures may omit it
     // entirely, same reasoning as executionUnits/portions below), but a

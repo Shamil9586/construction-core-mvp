@@ -77,7 +77,7 @@ test('R03b every NONE row carries a real reason', () => {
 
 test('R03b the EXCLUSIVE set is exactly the scope-changing writers (a change of this list is a design decision, not an edit)', () => {
     const exclusive = Object.entries(registry).filter(([, e]) => e.mode === 'EXCLUSIVE').map(([k]) => k).sort();
-    assert.deepEqual(exclusive, ['schedule-service.ts#approveDraft', 'service.ts#createWork', 'service.ts#dependency']);
+    assert.deepEqual(exclusive, ['schedule-service.ts#approveDraft', 'service.ts#completeWorkPlanning', 'service.ts#createWork', 'service.ts#dependency']);
 });
 
 test('R03b the fact / SC / PTO / SDO writers named by the Technical Design are all SHARED', () => {

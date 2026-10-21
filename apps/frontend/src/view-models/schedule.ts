@@ -316,8 +316,8 @@ export interface ScopeOptionViewModel {
   label: string;
   executor: string;
   plan: string;
-  suggestedStart: string;
-  suggestedFinish: string;
+  suggestedStart: string | null;
+  suggestedFinish: string | null;
 }
 
 export interface HistoryViewModel {

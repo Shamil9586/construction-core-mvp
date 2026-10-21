@@ -34,6 +34,7 @@ export const WRITERS = {
     'service.ts#createObject': N('creates a new object: nothing can be racing on an object that does not exist yet'),
     'service.ts#assignContractor': S('the contractor assignment is the row progress() locks to admit a fact (eligibility)'),
     'service.ts#editObject': N('object metadata and responsible РП; authorisation is re-read per request; no production quantity invariant'),
+    'service.ts#completeWorkPlanning': X('R04: filling previously unknown Work planning fields changes scope'),
     'service.ts#createWork': X('Work generation changes the object scope (TD §12.3 item 1)'),
     'service.ts#dependency': X('technology topology change (TD §12.3 item 1)'),
     'service.ts#start': S(FACT),

@@ -67,7 +67,11 @@ const DESTRUCTIVE: [RegExp, string][] = [
     [/\bRENAME\b/i, 'RENAME']
 ];
 export function destructiveStatements(sql: string): string[] {
-    const text = executableText(sql);
+    // R04: only a COMPLETE standalone nullability expansion is exempt. A trailing
+    // DROP COLUMN/SET NOT NULL/UPDATE in the same statement remains visible.
+    const text = executableText(sql).split(';').map(statement =>
+        /^\s*ALTER\s+TABLE\s+[a-z_][a-z0-9_]*\s+ALTER\s+COLUMN\s+[a-z_][a-z0-9_]*\s+DROP\s+NOT\s+NULL\s*$/i.test(statement) ? '' : statement
+    ).join(';');
     return DESTRUCTIVE.filter(([re]) => re.test(text)).map(([, name]) => name);
 }
 

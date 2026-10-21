@@ -163,8 +163,8 @@ function AddEntryForm({ draft, scopes, actions }: { draft: DraftViewModel; scope
     const chosen = scopes.find((candidate) => candidate.value === value);
     // The work's own window is only a default: the planner decides the dates of THIS scope.
     if (chosen) {
-      setStart(chosen.suggestedStart);
-      setFinish(chosen.suggestedFinish);
+      setStart(chosen.suggestedStart ?? '');
+      setFinish(chosen.suggestedFinish ?? '');
     }
   }
 

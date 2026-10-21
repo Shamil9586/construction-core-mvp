@@ -18,6 +18,8 @@ export class WorksController {
     r: any,
     @Body()
     b: any) { return this.service.createWork(await authenticate(r), V.workDto.parse(b)); }
+    @Post('works/:id/complete-planning')
+    async completePlanning(@Req() r: any, @Param('id') id: string, @Body() b: any) { return this.service.completeWorkPlanning(await authenticate(r), V.uuid.parse(id), V.completeWorkPlanningDto.parse(b)); }
     @Get('works/:id')
     async work(
     @Req()
