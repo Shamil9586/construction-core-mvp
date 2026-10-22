@@ -54,7 +54,7 @@ jobs:
         with:
           ref: b882fd0a35fe93d5f85d6be1ccd7dfdc6982f67d
           path: core
-          fetch-depth: 5
+          fetch-depth: 0
           persist-credentials: false
       - name: Verify candidate SHA, trees, parents and clean checkout
         shell: bash
