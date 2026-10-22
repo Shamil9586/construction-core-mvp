@@ -24,7 +24,7 @@ export interface ScopeFacts {
     zone: string | null;
     finishType: string | null;
     conditions: string | null;
-    contractorId: string;
+    contractorId: string | null;
     executor: string;
     unit: string;
     plannedQuantity: string;
@@ -40,8 +40,8 @@ export interface ScopeFacts {
     /** The work has execution units: it is planned through them, so its own whole-work scope is not offered or counted as unscheduled. */
     workHasUnits: boolean;
     /** The work's legacy planned window — offered as the default dates when a scope is added to a draft; never an authority. */
-    workPlannedStart: string;
-    workPlannedFinish: string;
+    workPlannedStart: string | null;
+    workPlannedFinish: string | null;
 }
 
 export const scopeKey = (objectWorkId: string, executionUnitId: string | null): string => (executionUnitId ? 'U:' + executionUnitId : 'W:' + objectWorkId);
@@ -57,7 +57,7 @@ const sumOrNull = (values: (string | null)[]): string | null => {
 export async function loadObjectScopes(c: any, tenantId: string, objectId: string): Promise<Map<string, ScopeFacts>> {
     const works = await rows(c, `SELECT w.id,w.name,w.unit,w.status,w.planned_quantity,w.actual_quantity,w.contractor_id,w.planned_start_date,w.planned_finish_date,k.name AS contractor_name,
         EXISTS(SELECT 1 FROM work_progress p WHERE p.tenant_id=w.tenant_id AND p.object_work_id=w.id) AS has_progress
-        FROM works w JOIN contractors k ON k.tenant_id=w.tenant_id AND k.id=w.contractor_id
+        FROM works w LEFT JOIN contractors k ON k.tenant_id=w.tenant_id AND k.id=w.contractor_id
         WHERE w.tenant_id=$1 AND w.object_id=$2 ORDER BY w.planned_start_date,w.name,w.id`, [tenantId, objectId]);
     const workIds = works.map((w: any) => w.id);
     const units = workIds.length ? await rows(c, `SELECT u.id,u.object_work_id,u.location,u.execution_conditions,u.contractor_id,u.unit,u.planned_quantity,k.name AS contractor_name,f.name AS finish_type_name
@@ -93,7 +93,7 @@ export async function loadObjectScopes(c: any, tenantId: string, objectId: strin
         const wholeFact = wholeUnknown ? null : fact.mode === 'LEGACY_WORK' ? legacyFact : fact.state === 'NONE_REPORTED' ? null : fact.quantity;
         scopes.set(scopeKey(w.id, null), {
             ...base, key: scopeKey(w.id, null), executionUnitId: null, zone: null, finishType: null, conditions: null,
-            contractorId: w.contractorId, executor: w.contractorName, unit: w.unit, plannedQuantity: new Decimal(w.plannedQuantity).toFixed(4),
+            contractorId: w.contractorId, executor: w.contractorName ?? 'Не назначен', unit: w.unit, plannedQuantity: new Decimal(w.plannedQuantity).toFixed(4),
             rpFactQuantity: wholeFact, factUnknown: wholeUnknown,
             internalScAcceptedQuantity: ownUnits.length ? sumOrNull(ownUnits.filter((u: any) => u.unit === w.unit).map((u: any) => unitFacts.get(u.id)!.internalSc)) : null,
         });
