@@ -23,7 +23,7 @@ verify parent_tree 'HEAD^^{tree}' "$CP01_TREE"
 verify original_r04 HEAD^^ "$R04"
 verify original_r04_tree 'HEAD^^^{tree}' "$R04_TREE"
 verify base HEAD^^^ "$BASE"
-verify base_tree 'HEAD^^^{tree}' "$BASE_TREE"
+verify base_tree 'HEAD~3^{tree}' "$BASE_TREE"
 [[ -z "$(git -C core status --porcelain)" ]] || { echo 'REFUSED dirty candidate checkout' >&2; exit 2; }
 git -C core diff --check "$BASE..$CAND"
 {
