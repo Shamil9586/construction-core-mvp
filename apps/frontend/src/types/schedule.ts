@@ -44,7 +44,7 @@ export interface ScheduleScope {
   zone: string | null;
   finishType: string | null;
   conditions: string | null;
-  contractorId: Uuid;
+  contractorId: Uuid | null;
   executor: string;
   unit: string;
   plannedQuantity: Numeric;
@@ -176,8 +176,8 @@ export interface ScheduleDraft {
 
 /** A production scope that can still be added to the draft. The dates are the work's own window, offered as a default only. */
 export interface ScheduleAvailableScope extends ScheduleScope {
-  suggestedStart: CivilDate;
-  suggestedFinish: CivilDate;
+  suggestedStart: CivilDate | null;
+  suggestedFinish: CivilDate | null;
 }
 
 export interface ScheduleAccess {

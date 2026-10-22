@@ -226,7 +226,7 @@ export interface ObjectSummary extends Versioned {
 
 /** The closing funnel for one work, from `PotentialClosingService`. */
 export interface WorkFinancial {
-  /** `null` (with `potential` and `buckets`) when the work's fact is unknown: no physical value is stated. `closed` is always known. */
+  /** `null` (with `potential` and `buckets`) when the work's fact or monetary weight is unknown: no physical value is stated. `closed` is always known. */
   physical: Numeric | null;
   closed: Numeric;
   potential: Numeric | null;
@@ -238,6 +238,7 @@ export interface WorkFinancial {
     calculated: Numeric;
   } | null;
   factUnknown?: boolean;
+  costUnknown?: boolean;
 }
 
 /**
@@ -253,8 +254,8 @@ export interface WorkFinancial {
 export interface Work extends Versioned {
   objectId: Uuid;
   workTypeId: Uuid;
-  contractorId: Uuid;
-  responsibleUserId: Uuid;
+  contractorId: Uuid | null;
+  responsibleUserId: Uuid | null;
   name: string;
   unit: string;
   plannedQuantity: Numeric;
@@ -267,8 +268,10 @@ export interface Work extends Versioned {
   factUnknown?: boolean;
   factSourceMode?: string;
   factSourceModeProvenance?: string;
-  plannedStartDate: CivilDate;
-  plannedFinishDate: CivilDate;
+  /** R04: derived from assignments and existing dependency blockers; never an approval. */
+  productionEligibility?: { state: 'MISSING_ASSIGNMENTS' | 'BLOCKED' | 'READY'; allowed: boolean; reasons: string[] };
+  plannedStartDate: CivilDate | null;
+  plannedFinishDate: CivilDate | null;
   actualStartDate: CivilDate | null;
   actualFinishDate: CivilDate | null;
   status: WorkStatus;
@@ -287,7 +290,7 @@ export interface Work extends Versioned {
   docsReady: boolean;
   blockers: string[];
   stale: boolean;
-  estimatedCost?: Numeric;
+  estimatedCost?: Numeric | null;
   closed?: Numeric;
   financial?: WorkFinancial;
   /**
