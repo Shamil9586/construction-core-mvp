@@ -1,0 +1,80 @@
+name: GPR-2 Independent Acceptance (PostgreSQL + Chromium)
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: 'Owner-approved isolated R04 runtime verification only'
+        type: choice
+        required: true
+        default: DO_NOT_RUN
+        options:
+          - DO_NOT_RUN
+          - APPROVE_R04_TEST_ONLY
+      candidate_sha:
+        description: 'Exact approved R04 CP-02 commit SHA; no arbitrary refs'
+        type: string
+        required: true
+        default: b882fd0a35fe93d5f85d6be1ccd7dfdc6982f67d
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gpr2-independent-acceptance
+  cancel-in-progress: false
+
+jobs:
+  r04-runtime:
+    # Manual, owner-only, no write permissions, only the frozen R04 candidate.
+    if: >-
+      github.repository == 'Shamil9586/construction-core-mvp' &&
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
+      github.actor == 'Shamil9586' &&
+      inputs.confirmation == 'APPROVE_R04_TEST_ONLY' &&
+      inputs.candidate_sha == 'b882fd0a35fe93d5f85d6be1ccd7dfdc6982f67d'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      CI: 'true'
+      TZ: UTC
+      GPR2_ISOLATED_PG_URL: postgresql://postgres:x@127.0.0.1:54329/postgres
+      GPR2_EVIDENCE_DIR: ${{ github.workspace }}/gpr2-ci-evidence/native/evidence
+      DATABASE_URL: ''
+      AUTH_MODE: mock
+    steps:
+      - name: Checkout frozen R04 candidate without persisting GitHub credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: b882fd0a35fe93d5f85d6be1ccd7dfdc6982f67d
+          fetch-depth: 5
+          persist-credentials: false
+      - name: Verify candidate SHA, trees, parents and clean checkout
+        shell: bash
+        run: |
+          bash .github/acceptance/verify-r04-identity.sh
+      - name: Set up Node.js 22.22.0
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22.22.0'
+          cache: npm
+      - name: Install dependencies using the candidate's lockfile
+        run: npm ci
+      - name: Initialize isolated PostgreSQL 16 cluster (localhost only)
+        run: bash .github/acceptance/postgres-start.sh
+      - name: Install pinned Playwright Chromium and OS libraries
+        run: npx --no-install playwright install --with-deps chromium
+      - name: Run native PostgreSQL and browser acceptance gates
+        run: bash .github/acceptance/run-r04-runtime.sh
+      - name: Destroy disposable PostgreSQL cluster
+        if: always()
+        run: bash .github/acceptance/postgres-stop.sh
+      - name: Upload evidence even after failure
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: gpr2-r04-independent-runtime-evidence
+          path: gpr2-ci-evidence/
+          if-no-files-found: warn
+          retention-days: 14
