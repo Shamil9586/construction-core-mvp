@@ -44,10 +44,16 @@ jobs:
       DATABASE_URL: ''
       AUTH_MODE: mock
     steps:
+      - name: Checkout reviewed acceptance harness from main
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: main
+          persist-credentials: false
       - name: Checkout frozen R04 candidate without persisting GitHub credentials
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: b882fd0a35fe93d5f85d6be1ccd7dfdc6982f67d
+          path: core
           fetch-depth: 5
           persist-credentials: false
       - name: Verify candidate SHA, trees, parents and clean checkout
@@ -59,11 +65,14 @@ jobs:
         with:
           node-version: '22.22.0'
           cache: npm
+          cache-dependency-path: core/package-lock.json
       - name: Install dependencies using the candidate's lockfile
+        working-directory: core
         run: npm ci
       - name: Initialize isolated PostgreSQL 16 cluster (localhost only)
         run: bash .github/acceptance/postgres-start.sh
       - name: Install pinned Playwright Chromium and OS libraries
+        working-directory: core
         run: npx --no-install playwright install --with-deps chromium
       - name: Run native PostgreSQL and browser acceptance gates
         run: bash .github/acceptance/run-r04-runtime.sh
