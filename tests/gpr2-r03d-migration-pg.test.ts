@@ -10,7 +10,7 @@ import { IsolatedDatabase, Session, createIsolatedDatabase, recordEvidence, scru
  * contract dry-run: никакого неконтролируемого destructive DDL".
  *   * two runners started at the same moment on an empty database: the advisory lock serialises them, every version is recorded once
  *   * a run that fails in the middle leaves NOTHING (all-or-nothing), the repaired chain then applies, a restart is a no-op
- *   * the upgrade from the OLD runner's ledger (version + applied_at only): the new columns are added, the 25 legacy rows are reported unverified, 026/027 apply
+ *   * the upgrade from the OLD runner's ledger (version + applied_at only): the new columns are added, the 25 legacy rows are reported unverified, 026-028 apply
  *   * --plan on a database with no ledger at all, and on one with the old ledger, applies nothing and takes no lock
  *   * a contract step is refused before anything is applied; a refusal leaves the database exactly as it was
  */
@@ -83,15 +83,21 @@ test('A29 upgrade from the OLD runner\'s ledger: its rows stay, are reported UNV
     assert.equal(oldRows.length, 25);
 
     // --plan: nothing applied, no lock, no ledger change — even though the checksum column does not exist yet
+    // R04 CP-02 (REG-02): R04 added 028 (additive expand: five DROP NOT NULL). The list is still pinned, and checked against the repository chain.
+    const AFTER_OLD_RUNNER = [26, 27, 28];
+    const newer = runner.readMigrationFiles('infra').filter((f: any) => f.version > 25);
+    assert.deepEqual(newer.map((f: any) => f.version), AFTER_OLD_RUNNER, 'the migrations the old runner never knew');
+    assert.deepEqual(newer.map((f: any) => f.class), ['additive', 'additive', 'additive'], 'none of them is a contract step');
+    assert.deepEqual(newer.flatMap((f: any) => runner.destructiveStatements(f.sql)), [], 'and none carries destructive DDL');
     const plan = await mig.planMigrationsOnDatabase();
-    assert.deepEqual(plan.pending.map((p: any) => p.version), [26, 27]);
+    assert.deepEqual(plan.pending.map((p: any) => p.version), AFTER_OLD_RUNNER);
     assert.deepEqual(plan.unverifiedInLedger, Array.from({ length: 25 }, (_, i) => i + 1), 'the plan already says the 25 old rows are unverified');
     const cols = (await c.query("SELECT column_name FROM information_schema.columns WHERE table_name='schema_migrations' ORDER BY 1")).rows.map((r: any) => r.column_name);
     assert.deepEqual(cols, ['applied_at', 'version'], 'planning did not touch the ledger');
     assert.deepEqual((await c.query('SELECT version FROM schema_migrations')).rows.length, 25);
 
     const result = await mig.migrate();
-    assert.deepEqual(result.applied.map((a: any) => a.version), [26, 27]);
+    assert.deepEqual(result.applied.map((a: any) => a.version), AFTER_OLD_RUNNER);
     assert.deepEqual(result.unverifiedInLedger, Array.from({ length: 25 }, (_, i) => i + 1));
     const after = (await c.query('SELECT version, applied_at, checksum FROM schema_migrations ORDER BY version')).rows;
     assert.deepEqual(after.slice(0, 25).map((r: any) => [r.version, r.applied_at.toISOString()]), oldRows.map((r: any) => [r.version, r.applied_at.toISOString()]), 'the old rows (and their times) are untouched');
