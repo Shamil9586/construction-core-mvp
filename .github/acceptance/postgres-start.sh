@@ -14,7 +14,7 @@ sudo -u postgres "$PG_BIN/pg_ctl" -D "$ROOT/data" -o '-c cluster_name=gpr2-p1-is
 # Reject anything except the runner-owned localhost cluster before any tests create databases.
 psql "$GPR2_ISOLATED_PG_URL" -XAt -F '|' -c "SELECT current_setting('cluster_name'), inet_server_addr()::text, current_setting('port'), current_database()" > "$OUT/postgresql-identity.txt"
 IFS='|' read -r cluster address port db < "$OUT/postgresql-identity.txt"
-[[ "$cluster" == 'gpr2-p1-isolated' && "$address" == '127.0.0.1' && "$port" == '54329' && "$db" == 'postgres' ]] || {
+[[ "$cluster" == 'gpr2-p1-isolated' && "$address" =~ ^127[.]0[.]0[.]1(/32)?$ && "$port" == '54329' && "$db" == 'postgres' ]] || {
   echo 'REFUSED: PostgreSQL isolation mismatch' >&2; exit 2;
 }
 echo "PostgreSQL isolation verified: cluster=$cluster addr=$address port=$port db=$db"
