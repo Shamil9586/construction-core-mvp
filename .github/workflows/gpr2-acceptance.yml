@@ -1,0 +1,266 @@
+# Construction Core — GPR-2 CI Foundation: universal isolated acceptance run (PostgreSQL + Chromium).
+#
+# Manual, owner-only, test-only. Reusable for any GPR-2 stage registered in .github/acceptance/profiles/<profile>.json on main.
+# A candidate is runnable only when its exact SHA and tree are registered in an ACTIVE profile through a reviewed PR to main; a workflow
+# input, a branch or an open PR never makes code trusted. The frozen R04 workflow (gpr2-independent-acceptance.yml) is kept unchanged.
+#
+# Jobs: authorize (no candidate code) -> runtime (candidate code, read-only token, no secrets) -> seal (no candidate code).
+# Nothing here merges, deploys, migrates a LIVE database or uses production credentials. A green run is a TECHNICAL gate only.
+name: GPR-2 Acceptance (universal, isolated)
+
+on:
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: 'Registered acceptance profile id (file name under .github/acceptance/profiles/, e.g. r04-cp02)'
+        type: string
+        required: true
+      candidate_sha:
+        description: 'Exact 40-hex candidate commit SHA registered in that profile (no branches, tags or short SHAs)'
+        type: string
+        required: true
+      confirmation:
+        description: 'Type exactly: APPROVE-TEST-ONLY <profile> <candidate_sha>'
+        type: string
+        required: true
+        default: DO_NOT_RUN
+
+permissions: {}
+
+concurrency:
+  group: gpr2-acceptance
+  cancel-in-progress: false
+
+jobs:
+  authorize:
+    name: Authorise dispatch and verify candidate identity (no candidate code)
+    if: >-
+      github.repository == 'Shamil9586/construction-core-mvp' &&
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
+      github.actor == 'Shamil9586' &&
+      github.triggering_actor == 'Shamil9586'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      stage: ${{ steps.authz.outputs.stage }}
+      profile_id: ${{ steps.authz.outputs.profile_id }}
+      profile_sha256: ${{ steps.authz.outputs.profile_sha256 }}
+      candidate_sha: ${{ steps.authz.outputs.candidate_sha }}
+      candidate_tree: ${{ steps.authz.outputs.candidate_tree }}
+      node_version: ${{ steps.authz.outputs.node_version }}
+      postgres_major: ${{ steps.authz.outputs.postgres_major }}
+      job_timeout_minutes: ${{ steps.authz.outputs.job_timeout_minutes }}
+      needs_postgres: ${{ steps.authz.outputs.needs_postgres }}
+      needs_chromium: ${{ steps.authz.outputs.needs_chromium }}
+      evidence_name: ${{ steps.authz.outputs.evidence_name }}
+    steps:
+      - name: Checkout acceptance harness at the exact workflow commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          path: harness
+          persist-credentials: false
+          sparse-checkout: .github/acceptance
+      - name: Set up Node.js for the harness
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22.22.0'
+      - name: Authorise (actor, ref, registered profile, registered SHA, explicit confirmation)
+        id: authz
+        env:
+          INPUT_PROFILE: ${{ inputs.profile }}
+          INPUT_CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          INPUT_CONFIRMATION: ${{ inputs.confirmation }}
+          GITHUB_TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: node harness/.github/acceptance/lib/authorize.mjs harness/.github/acceptance "$RUNNER_TEMP/authz"
+      - name: Fetch the registered candidate by SHA (checkout only; nothing is executed)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ steps.authz.outputs.candidate_sha }}
+          path: core
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify candidate SHA, tree, pinned lineage, baseline ancestry and clean checkout
+        env:
+          PROFILE_ID: ${{ steps.authz.outputs.profile_id }}
+          CANDIDATE_SHA: ${{ steps.authz.outputs.candidate_sha }}
+        run: |
+          node harness/.github/acceptance/lib/identity.mjs --phase authorize \
+            --profile "harness/.github/acceptance/profiles/${PROFILE_ID}.json" --candidate "$CANDIDATE_SHA" \
+            --repo core --out "$RUNNER_TEMP/authz/identity-authorize.json"
+      - name: Upload authorisation record
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: authorization-run${{ github.run_id }}-a${{ github.run_attempt }}
+          path: ${{ runner.temp }}/authz/
+          if-no-files-found: error
+          retention-days: 90
+
+  runtime:
+    name: Isolated runtime (${{ needs.authorize.outputs.profile_id }} @ ${{ needs.authorize.outputs.candidate_sha }})
+    needs: authorize
+    runs-on: ubuntu-24.04
+    timeout-minutes: ${{ fromJSON(needs.authorize.outputs.job_timeout_minutes) }}
+    permissions:
+      contents: read
+    env:
+      CI: 'true'
+      TZ: UTC
+      DATABASE_URL: ''
+      AUTH_MODE: mock
+      RAW: ${{ github.workspace }}/evidence-raw
+      PROFILE_FILE: ${{ github.workspace }}/harness/.github/acceptance/profiles/${{ needs.authorize.outputs.profile_id }}.json
+      LIB: ${{ github.workspace }}/harness/.github/acceptance/lib
+      CANDIDATE_SHA: ${{ needs.authorize.outputs.candidate_sha }}
+    steps:
+      - name: Checkout acceptance harness at the exact workflow commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          path: harness
+          persist-credentials: false
+          sparse-checkout: .github/acceptance
+      - name: Checkout registered candidate without persisting credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.authorize.outputs.candidate_sha }}
+          path: core
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Node.js ${{ needs.authorize.outputs.node_version }} (no dependency cache, to avoid cache poisoning)
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ needs.authorize.outputs.node_version }}
+      - name: Re-verify candidate identity before any candidate code runs
+        run: |
+          mkdir -p "$RAW"
+          node "$LIB/identity.mjs" --phase runtime --profile "$PROFILE_FILE" --candidate "$CANDIDATE_SHA" --repo core --out "$RAW/identity-runtime.json"
+      - name: Install dependencies from the candidate lockfile
+        id: deps
+        continue-on-error: true
+        working-directory: core
+        run: npm ci --no-audit --no-fund > "$RAW/npm-ci.log" 2>&1
+      - name: Initialise disposable PostgreSQL ${{ needs.authorize.outputs.postgres_major }} cluster (loopback only)
+        id: postgres
+        if: needs.authorize.outputs.needs_postgres == 'true'
+        continue-on-error: true
+        env:
+          GPR2_EVIDENCE_OUT: ${{ github.workspace }}/evidence-raw
+          GPR2_PG_MAJOR: ${{ needs.authorize.outputs.postgres_major }}
+          GPR2_PG_INSTALL: '1'
+        run: bash "$LIB/pg-cluster.sh" start
+      - name: Install pinned Playwright Chromium and OS libraries
+        id: chromium
+        if: needs.authorize.outputs.needs_chromium == 'true' && steps.deps.outcome == 'success'
+        continue-on-error: true
+        working-directory: core
+        run: npx --no-install playwright install --with-deps chromium > "$RAW/playwright-install.log" 2>&1
+      - name: Run the profile's checks (harness-owned runner)
+        id: checks
+        continue-on-error: true
+        env:
+          GPR2_ENV_DEPS: ${{ steps.deps.outcome }}
+          GPR2_ENV_POSTGRES: ${{ steps.postgres.outcome }}
+          GPR2_ENV_CHROMIUM: ${{ steps.chromium.outcome }}
+        run: node "$LIB/run-profile.mjs" --profile "$PROFILE_FILE" --core core --out "$RAW"
+      - name: Stop, verify and remove the disposable PostgreSQL cluster
+        id: cleanup
+        if: always() && needs.authorize.outputs.needs_postgres == 'true'
+        env:
+          GPR2_EVIDENCE_OUT: ${{ github.workspace }}/evidence-raw
+          GPR2_PG_MAJOR: ${{ needs.authorize.outputs.postgres_major }}
+        run: bash "$LIB/pg-cluster.sh" stop
+      - name: Upload raw runtime evidence (also after failure)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: raw-run${{ github.run_id }}-a${{ github.run_attempt }}
+          path: evidence-raw/
+          if-no-files-found: warn
+          retention-days: 7
+      - name: Fail the runtime job when its preliminary gate failed
+        if: steps.checks.outcome != 'success'
+        env:
+          CHECKS_OUTCOME: ${{ steps.checks.outcome }}
+        run: |
+          echo "Preliminary runtime gate did not pass (checks step: ${CHECKS_OUTCOME}); see the seal job for the classified result." >&2
+          exit 1
+
+  seal:
+    name: Classify, bind identity and seal evidence (no candidate code)
+    needs: [authorize, runtime]
+    if: always() && needs.authorize.result == 'success'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      PROFILE_FILE: ${{ github.workspace }}/harness/.github/acceptance/profiles/${{ needs.authorize.outputs.profile_id }}.json
+      LIB: ${{ github.workspace }}/harness/.github/acceptance/lib
+      CANDIDATE_SHA: ${{ needs.authorize.outputs.candidate_sha }}
+    steps:
+      - name: Checkout acceptance harness at the exact workflow commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          path: harness
+          persist-credentials: false
+          sparse-checkout: .github/acceptance
+      - name: Checkout candidate for independent identity re-verification (nothing is executed)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ needs.authorize.outputs.candidate_sha }}
+          path: core
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Node.js for the harness
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22.22.0'
+      - name: Download authorisation record
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: authorization-run${{ github.run_id }}-a${{ github.run_attempt }}
+          path: ${{ runner.temp }}/authz
+      - name: Download raw runtime evidence (may be absent if the runtime job never started)
+        continue-on-error: true
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: raw-run${{ github.run_id }}-a${{ github.run_attempt }}
+          path: ${{ runner.temp }}/raw
+      - name: Re-verify candidate identity independently of the runtime job
+        continue-on-error: true
+        run: node "$LIB/identity.mjs" --phase seal --profile "$PROFILE_FILE" --candidate "$CANDIDATE_SHA" --repo core --out "$RUNNER_TEMP/identity-seal.json"
+      - name: Classify against the workflow-commit profile and seal (manifest + SHA-256)
+        id: seal
+        env:
+          RUNTIME_RESULT: ${{ needs.runtime.result }}
+        run: |
+          set +e
+          node "$LIB/seal.mjs" --profile "$PROFILE_FILE" --raw "$RUNNER_TEMP/raw" --authorization "$RUNNER_TEMP/authz/authorization.json" \
+            --identity "$RUNNER_TEMP/identity-seal.json" --runtime-result "$RUNTIME_RESULT" --out "$GITHUB_WORKSPACE/sealed"
+          echo "gate_exit=$?" >> "$GITHUB_OUTPUT"
+      - name: Upload sealed evidence package
+        id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ needs.authorize.outputs.evidence_name }}
+          path: sealed/
+          if-no-files-found: error
+          retention-days: 90
+      - name: Record artifact identity and enforce the technical gate
+        env:
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+          GATE_EXIT: ${{ steps.seal.outputs.gate_exit }}
+        run: |
+          {
+            echo ""
+            echo "Sealed artifact: ${ARTIFACT_URL} (id ${ARTIFACT_ID}); manifest sha256 $(sha256sum sealed/manifest.json | cut -d' ' -f1)"
+            echo "Retention: 90 days in GitHub Actions — archive it durably per docs/gpr2-ci-foundation.md §7 after review."
+          } >> "$GITHUB_STEP_SUMMARY"
+          [ "$GATE_EXIT" = "0" ] || { echo "Technical gates did not pass (see SUMMARY.md)." >&2; exit 1; }
