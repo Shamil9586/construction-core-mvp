@@ -1,0 +1,129 @@
+{
+  "$comment": "Copy to <profile_id>.json, fill in, and register through a reviewed PR. A TEMPLATE profile can never run.",
+  "schema": "construction-core/gpr2-acceptance-profile@1",
+  "profile_id": "stage-template",
+  "stage": "R05",
+  "title": "GPR-2 R05 — <stage name> (template, not runnable)",
+  "status": "TEMPLATE",
+  "baseline": {
+    "sha": "9bd684806f0d87d802387abb141d9a88d950ceba",
+    "tree": "fb4d5724a5af1164d6dc46bfddc0be49776453f7",
+    "description": "authorised baseline for the stage (replace)"
+  },
+  "candidates": [],
+  "runtime": {
+    "runner": "ubuntu-24.04",
+    "node": "22.22.0",
+    "postgres_major": 16,
+    "job_timeout_minutes": 75,
+    "requires": [
+      "postgres",
+      "chromium"
+    ]
+  },
+  "checks": [
+    {
+      "id": "stage-native-pg",
+      "title": "<stage> native PostgreSQL suites",
+      "class": "NATIVE_POSTGRESQL",
+      "kind": "node-test",
+      "mandatory": true,
+      "requires": [
+        "postgres"
+      ],
+      "allow_skip": false,
+      "fresh_database_per_file": true,
+      "file_timeout_seconds": 480,
+      "files": [
+        {
+          "path": "tests/gpr2-r05-replace-me-pg.test.ts",
+          "expect_tests": 1
+        }
+      ]
+    },
+    {
+      "id": "previous-stage-native-pg",
+      "title": "Previous-stage compatibility (R02-R04 native suites)",
+      "class": "NATIVE_POSTGRESQL",
+      "kind": "node-test",
+      "mandatory": true,
+      "requires": [
+        "postgres"
+      ],
+      "allow_skip": false,
+      "fresh_database_per_file": true,
+      "file_timeout_seconds": 480,
+      "files": [
+        {
+          "path": "tests/gpr2-r02-fact-resolver-pg.test.ts",
+          "expect_tests": 2
+        },
+        {
+          "path": "tests/gpr2-r03a-snapshot-pg.test.ts",
+          "expect_tests": 4
+        },
+        {
+          "path": "tests/gpr2-r03b-coordination-pg.test.ts",
+          "expect_tests": 8
+        },
+        {
+          "path": "tests/gpr2-r03c-ledger-pg.test.ts",
+          "expect_tests": 5
+        },
+        {
+          "path": "tests/gpr2-r03d-migration-pg.test.ts",
+          "expect_tests": 6
+        },
+        {
+          "path": "tests/gpr2-r04-native-pg.test.ts",
+          "expect_tests": 1
+        },
+        {
+          "path": "tests/gpr2-r04-cp02-native-pg.test.ts",
+          "expect_tests": 1
+        }
+      ]
+    },
+    {
+      "id": "pglite-migration",
+      "title": "Pure / PGlite migration-runner suite",
+      "class": "PURE_PGLITE",
+      "kind": "node-test",
+      "mandatory": true,
+      "requires": [],
+      "allow_skip": false,
+      "fresh_database_per_file": false,
+      "file_timeout_seconds": 480,
+      "files": [
+        {
+          "path": "tests/gpr2-r03d-migration-runner.test.ts",
+          "expect_tests": 16
+        }
+      ]
+    },
+    {
+      "id": "browser-gpr1",
+      "title": "Chromium / Playwright GPR-1 regression incl. R04 W01 (1440 px and 390 px)",
+      "class": "BROWSER_CHROMIUM",
+      "kind": "playwright",
+      "mandatory": true,
+      "requires": [
+        "chromium"
+      ],
+      "allow_skip": false,
+      "config": "playwright.gpr-1.config.ts",
+      "expect_passed": 22,
+      "timeout_seconds": 2400
+    },
+    {
+      "id": "typecheck-build",
+      "title": "TypeScript type-check and production build",
+      "class": "TYPECHECK_BUILD",
+      "kind": "npm-script",
+      "mandatory": true,
+      "requires": [],
+      "script": "build",
+      "timeout_seconds": 1200
+    }
+  ]
+}

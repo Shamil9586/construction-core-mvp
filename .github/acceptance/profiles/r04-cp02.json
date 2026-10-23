@@ -1,0 +1,81 @@
+{
+  "$comment": "Frozen equivalent of the accepted R04 runtime gates (run 39788979618: native 27 + PGlite 16 + Chromium 22 = 65). Do not edit counts without a reviewed owner decision.",
+  "schema": "construction-core/gpr2-acceptance-profile@1",
+  "profile_id": "r04-cp02",
+  "stage": "R04",
+  "title": "GPR-2 R04 Early Work (CP-01 + CP-02) — accepted implementation candidate",
+  "status": "ACTIVE",
+  "baseline": {
+    "sha": "92fcf6d047fd22453349260432dbc65590386a17",
+    "tree": "b32c75756c9e4eb6f71e8c55e103482ca4591820",
+    "description": "main before R04 (R04 authorised baseline)"
+  },
+  "candidates": [
+    {
+      "sha": "b882fd0a35fe93d5f85d6be1ccd7dfdc6982f67d",
+      "tree": "2f5d3648b330c30642a08b62e7737834dbe25ec2",
+      "lineage": [
+        { "rev": "HEAD^",  "sha": "169ae902fafaf0f836464b2741af4bf98afd6a3b", "tree": "bb77c3f5437661670ca9fc59b7dea78ac3128fb4" },
+        { "rev": "HEAD~2", "sha": "e7ddcf63900e3a6d9f8d69d4815d54dfacc07260", "tree": "bedaabff1d96094ee678133d56c37000a765f32d" },
+        { "rev": "HEAD~3", "sha": "92fcf6d047fd22453349260432dbc65590386a17", "tree": "b32c75756c9e4eb6f71e8c55e103482ca4591820" }
+      ],
+      "diff_check_from": "92fcf6d047fd22453349260432dbc65590386a17",
+      "approval": "R04 CP-02 accepted by independent review; integrated via PR #11 (main 9bd684806f0d87d802387abb141d9a88d950ceba)"
+    }
+  ],
+  "runtime": {
+    "runner": "ubuntu-24.04",
+    "node": "22.22.0",
+    "postgres_major": 16,
+    "job_timeout_minutes": 75,
+    "requires": ["postgres", "chromium"]
+  },
+  "checks": [
+    {
+      "id": "native-pg",
+      "title": "Native PostgreSQL suites (R02, R03a-d, R04, CP-02)",
+      "class": "NATIVE_POSTGRESQL",
+      "kind": "node-test",
+      "mandatory": true,
+      "requires": ["postgres"],
+      "allow_skip": false,
+      "fresh_database_per_file": true,
+      "file_timeout_seconds": 480,
+      "files": [
+        { "path": "tests/gpr2-r02-fact-resolver-pg.test.ts", "expect_tests": 2 },
+        { "path": "tests/gpr2-r03a-snapshot-pg.test.ts", "expect_tests": 4 },
+        { "path": "tests/gpr2-r03b-coordination-pg.test.ts", "expect_tests": 8 },
+        { "path": "tests/gpr2-r03c-ledger-pg.test.ts", "expect_tests": 5 },
+        { "path": "tests/gpr2-r03d-migration-pg.test.ts", "expect_tests": 6 },
+        { "path": "tests/gpr2-r04-native-pg.test.ts", "expect_tests": 1 },
+        { "path": "tests/gpr2-r04-cp02-native-pg.test.ts", "expect_tests": 1 }
+      ]
+    },
+    {
+      "id": "pglite-migration",
+      "title": "Pure / PGlite migration-runner suite (R03d)",
+      "class": "PURE_PGLITE",
+      "kind": "node-test",
+      "mandatory": true,
+      "requires": [],
+      "allow_skip": false,
+      "fresh_database_per_file": false,
+      "file_timeout_seconds": 480,
+      "files": [
+        { "path": "tests/gpr2-r03d-migration-runner.test.ts", "expect_tests": 16 }
+      ]
+    },
+    {
+      "id": "browser-gpr1",
+      "title": "Chromium / Playwright GPR-1 regression incl. R04 W01 (1440 px and 390 px)",
+      "class": "BROWSER_CHROMIUM",
+      "kind": "playwright",
+      "mandatory": true,
+      "requires": ["chromium"],
+      "allow_skip": false,
+      "config": "playwright.gpr-1.config.ts",
+      "expect_passed": 22,
+      "timeout_seconds": 2400
+    }
+  ]
+}

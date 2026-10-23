@@ -1,0 +1,133 @@
+{
+  "$comment": "Integration baseline: the accepted R04 gates re-run against the main merge commit, plus the full type-check/build. Template for verifying later integration commits.",
+  "schema": "construction-core/gpr2-acceptance-profile@1",
+  "profile_id": "r04-main-integration",
+  "stage": "R04",
+  "title": "GPR-2 R04 integrated main baseline (merge of PR #11)",
+  "status": "ACTIVE",
+  "baseline": {
+    "sha": "8376cd3c299d24545ceafe318366bb7be89d9c6b",
+    "tree": "9a2ca9b7d2d27b4fd9e94199489f3c8473790674",
+    "description": "main before the R04 integration merge (PR #11 first parent)"
+  },
+  "candidates": [
+    {
+      "sha": "9bd684806f0d87d802387abb141d9a88d950ceba",
+      "tree": "fb4d5724a5af1164d6dc46bfddc0be49776453f7",
+      "lineage": [
+        {
+          "rev": "HEAD^1",
+          "sha": "8376cd3c299d24545ceafe318366bb7be89d9c6b",
+          "tree": "9a2ca9b7d2d27b4fd9e94199489f3c8473790674"
+        },
+        {
+          "rev": "HEAD^2",
+          "sha": "3002489e914f1d5619a9eb31137dcaa8961588d1",
+          "tree": "fb4d5724a5af1164d6dc46bfddc0be49776453f7"
+        },
+        {
+          "rev": "HEAD^2^2",
+          "sha": "b882fd0a35fe93d5f85d6be1ccd7dfdc6982f67d",
+          "tree": "2f5d3648b330c30642a08b62e7737834dbe25ec2"
+        }
+      ],
+      "approval": "Integration of accepted R04 (PR #11) independently accepted; canonical main 9bd684806f0d87d802387abb141d9a88d950ceba"
+    }
+  ],
+  "runtime": {
+    "runner": "ubuntu-24.04",
+    "node": "22.22.0",
+    "postgres_major": 16,
+    "job_timeout_minutes": 75,
+    "requires": [
+      "postgres",
+      "chromium"
+    ]
+  },
+  "checks": [
+    {
+      "id": "native-pg",
+      "title": "Native PostgreSQL suites (R02, R03a-d, R04, CP-02)",
+      "class": "NATIVE_POSTGRESQL",
+      "kind": "node-test",
+      "mandatory": true,
+      "requires": [
+        "postgres"
+      ],
+      "allow_skip": false,
+      "fresh_database_per_file": true,
+      "file_timeout_seconds": 480,
+      "files": [
+        {
+          "path": "tests/gpr2-r02-fact-resolver-pg.test.ts",
+          "expect_tests": 2
+        },
+        {
+          "path": "tests/gpr2-r03a-snapshot-pg.test.ts",
+          "expect_tests": 4
+        },
+        {
+          "path": "tests/gpr2-r03b-coordination-pg.test.ts",
+          "expect_tests": 8
+        },
+        {
+          "path": "tests/gpr2-r03c-ledger-pg.test.ts",
+          "expect_tests": 5
+        },
+        {
+          "path": "tests/gpr2-r03d-migration-pg.test.ts",
+          "expect_tests": 6
+        },
+        {
+          "path": "tests/gpr2-r04-native-pg.test.ts",
+          "expect_tests": 1
+        },
+        {
+          "path": "tests/gpr2-r04-cp02-native-pg.test.ts",
+          "expect_tests": 1
+        }
+      ]
+    },
+    {
+      "id": "pglite-migration",
+      "title": "Pure / PGlite migration-runner suite (R03d)",
+      "class": "PURE_PGLITE",
+      "kind": "node-test",
+      "mandatory": true,
+      "requires": [],
+      "allow_skip": false,
+      "fresh_database_per_file": false,
+      "file_timeout_seconds": 480,
+      "files": [
+        {
+          "path": "tests/gpr2-r03d-migration-runner.test.ts",
+          "expect_tests": 16
+        }
+      ]
+    },
+    {
+      "id": "browser-gpr1",
+      "title": "Chromium / Playwright GPR-1 regression incl. R04 W01 (1440 px and 390 px)",
+      "class": "BROWSER_CHROMIUM",
+      "kind": "playwright",
+      "mandatory": true,
+      "requires": [
+        "chromium"
+      ],
+      "allow_skip": false,
+      "config": "playwright.gpr-1.config.ts",
+      "expect_passed": 22,
+      "timeout_seconds": 2400
+    },
+    {
+      "id": "typecheck-build",
+      "title": "TypeScript type-check and production build (npm run build)",
+      "class": "TYPECHECK_BUILD",
+      "kind": "npm-script",
+      "mandatory": true,
+      "requires": [],
+      "script": "build",
+      "timeout_seconds": 1200
+    }
+  ]
+}

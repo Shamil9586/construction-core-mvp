@@ -1,0 +1,4 @@
+# GitHub logins allowed to dispatch an isolated GPR-2 acceptance run.
+# Both github.actor and github.triggering_actor (re-runs) must be listed.
+# Changing this file requires a reviewed PR to main and an owner decision.
+Shamil9586
