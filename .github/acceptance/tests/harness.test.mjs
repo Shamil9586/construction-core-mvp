@@ -13,6 +13,7 @@ import { authorize } from '../lib/authorize.mjs';
 import { verifyIdentity } from '../lib/identity.mjs';
 import { classifyRun, classifyNodeFile, classifyCleanup, evaluateCleanup, applyRuntimeResult, parseTapSummary, S, GATE } from '../lib/classify.mjs';
 import { writeManifest } from '../lib/seal.mjs';
+import { judgeCluster, expectedDataDirectory } from '../lib/run-profile.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ACC = path.resolve(HERE, '..');
@@ -46,6 +47,27 @@ const notStartedRecord = (over = {}) => cleanupRecord({
   termination_evidence: 'not_applicable', shutdown_proof: [], ...over,
 });
 const uninitialisedRecord = (over = {}) => notStartedRecord({ status: 'REMOVED_UNINITIALISED', root_existed_before: true, shutdown_proof: ['PG_VERSION absent, no postmaster.pid, no startup evidence, no process tied to the root'], ...over });
+  // Seals an all-PASS synthetic r04-cp02 evidence package through the real seal.mjs CLI and verifies it through the real verify-evidence.mjs CLI.
+const sealR04 = rr => {
+  const { profile: realProfile, sha256 } = loadProfile(path.join(PROFILES, 'r04-cp02.json'));
+    const d = tmp(); const rawDir = path.join(d, 'raw'); fs.mkdirSync(path.join(rawDir, 'postgres'), { recursive: true });
+    for (const c of realProfile.checks.filter(x => x.kind === 'node-test')) { fs.mkdirSync(path.join(rawDir, 'checks', c.id), { recursive: true });
+      fs.writeFileSync(path.join(rawDir, 'checks', c.id, 'result.json'), JSON.stringify({ state: 'EXECUTED', files: c.files.map(f => ({ path: f.path, state: 'EXECUTED', exit_code: 0, counts: { tests: f.expect_tests, pass: f.expect_tests, fail: 0, cancelled: 0, skipped: 0, todo: 0 } })) })); }
+    const pw = realProfile.checks.find(c => c.kind === 'playwright'); fs.mkdirSync(path.join(rawDir, 'checks', pw.id), { recursive: true });
+    fs.writeFileSync(path.join(rawDir, 'checks', pw.id, 'report.json'), JSON.stringify({ stats: { expected: pw.expect_passed, unexpected: 0, flaky: 0, skipped: 0 }, errors: [], suites: [{ title: 's', specs: Array.from({ length: pw.expect_passed }, (_, i) => ({ title: 't' + i, tests: [{ status: 'expected', results: [{ status: 'passed' }] }] })) }] }));
+    fs.writeFileSync(path.join(rawDir, 'checks', pw.id, 'result.json'), JSON.stringify({ state: 'EXECUTED', exit_code: 0, report: `checks/${pw.id}/report.json` }));
+    fs.writeFileSync(path.join(rawDir, 'postgres', 'cleanup.json'), JSON.stringify(cleanupRecord()));
+    const cand = { sha: R04, tree: realProfile.candidates[0].tree };
+    fs.writeFileSync(path.join(rawDir, 'identity-runtime.json'), JSON.stringify({ ok: true, candidate: cand }));
+    fs.writeFileSync(path.join(d, 'authorization.json'), JSON.stringify({ ok: true, request: { actor: 'Shamil9586', triggering_actor: 'Shamil9586' }, candidate: cand, profile: { sha256 } }));
+    fs.writeFileSync(path.join(d, 'identity-seal.json'), JSON.stringify({ ok: true, candidate: cand }));
+    const out = path.join(d, 'sealed');
+    const args = [path.join(LIB, 'seal.mjs'), '--profile', path.join(PROFILES, 'r04-cp02.json'), '--raw', rawDir, '--authorization', path.join(d, 'authorization.json'), '--identity', path.join(d, 'identity-seal.json'), ...(rr === undefined ? [] : ['--runtime-result', rr]), '--out', out];
+    const run = spawnSync('node', args, { encoding: 'utf8' });
+    const rec = JSON.parse(fs.readFileSync(path.join(out, 'acceptance-result.json'), 'utf8'));
+    const verify = spawnSync('node', [path.join(LIB, 'verify-evidence.mjs'), out, '--profile', path.join(PROFILES, 'r04-cp02.json')], { encoding: 'utf8' });
+    return { run, rec, verify, out };
+  };
 const hasCommit = sha => spawnSync('git', ['-C', REPO, 'cat-file', '-e', `${sha}^{commit}`]).status === 0;
 
 describe('profile registry', () => {
@@ -433,40 +455,113 @@ describe('C3: the runtime job conclusion bounds the sealed gate (S14-S16)', () =
     const r = { gate: GATE.PASSED, gate_reasons: [] }; assert.equal(applyRuntimeResult(r, 'failure').gate, GATE.FAILED);
   });
   test('seal.mjs CLI enforces it end-to-end, records the conclusion, and verify-evidence rejects a PASS sealed next to a failed runtime job', () => {
-    const { profile: realProfile, sha256 } = loadProfile(path.join(PROFILES, 'r04-cp02.json'));
-    const sealWith = rr => {
-      const d = tmp(); const rawDir = path.join(d, 'raw'); fs.mkdirSync(path.join(rawDir, 'postgres'), { recursive: true });
-      for (const c of realProfile.checks.filter(x => x.kind === 'node-test')) { fs.mkdirSync(path.join(rawDir, 'checks', c.id), { recursive: true });
-        fs.writeFileSync(path.join(rawDir, 'checks', c.id, 'result.json'), JSON.stringify({ state: 'EXECUTED', files: c.files.map(f => ({ path: f.path, state: 'EXECUTED', exit_code: 0, counts: { tests: f.expect_tests, pass: f.expect_tests, fail: 0, cancelled: 0, skipped: 0, todo: 0 } })) })); }
-      const pw = realProfile.checks.find(c => c.kind === 'playwright'); fs.mkdirSync(path.join(rawDir, 'checks', pw.id), { recursive: true });
-      fs.writeFileSync(path.join(rawDir, 'checks', pw.id, 'report.json'), JSON.stringify({ stats: { expected: pw.expect_passed, unexpected: 0, flaky: 0, skipped: 0 }, errors: [], suites: [{ title: 's', specs: Array.from({ length: pw.expect_passed }, (_, i) => ({ title: 't' + i, tests: [{ status: 'expected', results: [{ status: 'passed' }] }] })) }] }));
-      fs.writeFileSync(path.join(rawDir, 'checks', pw.id, 'result.json'), JSON.stringify({ state: 'EXECUTED', exit_code: 0, report: `checks/${pw.id}/report.json` }));
-      fs.writeFileSync(path.join(rawDir, 'postgres', 'cleanup.json'), JSON.stringify(cleanupRecord()));
-      const cand = { sha: R04, tree: realProfile.candidates[0].tree };
-      fs.writeFileSync(path.join(rawDir, 'identity-runtime.json'), JSON.stringify({ ok: true, candidate: cand }));
-      fs.writeFileSync(path.join(d, 'authorization.json'), JSON.stringify({ ok: true, request: { actor: 'Shamil9586', triggering_actor: 'Shamil9586' }, candidate: cand, profile: { sha256 } }));
-      fs.writeFileSync(path.join(d, 'identity-seal.json'), JSON.stringify({ ok: true, candidate: cand }));
-      const out = path.join(d, 'sealed');
-      const args = [path.join(LIB, 'seal.mjs'), '--profile', path.join(PROFILES, 'r04-cp02.json'), '--raw', rawDir, '--authorization', path.join(d, 'authorization.json'), '--identity', path.join(d, 'identity-seal.json'), ...(rr === undefined ? [] : ['--runtime-result', rr]), '--out', out];
-      const run = spawnSync('node', args, { encoding: 'utf8' });
-      const rec = JSON.parse(fs.readFileSync(path.join(out, 'acceptance-result.json'), 'utf8'));
-      const verify = spawnSync('node', [path.join(LIB, 'verify-evidence.mjs'), out, '--profile', path.join(PROFILES, 'r04-cp02.json')], { encoding: 'utf8' });
-      return { run, rec, verify, out };
-    };
-    const ok = sealWith('success');
+    const ok = sealR04('success');
     assert.equal(ok.rec.result.gate, GATE.PASSED); assert.equal(ok.run.status, 0, ok.run.stdout + ok.run.stderr); assert.equal(ok.rec.github.runtime_job_result, 'success'); assert.equal(ok.verify.status, 0, ok.verify.stdout);
     for (const [rr, expected] of [['failure', GATE.FAILED], ['cancelled', GATE.INCONCLUSIVE], ['skipped', GATE.INCONCLUSIVE], [undefined, GATE.FAILED], ['bogus', GATE.FAILED]]) {
-      const x = sealWith(rr);
+      const x = sealR04(rr);
       assert.equal(x.rec.result.gate, expected, String(rr)); assert.notEqual(x.run.status, 0, String(rr));
       assert.ok(x.rec.result.checks.filter(c => c.id !== 'postgres-cleanup').every(c => c.status === S.PASS), 'individual outcomes are preserved: ' + rr);
       assert.equal(x.verify.status, 0, `${rr}: the sealed package verifies consistently\n${x.verify.stdout}`);
     }
     // forging the sealed gate to PASSED next to a failed runtime job is caught by independent re-classification
-    const f = sealWith('failure'); const recFile = path.join(f.out, 'acceptance-result.json');
+    const f = sealR04('failure'); const recFile = path.join(f.out, 'acceptance-result.json');
     fs.writeFileSync(recFile, fs.readFileSync(recFile, 'utf8').replace(/"gate": "TECHNICAL_GATES_FAILED"/, '"gate": "TECHNICAL_GATES_PASSED"'));
     writeManifest(f.out, { gate: 'TECHNICAL_GATES_PASSED' });
     const v = spawnSync('node', [path.join(LIB, 'verify-evidence.mjs'), f.out, '--profile', path.join(PROFILES, 'r04-cp02.json')], { encoding: 'utf8' });
     assert.equal(v.status, 2, v.stdout); assert.match(v.stdout, /re-classification gives TECHNICAL_GATES_FAILED, sealed result claims TECHNICAL_GATES_PASSED/);
+  });
+});
+
+describe('C4 defense in depth: the database reset targets exactly this run\'s disposable cluster (pure, no SQL)', () => {
+  const ENV = { GITHUB_RUN_ID: '123456789', GITHUB_RUN_ATTEMPT: '2' };
+  const GOOD = { name: 'gpr2-p1-isolated', dir: '/var/tmp/gpr2-accept-123456789-2/data', addr: '127.0.0.1/32' };
+  test('the exact run id + attempt is accepted (also with a plain 127.0.0.1 address)', () => {
+    assert.equal(expectedDataDirectory(ENV), '/var/tmp/gpr2-accept-123456789-2/data');
+    assert.equal(judgeCluster(GOOD, ENV), null); assert.equal(judgeCluster({ ...GOOD, addr: '127.0.0.1' }, ENV), null);
+  });
+  test('a different run id, a different attempt, and a stale-looking root of another run are rejected although they match the generic pattern', () => {
+    assert.match(judgeCluster({ ...GOOD, dir: '/var/tmp/gpr2-accept-123456780-2/data' }, ENV), /not this run's disposable cluster/);
+    assert.match(judgeCluster({ ...GOOD, dir: '/var/tmp/gpr2-accept-123456789-1/data' }, ENV), /not this run's disposable cluster/);
+    assert.match(judgeCluster(GOOD, { ...ENV, GITHUB_RUN_ATTEMPT: '3' }), /not this run's disposable cluster/);
+    assert.match(judgeCluster(GOOD, { ...ENV, GITHUB_RUN_ID: '1' }), /not this run's disposable cluster/);
+  });
+  test('missing or invalid run identity is rejected before anything else is considered', () => {
+    for (const env of [{}, { GITHUB_RUN_ID: '1' }, { GITHUB_RUN_ATTEMPT: '1' }, { ...ENV, GITHUB_RUN_ID: '' }, { ...ENV, GITHUB_RUN_ATTEMPT: '' }, { ...ENV, GITHUB_RUN_ID: 'abc' }, { ...ENV, GITHUB_RUN_ATTEMPT: '1x' },
+                       { ...ENV, GITHUB_RUN_ID: '../..' }, { ...ENV, GITHUB_RUN_ID: ' 12' }, { ...ENV, GITHUB_RUN_ATTEMPT: '-1' }, { ...ENV, GITHUB_RUN_ID: '1e3' }, { ...ENV, GITHUB_RUN_ID: '12\n' }]) {
+      assert.equal(expectedDataDirectory(env), null, JSON.stringify(env));
+      assert.match(judgeCluster(GOOD, env), /missing or not numeric/, JSON.stringify(env));
+    }
+  });
+  test('a foreign data directory is rejected: another cluster, a subdirectory, a parent, a traversal, a trailing slash, a symlink-style variant', () => {
+    for (const dir of ['/var/lib/postgresql/16/main', '/var/tmp/gpr2-foreign/data', '/var/tmp/gpr2-accept-123456789-2', '/var/tmp/gpr2-accept-123456789-2/data/', '/var/tmp/gpr2-accept-123456789-2/data/base',
+                       '/var/tmp/gpr2-accept-123456789-2/../gpr2-accept-9-9/data', '/var/tmp/gpr2-accept-123456789-2/data/..', '', undefined, null])
+      assert.match(judgeCluster({ ...GOOD, dir }, ENV), /not this run's disposable cluster/, String(dir));
+  });
+  test('cluster_name and loopback checks are preserved', () => {
+    assert.match(judgeCluster({ ...GOOD, name: 'foreign' }, ENV), /cluster_name is 'foreign'/);
+    assert.match(judgeCluster({ ...GOOD, name: undefined }, ENV), /cluster_name/);
+    for (const addr of ['10.0.0.5', '::1', '0.0.0.0', '127.0.0.2', '', undefined]) assert.match(judgeCluster({ ...GOOD, addr }, ENV), /not loopback/, String(addr));
+  });
+  test('the generic pattern alone no longer admits a cluster: judgeCluster never returns null for a mismatching run, whatever the other fields', () => {
+    for (let n = 0; n < 50; n++) assert.notEqual(judgeCluster({ ...GOOD, dir: `/var/tmp/gpr2-accept-${n}-${n}/data` }, ENV), null);
+  });
+});
+
+describe('CI-EVID-01: verify-evidence must fail closed on an invalid or inconsistent sealed gate', () => {
+  const VERIFY = (dir) => spawnSync('node', [path.join(LIB, 'verify-evidence.mjs'), dir, '--profile', path.join(PROFILES, 'r04-cp02.json')], { encoding: 'utf8' });
+  // Rewrite acceptance-result.json with `mutate`, then REBUILD manifest.json and SHA256SUMS (keeping the original manifest metadata, optionally
+  // patched) so the package is checksum-consistent and only semantic verification can reject it.
+  const forge = (pkg, mutate, manifestPatch = {}) => {
+    const recFile = path.join(pkg.out, 'acceptance-result.json');
+    const rec = JSON.parse(fs.readFileSync(recFile, 'utf8')); mutate(rec); fs.writeFileSync(recFile, JSON.stringify(rec, null, 2) + '\n');
+    const { schema, file_count, files, ...meta } = JSON.parse(fs.readFileSync(path.join(pkg.out, 'manifest.json'), 'utf8')); void schema; void file_count; void files;
+    writeManifest(pkg.out, { ...meta, ...manifestPatch });
+    return VERIFY(pkg.out);
+  };
+  const FAILED_MSG = /EVIDENCE INTEGRITY: FAILED/;
+
+  test('valid sealed PASS (checksums rebuilt, nothing altered) still verifies: exit 0', () => {
+    const pkg = sealR04('success'); assert.equal(pkg.rec.result.gate, GATE.PASSED);
+    const v = forge(pkg, () => {}); assert.equal(v.status, 0, v.stdout); assert.match(v.stdout, /EVIDENCE INTEGRITY: VERIFIED/);
+  });
+  for (const [label, mutate] of [
+    ['an unrecognised gate string', r => { r.result.gate = 'UNRECOGNISED_GATE'; }],
+    ['a missing gate', r => { delete r.result.gate; }],
+    ['a null gate', r => { r.result.gate = null; }],
+    ['a numeric gate', r => { r.result.gate = 2; }],
+    ['a differently-cased gate', r => { r.result.gate = 'technical_gates_passed'; }],
+    ['an inherited-property name as gate', r => { r.result.gate = 'constructor'; }],
+    ['a missing result object', r => { delete r.result; }],
+  ]) {
+    test(`${label} fails verification (exit 2) even though manifest and SHA256SUMS were rebuilt`, () => {
+      const v = forge(sealR04('success'), mutate);
+      assert.equal(v.status, 2, `${label}: exit ${v.status}\n${v.stdout}${v.stderr}`); assert.match(v.stdout, FAILED_MSG);
+    });
+  }
+  test('an unknown/invalid gate fails on every kind of package, including sealed FAILED/INCONCLUSIVE ones, without disturbing their valid semantics', () => {
+    for (const [rr, expected] of [['failure', GATE.FAILED], ['cancelled', GATE.INCONCLUSIVE], ['skipped', GATE.INCONCLUSIVE]]) {
+      const good = sealR04(rr); assert.equal(good.rec.result.gate, expected); assert.equal(good.verify.status, 0, `${rr} stays valid`);
+      assert.equal(forge(sealR04(rr), r => { r.result.gate = 'BOGUS'; }).status, 2, `${rr} + bogus gate`);
+    }
+  });
+  test('runtime failure + sealed gate forged to PASSED fails; downgrade semantics are unchanged (a sealed gate stricter than the re-classification is accepted)', () => {
+    const v = forge(sealR04('failure'), r => { r.result.gate = GATE.PASSED; }, { gate: GATE.PASSED });
+    assert.equal(v.status, 2); assert.match(v.stdout, /re-classification gives TECHNICAL_GATES_FAILED, sealed result claims TECHNICAL_GATES_PASSED/);
+    // all-PASS evidence honestly sealed as FAILED/INCONCLUSIVE is a conservative downgrade, not an upgrade: still allowed (and manifest agrees)
+    for (const g of [GATE.FAILED, GATE.INCONCLUSIVE]) { const w = forge(sealR04('success'), r => { r.result.gate = g; }, { gate: g }); assert.equal(w.status, 0, `${g}\n${w.stdout}`); }
+  });
+  test('manifest.gate must equal result.gate: a PASSED result next to a FAILED manifest (or vice versa, or a missing manifest gate) fails', () => {
+    assert.equal(forge(sealR04('success'), () => {}, { gate: GATE.FAILED }).status, 2);
+    assert.equal(forge(sealR04('failure'), r => { r.result.gate = GATE.INCONCLUSIVE; }, { gate: GATE.FAILED }).status, 2);
+    assert.equal(forge(sealR04('success'), () => {}, { gate: 'UNRECOGNISED_GATE' }).status, 2);
+    assert.equal(forge(sealR04('success'), () => {}, { gate: undefined }).status, 2);
+  });
+  test('ordinary checksum tampering and unlisted files are still rejected', () => {
+    const pkg = sealR04('success'); const rf = path.join(pkg.out, 'raw', 'checks', 'native-pg', 'result.json');
+    fs.writeFileSync(rf, fs.readFileSync(rf, 'utf8').replace('"pass":', '"pass":1')); let v = VERIFY(pkg.out);
+    assert.equal(v.status, 2); assert.match(v.stdout, /checksum mismatch: raw\/checks\/native-pg\/result.json/);
+    const pkg2 = sealR04('success'); fs.writeFileSync(path.join(pkg2.out, 'extra.txt'), 'x'); v = VERIFY(pkg2.out);
+    assert.equal(v.status, 2); assert.match(v.stdout, /not covered by SHA256SUMS/);
   });
 });
 

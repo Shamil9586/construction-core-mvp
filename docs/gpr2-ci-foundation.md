@@ -153,7 +153,9 @@ server still answering on 54329. The new implementation:
   contradictory record is `FAIL`.
 
 Each native test file runs alone on a freshly recreated `construction_test` (DROP … WITH (FORCE) / CREATE), after re-checking the
-cluster identity, with `DATABASE_URL`, `PG*`, `E2E_*`, `POSTGRES_*` and any `*TOKEN*/*SECRET*/*PASSWORD*` variables scrubbed and
+cluster identity (the server must report `cluster_name=gpr2-p1-isolated`, a loopback address and exactly
+`/var/tmp/gpr2-accept-<GITHUB_RUN_ID>-<GITHUB_RUN_ATTEMPT>/data`; a missing or non-numeric run id / attempt refuses before any
+connection — `run-profile.mjs` `judgeCluster`), with `DATABASE_URL`, `PG*`, `E2E_*`, `POSTGRES_*` and any `*TOKEN*/*SECRET*/*PASSWORD*` variables scrubbed and
 only the isolated URLs set. Pure/PGlite checks get no database URL at all.
 
 ## 6. Chromium / Playwright
@@ -191,6 +193,11 @@ Gate: `TECHNICAL_GATES_PASSED` · `TECHNICAL_GATES_FAILED` (any mandatory FAIL/S
 upgraded: `success` — classified normally (necessary, not sufficient); `failure` — PASSED becomes FAILED (an unexplained failure beside
 all-PASS checks is contradictory), a FAILED/INCONCLUSIVE gate stays as classified (the failing or blocked checks explain the failed job);
 `cancelled` / `skipped` — PASSED becomes INCONCLUSIVE (the run did not complete); missing or unrecognised — FAILED (fail closed).
+
+`verify-evidence.mjs` validates the gates before comparing them (CI-EVID-01): the sealed `result.gate`, the re-classified gate and
+`manifest.gate` must all be members of the `GATE` enumeration in `classify.mjs` (an absent, unknown, wrong-type or differently-cased
+value fails, exit 2, even if `manifest.json` and `SHA256SUMS` were rebuilt), `manifest.gate` must equal `result.gate`, and a sealed
+gate stricter than the re-classification (a conservative downgrade) remains valid while a more lenient one does not.
 
 **Retention — verified facts (GitHub Docs, read 22.10.2026).** Artifacts and logs default to 90 days; a public repository allows
 1–90 days, a private one 1–400; `retention-days` cannot exceed the repository/organisation limit; downloading artifacts needs a

@@ -9,7 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { loadProfile } from './profile.mjs';
-import { classifyRun } from './classify.mjs';
+import { classifyRun, GATE } from './classify.mjs';
 import { listFiles } from './seal.mjs';
 
 const argv = process.argv.slice(2);
@@ -55,13 +55,28 @@ if (authz.candidate?.sha !== record.git.candidate_sha) bad('authorization record
 
 const identity = JSON.parse(fs.readFileSync(path.join(dir, 'identity-seal.json'), 'utf8'));
 const again = classifyRun({ profile, rawDir: path.join(dir, 'raw'), identity, runtimeResult: record.github?.runtime_job_result ?? null });
-const sealedGate = record.result.gate;
+// Gate values come from the shared enumeration in classify.mjs only. Validating BEFORE comparing is what makes the comparison meaningful: an
+// absent / unknown / wrong-type sealed gate would otherwise compare as `undefined` and could never be reported as an upgrade (CI-EVID-01).
+const KNOWN_GATES = Object.values(GATE);
+const isGate = v => typeof v === 'string' && KNOWN_GATES.includes(v);
+const resultOk = record.result !== null && typeof record.result === 'object' && !Array.isArray(record.result);
+if (!resultOk) bad('acceptance-result.json has no result object');
+const sealedGate = resultOk ? record.result.gate : undefined;
+if (!isGate(sealedGate)) bad(`sealed gate ${JSON.stringify(sealedGate) ?? 'undefined'} (${typeof sealedGate}) is not a known gate (${KNOWN_GATES.join(' | ')})`);
+if (!isGate(again.gate)) bad(`re-classified gate ${JSON.stringify(again.gate)} is not a known gate`);
+// The manifest records the gate the seal job computed; it must be the same value as the sealed result's (both are checksum-covered, so a
+// mismatch means one of them was rebuilt or edited after sealing).
+if (manifest.gate !== sealedGate) bad(`manifest gate ${JSON.stringify(manifest.gate) ?? 'undefined'} differs from the sealed result gate ${JSON.stringify(sealedGate) ?? 'undefined'}`);
 // The seal can only downgrade (never upgrade) the gate for cross-record problems; an upgrade on re-classification is a mismatch.
 // The runtime job's recorded conclusion is part of that re-classification, so a PASS sealed next to a non-success runtime job cannot verify.
-const rank = { TECHNICAL_GATES_PASSED: 2, INCONCLUSIVE_ENVIRONMENT_BLOCKED: 1, TECHNICAL_GATES_FAILED: 0 };
-if (rank[again.gate] < rank[sealedGate]) bad(`re-classification gives ${again.gate}, sealed result claims ${sealedGate}`); else ok(`re-classification gate ${again.gate} (sealed ${sealedGate})`);
+const rank = { [GATE.PASSED]: 2, [GATE.INCONCLUSIVE]: 1, [GATE.FAILED]: 0 };
+if (isGate(sealedGate) && isGate(again.gate)) {
+  if (rank[again.gate] < rank[sealedGate]) bad(`re-classification gives ${again.gate}, sealed result claims ${sealedGate}`); else ok(`re-classification gate ${again.gate} (sealed ${sealedGate})`);
+}
+const sealedChecks = resultOk && Array.isArray(record.result.checks) ? record.result.checks : null;
+if (!sealedChecks) bad('sealed result has no checks array');
 for (const c of again.checks) {
-  const s = record.result.checks.find(x => x.id === c.id);
+  const s = sealedChecks?.find(x => x.id === c.id);
   if (!s) bad(`sealed result lacks check ${c.id}`); else if (s.status !== c.status) bad(`check ${c.id}: sealed ${s.status}, re-classified ${c.status}`);
 }
 console.log('');

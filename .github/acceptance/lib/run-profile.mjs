@@ -42,14 +42,31 @@ function run(cmd, argv, { cwd, env, log, timeoutSec }) {
 const capture = (cmd, argv, opts = {}) => { const r = spawnSync(cmd, argv, { encoding: 'utf8', ...opts }); return r.status === 0 ? r.stdout.trim() : null; };
 const psql = (url, sql) => spawnSync('psql', [url, '-XAtq', '-v', 'ON_ERROR_STOP=1', '-c', sql], { encoding: 'utf8', env: baseEnv() });
 
+/** Exact data directory of THIS run's disposable cluster (the layout pg-cluster.sh creates), or null when the run identity is missing or not numeric. */
+export function expectedDataDirectory(env = process.env) {
+  const id = env.GITHUB_RUN_ID, attempt = env.GITHUB_RUN_ATTEMPT;
+  if (typeof id !== 'string' || typeof attempt !== 'string' || !/^[0-9]+$/.test(id) || !/^[0-9]+$/.test(attempt)) return null;
+  return `/var/tmp/gpr2-accept-${id}-${attempt}/data`;
+}
+/**
+ * Judge what a server reports about itself against this run's disposable cluster. Returns null only for the expected one, otherwise the refusal
+ * reason. Pure (no I/O): the destructive database reset is never reached unless this returns null. Defense in depth: pg-cluster.sh start already
+ * refuses a stale root and an occupied port, so only this run's cluster can normally answer here; this makes that an enforced precondition.
+ */
+export function judgeCluster({ name, dir, addr }, env = process.env) {
+  const expected = expectedDataDirectory(env);
+  if (!expected) return 'GITHUB_RUN_ID and GITHUB_RUN_ATTEMPT are missing or not numeric: this run\'s disposable cluster cannot be identified';
+  if (name !== CLUSTER_NAME) return `cluster_name is '${name}', not ${CLUSTER_NAME}`;
+  if (dir !== expected) return `data directory ${dir} is not this run's disposable cluster (${expected})`;
+  if (!/^127\.0\.0\.1(\/32)?$/.test(addr)) return `server address ${addr} is not loopback`;
+  return null;
+}
 function verifyCluster() {
+  if (!expectedDataDirectory()) return judgeCluster({});   // no run identity: refuse before connecting to anything
   const r = psql(`${PG_BASE}/postgres`, "select current_setting('cluster_name') || '|' || current_setting('data_directory') || '|' || inet_server_addr()::text");
   if (r.status !== 0) return 'isolated cluster does not answer on 127.0.0.1:54329';
   const [name, dir, addr] = r.stdout.trim().split('|');
-  if (name !== CLUSTER_NAME) return `cluster_name is '${name}', not ${CLUSTER_NAME}`;
-  if (!/^\/var\/tmp\/gpr2-accept-[0-9]+-[0-9]+\/data$/.test(dir)) return `data directory ${dir} is not this run's disposable cluster`;
-  if (!/^127\.0\.0\.1(\/32)?$/.test(addr)) return `server address ${addr} is not loopback`;
-  return null;
+  return judgeCluster({ name, dir, addr });
 }
 
 function nodeTestCheck(check, ctx) {
