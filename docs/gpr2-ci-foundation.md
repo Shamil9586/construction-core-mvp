@@ -348,6 +348,22 @@ Local environment: Ubuntu 24.04.5, Node 22.22.0, PostgreSQL 16.15, Chromium 141.
 | R04 product suites through the new harness (`r04-cp02`, `r04-main-integration`) | **NOT RUN — ENVIRONMENT BLOCKED**: this session's egress policy refuses `registry.npmjs.org` (proxy `403`), so `npm ci` of the candidate is impossible |
 | GitHub-hosted run of `gpr2-acceptance.yml` | **NOT RUN** — not authorised; `workflow_dispatch` also requires the workflow on `main` |
 
+**ShellCheck scope.** The harness lint scope is `lib/*.sh`, `tests/*.sh` and `archive-evidence.sh` (exactly what `tests/run-all.sh` runs);
+it must report **no finding** (shellcheck 0.10.0, exit 0). The frozen R04 scripts `postgres-start.sh` / `postgres-stop.sh` (byte-identical to
+`main`, with `run-r04-runtime.sh` and `verify-r04-identity.sh`) are *not* in that scope: running ShellCheck over `*.sh` of the whole directory
+adds three historical `SC2024` warnings (`postgres-start.sh:8`, `postgres-start.sh:12`, `postgres-stop.sh:8` — sudo does not apply to a shell
+redirect), which belong to the F-CI-01 reproduction fixture and are recorded here as an immutable baseline rather than suppressed or edited.
+Any wider criterion ("zero findings over every `*.sh`") would require changing a frozen file and is an owner decision, not a silent exclusion.
+Non-trivial exceptions inside the scope are line-level `# shellcheck disable=` directives carrying a reason (generated or nested shell code).
+
+**Lifecycle-test oracles.** `tests/pg-cluster.test.sh` runs as an unprivileged user while the postmasters belong to `postgres` and every cluster
+directory is `0700`. Its probes therefore read through sudo (`alive PID [START_TICKS]` via `/proc/<pid>/stat`, `pexists` / `pdir`): an unprivileged
+`kill -0` returns EPERM for a *live* process and an unprivileged `test -d` returns false under `0700`. These probes decide only whether a process
+or path exists — never ownership, which stays in `pg-cluster.sh`. T3 keeps its deliberately unprivileged `PG_VERSION` probe. Test teardown goes
+through `reap_root`, which stops only postmasters whose cwd lies inside the given test-owned root and refuses to delete the root while any
+process with its cwd inside it still runs. Each S-case freezes the first refusal's `cleanup.json` before the recovery step and judges the two
+phases separately; a `STOPPED_VERIFIED` after recovery is not evidence about the refusal.
+
 Known limitations: the hosted behaviour of `apt-get install postgresql-16`, `playwright install --with-deps`, artifact upload and
 download is inferred from the frozen workflow's successful run, not re-executed; `npm run build` on `9bd68480` has never been run by
 this work.

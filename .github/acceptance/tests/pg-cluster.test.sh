@@ -24,11 +24,63 @@ foreign_start() {  # an unrelated instance (NOT ours) on 55432 that must survive
   sudo -u postgres "$PG_BIN/initdb" -D /var/tmp/gpr2-foreign/data -U postgres --auth=trust >/dev/null 2>&1
   sudo -u postgres "$PG_BIN/pg_ctl" -D /var/tmp/gpr2-foreign/data -l /var/tmp/gpr2-foreign/log -w -o "-c port=${1:-55432} -c listen_addresses=127.0.0.1 -c unix_socket_directories=/var/tmp/gpr2-foreign -c cluster_name=foreign" start >/dev/null
 }
-alive() { [[ -n "$1" ]] && kill -0 "$1" 2>/dev/null; }
-classified() {  # the independent classifier's verdict (classify.mjs evaluateCleanup) on the cleanup.json this script wrote
-  node --input-type=module -e "import fs from 'node:fs'; import { evaluateCleanup } from '$LIB/classify.mjs'; process.exit(evaluateCleanup(JSON.parse(fs.readFileSync(process.argv[1], 'utf8'))).ok ? 0 : 1)" "$EV/$1/postgres/cleanup.json"
+# ---- test oracles (CI-CS-01) ----------------------------------------------------------------------------------------------------------------
+# The postmasters belong to `postgres` and every cluster directory is 0700. Run as the unprivileged runner user, a plain `kill -0` on a LIVE
+# postmaster answers EPERM (indistinguishable from "no such process" in `kill -0 ... 2>/dev/null`), and a plain `test -d/-e/-f` on anything inside
+# a cluster root answers "no". Both oracles are therefore read through sudo. They answer ONE question only — "does this process / path exist" —
+# and never decide who owns a process: that decision lives in pg-cluster.sh and is itself under test. T3 deliberately keeps its UNPRIVILEGED
+# PG_VERSION probe (it reproduces the historical F-CI-01 mistake).
+proc_tail() { sudo -n cat "/proc/$1/stat" 2>/dev/null | sed -E 's/^[0-9]+ \(.*\) //'; }   # state + remaining stat fields of a pid; empty when there is no such process
+proc_ticks() { proc_tail "$1" | awk '{print $20}'; }                                      # start time in clock ticks: lets a caller tell the SAME process from a recycled pid
+# alive PID [START_TICKS]: true iff a live, non-zombie process has this pid (and, when given, this start time, so a recycled pid is not "the same").
+alive() {
+  local t
+  [[ "${1:-}" =~ ^[0-9]+$ ]] || return 1
+  t="$(proc_tail "$1")"; [[ -n "$t" && "${t%% *}" != Z && "${t%% *}" != X ]] || return 1
+  [[ -z "${2:-}" || "$(awk '{print $20}' <<<"$t")" == "$2" ]]
 }
-serving() { ps -eo args= | grep -F -- "postgres -D $1" | grep -vF grep >/dev/null; }   # a postmaster is still serving this data directory
+pexists() { sudo -n test -e "$1"; }
+pdir() { sudo -n test -d "$1"; }
+sql_ok() { [[ "$(psql "postgresql://postgres@127.0.0.1:${1:-54329}/postgres" -XAtc 'select 1' 2>/dev/null)" == 1 ]]; }
+classified() {  # the independent classifier's verdict (classify.mjs evaluateCleanup) on a cleanup.json: $1 = run id, or $2 = an explicit file (e.g. a first-failure snapshot)
+  node --input-type=module -e "import fs from 'node:fs'; import { evaluateCleanup } from '$LIB/classify.mjs'; process.exit(evaluateCleanup(JSON.parse(fs.readFileSync(process.argv[1], 'utf8'))).ok ? 0 : 1)" "${2:-$EV/$1/postgres/cleanup.json}"
+}
+serving() { pgrep -f -- "[p]ostgres -D $1 " >/dev/null; }   # a postmaster is still serving this data directory
+
+# ---- safe teardown (CI-CS-01) ----------------------------------------------------------------------------------------------------------------
+# A test cluster root is never deleted while a server may still be running from it: deleting the data directory under a live postmaster (what the
+# old conditional teardown did whenever alive() lied) leaks the server and its port. reap_root stops ONLY postmasters whose working directory lies
+# inside the given test-owned root (kernel truth, privileged scan; never by port, name or bare pid), and removes the root only when none is left.
+TIED_SRC=$(cat <<'TIED'
+root="$1"; mode="$2"
+for d in /proc/[0-9]*; do
+  c="$(readlink "$d/cwd" 2>/dev/null)" || continue; c="${c% (deleted)}"
+  [[ "$c" == "$root" || "$c" == "$root"/* ]] || continue
+  if [[ "$mode" == postmasters ]]; then
+    { mapfile -d '' -t a < "$d/cmdline"; } 2>/dev/null || continue
+    [[ "${a[0]##*/}" == postgres ]] || continue
+    case " ${a[*]} " in *" -D "*) ;; *) continue ;; esac
+  fi
+  echo "${d#/proc/}"
+done
+exit 0
+TIED
+)
+tied() { sudo -n bash -c "$TIED_SRC" tied "$1" "${2:-all}"; }   # pids with their cwd inside $1 (all | postmasters)
+reap_root() {
+  local R="$1" sig p i left pms=()
+  [[ "$R" =~ ^/var/tmp/(gpr2-accept-99[0-9]+(-[0-9]+)?|gpr2-foreign|gpr2-wrapbin)$ ]] || { bad cleanup "refusing to touch '$R'"; return 1; }
+  pexists "$R" || return 0
+  for sig in INT QUIT; do
+    mapfile -t pms < <(tied "$R" postmasters)
+    ((${#pms[@]})) || break
+    for p in "${pms[@]}"; do sudo -n kill -CONT "$p" 2>/dev/null; sudo -n kill -"$sig" "$p" 2>/dev/null; done
+    for ((i = 0; i < 30; i++)); do [[ -z "$(tied "$R" all)" ]] && break; sleep 0.5; done
+  done
+  left="$(tied "$R" all | xargs echo)"
+  if [[ -n "$left" ]]; then bad cleanup "NOT deleting $R: process(es) $left with their working directory inside it are still running"; return 1; fi
+  sudo -n rm -rf --one-file-system -- "$R"
+}
 foreign_cfgdir_start() {  # $1 = run id, $2 = copy PG_VERSION into the config dir (true|false)
   # A FOREIGN cluster (real data_directory /var/tmp/gpr2-foreign/data, port 55432) whose postmaster is started with `-D <our cluster's data dir>`:
   # the cluster root's data dir holds only its configuration. Only its argv, not its cwd, matches our data directory.
@@ -39,19 +91,19 @@ foreign_cfgdir_start() {  # $1 = run id, $2 = copy PG_VERSION into the config di
   [[ "$2" != true ]] || sudo cp "$F/data/PG_VERSION" "$R/data/PG_VERSION"
   echo "data_directory = '$F/data'" | sudo tee -a "$R/data/postgresql.conf" >/dev/null; sudo chown -R postgres:postgres "$R"
   sudo -u postgres bash -c "nohup $PG_BIN/postgres -D $R/data -c port=55432 -c listen_addresses=127.0.0.1 -c unix_socket_directories=$F/sock -c cluster_name=foreign-cfgdir >$F/log 2>&1 &"
-  local i; for i in $(seq 1 40); do pg_isready -q -h 127.0.0.1 -p 55432 && return 0; sleep 0.5; done; return 1
+  local _; for _ in $(seq 1 40); do pg_isready -q -h 127.0.0.1 -p 55432 && return 0; sleep 0.5; done; return 1
 }
 foreign_fingerprint() { sudo sha256sum /var/tmp/gpr2-foreign/data/PG_VERSION /var/tmp/gpr2-foreign/data/postgresql.conf /var/tmp/gpr2-foreign/data/pg_hba.conf /var/tmp/gpr2-foreign/data/postmaster.pid | sha256sum; }
 foreign_signalled() { sudo grep -q -E 'received (fast|smart|immediate) shutdown request|shutting down' /var/tmp/gpr2-foreign/log; }
 foreign_select() { psql "postgresql://postgres@127.0.0.1:55432/postgres" -XAtc 'select 1' 2>/dev/null; }
-foreign_stop() { sudo -u postgres "$PG_BIN/pg_ctl" -D /var/tmp/gpr2-foreign/data -m fast -w stop >/dev/null 2>&1; sudo rm -rf /var/tmp/gpr2-foreign; }
+foreign_stop() { sudo -u postgres "$PG_BIN/pg_ctl" -D /var/tmp/gpr2-foreign/data -m fast -w stop >/dev/null 2>&1; reap_root /var/tmp/gpr2-foreign; }
 
 echo "== evidence: $EV"
 port_free 54329 || { echo 'port 54329 is busy before the tests; refusing'; exit 2; }
 
 # T1 positive: start -> identity -> stop -> verified removal
 if pgc 990001 bash "$LIB/pg-cluster.sh" start >"$EV/t1.log" 2>&1 && jq -e '.status=="RUNNING_VERIFIED" and .cluster_name=="gpr2-p1-isolated" and .port==54329 and .loopback_only' "$EV/990001/postgres/identity.json" >/dev/null; then
-  if pgc 990001 bash "$LIB/pg-cluster.sh" stop >>"$EV/t1.log" 2>&1 && [[ "$(field 990001 status)" == STOPPED_VERIFIED && "$(field 990001 root_exists_after)" == false ]] && port_free && [[ ! -e /var/tmp/gpr2-accept-990001-1 ]] && [[ -s "$EV/990001/postgres/server.log" ]]; then
+  if pgc 990001 bash "$LIB/pg-cluster.sh" stop >>"$EV/t1.log" 2>&1 && [[ "$(field 990001 status)" == STOPPED_VERIFIED && "$(field 990001 root_exists_after)" == false ]] && port_free && ! pexists /var/tmp/gpr2-accept-990001-1 && [[ -s "$EV/990001/postgres/server.log" ]]; then
     ok 'T1 start, identity, verified stop, root removed, server log preserved'
   else bad T1 "stop not verified: $(cat "$EV/990001/postgres/cleanup.json" 2>/dev/null)"; fi
 else bad T1 "start failed: $(tail -3 "$EV/t1.log")"; fi
@@ -69,12 +121,12 @@ GITHUB_RUN_ID=990003 GITHUB_WORKSPACE="$EV/frozen" bash "$FROZEN_STOP"; frozen_r
 if [[ "$frozen_rc" == 0 && "$unpriv_sees" == false ]] && ! port_free; then
   ok "T3 F-CI-01 reproduced: frozen postgres-stop.sh exit 0, unprivileged PG_VERSION test=false, server still answering on 54329"
 else bad T3 "could not reproduce (rc=$frozen_rc unpriv_sees=$unpriv_sees port_free=$(port_free && echo y || echo n))"; fi
-sudo -u postgres "$PG_BIN/pg_ctl" -D "$ROOT3/data" -m fast -w stop >/dev/null 2>&1; sudo rm -rf "$ROOT3"
+sudo -u postgres "$PG_BIN/pg_ctl" -D "$ROOT3/data" -m fast -w stop >/dev/null 2>&1; reap_root "$ROOT3"
 
 # T4 refuse a stale cluster root
 sudo install -d -m 0700 /var/tmp/gpr2-accept-990004-1
 if ! pgc 990004 bash "$LIB/pg-cluster.sh" start >"$EV/t4.log" 2>&1 && grep -q 'already exists' "$EV/t4.log"; then ok 'T4 refuses to reuse a stale cluster root'; else bad T4 "$(cat "$EV/t4.log")"; fi
-sudo rm -rf /var/tmp/gpr2-accept-990004-1
+reap_root /var/tmp/gpr2-accept-990004-1
 
 # T5 refuse to start when something else answers on 54329; the foreign server is left untouched
 foreign_start 54329
@@ -104,7 +156,7 @@ pgc 990007 bash "$LIB/pg-cluster.sh" stop >>"$EV/t7.log" 2>&1 && [[ "$(field 990
 pgc 990008 bash "$LIB/pg-cluster.sh" start >"$EV/t8.log" 2>&1
 pid8="$(sudo head -1 /var/tmp/gpr2-accept-990008-1/data/postmaster.pid)"; sudo kill -9 "$pid8"; sleep 2
 pgc 990008 bash "$LIB/pg-cluster.sh" stop >>"$EV/t8.log" 2>&1; rc=$?
-if [[ "$rc" == 0 && "$(field 990008 status)" == STOPPED_VERIFIED && "$(field 990008 stop_mode)" == already_stopped ]] && jq -e '.notes|map(test("stale postmaster.pid"))|any' "$EV/990008/postgres/cleanup.json" >/dev/null && [[ ! -e /var/tmp/gpr2-accept-990008-1 ]]; then
+if [[ "$rc" == 0 && "$(field 990008 status)" == STOPPED_VERIFIED && "$(field 990008 stop_mode)" == already_stopped ]] && jq -e '.notes|map(test("stale postmaster.pid"))|any' "$EV/990008/postgres/cleanup.json" >/dev/null && ! pexists /var/tmp/gpr2-accept-990008-1; then
   ok 'T8 crashed postmaster: stale pid file handled, verified, noted'
 else bad T8 "rc=$rc $(cat "$EV/990008/postgres/cleanup.json")"; fi
 
@@ -127,95 +179,97 @@ pgc 990011 bash "$LIB/pg-cluster.sh" start >"$EV/t11.log" 2>&1
 R11=/var/tmp/gpr2-accept-990011-1; sudo rm -f "$R11/data/PG_VERSION"
 pgc 990011 bash "$LIB/pg-cluster.sh" stop >>"$EV/t11.log" 2>&1; rc=$?
 if [[ "$rc" == 0 && "$(field 990011 status)" == STOPPED_VERIFIED && "$(field 990011 stop_method)" == signal && "$(field 990011 termination_evidence)" == stopped_by_cleanup && "$(field 990011 startup_status)" == RUNNING_VERIFIED ]] \
-   && [[ ! -e $R11 ]] && port_free && ! serving "$R11/data" && classified 990011; then
+   && ! pexists "$R11" && port_free && ! serving "$R11/data" && classified 990011; then
   ok 'T11 F-CI-02 N1: running cluster without PG_VERSION is stopped via the verified postmaster, then removed; classifier agrees'
 else bad T11 "rc=$rc $(cat "$EV/990011/postgres/cleanup.json")"; fi
-sudo -u postgres "$PG_BIN/pg_ctl" -D "$R11/data" -m immediate stop >/dev/null 2>&1; sudo rm -rf "$R11"
+reap_root "$R11"
 
 # T11b same, with postmaster.pid deleted too: no file names the server any more, only the process table does
 pgc 990017 bash "$LIB/pg-cluster.sh" start >"$EV/t11b.log" 2>&1
 R17=/var/tmp/gpr2-accept-990017-1; sudo rm -f "$R17/data/PG_VERSION" "$R17/data/postmaster.pid"
 pgc 990017 bash "$LIB/pg-cluster.sh" stop >>"$EV/t11b.log" 2>&1; rc=$?
-if [[ "$rc" == 0 && "$(field 990017 status)" == STOPPED_VERIFIED && "$(field 990017 stop_method)" == signal ]] && [[ ! -e $R17 ]] && port_free && ! serving "$R17/data" && classified 990017; then
+if [[ "$rc" == 0 && "$(field 990017 status)" == STOPPED_VERIFIED && "$(field 990017 stop_method)" == signal ]] && ! pexists "$R17" && port_free && ! serving "$R17/data" && classified 990017; then
   ok 'T11b F-CI-02 N1: PG_VERSION and postmaster.pid both gone, server still found and stopped through the process table'
 else bad T11b "rc=$rc $(cat "$EV/990017/postgres/cleanup.json")"; fi
-sudo rm -rf "$R17"
+reap_root "$R17"
 
 # T12 (N1/N2) the server cannot be stopped (SIGSTOP: it never handles SIGINT/SIGQUIT): FAILED, non-zero, root and server preserved, never a success
 pgc 990012 bash "$LIB/pg-cluster.sh" start >"$EV/t12.log" 2>&1
-R12=/var/tmp/gpr2-accept-990012-1; pm12="$(sudo head -1 "$R12/data/postmaster.pid")"; sudo rm -f "$R12/data/PG_VERSION"; sudo kill -STOP "$pm12"
+R12=/var/tmp/gpr2-accept-990012-1; pm12="$(sudo head -1 "$R12/data/postmaster.pid")"; pt12="$(proc_ticks "$pm12")"; sudo rm -f "$R12/data/PG_VERSION"; sudo kill -STOP "$pm12"
 pgc 990012 env GPR2_PG_CTL_STOP_TIMEOUT=1 bash "$LIB/pg-cluster.sh" stop >>"$EV/t12.log" 2>&1; rc=$?
-if [[ "$rc" != 0 && "$(field 990012 status)" == FAILED && -d $R12/data ]] && alive "$pm12" && jq -e '.problems|map(test("did not stop"))|any' "$EV/990012/postgres/cleanup.json" >/dev/null && ! classified 990012; then
+if [[ "$rc" != 0 && "$(field 990012 status)" == FAILED ]] && pdir "$R12/data" && alive "$pm12" "$pt12" && jq -e '.problems|map(test("did not stop"))|any' "$EV/990012/postgres/cleanup.json" >/dev/null && ! classified 990012; then
   ok 'T12 F-CI-02 N1/N2: unstoppable owned server -> FAILED, exit non-zero, data directory and server preserved, classifier rejects'
-else bad T12 "rc=$rc alive=$(alive "$pm12" && echo y || echo n) $(cat "$EV/990012/postgres/cleanup.json")"; fi
-sudo kill -CONT "$pm12" 2>/dev/null; for _ in $(seq 1 60); do alive "$pm12" || break; sleep 0.5; done
+else bad T12 "rc=$rc alive=$(alive "$pm12" "$pt12" && echo y || echo n) $(cat "$EV/990012/postgres/cleanup.json")"; fi
+cp "$EV/990012/postgres/cleanup.json" "$EV/990012.first-failure.cleanup.json"   # the refusal itself, kept apart from what follows
+sudo kill -CONT "$pm12" 2>/dev/null; for _ in $(seq 1 60); do alive "$pm12" "$pt12" || break; sleep 0.5; done
+alive "$pm12" "$pt12" && bad T12-wait "postmaster $pm12 still alive 30s after SIGCONT; the follow-up step would not be about a stopped server"
 # the server is now gone, but deleted files are not proof: with RUNNING_VERIFIED evidence and no stale pid it is still not a success
 sudo rm -f "$R12/data/postmaster.pid"
 pgc 990012 bash "$LIB/pg-cluster.sh" stop >>"$EV/t12.log" 2>&1; rc=$?
-if [[ "$rc" != 0 && "$(field 990012 status)" == FAILED && -d $R12/data ]] && jq -e '.problems|map(test("shutdown cannot be proven"))|any' "$EV/990012/postgres/cleanup.json" >/dev/null && ! classified 990012; then
+if [[ "$rc" != 0 && "$(field 990012 status)" == FAILED ]] && pdir "$R12/data" && jq -e '.problems|map(test("shutdown cannot be proven"))|any' "$EV/990012/postgres/cleanup.json" >/dev/null && ! classified 990012; then
   ok 'T12b F-CI-02 B: RUNNING_VERIFIED + missing PG_VERSION/postmaster.pid is not proof of termination -> FAILED, root preserved'
 else bad T12b "rc=$rc $(cat "$EV/990012/postgres/cleanup.json")"; fi
-sudo rm -rf "$R12"
+reap_root "$R12"
 
 # T16 same strictness with PG_VERSION present: server shut down behind our back, no stale pid, RUNNING_VERIFIED -> FAILED
 pgc 990016 bash "$LIB/pg-cluster.sh" start >"$EV/t16.log" 2>&1
 R16=/var/tmp/gpr2-accept-990016-1; sudo -u postgres "$PG_BIN/pg_ctl" -D "$R16/data" -m fast -w stop >/dev/null 2>&1
 pgc 990016 bash "$LIB/pg-cluster.sh" stop >>"$EV/t16.log" 2>&1; rc=$?
-if [[ "$rc" != 0 && "$(field 990016 status)" == FAILED && -d $R16/data ]] && ! classified 990016; then ok 'T16 F-CI-02 B: server stopped by someone else, no stale-pid evidence -> FAILED (shutdown by this cleanup not shown)'; else bad T16 "rc=$rc $(cat "$EV/990016/postgres/cleanup.json")"; fi
-sudo rm -rf "$R16"
+if [[ "$rc" != 0 && "$(field 990016 status)" == FAILED ]] && pdir "$R16/data" && ! classified 990016; then ok 'T16 F-CI-02 B: server stopped by someone else, no stale-pid evidence -> FAILED (shutdown by this cleanup not shown)'; else bad T16 "rc=$rc $(cat "$EV/990016/postgres/cleanup.json")"; fi
+reap_root "$R16"
 
 # T13 (N3) uncertain ownership: our postmaster.pid is forged to name a FOREIGN live postmaster. It must not be signalled, nothing is deleted, no success.
 foreign_start 55432
-fpid="$(sudo head -1 /var/tmp/gpr2-foreign/data/postmaster.pid)"
+fpid="$(sudo head -1 /var/tmp/gpr2-foreign/data/postmaster.pid)"; fpt="$(proc_ticks "$fpid")"
 pgc 990013 bash "$LIB/pg-cluster.sh" start >"$EV/t13.log" 2>&1
 R13=/var/tmp/gpr2-accept-990013-1; real13="$(sudo head -1 "$R13/data/postmaster.pid")"; sudo sed -i "1s/.*/$fpid/" "$R13/data/postmaster.pid"
 pgc 990013 bash "$LIB/pg-cluster.sh" stop >>"$EV/t13.log" 2>&1; rc=$?
-if [[ "$rc" != 0 && "$(field 990013 status)" == FAILED && -d $R13/data ]] && alive "$fpid" && ! port_free 55432 \
+if [[ "$rc" != 0 && "$(field 990013 status)" == FAILED ]] && pdir "$R13/data" && alive "$fpid" "$fpt" && ! port_free 55432 \
    && jq -e '.problems|map(test("not provably this cluster"))|any' "$EV/990013/postgres/cleanup.json" >/dev/null && ! classified 990013; then
   ok 'T13 F-CI-02 N3: pid file naming a foreign postmaster -> refused, FAILED, foreign server untouched, root preserved'
-else bad T13 "rc=$rc fpid_alive=$(alive "$fpid" && echo y || echo n) $(cat "$EV/990013/postgres/cleanup.json")"; fi
+else bad T13 "rc=$rc fpid_alive=$(alive "$fpid" "$fpt" && echo y || echo n) $(cat "$EV/990013/postgres/cleanup.json")"; fi
 sudo sed -i "1s/.*/$real13/" "$R13/data/postmaster.pid"
-pgc 990013 bash "$LIB/pg-cluster.sh" stop >>"$EV/t13.log" 2>&1 && [[ "$(field 990013 status)" == STOPPED_VERIFIED ]] && alive "$fpid" && ok 'T13b once the pid file is true again our cluster stops verified; the foreign server still runs' || bad T13b "$(cat "$EV/990013/postgres/cleanup.json")"
+pgc 990013 bash "$LIB/pg-cluster.sh" stop >>"$EV/t13.log" 2>&1 && [[ "$(field 990013 status)" == STOPPED_VERIFIED ]] && alive "$fpid" "$fpt" && ok 'T13b once the pid file is true again our cluster stops verified; the foreign server still runs' || bad T13b "$(cat "$EV/990013/postgres/cleanup.json")"
 foreign_stop
 
 # T14 (P2) partially initialised root, nothing started, process table clean: REMOVED_UNINITIALISED, success
 R14=/var/tmp/gpr2-accept-990014-1
 sudo install -d -o postgres -g postgres -m 0700 "$R14" "$R14/data" "$R14/data/base"; sudo -u postgres touch "$R14/data/postgresql.conf"
 pgc 990014 bash "$LIB/pg-cluster.sh" stop >"$EV/t14.log" 2>&1; rc=$?
-if [[ "$rc" == 0 && "$(field 990014 status)" == REMOVED_UNINITIALISED && ! -e $R14 && "$(field 990014 startup_status)" == NONE ]] && classified 990014; then ok 'T14 F-CI-02 P2: partial initdb remains, no server evidence anywhere -> REMOVED_UNINITIALISED, removed'; else bad T14 "rc=$rc $(cat "$EV/990014/postgres/cleanup.json")"; fi
+if [[ "$rc" == 0 && "$(field 990014 status)" == REMOVED_UNINITIALISED && "$(field 990014 startup_status)" == NONE ]] && ! pexists "$R14" && classified 990014; then ok 'T14 F-CI-02 P2: partial initdb remains, no server evidence anywhere -> REMOVED_UNINITIALISED, removed'; else bad T14 "rc=$rc $(cat "$EV/990014/postgres/cleanup.json")"; fi
 
 # T15 (P2+P4) the same next to an independently identified FOREIGN instance on our port: removal proceeds, the foreign server and its data are untouched
 foreign_start 54329
-fpid="$(sudo head -1 /var/tmp/gpr2-foreign/data/postmaster.pid)"; fver="$(sudo cat /var/tmp/gpr2-foreign/data/PG_VERSION)"
+fpid="$(sudo head -1 /var/tmp/gpr2-foreign/data/postmaster.pid)"; fpt="$(proc_ticks "$fpid")"; fver="$(sudo cat /var/tmp/gpr2-foreign/data/PG_VERSION)"
 R15=/var/tmp/gpr2-accept-990015-1; sudo install -d -o postgres -g postgres -m 0700 "$R15" "$R15/data"
 pgc 990015 bash "$LIB/pg-cluster.sh" stop >"$EV/t15.log" 2>&1; rc=$?
-if [[ "$rc" == 0 && "$(field 990015 status)" == REMOVED_UNINITIALISED && "$(field 990015 port_before.responder)" == foreign && ! -e $R15 ]] && alive "$fpid" && ! port_free 54329 \
+if [[ "$rc" == 0 && "$(field 990015 status)" == REMOVED_UNINITIALISED && "$(field 990015 port_before.responder)" == foreign ]] && ! pexists "$R15" && alive "$fpid" "$fpt" && ! port_free 54329 \
    && [[ "$(sudo cat /var/tmp/gpr2-foreign/data/PG_VERSION)" == "$fver" && "$(sudo head -1 /var/tmp/gpr2-foreign/data/postmaster.pid)" == "$fpid" ]] && classified 990015; then
   ok 'T15 F-CI-02 P2/P4: foreign instance on 54329 identified as foreign, left running with unchanged data; partial root removed'
-else bad T15 "rc=$rc fpid_alive=$(alive "$fpid" && echo y || echo n) $(cat "$EV/990015/postgres/cleanup.json")"; fi
+else bad T15 "rc=$rc fpid_alive=$(alive "$fpid" "$fpt" && echo y || echo n) $(cat "$EV/990015/postgres/cleanup.json")"; fi
 # ...and with startup evidence a listener on the port never turns the same root into a success
 mkdir -p "$EV/990018/postgres"; echo '{"status":"RUNNING_VERIFIED","postmaster_pid":1}' > "$EV/990018/postgres/identity.json"
 R18=/var/tmp/gpr2-accept-990018-1; sudo install -d -o postgres -g postgres -m 0700 "$R18" "$R18/data"
 pgc 990018 bash "$LIB/pg-cluster.sh" stop >"$EV/t18.log" 2>&1; rc=$?
-if [[ "$rc" != 0 && "$(field 990018 status)" == FAILED && -d $R18 ]] && alive "$fpid" && ! classified 990018; then ok 'T18 F-CI-02 B/N3: RUNNING_VERIFIED + no PG_VERSION + foreign listener -> FAILED, root preserved, foreign untouched'; else bad T18 "rc=$rc $(cat "$EV/990018/postgres/cleanup.json")"; fi
-sudo rm -rf "$R18"; foreign_stop
+if [[ "$rc" != 0 && "$(field 990018 status)" == FAILED ]] && pdir "$R18" && alive "$fpid" "$fpt" && ! classified 990018; then ok 'T18 F-CI-02 B/N3: RUNNING_VERIFIED + no PG_VERSION + foreign listener -> FAILED, root preserved, foreign untouched'; else bad T18 "rc=$rc $(cat "$EV/990018/postgres/cleanup.json")"; fi
+reap_root "$R18"; foreign_stop
 
 # ---- F-CI-02 R1: `-D` is a configuration directory, not proof of ownership ------------------------------------------------------------------
 # T31 (mandatory negative) a foreign postmaster is started with `-D <our data dir>` but its effective data_directory is a separate foreign cluster.
 # Only its argv matches. It must not be treated as ours, signalled, or deleted around; uncertain ownership must not become a cleanup PASS.
 for variant in A:false B:true; do
   vid="${variant%%:*}"; withver="${variant##*:}"; id=$([[ "$vid" == A ]] && echo 990031 || echo 990032); R="/var/tmp/gpr2-accept-$id-1"
-  foreign_cfgdir_start "$id" "$withver" || { bad "T31$vid" 'foreign config-dir instance did not start'; foreign_stop; sudo rm -rf "$R"; continue; }
-  fpid="$(sudo head -1 /var/tmp/gpr2-foreign/data/postmaster.pid)"; fp_before="$(foreign_fingerprint)"
-  cwd_ok=false; [[ "$(sudo readlink /proc/$fpid/cwd)" == /var/tmp/gpr2-foreign/data ]] && sudo tr '\0' ' ' </proc/$fpid/cmdline | grep -qF -- "-D $R/data " && cwd_ok=true
+  foreign_cfgdir_start "$id" "$withver" || { bad "T31$vid" 'foreign config-dir instance did not start'; foreign_stop; reap_root "$R"; continue; }
+  fpid="$(sudo head -1 /var/tmp/gpr2-foreign/data/postmaster.pid)"; fpt="$(proc_ticks "$fpid")"; fp_before="$(foreign_fingerprint)"
+  cwd_ok=false; [[ "$(sudo readlink "/proc/$fpid/cwd")" == /var/tmp/gpr2-foreign/data ]] && sudo -n cat "/proc/$fpid/cmdline" | tr '\0' ' ' | grep -qF -- "-D $R/data " && cwd_ok=true
   pgc "$id" bash "$LIB/pg-cluster.sh" stop >"$EV/t31$vid.log" 2>&1; rc=$?
   if [[ "$cwd_ok" == true && "$rc" != 0 && "$(field "$id" status)" == FAILED && "$(field "$id" foreign_instances_untouched)" == true ]] \
-     && alive "$fpid" && [[ "$(foreign_select)" == 1 ]] && ! foreign_signalled && [[ "$(foreign_fingerprint)" == "$fp_before" ]] && sudo test -f "$R/data/postgresql.conf" \
+     && alive "$fpid" "$fpt" && [[ "$(foreign_select)" == 1 ]] && ! foreign_signalled && [[ "$(foreign_fingerprint)" == "$fp_before" ]] && sudo test -f "$R/data/postgresql.conf" \
      && jq -e --argjson p "$fpid" '(.ambiguous_processes_before|map(.pid)|index($p)) != null and (.owned_processes_before|length)==0 and (.problems|map(test("[Oo]wnership is not established"))|any)' "$EV/$id/postgres/cleanup.json" >/dev/null \
      && ! classified "$id"; then
     ok "T31$vid F-CI-02 R1: foreign postmaster with our -D but another data_directory (PG_VERSION in config dir: $withver) -> not signalled, data unchanged, root kept, FAILED, classifier rejects"
-  else bad "T31$vid" "rc=$rc cwd_ok=$cwd_ok fpid_alive=$(alive "$fpid" && echo y || echo n) signalled=$(foreign_signalled && echo y || echo n) $(cat "$EV/$id/postgres/cleanup.json" 2>/dev/null | head -c 700)"; fi
-  foreign_stop; sudo rm -rf "$R"
+  else bad "T31$vid" "rc=$rc cwd_ok=$cwd_ok fpid_alive=$(alive "$fpid" "$fpt" && echo y || echo n) signalled=$(foreign_signalled && echo y || echo n) $(head -c 700 "$EV/$id/postgres/cleanup.json" 2>/dev/null)"; fi
+  foreign_stop; reap_root "$R"
 done
 
 # T32 the process at the data directory is not the one recorded at start-up (restart / pid reuse class): same cwd, same -D, different pid and start
@@ -225,22 +279,22 @@ R33=/var/tmp/gpr2-accept-990033-1
 jq -e '(.postmaster_start_ticks|test("^[0-9]+$")) and (.boot_id|length>0)' "$EV/990033/postgres/identity.json" >/dev/null && ok 'T32a identity.json records the postmaster start time and boot id' || bad T32a "$(cat "$EV/990033/postgres/identity.json")"
 sudo -u postgres "$PG_BIN/pg_ctl" -D "$R33/data" -m fast -w stop >/dev/null 2>&1
 sudo -u postgres "$PG_BIN/pg_ctl" -D "$R33/data" -l "$R33/server2.log" -w -o "-c cluster_name=gpr2-p1-isolated -c port=54329 -c listen_addresses=127.0.0.1 -c unix_socket_directories=$R33/socket" start >/dev/null 2>&1
-pm33="$(sudo head -1 "$R33/data/postmaster.pid")"
+pm33="$(sudo head -1 "$R33/data/postmaster.pid")"; pt33="$(proc_ticks "$pm33")"
 pgc 990033 bash "$LIB/pg-cluster.sh" stop >>"$EV/t32.log" 2>&1; rc=$?
-if [[ "$rc" != 0 && "$(field 990033 status)" == FAILED && -d $R33/data ]] && alive "$pm33" && ! port_free 54329 \
+if [[ "$rc" != 0 && "$(field 990033 status)" == FAILED ]] && pdir "$R33/data" && alive "$pm33" "$pt33" && ! port_free 54329 \
    && jq -e '.problems|map(test("recorded start-up identity"))|any' "$EV/990033/postgres/cleanup.json" >/dev/null && ! classified 990033; then
   ok 'T32 F-CI-02 R1: postmaster with our cwd/-D but not the recorded pid/start time -> not signalled, server and root preserved, FAILED'
-else bad T32 "rc=$rc alive=$(alive "$pm33" && echo y || echo n) $(cat "$EV/990033/postgres/cleanup.json" | head -c 800)"; fi
-sudo -u postgres "$PG_BIN/pg_ctl" -D "$R33/data" -m immediate -w stop >/dev/null 2>&1; sudo rm -rf "$R33"
+else bad T32 "rc=$rc alive=$(alive "$pm33" "$pt33" && echo y || echo n) $(head -c 800 "$EV/990033/postgres/cleanup.json")"; fi
+reap_root "$R33"
 
 # ---- CI-safety closeout (C1/C2): NO signal without a COMPLETE, matching start-up identity -----------------------------------------------------
 # One real, running, owned postmaster per case. The recorded identity is damaged in one specific way; the cleanup must then refuse to signal the
 # (genuinely ours) server, keep its data, report FAILED with recovery diagnostics, and the classifier must reject the record. Afterwards the
 # identity is restored and the SAME cleanup stops that server verified — showing the refusal was about the missing proof, not about the server.
 ident_case() {  # $1 run id, $2 label, $3 mutation: "rm" | "rm-all" | "corrupt" | "truncate" | a jq filter applied to identity.json
-  local id="$1" label="$2" mut="$3" R="/var/tmp/gpr2-accept-$1-1" f="$EV/$1/postgres/identity.json" rc pm ok=true why=""
-  pgc "$id" bash "$LIB/pg-cluster.sh" start >"$EV/t$id.log" 2>&1 || { bad "$label" "start failed: $(tail -3 "$EV/t$id.log")"; return; }
-  pm="$(sudo head -1 "$R/data/postmaster.pid")"; cp "$f" "$EV/$id.identity.bak"
+  local id="$1" label="$2" mut="$3" R="/var/tmp/gpr2-accept-$1-1" f="$EV/$1/postgres/identity.json" first="$EV/$1.first-failure.cleanup.json" rc rc2 pm pmt ok=true p1="" p2=""
+  pgc "$id" bash "$LIB/pg-cluster.sh" start >"$EV/t$id.log" 2>&1 || { bad "$label" "start failed: $(tail -3 "$EV/t$id.log")"; reap_root "$R"; return; }
+  pm="$(sudo head -1 "$R/data/postmaster.pid")"; pmt="$(proc_ticks "$pm")"; cp "$f" "$EV/$id.identity.bak"
   case "$mut" in
     rm) rm -f "$f" ;;
     rm-all) rm -f "$f" "$EV/$id/postgres/pg_ctl-start.log" ;;
@@ -249,22 +303,27 @@ ident_case() {  # $1 run id, $2 label, $3 mutation: "rm" | "rm-all" | "corrupt" 
     *) jq "$mut" "$EV/$id.identity.bak" > "$f" ;;
   esac
   pgc "$id" bash "$LIB/pg-cluster.sh" stop >>"$EV/t$id.log" 2>&1; rc=$?
-  [[ "$rc" != 0 ]] || { ok=false; why+=" rc=0;"; }
-  [[ "$(field "$id" status)" == FAILED ]] || { ok=false; why+=" status=$(field "$id" status);"; }
-  alive "$pm" || { ok=false; why+=" postmaster not alive (signalled?);"; }
-  ! port_free || { ok=false; why+=" port free;"; }
-  sudo test -f "$R/data/postgresql.conf" || { ok=false; why+=" data dir gone;"; }
-  ! sudo grep -q -E 'received (fast|smart|immediate) shutdown request' "$R/server.log" || { ok=false; why+=" server log shows a shutdown request;"; }
-  [[ "$(field "$id" 'signals|length')" == 0 && "$(field "$id" stop_method)" == none ]] || { ok=false; why+=" signals recorded;"; }
-  jq -e '.problems|map(test("never signalled|cannot be proven|Recovery"))|any' "$EV/$id/postgres/cleanup.json" >/dev/null || { ok=false; why+=" no recovery diagnostics;"; }
-  ! classified "$id" || { ok=false; why+=" classifier accepted the record;"; }
-  # recovery path: restore the identity, the same cleanup now stops it verified
+  cp "$EV/$id/postgres/cleanup.json" "$first"   # PHASE 1 evidence is frozen here; the recovery below overwrites cleanup.json and must never stand in for it
+  # PHASE 1 — judged on the refusal alone, by privileged probes of the one specific postmaster (pid AND start time) and of its data directory
+  [[ "$rc" != 0 ]] || { ok=false; p1+=" rc=0;"; }
+  [[ "$(jq -r .status "$first")" == FAILED ]] || { ok=false; p1+=" status=$(jq -r .status "$first");"; }
+  alive "$pm" "$pmt" || { ok=false; p1+=" the postmaster $pm is gone after the REFUSED cleanup;"; }
+  sql_ok 54329 || { ok=false; p1+=" the server no longer answers SQL;"; }
+  pdir "$R/data" && sudo -n test -f "$R/data/postgresql.conf" || { ok=false; p1+=" data dir gone;"; }
+  ! sudo -n grep -q -E 'received (fast|smart|immediate) shutdown request' "$R/server.log" || { ok=false; p1+=" server log shows a shutdown request;"; }
+  jq -e '(.signals|length) == 0 and .stop_method == "none"' "$first" >/dev/null || { ok=false; p1+=" signals recorded;"; }
+  jq -e '.problems|map(test("never signalled|cannot be proven|Recovery"))|any' "$first" >/dev/null || { ok=false; p1+=" no recovery diagnostics;"; }
+  ! classified "$id" "$first" || { ok=false; p1+=" classifier accepted the refusal record;"; }
+  # PHASE 2 — recovery: with the identity restored the SAME cleanup now stops exactly that server, verified. This says nothing about phase 1.
   cp "$EV/$id.identity.bak" "$f"
-  pgc "$id" bash "$LIB/pg-cluster.sh" stop >>"$EV/t$id.log" 2>&1
-  if [[ "$(field "$id" status)" != STOPPED_VERIFIED ]] || alive "$pm" || [[ -e $R ]] || ! classified "$id"; then ok=false; why+=" recovery with restored identity failed ($(field "$id" status));"; fi
-  if [[ "$ok" == true ]]; then ok "$label"; else bad "$label" "$why $(jq -c '{status,problems,startup_identity,signals}' "$EV/$id/postgres/cleanup.json" 2>/dev/null | head -c 500)"; fi
-  if alive "$pm"; then sudo -u postgres "$PG_BIN/pg_ctl" -D "$R/data" -m immediate stop >/dev/null 2>&1; fi
-  sudo rm -rf "$R"
+  pgc "$id" bash "$LIB/pg-cluster.sh" stop >>"$EV/t$id.log" 2>&1; rc2=$?
+  [[ "$rc2" == 0 && "$(field "$id" status)" == STOPPED_VERIFIED ]] || { ok=false; p2+=" recovery status=$(field "$id" status) rc=$rc2;"; }
+  ! alive "$pm" "$pmt" || { ok=false; p2+=" the postmaster is still alive after recovery;"; }
+  jq -e --argjson p "$pm" '(.signals|length) == 1 and .signals[0].pid == $p and .signals[0].exited == true' "$EV/$id/postgres/cleanup.json" >/dev/null || { ok=false; p2+=" recovery did not record exactly one verified signal to the recorded pid;"; }
+  ! pexists "$R" && classified "$id" || { ok=false; p2+=" root not removed or recovery record rejected;"; }
+  if [[ "$ok" == true ]]; then ok "$label"
+  else bad "$label" "PHASE1[${p1:- ok}] PHASE2[${p2:- ok}] first-refusal=$(jq -c '{status,problems,startup_identity,signals}' "$first" 2>/dev/null | head -c 600) recovery=$(jq -c '{status,signals}' "$EV/$id/postgres/cleanup.json" 2>/dev/null | head -c 300)"; fi
+  reap_root "$R"
 }
 ident_case 990041 'S1 live postmaster, identity.json AND start evidence absent -> no signal, data kept, FAILED, recovery works' rm-all
 ident_case 990042 'S9 live postmaster, start attempted but identity.json absent -> no signal, data kept, FAILED' rm
@@ -283,18 +342,21 @@ ident_case 990054 'S3h identity naming another data directory -> no signal, FAIL
 
 # S6 + structured proof: a normal stop records everything the classifier needs, and it is exactly the recorded identity
 pgc 990055 bash "$LIB/pg-cluster.sh" start >"$EV/t55.log" 2>&1
-pm55="$(sudo head -1 /var/tmp/gpr2-accept-990055-1/data/postmaster.pid)"
+pm55="$(sudo head -1 /var/tmp/gpr2-accept-990055-1/data/postmaster.pid)"; pt55="$(proc_ticks "$pm55")"
 pgc 990055 bash "$LIB/pg-cluster.sh" stop >>"$EV/t55.log" 2>&1; rc=$?
-if [[ "$rc" == 0 && "$(field 990055 status)" == STOPPED_VERIFIED && "$(field 990055 startup_identity.state)" == COMPLETE ]] && ! alive "$pm55" && classified 990055 \
+if [[ "$rc" == 0 && "$(field 990055 status)" == STOPPED_VERIFIED && "$(field 990055 startup_identity.state)" == COMPLETE ]] && ! alive "$pm55" "$pt55" && classified 990055 \
    && jq -e --argjson p "$pm55" '(.signals|length)==1 and .signals[0].pid==$p and .signals[0].exited==true and (.owned_processes_before|map(select(.role=="postmaster"))|length)==1 and .startup_identity.recorded.pid==$p and (.owned_processes_after|length)==0' "$EV/990055/postgres/cleanup.json" >/dev/null; then
   ok 'S6 complete identity + normal stop: one verified signal, exit evidenced, nothing owned left, classifier PASS'
 else bad S6 "rc=$rc $(head -c 600 "$EV/990055/postgres/cleanup.json")"; fi
 
 # Partial start-up through the real start(): a wrapper dir stands in for the PostgreSQL binaries and fails (or half-succeeds) on cue.
 WRAP=/var/tmp/gpr2-wrapbin
-sudo rm -rf "$WRAP"; sudo install -d -m 0755 "$WRAP"
+reap_root "$WRAP"; sudo install -d -m 0755 "$WRAP"
 for b in postgres pg_isready psql; do [[ -e "$PG_BIN/$b" ]] && sudo ln -s "$PG_BIN/$b" "$WRAP/$b"; done
+# The two wrappers below are generated scripts: their $-expressions are meant to stay literal until the WRAPPER runs, hence single quotes.
+# shellcheck disable=SC2016
 printf '#!/bin/bash\n[[ "$(cat "$(dirname "$0")/mode")" == initdb-fail ]] && exit 1\nexec %s/initdb "$@"\n' "$PG_BIN" | sudo tee "$WRAP/initdb" >/dev/null
+# shellcheck disable=SC2016
 printf '#!/bin/bash\nm="$(cat "$(dirname "$0")/mode")"\nfor a in "$@"; do if [[ "$a" == start ]]; then [[ "$m" == start-fail ]] && exit 1; [[ "$m" == start-then-fail ]] && { %s/pg_ctl "$@"; exit 1; }; fi; done\nexec %s/pg_ctl "$@"\n' "$PG_BIN" "$PG_BIN" | sudo tee "$WRAP/pg_ctl" >/dev/null
 sudo chmod 755 "$WRAP/initdb" "$WRAP/pg_ctl"
 wrap_mode() { echo "$1" | sudo tee "$WRAP/mode" >/dev/null; }
@@ -303,7 +365,7 @@ wrap_mode() { echo "$1" | sudo tee "$WRAP/mode" >/dev/null; }
 wrap_mode initdb-fail
 pgc 990056 env GPR2_PG_BIN="$WRAP" bash "$LIB/pg-cluster.sh" start >"$EV/t56.log" 2>&1; rc=$?
 pgc 990056 bash "$LIB/pg-cluster.sh" stop >>"$EV/t56.log" 2>&1; rc2=$?
-if [[ "$rc" != 0 && ! -e "$EV/990056/postgres/identity.json" && "$(jq -r '.server_launch_issued' "$EV/990056/postgres/startup-failure.json")" == false && "$rc2" == 0 && "$(field 990056 status)" == REMOVED_UNINITIALISED && ! -e /var/tmp/gpr2-accept-990056-1 ]] && classified 990056; then
+if [[ "$rc" != 0 && ! -e "$EV/990056/postgres/identity.json" && "$(jq -r '.server_launch_issued' "$EV/990056/postgres/startup-failure.json")" == false && "$rc2" == 0 && "$(field 990056 status)" == REMOVED_UNINITIALISED ]] && ! pexists /var/tmp/gpr2-accept-990056-1 && classified 990056; then
   ok 'S8 initdb failed: startup-failure.json kept, no RUNNING_VERIFIED, partial root removed as REMOVED_UNINITIALISED'
 else bad S8 "rc=$rc rc2=$rc2 $(cat "$EV/990056/postgres/startup-failure.json" 2>/dev/null) $(head -c 500 "$EV/990056/postgres/cleanup.json")"; fi
 
@@ -319,15 +381,14 @@ else bad S9b "rc=$rc rc2=$rc2 $(head -c 600 "$EV/990057/postgres/cleanup.json")"
 # S9c pg_ctl reports failure but the postmaster DID come up: a live server that was never identity-verified. Never signalled, never deleted.
 wrap_mode start-then-fail
 pgc 990058 env GPR2_PG_BIN="$WRAP" bash "$LIB/pg-cluster.sh" start >"$EV/t58.log" 2>&1; rc=$?
-R58=/var/tmp/gpr2-accept-990058-1; pm58="$(sudo head -1 "$R58/data/postmaster.pid" 2>/dev/null)"
+R58=/var/tmp/gpr2-accept-990058-1; pm58="$(sudo head -1 "$R58/data/postmaster.pid" 2>/dev/null)"; pt58="$(proc_ticks "$pm58")"
 pgc 990058 bash "$LIB/pg-cluster.sh" stop >>"$EV/t58.log" 2>&1; rc2=$?
-if [[ "$rc" != 0 && ! -e "$EV/990058/postgres/identity.json" && "$rc2" != 0 && "$(field 990058 status)" == FAILED && -n "$pm58" ]] && alive "$pm58" && ! port_free && sudo test -f "$R58/data/postgresql.conf" \
+if [[ "$rc" != 0 && ! -e "$EV/990058/postgres/identity.json" && "$rc2" != 0 && "$(field 990058 status)" == FAILED && -n "$pm58" ]] && alive "$pm58" "$pt58" && ! port_free && sudo test -f "$R58/data/postgresql.conf" \
    && ! sudo grep -q -E 'received (fast|smart|immediate) shutdown request' "$R58/server.log" && [[ "$(field 990058 'signals|length')" == 0 ]] && ! classified 990058 \
    && jq -e '.problems|map(test("Recovery"))|any' "$EV/990058/postgres/cleanup.json" >/dev/null; then
   ok 'S9c partial start leaves a live, never-verified postmaster: no signal, data kept, FAILED with recovery diagnostics'
 else bad S9c "rc=$rc rc2=$rc2 $(head -c 700 "$EV/990058/postgres/cleanup.json")"; fi
-if alive "$pm58"; then sudo -u postgres "$PG_BIN/pg_ctl" -D "$R58/data" -m immediate stop >/dev/null 2>&1; fi
-sudo rm -rf "$R58" "$WRAP"
+reap_root "$R58"; reap_root "$WRAP"
 
 ls -d /var/tmp/gpr2-accept-99* 2>/dev/null && bad leftovers 'cluster roots left behind' || ok 'no cluster roots left behind'
 port_free 54329 && port_free 55432 && ok 'ports 54329 and 55432 free at the end' || bad ports 'a test server is still running'

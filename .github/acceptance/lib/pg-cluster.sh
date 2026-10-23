@@ -51,6 +51,7 @@ pid_alive() {  # a zombie awaiting reaping is not a live server
 wait_pid_gone() { local i; for ((i = 0; i < 20; i++)); do pid_alive "$1" || return 0; sleep 0.5; done; return 1; }
 json_list() { jq -Rn '[inputs | select(length>0)]'; }
 owned_json() { jq -Rn '[inputs | select(length>0) | split("\t") | {pid: (.[0]|tonumber), role: .[1], cwd: (.[2] // ""), start_ticks: (.[3] // ""), boot_id: (.[4] // ""), exe: (.[5] // ""), argv: ((.[6] // "") | if . == "" then [] else split("\u001f") end)}]' <<<"$1"; }
+# shellcheck disable=SC2016 # $1 and ${a[@]} are meant for the INNER privileged bash, not for this shell
 cmdline_us() { priv bash -c 'mapfile -d "" -t a < "/proc/$1/cmdline" && printf "%s\037" "${a[@]}"' _ "$1"; }   # argv of a pid, each element terminated by US (0x1f)
 proc_ticks() { local s f; s="$(cat "/proc/$1/stat" 2>/dev/null)" || return 1; s="${s##*) }"; read -ra f <<<"$s"; printf '%s' "${f[19]:-}"; }   # starttime (clock ticks since boot)
 
@@ -214,8 +215,8 @@ start() {
     '{status:"RUNNING_VERIFIED", cluster_name:$cluster, address:$addr, port:($port|tonumber), database:$db, data_directory:$datadir,
       server_version:$version, server_version_full:$full, major:($major|tonumber), root:$root, loopback_only:true,
       postmaster_pid:($pid|tonumber), postmaster_start_ticks:$ticks, boot_id:$boot, postmaster_exe:$exe, postmaster_cwd:$pcwd,
-      postmaster_argv:($argv_us | split("\u001f") | .[:-1])}' > "$OUT/postgres/identity.json.tmp" \
-    && mv -f "$OUT/postgres/identity.json.tmp" "$OUT/postgres/identity.json" || start_fail PROCESS_IDENTITY true 'could not write identity.json'
+      postmaster_argv:($argv_us | split("\u001f") | .[:-1])}' > "$OUT/postgres/identity.json.tmp" || start_fail PROCESS_IDENTITY true 'could not build identity.json'
+  mv -f "$OUT/postgres/identity.json.tmp" "$OUT/postgres/identity.json" || start_fail PROCESS_IDENTITY true 'could not write identity.json'
   printf '%s|%s|%s|%s\n' "$cluster" "$addr" "$port" "$db" > "$OUT/postgres/identity.txt"
   echo "PostgreSQL isolation verified: cluster=$cluster addr=$addr port=$port db=$db data=$datadir version=$version postmaster=$pmpid"
 }
@@ -234,7 +235,7 @@ stop() {
   local startup=NONE recorded_pid="" prior_status="" root_before=false version_before=false pidfile_before=false
   local scan=ok owned_before="" owned_now="" owned_after="" refused=false uninit=false stopped_here=false
   local scan_out="" ambig_before="" ambig_after="" unverified="" own_ids=""
-  local id_state=ABSENT id_missing=() idj="" signals=() stale_pid="" exited
+  local id_state=ABSENT id_missing=() idj="" signals=() stale_pid=""
   local resp_before resp_before_detail resp_before_exit resp_after resp_after_detail resp_after_exit
 
   # Evidence that exists BEFORE this cleanup touches anything: the start-up identity, whether a start was attempted, any earlier cleanup record.
