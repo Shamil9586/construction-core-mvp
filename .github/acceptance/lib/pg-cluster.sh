@@ -7,13 +7,14 @@
 # verified from four independent angles, every outcome is written to cleanup.json, and an unexpected failure exits non-zero.
 #
 # Isolation: the cluster is a fresh initdb under /var/tmp/gpr2-accept-<run_id>-<attempt>, loopback only, port 54329, cluster_name
-# gpr2-p1-isolated, unix socket inside its own directory. The script only ever signals the postmaster whose postmaster.pid names that
-# exact data directory and port; it never touches any other PostgreSQL instance (they are recorded before/after as evidence).
+# gpr2-p1-isolated, unix socket inside its own directory. The script only ever signals a postmaster proven to serve that exact data
+# directory (cwd, -D, binary, recorded start time; see owned_scan) and whose postmaster.pid, if present, agrees; it never touches any
+# other PostgreSQL instance (they are recorded before/after as evidence). Ambiguous ownership fails closed.
 #
 # Environment:
 #   GPR2_EVIDENCE_OUT  evidence directory (required)          GITHUB_RUN_ID / GITHUB_RUN_ATTEMPT  select the cluster root
 #   GPR2_PG_MAJOR      PostgreSQL major (default 16)          GPR2_PG_INSTALL=1  apt-install the server packages first (CI)
-#   GPR2_PG_CTL_STOP_TIMEOUT  seconds for a fast stop (default 60)
+#   GPR2_PG_CTL_STOP_TIMEOUT  seconds to wait for a fast (SIGINT) shutdown before escalating to immediate (default 60)
 #   GPR2_PG_BIN        test-only override of the binaries directory (must still contain initdb/pg_ctl/postgres)
 set -uo pipefail
 
@@ -49,39 +50,72 @@ pid_alive() {  # a zombie awaiting reaping is not a live server
 }
 wait_pid_gone() { local i; for ((i = 0; i < 20; i++)); do pid_alive "$1" || return 0; sleep 0.5; done; return 1; }
 json_list() { jq -Rn '[inputs | select(length>0)]'; }
-owned_json() { jq -Rn '[inputs | select(length>0) | split("\t") | {pid: (.[0]|tonumber), role: .[1], cwd: (.[2] // "")}]' <<<"$1"; }
+owned_json() { jq -Rn '[inputs | select(length>0) | split("\t") | {pid: (.[0]|tonumber), role: .[1], cwd: (.[2] // ""), start_ticks: (.[3] // "")}]' <<<"$1"; }
+proc_ticks() { local s f; s="$(cat "/proc/$1/stat" 2>/dev/null)" || return 1; s="${s##*) }"; read -ra f <<<"$s"; printf '%s' "${f[19]:-}"; }   # starttime (clock ticks since boot)
 
-# Ownership is proven from the process table and the exact cluster root, never from files or from a port (F-CI-02).
-# pg_ctl refuses to look at a directory without PG_VERSION, and a deleted PG_VERSION / postmaster.pid says nothing about a live server.
-# A process belongs to THIS cluster iff it is a postgres whose argv names `-D $DATA` (role postmaster), or its cwd is inside $ROOT
-# (role member: a postmaster and every backend/auxiliary process chdir into the data directory, even after it was unlinked).
-# Output: "pid<TAB>role<TAB>cwd" per process. Exit non-zero when the scan itself is unreliable (callers must then fail closed).
-owned_scan() {
-  priv bash -s -- "$ROOT" "$DATA" <<'SCAN'
-root="$1"; data="$2"
+# Ownership is proven from the process table and the exact cluster root, never from files, a port or an argument (F-CI-02, R1).
+# `-D` names the CONFIGURATION directory: a foreign cluster can use $DATA only for its config files while its real data_directory is
+# elsewhere. So a postgres whose argv has `-D $DATA` is NOT thereby ours. The kernel-truth of a postmaster's effective data directory is its
+# cwd (it chdir()s into it). Roles, from strongest to weakest claim:
+#   postmaster             postgres binary (exe+argv0) AND `-D $DATA` AND cwd == $DATA (an unlinked directory shows as "(deleted)") AND, when the
+#                          start-up identity recorded pid / start time / boot id, they match — the only role that may ever be signalled
+#   postmaster_unverified  looks like the above but contradicts the recorded start-up identity (restart, pid reuse): present, never signalled
+#   member                 cwd inside $ROOT (backends / auxiliaries, or anything else holding the root)
+#   config_only            names `-D $DATA` but is not provably serving it (cwd elsewhere): possibly a FOREIGN cluster. Ambiguous: never
+#                          signalled, never assumed ours, and its presence blocks every removal.
+# Output: "pid<TAB>role<TAB>cwd<TAB>start_ticks". Exit non-zero when the scan itself is unreliable (callers must then fail closed).
+# `kill <pid> <SIG>` re-classifies the pid and signals it inside the SAME privileged process, only when it is still a verified postmaster
+# (exit 4 otherwise), so the check-to-signal window is microseconds, not a round trip between scripts.
+SCAN_SRC=$(cat <<'SCAN'
+root="$1"; data="$2"; rpid="$3"; rticks="$4"; rboot="$5"; action="${6:-list}"; target="${7:-}"; sig="${8:-}"
 readlink "/proc/$$/cwd" >/dev/null 2>&1 || exit 3
-for d in /proc/[0-9]*; do
-  pid="${d#/proc/}"; [ "$pid" = "$$" ] && continue
-  cwd="$(readlink "$d/cwd" 2>/dev/null)" || cwd=""
-  cwd="${cwd% (deleted)}"
-  role=""
+boot="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)" || boot=""
+classify() {
+  local d="/proc/$1" cwd exe st f ticks i named=0 role="" argv=()
+  cwd="$(readlink "$d/cwd" 2>/dev/null)" || cwd=""; cwd="${cwd% (deleted)}"
+  exe="$(readlink "$d/exe" 2>/dev/null)" || exe=""; exe="${exe% (deleted)}"
+  st="$(cat "$d/stat" 2>/dev/null)" || st=""; st="${st##*) }"; read -ra f <<<"$st"; ticks="${f[19]:-}"
   mapfile -d '' -t argv < "$d/cmdline" 2>/dev/null || argv=()
   if [[ "${argv[0]##*/}" == postgres ]]; then
     for ((i = 1; i < ${#argv[@]}; i++)); do
-      if [[ "${argv[i]}" == "-D" && "${argv[i+1]:-}" == "$data" ]] || [[ "${argv[i]}" == "-D$data" ]]; then role=postmaster; fi
+      if [[ "${argv[i]}" == "-D" && "${argv[i+1]:-}" == "$data" ]] || [[ "${argv[i]}" == "-D$data" ]]; then named=1; fi
     done
   fi
-  if [[ -z "$role" && ( "$cwd" == "$root" || "$cwd" == "$root"/* ) ]]; then role=member; fi
-  [[ -n "$role" ]] && printf '%s\t%s\t%s\n' "$pid" "$role" "$cwd"
+  if ((named)); then
+    if [[ "${exe##*/}" == postgres && "$cwd" == "$data" ]]; then
+      role=postmaster
+      if [[ -n "$rpid" ]] && ! [[ "$1" == "$rpid" && ( -z "$rticks" || "$ticks" == "$rticks" ) && ( -z "$rboot" || "$boot" == "$rboot" ) ]]; then role=postmaster_unverified; fi
+    else role=config_only; fi
+  elif [[ "$cwd" == "$root" || "$cwd" == "$root"/* ]]; then role=member; fi
+  [[ -n "$role" ]] && printf '%s\t%s\t%s\n' "$role" "$cwd" "$ticks"
+  return 0
+}
+if [[ "$action" == kill ]]; then
+  [[ "$target" =~ ^[0-9]+$ && "$sig" =~ ^(INT|QUIT)$ ]] || exit 64
+  out="$(classify "$target")"
+  [[ "${out%%$'\t'*}" == postmaster ]] || exit 4
+  kill -"$sig" "$target" 2>/dev/null || exit 5
+  exit 0
+fi
+for d in /proc/[0-9]*; do
+  pid="${d#/proc/}"; [ "$pid" = "$$" ] && continue
+  out="$(classify "$pid")"
+  [[ -n "$out" ]] && printf '%s\t%s\n' "$pid" "$out"
 done
 exit 0
 SCAN
-}
+)
+REC_PID=""; REC_TICKS=""; REC_BOOT=""   # recorded start-up identity (stop() fills them from identity.json)
+run_scan() { priv bash -c "$SCAN_SRC" scan "$ROOT" "$DATA" "$REC_PID" "$REC_TICKS" "$REC_BOOT" "$@"; }
+owned_scan() { run_scan list; }
+only_owned() { awk -F'\t' 'NF && $2 != "config_only"' <<<"$1"; }
+only_ambiguous() { awk -F'\t' '$2 == "config_only"' <<<"$1"; }
+only_unverified() { awk -F'\t' '$2 == "postmaster_unverified"' <<<"$1"; }
 owned_postmasters() { awk -F'\t' '$2 == "postmaster" {print $1}' <<<"$1"; }
 owned_pid_list() { awk -F'\t' 'NF {printf "%s%s(%s)", sep, $1, $2; sep = " "}' <<<"$1"; }
 wait_owned_gone() {  # poll until no process is tied to the root (children of a killed postmaster need a moment); prints the last scan
   local i s
-  for ((i = 0; i < 20; i++)); do s="$(owned_scan)" || return 1; [[ -z "$s" ]] && break; sleep 0.5; done
+  for ((i = 0; i < 20; i++)); do s="$(owned_scan)" || return 1; [[ -z "$(only_owned "$s")" ]] && break; sleep 0.5; done
   printf '%s' "$s"
 }
 listener_pids() {  # pids LISTENing on the port (empty when it cannot be determined)
@@ -109,13 +143,13 @@ observe_port() {
   else RESP=unknown; RESP_DETAIL="the listener could not be identified (no listener pid, no readable data_directory)"; fi
 }
 SIGNALLED=""
-# Used only when pg_ctl cannot (no PG_VERSION) or did not stop an owned postmaster. $1 = pid. Ownership is re-proven from the process
-# table immediately before EVERY signal, so a pid that was reused or is no longer ours is never signalled. Sets SIGNALLED=INT|QUIT.
+# $1 = pid. The only way this script ever stops a server (pg_ctl stop is NOT used: it resolves the data directory from the configuration, which
+# is exactly what a foreign cluster can point at $DATA). Each signal is sent by run_scan only if the pid is, at that instant, a verified
+# postmaster of this root; a pid that was reused, restarted or is not provably ours is never signalled. Sets SIGNALLED=INT|QUIT.
 signal_owned_postmaster() {
   local p="$1" sig i n
   for sig in INT QUIT; do
-    owned_scan | awk -F'\t' -v p="$p" '$1 == p && $2 == "postmaster" {f = 1} END {exit !f}' || { pid_alive "$p" && return 1; return 0; }
-    priv kill -"$sig" "$p" 2>/dev/null || true
+    run_scan kill "$p" "$sig" || { pid_alive "$p" && return 1; return 0; }
     SIGNALLED="$sig"
     if [[ "$sig" == INT ]]; then n=$((STOP_TIMEOUT * 2)); else n=30; fi
     for ((i = 0; i < n; i++)); do pid_alive "$p" || return 0; sleep 0.5; done
@@ -151,11 +185,12 @@ start() {
   if [[ "$cluster" != "$CLUSTER_NAME" || ! "$addr" =~ ^127[.]0[.]0[.]1(/32)?$ || "$port" != "$PORT" || "$db" != postgres || "$datadir" != "$DATA" ]]; then
     die "REFUSED: PostgreSQL isolation mismatch ($row)"
   fi
+  local pmpid; pmpid="$(priv head -1 "$DATA/postmaster.pid")"
   jq -n --arg cluster "$cluster" --arg addr "$addr" --arg port "$port" --arg db "$db" --arg datadir "$datadir" --arg version "$version" \
-        --arg major "$MAJOR" --arg root "$ROOT" --arg pid "$(priv head -1 "$DATA/postmaster.pid")" \
+        --arg major "$MAJOR" --arg root "$ROOT" --arg pid "$pmpid" --arg ticks "$(proc_ticks "$pmpid")" --arg boot "$(cat /proc/sys/kernel/random/boot_id 2>/dev/null)" \
         --arg full "$(psql "$ADMIN_URL" -XAt -c 'SELECT version()')" \
     '{status:"RUNNING_VERIFIED", cluster_name:$cluster, address:$addr, port:($port|tonumber), database:$db, data_directory:$datadir,
-      server_version:$version, server_version_full:$full, major:($major|tonumber), root:$root, postmaster_pid:($pid|tonumber), loopback_only:true}' \
+      server_version:$version, server_version_full:$full, major:($major|tonumber), root:$root, postmaster_pid:($pid|tonumber), postmaster_start_ticks:$ticks, boot_id:$boot, loopback_only:true}' \
     > "$OUT/postgres/identity.json"
   printf '%s|%s|%s|%s\n' "$cluster" "$addr" "$port" "$db" > "$OUT/postgres/identity.txt"
   echo "PostgreSQL isolation verified: cluster=$cluster addr=$addr port=$port db=$db data=$datadir version=$version"
@@ -174,6 +209,7 @@ stop() {
   local pid_file_dir="" pid_file_port="" pid="" problems=() notes=() proof=() pms=() before after pm
   local startup=NONE recorded_pid="" prior_status="" root_before=false version_before=false pidfile_before=false
   local scan=ok owned_before="" owned_now="" owned_after="" refused=false uninit=false stopped_here=false
+  local scan_out="" ambig_before="" ambig_after="" unverified="" own_ids=""
   local resp_before resp_before_detail resp_before_exit resp_after resp_after_detail resp_after_exit
 
   # Evidence that exists BEFORE this cleanup touches anything: the start-up identity, whether a start was attempted, any earlier cleanup record.
@@ -181,19 +217,28 @@ stop() {
     startup="$(jq -r 'if .status == "RUNNING_VERIFIED" then "RUNNING_VERIFIED" else "IDENTITY_UNREADABLE" end' "$OUT/postgres/identity.json" 2>/dev/null)" || startup=""
     [[ -n "$startup" ]] || startup=IDENTITY_UNREADABLE
     recorded_pid="$(jq -r '.postmaster_pid // empty' "$OUT/postgres/identity.json" 2>/dev/null)" || recorded_pid=""
+    REC_TICKS="$(jq -r '.postmaster_start_ticks // empty' "$OUT/postgres/identity.json" 2>/dev/null)" || REC_TICKS=""
+    REC_BOOT="$(jq -r '.boot_id // empty' "$OUT/postgres/identity.json" 2>/dev/null)" || REC_BOOT=""
   elif [[ -e "$OUT/postgres/pg_ctl-start.log" ]]; then startup=START_ATTEMPTED_UNVERIFIED; fi
   [[ "$recorded_pid" =~ ^[0-9]+$ ]] || recorded_pid=""
+  REC_PID="$recorded_pid"; [[ "$REC_TICKS" =~ ^[0-9]+$ ]] || REC_TICKS=""   # no usable start time recorded: pid + cwd + argv + exe are all that can be correlated
   prior_status="$(jq -r '.status // empty' "$OUT/postgres/cleanup.json" 2>/dev/null)" || prior_status=""
 
   postmasters > "$OUT/postgres/postmasters-before-stop.tsv"
   priv test -e "$ROOT" && root_before=true
   priv test -f "$DATA/PG_VERSION" && version_before=true
   priv test -f "$DATA/postmaster.pid" && pidfile_before=true
-  if owned_before="$(owned_scan)"; then :; else scan=failed; owned_before=""; problems+=('process-ownership scan failed: cannot establish that no owned postmaster is running'); fi
+  if scan_out="$(owned_scan)"; then :; else scan=failed; scan_out=""; problems+=('process-ownership scan failed: cannot establish that no owned postmaster is running'); fi
+  owned_before="$(only_owned "$scan_out")"; ambig_before="$(only_ambiguous "$scan_out")"; unverified="$(only_unverified "$scan_out")"
+  own_ids="$(awk -F'\t' 'NF {printf "%s ", $1}' <<<"$owned_before")"
   observe_port "$owned_before"; resp_before="$RESP"; resp_before_detail="$RESP_DETAIL"; resp_before_exit="$RESP_EXIT"
 
   if [[ "$scan" == failed ]]; then
     : # fail closed: nothing is signalled or deleted without a reliable view of the process table
+  elif [[ -n "$ambig_before" ]]; then
+    problems+=("process(es) $(owned_pid_list "$ambig_before") name -D $DATA but their working directory (the effective data_directory) is elsewhere: possibly a foreign cluster using this directory for configuration only. Ownership is not established; nothing was signalled or deleted")
+  elif [[ -n "$unverified" ]]; then
+    problems+=("postmaster $(owned_pid_list "$unverified") serves $DATA but does not match the recorded start-up identity (pid ${REC_PID:-?}, start time ${REC_TICKS:-?}): restart or pid reuse cannot be told apart from a foreign process; nothing was signalled or deleted")
   elif [[ "$root_before" == false ]]; then
     if [[ -n "$owned_before" ]]; then
       problems+=("cluster root $ROOT does not exist but process(es) tied to it are running ($(owned_pid_list "$owned_before")); not signalled, nothing to verify them against")
@@ -231,32 +276,25 @@ stop() {
       proof+=("PG_VERSION absent, no postmaster.pid, no startup evidence, no process tied to $ROOT, 127.0.0.1:$PORT not answered by this cluster ($resp_before)")
       [[ "$resp_before" == none ]] || notes+=("127.0.0.1:$PORT is answered by a foreign instance ($resp_before_detail); it was not touched")
     else
-      if [[ "$version_before" == true ]]; then
-        case "$(pg_ctl_status)" in
-          0) if as_pg "$PG_BIN/pg_ctl" -D "$DATA" -m fast -w -t "$STOP_TIMEOUT" stop > "$OUT/postgres/pg_ctl-stop.log" 2>&1; then mode=fast; proof+=('pg_ctl stop -m fast completed')
-             else notes+=("fast stop did not complete within ${STOP_TIMEOUT}s; escalated to immediate")
-                  if as_pg "$PG_BIN/pg_ctl" -D "$DATA" -m immediate -w -t 30 stop >> "$OUT/postgres/pg_ctl-stop.log" 2>&1; then mode=immediate; proof+=('pg_ctl stop -m immediate completed'); else mode=failed; problems+=('immediate stop failed'); fi
-             fi
-             method=pg_ctl; stopped_here=true ;;
-          3) mode=already_stopped ;;
-          *) mode=unknown; problems+=("pg_ctl status could not read $DATA") ;;
-        esac
-      else
-        notes+=("PG_VERSION is absent: pg_ctl refuses this directory, so only the process table decides whether a server runs")
-      fi
-      # pg_ctl cannot see (or fails to stop) a server whose PG_VERSION / postmaster.pid is gone: stop exactly the postmaster the process table
-      # ties to this root, re-proving ownership before each signal. Never by port, never by name, never an unverified pid.
-      if owned_now="$(owned_scan)"; then
+      [[ "$version_before" == true ]] || notes+=("PG_VERSION is absent: pg_ctl refuses this directory, so only the process table decides whether a server runs")
+      # Stop exactly the postmaster the process table proves is ours (cwd == $DATA, -D, exe, recorded start time), re-proven inside the privileged
+      # process that sends each signal. pg_ctl stop is deliberately not used: it resolves the data directory from configuration a foreign cluster
+      # can point at us. Never by port, never by name, never an unverified pid.
+      mode=already_stopped
+      if scan_out="$(owned_scan)"; then
+        owned_now="$(only_owned "$scan_out")"
         mapfile -t pms < <(owned_postmasters "$owned_now")
         for pm in "${pms[@]}"; do
-          if signal_owned_postmaster "$pm"; then
+          if [[ "$pidfile_before" == true && "$pid" != "$pm" ]]; then
+            mode=failed; problems+=("postmaster.pid names pid $pid but the verified postmaster is $pm: inconsistent, refusing to signal")
+          elif signal_owned_postmaster "$pm"; then
             method=signal; stopped_here=true
-            if [[ "$SIGNALLED" == QUIT ]]; then mode=immediate; notes+=("SIGINT (fast shutdown) of pid $pm did not finish; escalated to SIGQUIT (immediate)"); else mode=fast; fi
-            notes+=("pg_ctl could not stop it, so verified postmaster pid $pm was signalled directly (SIG$SIGNALLED) after its cwd and -D argument matched $DATA")
+            if [[ "$SIGNALLED" == QUIT ]]; then mode=immediate; notes+=("SIGINT (fast shutdown) of pid $pm did not finish within ${STOP_TIMEOUT}s; escalated to SIGQUIT (immediate)"); else mode=fast; fi
+            notes+=("verified postmaster pid $pm was signalled directly (SIG$SIGNALLED) after its cwd, -D argument, binary and recorded start time matched $DATA")
             proof+=("verified postmaster pid $pm exited after SIG$SIGNALLED")
           else mode=failed; problems+=("owned postmaster pid $pm did not stop (or is no longer provably ours); data directory preserved"); fi
         done
-      else scan=failed; problems+=('process-ownership scan failed after pg_ctl'); fi
+      else scan=failed; problems+=('process-ownership scan failed before the stop'); fi
       [[ "$stopped_here" != true ]] || termination=stopped_by_cleanup
 
       if priv test -e "$DATA/postmaster.pid" && [[ "$pid" =~ ^[0-9]+$ ]] && ! pid_alive "$pid"; then
@@ -269,8 +307,10 @@ stop() {
       if [[ "$version_before" == true ]]; then [[ "$(pg_ctl_status)" == 3 ]] || problems+=('pg_ctl status still reports a server (or cannot read the data directory)'); fi
       ! priv test -e "$DATA/postmaster.pid" || problems+=('postmaster.pid still present')
       if [[ "$pid" =~ ^[0-9]+$ ]] && ! wait_pid_gone "$pid"; then problems+=("postmaster pid $pid is still alive 10s after stop"); fi
-      if owned_now="$(wait_owned_gone)"; then
+      if scan_out="$(wait_owned_gone)"; then
+        owned_now="$(only_owned "$scan_out")"
         [[ -z "$owned_now" ]] || problems+=("process(es) tied to the cluster root are still running: $(owned_pid_list "$owned_now")")
+        [[ -z "$(only_ambiguous "$scan_out")" ]] || problems+=("process(es) $(owned_pid_list "$(only_ambiguous "$scan_out")") name -D $DATA but are not provably serving it; ownership not established")
       else scan=failed; owned_now=""; problems+=('process-ownership scan failed after the stop'); fi
       observe_port "$owned_now"
       case "$RESP" in
@@ -301,11 +341,15 @@ stop() {
   fi
 
   postmasters > "$OUT/postgres/postmasters-after-stop.tsv"
-  before="$(grep -vF -- "-D $DATA" "$OUT/postgres/postmasters-before-stop.tsv" | sort)"; after="$(grep -vF -- "-D $DATA" "$OUT/postgres/postmasters-after-stop.tsv" | sort)"
+  # every postmaster except the ones proven ours must be unchanged; a foreign one that merely names -D $DATA is deliberately NOT excluded
+  before="$(awk -F'\t' -v ids="$own_ids" 'BEGIN {n = split(ids, a, " "); for (i = 1; i <= n; i++) skip[a[i]] = 1} !($1 in skip)' "$OUT/postgres/postmasters-before-stop.tsv" | sort)"
+  after="$(awk -F'\t' -v ids="$own_ids" 'BEGIN {n = split(ids, a, " "); for (i = 1; i <= n; i++) skip[a[i]] = 1} !($1 in skip)' "$OUT/postgres/postmasters-after-stop.tsv" | sort)"
   local foreign_untouched=true; [[ "$before" == "$after" ]] || foreign_untouched=false
   [[ "$foreign_untouched" == true ]] || problems+=('the set of other PostgreSQL instances changed during cleanup')
   # Final observation, after any removal: nothing owned may remain, and no success may stand next to an owned or unidentifiable listener.
-  if owned_after="$(owned_scan)"; then :; else scan=failed; owned_after=""; problems+=('final process-ownership scan failed'); fi
+  if scan_out="$(owned_scan)"; then :; else scan=failed; scan_out=""; problems+=('final process-ownership scan failed'); fi
+  owned_after="$(only_owned "$scan_out")"; ambig_after="$(only_ambiguous "$scan_out")"
+  [[ -z "$ambig_after" ]] || problems+=("process(es) $(owned_pid_list "$ambig_after") name -D $DATA without provably serving it (ambiguous ownership) after cleanup")
   [[ -z "$owned_after" ]] || problems+=("process(es) tied to the cluster root exist after cleanup: $(owned_pid_list "$owned_after")")
   observe_port "$owned_after"; resp_after="$RESP"; resp_after_detail="$RESP_DETAIL"; resp_after_exit="$RESP_EXIT"
   [[ "$resp_after" != owned ]] || problems+=("127.0.0.1:$PORT is answered by this cluster after cleanup ($resp_after_detail)")
@@ -317,12 +361,14 @@ stop() {
         --argjson root_exists "$root_exists" --argjson root_before "$root_before" --argjson version_before "$version_before" --argjson pidfile_before "$pidfile_before" \
         --arg startup "$startup" --arg recorded_pid "$recorded_pid" --arg termination "$termination" --arg scan "$scan" \
         --argjson owned_before "$(owned_json "$owned_before")" --argjson owned_after "$(owned_json "$owned_after")" \
+        --argjson ambig_before "$(owned_json "$ambig_before")" --argjson ambig_after "$(owned_json "$ambig_after")" \
         --arg rbe "$resp_before_exit" --arg rb "$resp_before" --arg rbd "$resp_before_detail" --arg rae "$resp_after_exit" --arg ra "$resp_after" --arg rad "$resp_after_detail" \
         --argjson proof "$(list_json "${proof[@]}")" --argjson problems "$(list_json "${problems[@]}")" --argjson notes "$(list_json "${notes[@]}")" --arg at "$(date -u +%FT%TZ)" \
     '{status:$status, stop_mode:$mode, stop_method:$method, root:$root, root_exists_after:$root_exists,
       startup_status:$startup, recorded_postmaster_pid:($recorded_pid | if . == "" then null else tonumber end),
       root_existed_before:$root_before, pg_version_present_before:$version_before, postmaster_pid_file_before:$pidfile_before,
       owned_process_scan:$scan, owned_processes_before:$owned_before, owned_processes_after:$owned_after,
+      ambiguous_processes_before:$ambig_before, ambiguous_processes_after:$ambig_after,
       port_before:{pg_isready_exit:($rbe|tonumber), responder:$rb, detail:$rbd}, port_after:{pg_isready_exit:($rae|tonumber), responder:$ra, detail:$rad},
       port_54329_pg_isready_exit:($rae|tonumber), termination_evidence:$termination, shutdown_proof:$proof,
       server_log_copy:$log, foreign_instances_untouched:$foreign, problems:$problems, notes:$notes, verified_at:$at}' > "$OUT/postgres/cleanup.json"

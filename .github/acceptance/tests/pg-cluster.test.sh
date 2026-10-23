@@ -29,6 +29,21 @@ classified() {  # the independent classifier's verdict (classify.mjs evaluateCle
   node --input-type=module -e "import fs from 'node:fs'; import { evaluateCleanup } from '$LIB/classify.mjs'; process.exit(evaluateCleanup(JSON.parse(fs.readFileSync(process.argv[1], 'utf8'))).ok ? 0 : 1)" "$EV/$1/postgres/cleanup.json"
 }
 serving() { ps -eo args= | grep -F -- "postgres -D $1" | grep -vF grep >/dev/null; }   # a postmaster is still serving this data directory
+foreign_cfgdir_start() {  # $1 = run id, $2 = copy PG_VERSION into the config dir (true|false)
+  # A FOREIGN cluster (real data_directory /var/tmp/gpr2-foreign/data, port 55432) whose postmaster is started with `-D <our cluster's data dir>`:
+  # the cluster root's data dir holds only its configuration. Only its argv, not its cwd, matches our data directory.
+  local R="/var/tmp/gpr2-accept-$1-1" F=/var/tmp/gpr2-foreign f
+  sudo install -d -o postgres -g postgres -m 0700 "$F" "$F/data" "$F/sock" "$R" "$R/data"
+  sudo -u postgres "$PG_BIN/initdb" -D "$F/data" -U postgres --auth=trust >/dev/null 2>&1
+  for f in postgresql.conf pg_hba.conf pg_ident.conf; do sudo cp "$F/data/$f" "$R/data/$f"; done
+  [[ "$2" != true ]] || sudo cp "$F/data/PG_VERSION" "$R/data/PG_VERSION"
+  echo "data_directory = '$F/data'" | sudo tee -a "$R/data/postgresql.conf" >/dev/null; sudo chown -R postgres:postgres "$R"
+  sudo -u postgres bash -c "nohup $PG_BIN/postgres -D $R/data -c port=55432 -c listen_addresses=127.0.0.1 -c unix_socket_directories=$F/sock -c cluster_name=foreign-cfgdir >$F/log 2>&1 &"
+  local i; for i in $(seq 1 40); do pg_isready -q -h 127.0.0.1 -p 55432 && return 0; sleep 0.5; done; return 1
+}
+foreign_fingerprint() { sudo sha256sum /var/tmp/gpr2-foreign/data/PG_VERSION /var/tmp/gpr2-foreign/data/postgresql.conf /var/tmp/gpr2-foreign/data/pg_hba.conf /var/tmp/gpr2-foreign/data/postmaster.pid | sha256sum; }
+foreign_signalled() { sudo grep -q -E 'received (fast|smart|immediate) shutdown request|shutting down' /var/tmp/gpr2-foreign/log; }
+foreign_select() { psql "postgresql://postgres@127.0.0.1:55432/postgres" -XAtc 'select 1' 2>/dev/null; }
 foreign_stop() { sudo -u postgres "$PG_BIN/pg_ctl" -D /var/tmp/gpr2-foreign/data -m fast -w stop >/dev/null 2>&1; sudo rm -rf /var/tmp/gpr2-foreign; }
 
 echo "== evidence: $EV"
@@ -184,6 +199,39 @@ R18=/var/tmp/gpr2-accept-990018-1; sudo install -d -o postgres -g postgres -m 07
 pgc 990018 bash "$LIB/pg-cluster.sh" stop >"$EV/t18.log" 2>&1; rc=$?
 if [[ "$rc" != 0 && "$(field 990018 status)" == FAILED && -d $R18 ]] && alive "$fpid" && ! classified 990018; then ok 'T18 F-CI-02 B/N3: RUNNING_VERIFIED + no PG_VERSION + foreign listener -> FAILED, root preserved, foreign untouched'; else bad T18 "rc=$rc $(cat "$EV/990018/postgres/cleanup.json")"; fi
 sudo rm -rf "$R18"; foreign_stop
+
+# ---- F-CI-02 R1: `-D` is a configuration directory, not proof of ownership ------------------------------------------------------------------
+# T31 (mandatory negative) a foreign postmaster is started with `-D <our data dir>` but its effective data_directory is a separate foreign cluster.
+# Only its argv matches. It must not be treated as ours, signalled, or deleted around; uncertain ownership must not become a cleanup PASS.
+for variant in A:false B:true; do
+  vid="${variant%%:*}"; withver="${variant##*:}"; id=$([[ "$vid" == A ]] && echo 990031 || echo 990032); R="/var/tmp/gpr2-accept-$id-1"
+  foreign_cfgdir_start "$id" "$withver" || { bad "T31$vid" 'foreign config-dir instance did not start'; foreign_stop; sudo rm -rf "$R"; continue; }
+  fpid="$(sudo head -1 /var/tmp/gpr2-foreign/data/postmaster.pid)"; fp_before="$(foreign_fingerprint)"
+  cwd_ok=false; [[ "$(sudo readlink /proc/$fpid/cwd)" == /var/tmp/gpr2-foreign/data ]] && sudo tr '\0' ' ' </proc/$fpid/cmdline | grep -qF -- "-D $R/data " && cwd_ok=true
+  pgc "$id" bash "$LIB/pg-cluster.sh" stop >"$EV/t31$vid.log" 2>&1; rc=$?
+  if [[ "$cwd_ok" == true && "$rc" != 0 && "$(field "$id" status)" == FAILED && "$(field "$id" foreign_instances_untouched)" == true ]] \
+     && alive "$fpid" && [[ "$(foreign_select)" == 1 ]] && ! foreign_signalled && [[ "$(foreign_fingerprint)" == "$fp_before" ]] && sudo test -f "$R/data/postgresql.conf" \
+     && jq -e --argjson p "$fpid" '(.ambiguous_processes_before|map(.pid)|index($p)) != null and (.owned_processes_before|length)==0 and (.problems|map(test("[Oo]wnership is not established"))|any)' "$EV/$id/postgres/cleanup.json" >/dev/null \
+     && ! classified "$id"; then
+    ok "T31$vid F-CI-02 R1: foreign postmaster with our -D but another data_directory (PG_VERSION in config dir: $withver) -> not signalled, data unchanged, root kept, FAILED, classifier rejects"
+  else bad "T31$vid" "rc=$rc cwd_ok=$cwd_ok fpid_alive=$(alive "$fpid" && echo y || echo n) signalled=$(foreign_signalled && echo y || echo n) $(cat "$EV/$id/postgres/cleanup.json" 2>/dev/null | head -c 700)"; fi
+  foreign_stop; sudo rm -rf "$R"
+done
+
+# T32 the process at the data directory is not the one recorded at start-up (restart / pid reuse class): same cwd, same -D, different pid and start
+# time. It is not provably OUR postmaster -> never signalled, root kept, FAILED.
+pgc 990033 bash "$LIB/pg-cluster.sh" start >"$EV/t32.log" 2>&1
+R33=/var/tmp/gpr2-accept-990033-1
+jq -e '(.postmaster_start_ticks|test("^[0-9]+$")) and (.boot_id|length>0)' "$EV/990033/postgres/identity.json" >/dev/null && ok 'T32a identity.json records the postmaster start time and boot id' || bad T32a "$(cat "$EV/990033/postgres/identity.json")"
+sudo -u postgres "$PG_BIN/pg_ctl" -D "$R33/data" -m fast -w stop >/dev/null 2>&1
+sudo -u postgres "$PG_BIN/pg_ctl" -D "$R33/data" -l "$R33/server2.log" -w -o "-c cluster_name=gpr2-p1-isolated -c port=54329 -c listen_addresses=127.0.0.1 -c unix_socket_directories=$R33/socket" start >/dev/null 2>&1
+pm33="$(sudo head -1 "$R33/data/postmaster.pid")"
+pgc 990033 bash "$LIB/pg-cluster.sh" stop >>"$EV/t32.log" 2>&1; rc=$?
+if [[ "$rc" != 0 && "$(field 990033 status)" == FAILED && -d $R33/data ]] && alive "$pm33" && ! port_free 54329 \
+   && jq -e '.problems|map(test("recorded start-up identity"))|any' "$EV/990033/postgres/cleanup.json" >/dev/null && ! classified 990033; then
+  ok 'T32 F-CI-02 R1: postmaster with our cwd/-D but not the recorded pid/start time -> not signalled, server and root preserved, FAILED'
+else bad T32 "rc=$rc alive=$(alive "$pm33" && echo y || echo n) $(cat "$EV/990033/postgres/cleanup.json" | head -c 800)"; fi
+sudo -u postgres "$PG_BIN/pg_ctl" -D "$R33/data" -m immediate -w stop >/dev/null 2>&1; sudo rm -rf "$R33"
 
 ls -d /var/tmp/gpr2-accept-99* 2>/dev/null && bad leftovers 'cluster roots left behind' || ok 'no cluster roots left behind'
 port_free 54329 && port_free 55432 && ok 'ports 54329 and 55432 free at the end' || bad ports 'a test server is still running'

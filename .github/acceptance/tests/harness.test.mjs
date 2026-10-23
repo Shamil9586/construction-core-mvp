@@ -24,17 +24,19 @@ const MAIN = '9bd684806f0d87d802387abb141d9a88d950ceba';
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'gpr2-harness-'));
 const r04 = () => JSON.parse(fs.readFileSync(path.join(PROFILES, 'r04-cp02.json'), 'utf8'));
 // A complete, internally consistent cleanup.json as pg-cluster.sh stop() writes it (verified stop of a running owned postmaster).
+const port = (responder, detail = '') => ({ pg_isready_exit: responder === 'none' ? 2 : 0, responder, detail });
 const cleanupRecord = (over = {}) => ({
   status: 'STOPPED_VERIFIED', stop_mode: 'fast', stop_method: 'pg_ctl', root: '/var/tmp/gpr2-accept-1-1', root_exists_after: false,
   startup_status: 'RUNNING_VERIFIED', recorded_postmaster_pid: 551, root_existed_before: true, pg_version_present_before: true, postmaster_pid_file_before: true,
   owned_process_scan: 'ok', owned_processes_before: [{ pid: 551, role: 'postmaster', cwd: '/var/tmp/gpr2-accept-1-1/data' }], owned_processes_after: [],
-  port_before: { pg_isready_exit: 0, responder: 'owned', detail: 'listener pid 551 is tied to the root' }, port_after: { pg_isready_exit: 2, responder: 'none', detail: 'nothing answers' },
+  ambiguous_processes_before: [], ambiguous_processes_after: [],
+  port_before: port('owned', 'listener pid 551 is tied to the root'), port_after: port('none', 'nothing answers'),
   termination_evidence: 'stopped_by_cleanup', shutdown_proof: ['pg_ctl stop -m fast completed', 'process table: no process is tied to the root after the stop'],
   foreign_instances_untouched: true, problems: [], notes: [], ...over,
 });
 const notStartedRecord = (over = {}) => cleanupRecord({
   status: 'NOT_STARTED', stop_mode: 'none', stop_method: 'none', startup_status: 'NONE', recorded_postmaster_pid: null, root_existed_before: false, pg_version_present_before: false,
-  postmaster_pid_file_before: false, owned_processes_before: [], port_before: { pg_isready_exit: 2, responder: 'none', detail: '' }, termination_evidence: 'not_applicable', shutdown_proof: [], ...over,
+  postmaster_pid_file_before: false, owned_processes_before: [], port_before: port('none'), termination_evidence: 'not_applicable', shutdown_proof: [], ...over,
 });
 const uninitialisedRecord = (over = {}) => notStartedRecord({ status: 'REMOVED_UNINITIALISED', root_existed_before: true, shutdown_proof: ['PG_VERSION absent, no postmaster.pid, no startup evidence, no process tied to the root'], ...over });
 const hasCommit = sha => spawnSync('git', ['-C', REPO, 'cat-file', '-e', `${sha}^{commit}`]).status === 0;
@@ -277,12 +279,37 @@ describe('F-CI-02: PostgreSQL cleanup must fail closed', () => {
     assert.equal(ev(cleanupRecord({ status: 'STOPPED_VERIFIED_AFTER_ESCALATION', stop_mode: 'fast' })).ok, false);
   });
   test('N3 uncertain ownership of the port: an unidentified or owned listener never supports a removal/stop success', () => {
-    assert.equal(ev(uninitialisedRecord({ port_before: { responder: 'unknown' } })).ok, false);
-    assert.equal(ev(uninitialisedRecord({ port_after: { responder: 'unknown' } })).ok, false);
-    assert.equal(ev(cleanupRecord({ port_after: { responder: 'unknown' } })).ok, false);
-    assert.equal(ev(cleanupRecord({ port_after: { responder: 'owned' } })).ok, false);
-    assert.equal(ev(notStartedRecord({ port_before: { responder: 'owned' }, port_after: { responder: 'owned' } })).ok, false);
+    assert.equal(ev(uninitialisedRecord({ port_before: port('unknown') })).ok, false);
+    assert.equal(ev(uninitialisedRecord({ port_after: port('unknown') })).ok, false);
+    assert.equal(ev(cleanupRecord({ port_after: port('unknown') })).ok, false);
+    assert.equal(ev(cleanupRecord({ port_after: port('owned') })).ok, false);
+    assert.equal(ev(notStartedRecord({ port_before: port('owned'), port_after: port('owned') })).ok, false);
   });
+  // R1 / R2 (final narrow corrective)
+  test('R2 exact: NOT_STARTED with port_before.responder=owned and port_after.responder=none is FAIL', () => {
+    const r = ev(notStartedRecord({ port_before: port('owned'), port_after: port('none') }));
+    assert.equal(r.ok, false); assert.match(r.reasons.join('\n'), /port_before\.responder is "owned"/);
+  });
+  test('R2 contradictory port evidence is FAIL: owned listener without an owned process; "none" with a responding pg_isready exit; a responder with exit 2; missing exit code', () => {
+    assert.equal(ev(cleanupRecord({ owned_processes_before: [], termination_evidence: 'stale_pidfile_dead_pid' })).ok, false);   // port_before owned, nothing owned
+    assert.equal(ev(notStartedRecord({ port_before: { pg_isready_exit: 0, responder: 'none', detail: '' } })).ok, false);
+    assert.equal(ev(notStartedRecord({ port_before: { pg_isready_exit: 2, responder: 'foreign', detail: '' } })).ok, false);
+    assert.equal(ev(notStartedRecord({ port_before: { responder: 'none' } })).ok, false);
+  });
+  test('R2 NOT_STARTED stays valid for an unstarted cluster, with a foreign or an unidentified listener on the port', () => {
+    assert.equal(ev(notStartedRecord()).ok, true);
+    assert.equal(ev(notStartedRecord({ port_before: port('foreign'), port_after: port('foreign') })).ok, true);
+    assert.equal(ev(notStartedRecord({ port_before: port('unknown'), port_after: port('unknown') })).ok, true);
+  });
+  test('R1 ambiguous ownership recorded (a process naming -D <root>/data without cwd there, possibly foreign) can never be a success, before or after', () => {
+    const amb = [{ pid: 257, role: 'config_only', cwd: '/var/tmp/gpr2-foreign/data' }];
+    for (const rec of [cleanupRecord({ ambiguous_processes_before: amb }), cleanupRecord({ ambiguous_processes_after: amb }), uninitialisedRecord({ ambiguous_processes_before: amb }), notStartedRecord({ ambiguous_processes_before: amb })]) assert.equal(ev(rec).ok, false);
+    const { ambiguous_processes_before, ...legacy } = cleanupRecord(); void ambiguous_processes_before; assert.equal(ev(legacy).ok, false);
+  });
+  test('R1 a postmaster that contradicts the recorded start-up identity is never part of a success', () => {
+    assert.equal(ev(cleanupRecord({ owned_processes_before: [{ pid: 700, role: 'postmaster_unverified', cwd: '/x' }] })).ok, false);
+  });
+
   test('gate FAILED (not PASSED, not INCONCLUSIVE) on the original false-positive record', () => {
     const d = tmp(); fs.mkdirSync(path.join(d, 'postgres')); fs.writeFileSync(path.join(d, 'postgres', 'cleanup.json'), JSON.stringify(uninitialisedRecord({ startup_status: 'RUNNING_VERIFIED' })));
     const prof = { profile_id: 't', stage: 'R04', runtime: { requires: ['postgres'] }, checks: [] };
@@ -295,20 +322,20 @@ describe('F-CI-02: PostgreSQL cleanup must fail closed', () => {
   test('P1 never-started cluster: NOT_STARTED is PASS, also next to an independently identified foreign listener on the port', () => {
     assert.equal(ev(notStartedRecord()).ok, true);
     assert.equal(viaFile(notStartedRecord()).status, S.PASS);
-    const foreign = notStartedRecord({ port_before: { responder: 'foreign', detail: 'reports data_directory /var/tmp/gpr2-foreign/data' }, port_after: { responder: 'foreign' }, notes: ['foreign'] });
+    const foreign = notStartedRecord({ port_before: port('foreign'), port_after: port('foreign'), notes: ['foreign'] });
     assert.equal(ev(foreign).ok, true);
   });
   test('P2 partially initialised root, no postmaster, port not ours: REMOVED_UNINITIALISED is PASS', () => {
     assert.equal(ev(uninitialisedRecord()).ok, true);
-    assert.equal(ev(uninitialisedRecord({ port_before: { responder: 'foreign' }, port_after: { responder: 'foreign' } })).ok, true);
+    assert.equal(ev(uninitialisedRecord({ port_before: port('foreign'), port_after: port('foreign') })).ok, true);
   });
   test('P3 verified shutdown is PASS: pg_ctl stop, escalation, direct signal of a verified postmaster, stale pid of a dead server, repeat cleanup', () => {
     assert.equal(ev(cleanupRecord()).ok, true);
     assert.equal(ev(cleanupRecord({ status: 'STOPPED_VERIFIED_AFTER_ESCALATION', stop_mode: 'immediate' })).ok, true);
     assert.equal(ev(cleanupRecord({ stop_method: 'signal', pg_version_present_before: false })).ok, true);
-    assert.equal(ev(cleanupRecord({ stop_mode: 'already_stopped', stop_method: 'none', owned_processes_before: [], termination_evidence: 'stale_pidfile_dead_pid', shutdown_proof: ['postmaster.pid named pid 551, which is not alive'] })).ok, true);
-    assert.equal(ev(cleanupRecord({ stop_mode: 'already_stopped', stop_method: 'none', root_existed_before: false, owned_processes_before: [], termination_evidence: 'prior_verified_stop', shutdown_proof: ['earlier cleanup'] })).ok, true);
-    assert.equal(ev(cleanupRecord({ startup_status: 'NONE', termination_evidence: 'not_applicable', owned_processes_before: [], stop_mode: 'already_stopped', stop_method: 'none' })).ok, true);
+    assert.equal(ev(cleanupRecord({ stop_mode: 'already_stopped', stop_method: 'none', owned_processes_before: [], port_before: port('none'), termination_evidence: 'stale_pidfile_dead_pid', shutdown_proof: ['postmaster.pid named pid 551, which is not alive'] })).ok, true);
+    assert.equal(ev(cleanupRecord({ stop_mode: 'already_stopped', stop_method: 'none', root_existed_before: false, owned_processes_before: [], port_before: port('none'), termination_evidence: 'prior_verified_stop', shutdown_proof: ['earlier cleanup'] })).ok, true);
+    assert.equal(ev(cleanupRecord({ startup_status: 'NONE', termination_evidence: 'not_applicable', owned_processes_before: [], port_before: port('none'), stop_mode: 'already_stopped', stop_method: 'none' })).ok, true);
   });
   test('P4 a foreign instance interfering with the cleanup record is FAIL; FAILED stays FAIL with its problems listed', () => {
     const r = ev({ status: 'FAILED', problems: ['a'] }); assert.equal(r.ok, false); assert.deepEqual(r.reasons, ['cleanup status FAILED', 'a']);

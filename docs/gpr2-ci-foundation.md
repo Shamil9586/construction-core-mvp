@@ -118,12 +118,19 @@ server still answering on 54329. The new implementation:
   address, port, database **and `data_directory`** before any test database exists (`postgres/identity.json`);
 - performs every probe of the cluster with `sudo`/`postgres` privilege; signals only the postmaster whose `postmaster.pid` names
   exactly this data directory and port **and** that the process table ties to this root (otherwise refuses, `FAILED`, exit 1);
-- establishes ownership from the process table, never from a file or a port (F-CI-02): a process is the cluster's own iff it is a
-  `postgres` whose argv has `-D <data dir>` (postmaster) or whose cwd is inside the cluster root (backends/auxiliaries, even after the
-  directory was unlinked). A responding port is only an observation, classified `none` / `owned` / `foreign` / `unknown` (listener pid,
-  else the server's `data_directory`); it is never grounds to signal anything, and an `unknown` listener blocks a removal;
-- stops `-m fast` (escalates to `immediate` and says so). `pg_ctl` refuses a directory without `PG_VERSION`, so a postmaster that
-  `pg_ctl` cannot stop is signalled directly (SIGINT, then SIGQUIT) — only after its ownership was re-proven immediately before the signal;
+- establishes ownership from the process table, never from a file, a port or an argument (F-CI-02). `-D` names the *configuration*
+  directory — a foreign cluster can use our data dir for config only while its real `data_directory` is elsewhere — so `-D` alone proves
+  nothing. A **postmaster** is the cluster's own only if it is the `postgres` binary, its argv has `-D <data dir>`, its cwd (the kernel's
+  record of the effective data directory; shown as `(deleted)` after an unlink) is exactly `<data dir>`, and it matches the pid, start time
+  and boot id recorded in `identity.json` at start-up. Processes with cwd inside the root are *members*. A process that names
+  `-D <data dir>` but does not serve it is `config_only` (ambiguous, possibly foreign); one that serves it but contradicts the recorded
+  identity is `postmaster_unverified` (restart / pid reuse). Neither is ever signalled or assumed ours, and either one makes the cleanup
+  `FAILED` with the root preserved. A responding port is only an observation, classified `none` / `owned` / `foreign` / `unknown`
+  (listener pid, else the server's `data_directory`); it is never grounds to signal anything, and an `unknown` listener blocks a removal;
+- stops by SIGINT (fast; escalates to SIGQUIT = immediate and says so) sent to the verified postmaster only. `pg_ctl stop` is not used: it
+  resolves the data directory from configuration (and refuses a directory without `PG_VERSION`). The signal is sent by the same privileged
+  process that re-classifies the pid at that instant, so a pid that was reused, restarted or is not provably ours is never signalled;
+  the check-to-signal window is that process's own few microseconds (no pidfd is available from shell);
 - verifies: `pg_ctl status` = 3 (when `PG_VERSION` exists), no `postmaster.pid`, the pid is gone (zombies excluded, 10 s grace), no
   process tied to the root, and the port is not answered by this cluster or by an unidentifiable listener; only then removes the root
   and verifies it is gone; handles a crashed server's stale pid file;
@@ -135,8 +142,10 @@ server still answering on 54329. The new implementation:
   cluster existed and its termination is proven), `NOT_STARTED` (no root, no start-up evidence, no owned process; a foreign listener
   on the port is irrelevant), `REMOVED_UNINITIALISED` (root without `PG_VERSION`/`postmaster.pid`, no start-up evidence, no owned
   process, port not ours), `FAILED`. The record also carries the start-up status, owned processes before/after, port observations
-  before/after, stop method and `shutdown_proof`. The seal job's `postgres-cleanup` gate (`classify.mjs` `evaluateCleanup`) accepts a
-  success status only when the rest of the record agrees with it; a legacy-shaped or contradictory record is `FAIL`.
+  before/after, ambiguous processes, stop method and `shutdown_proof`. The seal job's `postgres-cleanup` gate (`classify.mjs` `evaluateCleanup`) accepts a
+  success status only when the rest of the record agrees with it (e.g. `NOT_STARTED` is rejected when the pre-cleanup port observation
+  identifies the cluster as `owned`; a listener called `owned` must be backed by an owned process); a legacy-shaped, ambiguous or
+  contradictory record is `FAIL`.
 
 Each native test file runs alone on a freshly recreated `construction_test` (DROP … WITH (FORCE) / CREATE), after re-checking the
 cluster identity, with `DATABASE_URL`, `PG*`, `E2E_*`, `POSTGRES_*` and any `*TOKEN*/*SECRET*/*PASSWORD*` variables scrubbed and

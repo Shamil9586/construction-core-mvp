@@ -120,6 +120,9 @@ const TERMINATION_EVIDENCE = ['stopped_by_cleanup', 'stale_pidfile_dead_pid', 'p
  *   NOT_STARTED           root absent before, no startup evidence, no owned process (a foreign listener on the port is irrelevant)
  *   REMOVED_UNINITIALISED root present without PG_VERSION/postmaster.pid, no startup evidence, no owned process, port not answered by us
  * Anything contradictory, incomplete or unverifiable is a failure; there is no clamping of a doubt into a pass.
+ * Cross-field rules shared by every success: no ambiguous process (one that names -D <root>/data without provably serving it — possibly a
+ * foreign cluster) and no unverified postmaster before or after; a port observation is internally consistent (responder "none" iff pg_isready
+ * exit 2) and a listener called "owned" is backed by an owned process; the cluster that was to be removed never answers on the port afterwards.
  */
 export function evaluateCleanup(c) {
   if (!CLEANUP_SUCCESS.includes(c.status)) return { ok: false, reasons: [`cleanup status ${c.status}`, ...(c.problems || [])] };
@@ -132,9 +135,14 @@ export function evaluateCleanup(c) {
   if (!Array.isArray(c.owned_processes_before)) why.push('owned_processes_before missing (incomplete cleanup evidence)');
   if (!empty(c.owned_processes_after)) why.push(Array.isArray(c.owned_processes_after) ? `owned process(es) still present after cleanup: ${c.owned_processes_after.map(p => p.pid).join(', ')}` : 'owned_processes_after missing (incomplete cleanup evidence)');
   if (!STARTUP_STATUSES.includes(c.startup_status)) why.push(`startup_status ${c.startup_status ?? 'missing'} is not a recognised value (incomplete cleanup evidence)`);
+  if (!Array.isArray(c.ambiguous_processes_before) || !Array.isArray(c.ambiguous_processes_after)) why.push('ambiguous_processes_before/after missing (incomplete cleanup evidence)');
+  else if (c.ambiguous_processes_before.length || c.ambiguous_processes_after.length) why.push(`process(es) with unestablished ownership name the cluster directory: ${[...c.ambiguous_processes_before, ...c.ambiguous_processes_after].map(p => p.pid).join(', ')}`);
+  if (Array.isArray(c.owned_processes_before) && c.owned_processes_before.some(p => p.role === 'postmaster_unverified')) why.push('a postmaster that does not match the recorded start-up identity was present before cleanup');
   const respBefore = c.port_before?.responder, respAfter = c.port_after?.responder;
-  if (!RESPONDERS.includes(respBefore) || !RESPONDERS.includes(respAfter)) why.push('port observations missing or unrecognised (incomplete cleanup evidence)');
+  const portInconsistent = o => !RESPONDERS.includes(o?.responder) || !Number.isInteger(o?.pg_isready_exit) || (o.responder === 'none') !== (o.pg_isready_exit === 2);
+  if (portInconsistent(c.port_before) || portInconsistent(c.port_after)) why.push('port observations missing, unrecognised or internally inconsistent (incomplete cleanup evidence)');
   if (respAfter === 'owned') why.push('127.0.0.1:54329 is answered by the cluster that was to be removed');
+  if (respBefore === 'owned' && Array.isArray(c.owned_processes_before) && !c.owned_processes_before.length) why.push('port_before.responder is "owned" but no owned process was recorded');
   if (why.length) return { ok: false, reasons: [`cleanup status ${c.status} contradicts its own evidence`, ...why] };
 
   const ownedBefore = c.owned_processes_before;
@@ -144,6 +152,8 @@ export function evaluateCleanup(c) {
     if (c.root_existed_before !== false) why.push('NOT_STARTED but the cluster root existed');
     if (c.startup_status !== 'NONE') why.push(`NOT_STARTED but startup evidence is ${c.startup_status}`);
     if (ownedBefore.length) why.push('NOT_STARTED but processes tied to the cluster were present');
+    if (respBefore === 'owned') why.push('NOT_STARTED but the pre-cleanup port observation identifies the cluster as running on the port');
+    if (respAfter === 'owned') why.push('NOT_STARTED but the port is answered by this cluster after cleanup');
   } else if (c.status === 'REMOVED_UNINITIALISED') {
     if (c.root_existed_before !== true) why.push('REMOVED_UNINITIALISED but the cluster root did not exist');
     if (c.pg_version_present_before !== false) why.push('REMOVED_UNINITIALISED but PG_VERSION was present (or not recorded)');
