@@ -117,13 +117,26 @@ server still answering on 54329. The new implementation:
   uses its own unix-socket directory, `cluster_name=gpr2-p1-isolated`, loopback, port 54329, and verifies `cluster_name`, server
   address, port, database **and `data_directory`** before any test database exists (`postgres/identity.json`);
 - performs every probe of the cluster with `sudo`/`postgres` privilege; signals only the postmaster whose `postmaster.pid` names
-  exactly this data directory and port (otherwise refuses, `FAILED`, exit 1);
-- stops `-m fast` (escalates to `immediate` and says so), then verifies four ways: `pg_ctl status` = 3, no `postmaster.pid`, the pid
-  is gone (zombies excluded, 10 s grace), `pg_isready` on 54329 answers "no response", no process serves the data directory; then
-  removes the root and verifies it is gone; handles a crashed server's stale pid file;
+  exactly this data directory and port **and** that the process table ties to this root (otherwise refuses, `FAILED`, exit 1);
+- establishes ownership from the process table, never from a file or a port (F-CI-02): a process is the cluster's own iff it is a
+  `postgres` whose argv has `-D <data dir>` (postmaster) or whose cwd is inside the cluster root (backends/auxiliaries, even after the
+  directory was unlinked). A responding port is only an observation, classified `none` / `owned` / `foreign` / `unknown` (listener pid,
+  else the server's `data_directory`); it is never grounds to signal anything, and an `unknown` listener blocks a removal;
+- stops `-m fast` (escalates to `immediate` and says so). `pg_ctl` refuses a directory without `PG_VERSION`, so a postmaster that
+  `pg_ctl` cannot stop is signalled directly (SIGINT, then SIGQUIT) — only after its ownership was re-proven immediately before the signal;
+- verifies: `pg_ctl status` = 3 (when `PG_VERSION` exists), no `postmaster.pid`, the pid is gone (zombies excluded, 10 s grace), no
+  process tied to the root, and the port is not answered by this cluster or by an unidentifiable listener; only then removes the root
+  and verifies it is gone; handles a crashed server's stale pid file;
+- never treats a missing `PG_VERSION`, `postmaster.pid` or root as proof that a server is gone. Start-up evidence of a running server
+  (`identity.json` `RUNNING_VERIFIED`) is closed only by a stop performed by the cleanup (`termination_evidence: stopped_by_cleanup`),
+  a stale `postmaster.pid` of a dead pid, or an earlier verified stop of the same run — otherwise `FAILED` and the root is preserved;
 - preserves the server log, records other PostgreSQL instances before/after and fails if that set changed;
-- writes `postgres/cleanup.json` (`STOPPED_VERIFIED`, `STOPPED_VERIFIED_AFTER_ESCALATION`, `NOT_STARTED`, `REMOVED_UNINITIALISED`,
-  `FAILED`) and exits non-zero on any unexpected failure. The seal job turns cleanup into a mandatory `postgres-cleanup` gate.
+- writes `postgres/cleanup.json` and exits non-zero on any unexpected failure. Statuses: `STOPPED_VERIFIED[_AFTER_ESCALATION]` (a
+  cluster existed and its termination is proven), `NOT_STARTED` (no root, no start-up evidence, no owned process; a foreign listener
+  on the port is irrelevant), `REMOVED_UNINITIALISED` (root without `PG_VERSION`/`postmaster.pid`, no start-up evidence, no owned
+  process, port not ours), `FAILED`. The record also carries the start-up status, owned processes before/after, port observations
+  before/after, stop method and `shutdown_proof`. The seal job's `postgres-cleanup` gate (`classify.mjs` `evaluateCleanup`) accepts a
+  success status only when the rest of the record agrees with it; a legacy-shaped or contradictory record is `FAIL`.
 
 Each native test file runs alone on a freshly recreated `construction_test` (DROP … WITH (FORCE) / CREATE), after re-checking the
 cluster identity, with `DATABASE_URL`, `PG*`, `E2E_*`, `POSTGRES_*` and any `*TOKEN*/*SECRET*/*PASSWORD*` variables scrubbed and

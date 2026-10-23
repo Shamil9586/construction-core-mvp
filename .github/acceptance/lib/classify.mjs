@@ -107,13 +107,68 @@ export function classifyScript(check, rec) {
   return { status: reasons.length ? S.FAIL : S.PASS, reasons, exit_code: rec.exit_code, seconds: rec.seconds ?? null, log: rec.log ?? null };
 }
 
+const CLEANUP_SUCCESS = ['STOPPED_VERIFIED', 'STOPPED_VERIFIED_AFTER_ESCALATION', 'NOT_STARTED', 'REMOVED_UNINITIALISED'];
+const STARTUP_STATUSES = ['NONE', 'START_ATTEMPTED_UNVERIFIED', 'RUNNING_VERIFIED', 'IDENTITY_UNREADABLE'];
+const RESPONDERS = ['none', 'owned', 'foreign', 'unknown'];
+// Startup evidence that a server of this cluster really ran (or may have): only a stop performed by the cleanup, a stale postmaster.pid of a dead pid,
+// or an earlier verified stop closes it. A missing PG_VERSION, a missing postmaster.pid or a deleted root never does (F-CI-02).
+const TERMINATION_EVIDENCE = ['stopped_by_cleanup', 'stale_pidfile_dead_pid', 'prior_verified_stop'];
+
+/**
+ * Judge a cleanup.json. A success status is only believed when the rest of the record agrees with it (same table as pg-cluster.sh stop()):
+ *   STOPPED_VERIFIED[_AFTER_ESCALATION]  shutdown proof present; any owned postmaster seen before was stopped by the cleanup; running-startup evidence closed
+ *   NOT_STARTED           root absent before, no startup evidence, no owned process (a foreign listener on the port is irrelevant)
+ *   REMOVED_UNINITIALISED root present without PG_VERSION/postmaster.pid, no startup evidence, no owned process, port not answered by us
+ * Anything contradictory, incomplete or unverifiable is a failure; there is no clamping of a doubt into a pass.
+ */
+export function evaluateCleanup(c) {
+  if (!CLEANUP_SUCCESS.includes(c.status)) return { ok: false, reasons: [`cleanup status ${c.status}`, ...(c.problems || [])] };
+  const why = [];
+  const empty = a => Array.isArray(a) && a.length === 0;
+  if (c.root_exists_after !== false) why.push('cluster root still exists after cleanup');
+  if (c.foreign_instances_untouched !== true) why.push('foreign PostgreSQL instances were not shown to be untouched');
+  if (!empty(c.problems)) why.push(`success status recorded together with problems: ${Array.isArray(c.problems) ? c.problems.join('; ') : 'problems missing'}`);
+  if (c.owned_process_scan !== 'ok') why.push(`owned-process scan is ${c.owned_process_scan ?? 'missing'}: shutdown cannot be established`);
+  if (!Array.isArray(c.owned_processes_before)) why.push('owned_processes_before missing (incomplete cleanup evidence)');
+  if (!empty(c.owned_processes_after)) why.push(Array.isArray(c.owned_processes_after) ? `owned process(es) still present after cleanup: ${c.owned_processes_after.map(p => p.pid).join(', ')}` : 'owned_processes_after missing (incomplete cleanup evidence)');
+  if (!STARTUP_STATUSES.includes(c.startup_status)) why.push(`startup_status ${c.startup_status ?? 'missing'} is not a recognised value (incomplete cleanup evidence)`);
+  const respBefore = c.port_before?.responder, respAfter = c.port_after?.responder;
+  if (!RESPONDERS.includes(respBefore) || !RESPONDERS.includes(respAfter)) why.push('port observations missing or unrecognised (incomplete cleanup evidence)');
+  if (respAfter === 'owned') why.push('127.0.0.1:54329 is answered by the cluster that was to be removed');
+  if (why.length) return { ok: false, reasons: [`cleanup status ${c.status} contradicts its own evidence`, ...why] };
+
+  const ownedBefore = c.owned_processes_before;
+  const sawPostmaster = ownedBefore.some(p => p.role === 'postmaster');
+  const running = c.startup_status === 'RUNNING_VERIFIED' || c.startup_status === 'IDENTITY_UNREADABLE';
+  if (c.status === 'NOT_STARTED') {
+    if (c.root_existed_before !== false) why.push('NOT_STARTED but the cluster root existed');
+    if (c.startup_status !== 'NONE') why.push(`NOT_STARTED but startup evidence is ${c.startup_status}`);
+    if (ownedBefore.length) why.push('NOT_STARTED but processes tied to the cluster were present');
+  } else if (c.status === 'REMOVED_UNINITIALISED') {
+    if (c.root_existed_before !== true) why.push('REMOVED_UNINITIALISED but the cluster root did not exist');
+    if (c.pg_version_present_before !== false) why.push('REMOVED_UNINITIALISED but PG_VERSION was present (or not recorded)');
+    if (c.postmaster_pid_file_before !== false) why.push('REMOVED_UNINITIALISED but a postmaster.pid existed (or was not recorded)');
+    if (c.startup_status !== 'NONE') why.push(`REMOVED_UNINITIALISED but startup evidence is ${c.startup_status}: a server may have run, so "never initialised" is not established`);
+    if (ownedBefore.length) why.push('REMOVED_UNINITIALISED but processes tied to the cluster were present');
+    if (respBefore !== 'none' && respBefore !== 'foreign') why.push(`REMOVED_UNINITIALISED but the port was answered by an ${respBefore} listener before removal`);
+    if (respAfter !== 'none' && respAfter !== 'foreign') why.push(`REMOVED_UNINITIALISED but the port is answered by an ${respAfter} listener after removal`);
+  } else {
+    if (!Array.isArray(c.shutdown_proof) || !c.shutdown_proof.length) why.push('no shutdown proof recorded');
+    if (c.status === 'STOPPED_VERIFIED_AFTER_ESCALATION' && c.stop_mode !== 'immediate') why.push(`escalation status with stop_mode ${c.stop_mode}`);
+    if (running && !TERMINATION_EVIDENCE.includes(c.termination_evidence)) why.push(`startup evidence is ${c.startup_status} but termination evidence is ${c.termination_evidence ?? 'missing'}: a verified-running server's shutdown is not proven`);
+    if (sawPostmaster && c.termination_evidence !== 'stopped_by_cleanup') why.push('an owned postmaster was running before cleanup but no stop performed by the cleanup is recorded');
+    if (respAfter !== 'none' && respAfter !== 'foreign') why.push(`port is answered by an ${respAfter} listener after cleanup`);
+  }
+  return why.length ? { ok: false, reasons: [`cleanup status ${c.status} contradicts its own evidence`, ...why] } : { ok: true, reasons: c.notes || [] };
+}
+
 export function classifyCleanup(profile, rawDir) {
   if (!profile.runtime.requires.includes('postgres')) return null;
   const c = readJson(path.join(rawDir, 'postgres', 'cleanup.json'));
-  if (!c) return { id: 'postgres-cleanup', title: 'Disposable PostgreSQL cluster stopped and removed (verified)', class: 'INFRASTRUCTURE', mandatory: true, status: S.NOT_RUN, reasons: ['no cleanup.json'] };
-  const ok = ['STOPPED_VERIFIED', 'STOPPED_VERIFIED_AFTER_ESCALATION', 'NOT_STARTED', 'REMOVED_UNINITIALISED'].includes(c.status) && c.root_exists_after === false && c.foreign_instances_untouched === true;
-  return { id: 'postgres-cleanup', title: 'Disposable PostgreSQL cluster stopped and removed (verified)', class: 'INFRASTRUCTURE', mandatory: true,
-           status: ok ? S.PASS : S.FAIL, cleanup_status: c.status, stop_mode: c.stop_mode, reasons: ok ? (c.notes || []) : [`cleanup status ${c.status}`, ...(c.problems || [])] };
+  const head = { id: 'postgres-cleanup', title: 'Disposable PostgreSQL cluster stopped and removed (verified)', class: 'INFRASTRUCTURE', mandatory: true };
+  if (!c) return { ...head, status: S.NOT_RUN, reasons: ['no cleanup.json'] };
+  const r = evaluateCleanup(c);
+  return { ...head, status: r.ok ? S.PASS : S.FAIL, cleanup_status: c.status, stop_mode: c.stop_mode, reasons: r.reasons };
 }
 
 /** Classify a whole raw evidence directory against a profile. identityOk: result of the independent seal-phase re-verification. */
