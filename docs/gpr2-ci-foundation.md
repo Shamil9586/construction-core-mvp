@@ -115,17 +115,21 @@ server still answering on 54329. The new implementation:
 
 - creates `/var/tmp/gpr2-accept-<run_id>-<attempt>` (run **and** attempt; numeric only), refuses a stale root and an occupied port,
   uses its own unix-socket directory, `cluster_name=gpr2-p1-isolated`, loopback, port 54329, and verifies `cluster_name`, server
-  address, port, database **and `data_directory`** before any test database exists (`postgres/identity.json`);
+  address, port, database **and `data_directory`** before any test database exists, then records the postmaster's *process* identity —
+  pid, start time (clock ticks), Linux boot id, executable, exact argv, cwd — and writes `postgres/identity.json` (`RUNNING_VERIFIED`)
+  only if **every** field was obtained and agrees (atomic write). If start-up fails after it began, `postgres/startup-failure.json`
+  records the phase and whether the server launch was already issued; no `RUNNING_VERIFIED` is ever written for it;
 - performs every probe of the cluster with `sudo`/`postgres` privilege; signals only the postmaster whose `postmaster.pid` names
   exactly this data directory and port **and** that the process table ties to this root (otherwise refuses, `FAILED`, exit 1);
 - establishes ownership from the process table, never from a file, a port or an argument (F-CI-02). `-D` names the *configuration*
   directory — a foreign cluster can use our data dir for config only while its real `data_directory` is elsewhere — so `-D` alone proves
-  nothing. A **postmaster** is the cluster's own only if it is the `postgres` binary, its argv has `-D <data dir>`, its cwd (the kernel's
-  record of the effective data directory; shown as `(deleted)` after an unlink) is exactly `<data dir>`, and it matches the pid, start time
-  and boot id recorded in `identity.json` at start-up. Processes with cwd inside the root are *members*. A process that names
+  nothing. A **postmaster** is the cluster's own — and the only thing that may ever be signalled — only if it is the `postgres` binary,
+  its argv has `-D <data dir>`, its cwd (the kernel's record of the effective data directory; shown as `(deleted)` after an unlink) is
+  exactly `<data dir>`, **and the complete recorded identity matches**: pid, start time, boot id, executable and exact argv. A missing,
+  incomplete, corrupt or contradictory `identity.json` is not an optional condition: such a postmaster is `postmaster_unverified`. Processes with cwd inside the root are *members*. A process that names
   `-D <data dir>` but does not serve it is `config_only` (ambiguous, possibly foreign); one that serves it but contradicts the recorded
-  identity is `postmaster_unverified` (restart / pid reuse). Neither is ever signalled or assumed ours, and either one makes the cleanup
-  `FAILED` with the root preserved. A responding port is only an observation, classified `none` / `owned` / `foreign` / `unknown`
+  identity is `postmaster_unverified` (restart, pid reuse, nothing recorded). Neither is ever signalled or assumed ours, and either one
+  makes the cleanup `FAILED` with the data directory preserved and recovery instructions in `problems`. A responding port is only an observation, classified `none` / `owned` / `foreign` / `unknown`
   (listener pid, else the server's `data_directory`); it is never grounds to signal anything, and an `unknown` listener blocks a removal;
 - stops by SIGINT (fast; escalates to SIGQUIT = immediate and says so) sent to the verified postmaster only. `pg_ctl stop` is not used: it
   resolves the data directory from configuration (and refuses a directory without `PG_VERSION`). The signal is sent by the same privileged
@@ -142,7 +146,8 @@ server still answering on 54329. The new implementation:
   cluster existed and its termination is proven), `NOT_STARTED` (no root, no start-up evidence, no owned process; a foreign listener
   on the port is irrelevant), `REMOVED_UNINITIALISED` (root without `PG_VERSION`/`postmaster.pid`, no start-up evidence, no owned
   process, port not ours), `FAILED`. The record also carries the start-up status, owned processes before/after, port observations
-  before/after, ambiguous processes, stop method and `shutdown_proof`. The seal job's `postgres-cleanup` gate (`classify.mjs` `evaluateCleanup`) accepts a
+  before/after, ambiguous processes, the start-up identity state (`ABSENT` / `COMPLETE` / `INCOMPLETE` / `CORRUPT`) with the recorded
+  identity, the signals sent (pid, signal, whether the pid exited), the stale-`postmaster.pid` evidence and `shutdown_proof`. The seal job's `postgres-cleanup` gate (`classify.mjs` `evaluateCleanup`) accepts a
   success status only when the rest of the record agrees with it (e.g. `NOT_STARTED` is rejected when the pre-cleanup port observation
   identifies the cluster as `owned`; a listener called `owned` must be backed by an owned process); a legacy-shaped, ambiguous or
   contradictory record is `FAIL`.
@@ -180,6 +185,12 @@ Playwright and Chromium versions and path, candidate `package-lock.json` sha256,
 Result vocabulary: `PASS`, `FAIL`, `SKIP`, `NOT RUN`, `ENVIRONMENT BLOCKED` (never merged; a missing test file is `FAIL`).
 Gate: `TECHNICAL_GATES_PASSED` · `TECHNICAL_GATES_FAILED` (any mandatory FAIL/SKIP, identity or cleanup refused) ·
 `INCONCLUSIVE_ENVIRONMENT_BLOCKED` (a mandatory check BLOCKED / NOT RUN, nothing failed).
+
+**The runtime job's conclusion bounds the gate** (`classify.mjs` `applyRuntimeResult`, applied by `seal.mjs` and again by
+`verify-evidence.mjs` from `github.runtime_job_result`). Per-check statuses are never rewritten; only the aggregate is bounded and never
+upgraded: `success` — classified normally (necessary, not sufficient); `failure` — PASSED becomes FAILED (an unexplained failure beside
+all-PASS checks is contradictory), a FAILED/INCONCLUSIVE gate stays as classified (the failing or blocked checks explain the failed job);
+`cancelled` / `skipped` — PASSED becomes INCONCLUSIVE (the run did not complete); missing or unrecognised — FAILED (fail closed).
 
 **Retention — verified facts (GitHub Docs, read 22.10.2026).** Artifacts and logs default to 90 days; a public repository allows
 1–90 days, a private one 1–400; `retention-days` cannot exceed the repository/organisation limit; downloading artifacts needs a

@@ -109,20 +109,41 @@ export function classifyScript(check, rec) {
 
 const CLEANUP_SUCCESS = ['STOPPED_VERIFIED', 'STOPPED_VERIFIED_AFTER_ESCALATION', 'NOT_STARTED', 'REMOVED_UNINITIALISED'];
 const STARTUP_STATUSES = ['NONE', 'START_ATTEMPTED_UNVERIFIED', 'RUNNING_VERIFIED', 'IDENTITY_UNREADABLE'];
+const IDENTITY_STATES = ['ABSENT', 'COMPLETE', 'INCOMPLETE', 'CORRUPT'];
 const RESPONDERS = ['none', 'owned', 'foreign', 'unknown'];
-// Startup evidence that a server of this cluster really ran (or may have): only a stop performed by the cleanup, a stale postmaster.pid of a dead pid,
-// or an earlier verified stop closes it. A missing PG_VERSION, a missing postmaster.pid or a deleted root never does (F-CI-02).
+// Startup evidence that a server of this cluster really ran (or may have): only a stop performed by the cleanup, a stale postmaster.pid of the
+// RECORDED dead pid, or an earlier verified stop closes it. A missing PG_VERSION / postmaster.pid / root never does (F-CI-02), and none of them
+// can be matched to a process without a complete recorded identity (C1).
 const TERMINATION_EVIDENCE = ['stopped_by_cleanup', 'stale_pidfile_dead_pid', 'prior_verified_stop'];
+const isPid = v => Number.isInteger(v) && v > 0;
+const sameArgv = (a, b) => Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((x, i) => x === b[i]);
+
+/** A recorded start-up identity is usable only if every field is present, valid and mutually consistent. Returns the list of defects. */
+export function identityDefects(rec) {
+  if (!rec || typeof rec !== 'object') return ['recorded identity missing'];
+  const d = [];
+  if (!isPid(rec.pid)) d.push('pid');
+  if (typeof rec.start_ticks !== 'string' || !/^[0-9]+$/.test(rec.start_ticks)) d.push('start_ticks');
+  if (typeof rec.boot_id !== 'string' || !rec.boot_id) d.push('boot_id');
+  if (typeof rec.exe !== 'string' || rec.exe.split('/').pop() !== 'postgres') d.push('exe');
+  if (typeof rec.data_directory !== 'string' || !rec.data_directory) d.push('data_directory');
+  const i = Array.isArray(rec.argv) ? rec.argv.indexOf('-D') : -1;
+  if (!Array.isArray(rec.argv) || !rec.argv.length || !rec.argv.every(x => typeof x === 'string') || i < 0 || rec.argv[i + 1] !== rec.data_directory) d.push('argv');
+  return d;
+}
 
 /**
  * Judge a cleanup.json. A success status is only believed when the rest of the record agrees with it (same table as pg-cluster.sh stop()):
- *   STOPPED_VERIFIED[_AFTER_ESCALATION]  shutdown proof present; any owned postmaster seen before was stopped by the cleanup; running-startup evidence closed
- *   NOT_STARTED           root absent before, no startup evidence, no owned process (a foreign listener on the port is irrelevant)
+ *   STOPPED_VERIFIED[_AFTER_ESCALATION]  structured proof of the claimed shutdown (below); the textual shutdown_proof alone proves nothing
+ *   NOT_STARTED           root absent before, no startup evidence at all, no owned process (a foreign listener on the port is irrelevant)
  *   REMOVED_UNINITIALISED root present without PG_VERSION/postmaster.pid, no startup evidence, no owned process, port not answered by us
  * Anything contradictory, incomplete or unverifiable is a failure; there is no clamping of a doubt into a pass.
  * Cross-field rules shared by every success: no ambiguous process (one that names -D <root>/data without provably serving it — possibly a
  * foreign cluster) and no unverified postmaster before or after; a port observation is internally consistent (responder "none" iff pg_isready
  * exit 2) and a listener called "owned" is backed by an owned process; the cluster that was to be removed never answers on the port afterwards.
+ * Structured shutdown proof (no signal without identity, C1/C2): `stopped_by_cleanup` needs a COMPLETE recorded identity, an observed owned
+ * postmaster whose pid / start time / boot id / executable / argv / cwd all equal that identity, a recorded signal for it that was delivered
+ * and followed by exit, and nothing owned left after; `stale_pidfile_dead_pid` needs the recorded pid; `prior_verified_stop` an earlier verified record.
  */
 export function evaluateCleanup(c) {
   if (!CLEANUP_SUCCESS.includes(c.status)) return { ok: false, reasons: [`cleanup status ${c.status}`, ...(c.problems || [])] };
@@ -137,21 +158,50 @@ export function evaluateCleanup(c) {
   if (!STARTUP_STATUSES.includes(c.startup_status)) why.push(`startup_status ${c.startup_status ?? 'missing'} is not a recognised value (incomplete cleanup evidence)`);
   if (!Array.isArray(c.ambiguous_processes_before) || !Array.isArray(c.ambiguous_processes_after)) why.push('ambiguous_processes_before/after missing (incomplete cleanup evidence)');
   else if (c.ambiguous_processes_before.length || c.ambiguous_processes_after.length) why.push(`process(es) with unestablished ownership name the cluster directory: ${[...c.ambiguous_processes_before, ...c.ambiguous_processes_after].map(p => p.pid).join(', ')}`);
-  if (Array.isArray(c.owned_processes_before) && c.owned_processes_before.some(p => p.role === 'postmaster_unverified')) why.push('a postmaster that does not match the recorded start-up identity was present before cleanup');
+  if (Array.isArray(c.owned_processes_before) && c.owned_processes_before.some(p => p.role === 'postmaster_unverified')) why.push('a postmaster whose identity was not proven against the recorded start-up identity was present before cleanup');
   const respBefore = c.port_before?.responder, respAfter = c.port_after?.responder;
   const portInconsistent = o => !RESPONDERS.includes(o?.responder) || !Number.isInteger(o?.pg_isready_exit) || (o.responder === 'none') !== (o.pg_isready_exit === 2);
   if (portInconsistent(c.port_before) || portInconsistent(c.port_after)) why.push('port observations missing, unrecognised or internally inconsistent (incomplete cleanup evidence)');
   if (respAfter === 'owned') why.push('127.0.0.1:54329 is answered by the cluster that was to be removed');
   if (respBefore === 'owned' && Array.isArray(c.owned_processes_before) && !c.owned_processes_before.length) why.push('port_before.responder is "owned" but no owned process was recorded');
+  // lifecycle evidence added by the CI-safety closeout
+  const sid = c.startup_identity, rec = sid?.recorded;
+  if (!sid || !IDENTITY_STATES.includes(sid.state) || !Array.isArray(sid.missing)) why.push('startup_identity missing or unrecognised (incomplete cleanup evidence)');
+  else if (sid.state === 'COMPLETE') { const d = identityDefects(rec); if (d.length) why.push(`startup identity is claimed COMPLETE but its recorded fields are not (${d.join(', ')})`); }
+  else if (rec !== null && rec !== undefined) why.push(`startup identity is ${sid.state} but a recorded identity is attached`);
+  if (!Array.isArray(c.signals)) why.push('signals missing (incomplete cleanup evidence)');
+  if (!['none', 'signal'].includes(c.stop_method)) why.push(`stop_method ${c.stop_method ?? 'missing'} is not a recognised value`);
   if (why.length) return { ok: false, reasons: [`cleanup status ${c.status} contradicts its own evidence`, ...why] };
 
-  const ownedBefore = c.owned_processes_before;
-  const sawPostmaster = ownedBefore.some(p => p.role === 'postmaster');
+  const ownedBefore = c.owned_processes_before, signals = c.signals;
+  const identity = sid.state === 'COMPLETE' ? rec : null;
+  const postmastersBefore = ownedBefore.filter(p => p.role === 'postmaster');
   const running = c.startup_status === 'RUNNING_VERIFIED' || c.startup_status === 'IDENTITY_UNREADABLE';
+  // a process may be claimed as the verified postmaster only if it equals the recorded identity in every field
+  for (const p of postmastersBefore) {
+    if (!identity) { why.push(`postmaster ${p.pid} is recorded as verified without a complete start-up identity`); continue; }
+    const diff = [];
+    if (p.pid !== identity.pid) diff.push('pid'); if (p.start_ticks !== identity.start_ticks) diff.push('start_ticks'); if (p.boot_id !== identity.boot_id) diff.push('boot_id');
+    if (p.exe !== identity.exe) diff.push('exe'); if (!sameArgv(p.argv, identity.argv)) diff.push('argv'); if (p.cwd !== identity.data_directory) diff.push('cwd');
+    if (diff.length) why.push(`postmaster ${p.pid} is recorded as verified but differs from the recorded identity in: ${diff.join(', ')}`);
+  }
+  if (running && sid.state !== 'COMPLETE') why.push(`startup evidence is ${c.startup_status} but the recorded identity is ${sid.state}${sid.missing.length ? ` (${sid.missing.join(', ')})` : ''}: shutdown cannot be proven`);
+  // signals: each one targets a verified owned postmaster, was delivered, and was followed by exit; every verified postmaster was handled
+  for (const sg of signals) {
+    if (!postmastersBefore.some(p => p.pid === sg.pid)) why.push(`signal recorded for pid ${sg.pid}, which was not a verified owned postmaster`);
+    if (!['INT', 'QUIT'].includes(sg.signal)) why.push(`signal ${sg.signal} to pid ${sg.pid} is not an allowed shutdown signal`);
+    if (sg.exited !== true) why.push(`pid ${sg.pid} did not exit after ${sg.signal}`);
+  }
+  if (signals.length && c.stop_method !== 'signal') why.push('signals were sent but stop_method is not "signal"');
+  if (!signals.length && c.stop_method !== 'none') why.push('stop_method is "signal" but no signal is recorded');
+  if (postmastersBefore.some(p => !signals.some(sg => sg.pid === p.pid))) why.push('a verified postmaster was running before cleanup but no signal to it is recorded');
+
   if (c.status === 'NOT_STARTED') {
     if (c.root_existed_before !== false) why.push('NOT_STARTED but the cluster root existed');
     if (c.startup_status !== 'NONE') why.push(`NOT_STARTED but startup evidence is ${c.startup_status}`);
+    if (sid.state !== 'ABSENT') why.push(`NOT_STARTED but a start-up identity is ${sid.state}`);
     if (ownedBefore.length) why.push('NOT_STARTED but processes tied to the cluster were present');
+    if (signals.length) why.push('NOT_STARTED but a process was signalled');
     if (respBefore === 'owned') why.push('NOT_STARTED but the pre-cleanup port observation identifies the cluster as running on the port');
     if (respAfter === 'owned') why.push('NOT_STARTED but the port is answered by this cluster after cleanup');
   } else if (c.status === 'REMOVED_UNINITIALISED') {
@@ -159,14 +209,31 @@ export function evaluateCleanup(c) {
     if (c.pg_version_present_before !== false) why.push('REMOVED_UNINITIALISED but PG_VERSION was present (or not recorded)');
     if (c.postmaster_pid_file_before !== false) why.push('REMOVED_UNINITIALISED but a postmaster.pid existed (or was not recorded)');
     if (c.startup_status !== 'NONE') why.push(`REMOVED_UNINITIALISED but startup evidence is ${c.startup_status}: a server may have run, so "never initialised" is not established`);
+    if (sid.state !== 'ABSENT') why.push(`REMOVED_UNINITIALISED but a start-up identity is ${sid.state}`);
     if (ownedBefore.length) why.push('REMOVED_UNINITIALISED but processes tied to the cluster were present');
+    if (signals.length) why.push('REMOVED_UNINITIALISED but a process was signalled');
     if (respBefore !== 'none' && respBefore !== 'foreign') why.push(`REMOVED_UNINITIALISED but the port was answered by an ${respBefore} listener before removal`);
     if (respAfter !== 'none' && respAfter !== 'foreign') why.push(`REMOVED_UNINITIALISED but the port is answered by an ${respAfter} listener after removal`);
   } else {
     if (!Array.isArray(c.shutdown_proof) || !c.shutdown_proof.length) why.push('no shutdown proof recorded');
-    if (c.status === 'STOPPED_VERIFIED_AFTER_ESCALATION' && c.stop_mode !== 'immediate') why.push(`escalation status with stop_mode ${c.stop_mode}`);
-    if (running && !TERMINATION_EVIDENCE.includes(c.termination_evidence)) why.push(`startup evidence is ${c.startup_status} but termination evidence is ${c.termination_evidence ?? 'missing'}: a verified-running server's shutdown is not proven`);
-    if (sawPostmaster && c.termination_evidence !== 'stopped_by_cleanup') why.push('an owned postmaster was running before cleanup but no stop performed by the cleanup is recorded');
+    if (c.status === 'STOPPED_VERIFIED_AFTER_ESCALATION' && !signals.some(sg => sg.signal === 'QUIT')) why.push('escalation status without a recorded SIGQUIT');
+    if (signals.length && (c.stop_mode === 'immediate') !== signals.some(sg => sg.signal === 'QUIT')) why.push(`stop_mode ${c.stop_mode} disagrees with the recorded signals`);
+    const t = c.termination_evidence;
+    if (t === 'stopped_by_cleanup') {
+      if (!identity) why.push('stopped_by_cleanup without a complete start-up identity');
+      if (!signals.length) why.push('stopped_by_cleanup but no signal is recorded');
+    } else if (t === 'stale_pidfile_dead_pid') {
+      if (!identity) why.push('stale_pidfile_dead_pid without a complete start-up identity');
+      else if (!isPid(c.stale_pidfile?.pid) || c.stale_pidfile.alive !== false || c.stale_pidfile.pid !== identity.pid) why.push('stale_pidfile_dead_pid but no dead postmaster.pid for the recorded pid is recorded');
+      if (signals.length || postmastersBefore.length) why.push('stale_pidfile_dead_pid contradicts a running verified postmaster');
+    } else if (t === 'prior_verified_stop') {
+      if (!identity) why.push('prior_verified_stop without a complete start-up identity');
+      if (!/^STOPPED_VERIFIED/.test(c.prior_cleanup_status ?? '')) why.push('prior_verified_stop but no earlier verified stop is recorded');
+      if (c.root_existed_before !== false || signals.length || postmastersBefore.length) why.push('prior_verified_stop contradicts the observed state');
+    } else {
+      if (running) why.push(`startup evidence is ${c.startup_status} but termination evidence is ${t ?? 'missing'}: a verified-running server's shutdown is not proven`);
+      if (signals.length || postmastersBefore.length) why.push('a verified postmaster was involved but termination evidence is not "stopped_by_cleanup"');
+    }
     if (respAfter !== 'none' && respAfter !== 'foreign') why.push(`port is answered by an ${respAfter} listener after cleanup`);
   }
   return why.length ? { ok: false, reasons: [`cleanup status ${c.status} contradicts its own evidence`, ...why] } : { ok: true, reasons: c.notes || [] };
@@ -181,8 +248,30 @@ export function classifyCleanup(profile, rawDir) {
   return { ...head, status: r.ok ? S.PASS : S.FAIL, cleanup_status: c.status, stop_mode: c.stop_mode, reasons: r.reasons };
 }
 
-/** Classify a whole raw evidence directory against a profile. identityOk: result of the independent seal-phase re-verification. */
-export function classifyRun({ profile, rawDir, identity }) {
+export const RUNTIME_RESULTS = ['success', 'failure', 'cancelled', 'skipped'];
+/**
+ * The runtime job's own conclusion is evidence too: a run whose runtime job did not succeed can never be a technical PASS, whatever the
+ * individual check records say. The per-check statuses are left untouched; only the aggregate gate is bounded (it is never upgraded):
+ *   success                  no change (necessary, never sufficient: every classified criterion must still hold)
+ *   failure                  PASSED -> FAILED   an unexplained failure beside all-PASS checks is contradictory evidence;
+ *                            INCONCLUSIVE / FAILED stay (the blocked / failing checks already explain the failed job)
+ *   cancelled | skipped      PASSED -> INCONCLUSIVE   the run did not complete; nothing is established either way
+ *   missing / unrecognised   -> FAILED   fail closed: the provenance of the evidence is undefined
+ */
+export function applyRuntimeResult(result, runtimeResult) {
+  const rr = typeof runtimeResult === 'string' ? runtimeResult : null;
+  const note = m => result.gate_reasons.push(m);
+  if (rr === 'success') return result;
+  if (!RUNTIME_RESULTS.includes(rr)) { result.gate = GATE.FAILED; note(`runtime job result is ${rr === null ? 'missing' : `unrecognised ('${rr}')`}: fail closed`); return result; }
+  if (rr === 'failure') { if (result.gate === GATE.PASSED) { result.gate = GATE.FAILED; note('runtime job concluded failure although no classified check explains it'); } else note('runtime job concluded failure'); return result; }
+  if (result.gate === GATE.PASSED) result.gate = GATE.INCONCLUSIVE;
+  note(`runtime job result is ${rr}: the run did not complete, so it cannot be a technical PASS`);
+  return result;
+}
+
+/** Classify a whole raw evidence directory against a profile. identityOk: result of the independent seal-phase re-verification.
+ *  runtimeResult: the runtime job's conclusion; `undefined` = not applicable (the runtime job's own preliminary classification), anything else is enforced. */
+export function classifyRun({ profile, rawDir, identity, runtimeResult }) {
   const checks = profile.checks.map(check => {
     const rec = readJson(path.join(rawDir, 'checks', check.id, 'result.json'));
     const head = { id: check.id, title: check.title, class: check.class, kind: check.kind, mandatory: check.mandatory };
@@ -221,5 +310,6 @@ export function classifyRun({ profile, rawDir, identity }) {
     if (c.counts) { t.tests_pass += c.counts.expected ?? 0; t.tests_fail += (c.counts.unexpected ?? 0) + (c.counts.flaky ?? 0); t.tests_skip += c.counts.skipped ?? 0; }
   }
   const statusCount = Object.fromEntries(Object.values(S).map(s => [s, checks.filter(c => c.status === s).length]));
-  return { gate, gate_reasons: gateReasons, checks, by_class: byClass, check_status_counts: statusCount };
+  const classified = { gate, gate_reasons: gateReasons, checks, by_class: byClass, check_status_counts: statusCount };
+  return runtimeResult === undefined ? classified : applyRuntimeResult(classified, runtimeResult);
 }

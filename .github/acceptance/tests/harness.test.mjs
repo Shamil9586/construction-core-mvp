@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { validateProfile, loadProfile } from '../lib/profile.mjs';
 import { authorize } from '../lib/authorize.mjs';
 import { verifyIdentity } from '../lib/identity.mjs';
-import { classifyRun, classifyNodeFile, classifyCleanup, evaluateCleanup, parseTapSummary, S, GATE } from '../lib/classify.mjs';
+import { classifyRun, classifyNodeFile, classifyCleanup, evaluateCleanup, applyRuntimeResult, parseTapSummary, S, GATE } from '../lib/classify.mjs';
 import { writeManifest } from '../lib/seal.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -24,19 +24,26 @@ const MAIN = '9bd684806f0d87d802387abb141d9a88d950ceba';
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'gpr2-harness-'));
 const r04 = () => JSON.parse(fs.readFileSync(path.join(PROFILES, 'r04-cp02.json'), 'utf8'));
 // A complete, internally consistent cleanup.json as pg-cluster.sh stop() writes it (verified stop of a running owned postmaster).
+const DATA_DIR = '/var/tmp/gpr2-accept-1-1/data';
+const ID = { pid: 551, start_ticks: '34305', boot_id: 'a1b2c3d4-0000-4000-8000-000000000001', exe: '/usr/lib/postgresql/16/bin/postgres',
+             argv: ['/usr/lib/postgresql/16/bin/postgres', '-D', DATA_DIR, '-c', 'port=54329'], data_directory: DATA_DIR };
+const pm = (over = {}) => ({ pid: 551, role: 'postmaster', cwd: DATA_DIR, start_ticks: ID.start_ticks, boot_id: ID.boot_id, exe: ID.exe, argv: ID.argv, ...over });
 const port = (responder, detail = '') => ({ pg_isready_exit: responder === 'none' ? 2 : 0, responder, detail });
 const cleanupRecord = (over = {}) => ({
-  status: 'STOPPED_VERIFIED', stop_mode: 'fast', stop_method: 'pg_ctl', root: '/var/tmp/gpr2-accept-1-1', root_exists_after: false,
+  status: 'STOPPED_VERIFIED', stop_mode: 'fast', stop_method: 'signal', root: '/var/tmp/gpr2-accept-1-1', root_exists_after: false,
   startup_status: 'RUNNING_VERIFIED', recorded_postmaster_pid: 551, root_existed_before: true, pg_version_present_before: true, postmaster_pid_file_before: true,
-  owned_process_scan: 'ok', owned_processes_before: [{ pid: 551, role: 'postmaster', cwd: '/var/tmp/gpr2-accept-1-1/data' }], owned_processes_after: [],
+  startup_identity: { state: 'COMPLETE', missing: [], recorded: ID },
+  owned_process_scan: 'ok', owned_processes_before: [pm()], owned_processes_after: [],
   ambiguous_processes_before: [], ambiguous_processes_after: [],
+  signals: [{ pid: 551, signal: 'INT', exited: true }], stale_pidfile: null, prior_cleanup_status: null,
   port_before: port('owned', 'listener pid 551 is tied to the root'), port_after: port('none', 'nothing answers'),
-  termination_evidence: 'stopped_by_cleanup', shutdown_proof: ['pg_ctl stop -m fast completed', 'process table: no process is tied to the root after the stop'],
+  termination_evidence: 'stopped_by_cleanup', shutdown_proof: ['verified postmaster pid 551 exited after SIGINT', 'process table: no process is tied to the root after the stop'],
   foreign_instances_untouched: true, problems: [], notes: [], ...over,
 });
 const notStartedRecord = (over = {}) => cleanupRecord({
   status: 'NOT_STARTED', stop_mode: 'none', stop_method: 'none', startup_status: 'NONE', recorded_postmaster_pid: null, root_existed_before: false, pg_version_present_before: false,
-  postmaster_pid_file_before: false, owned_processes_before: [], port_before: port('none'), termination_evidence: 'not_applicable', shutdown_proof: [], ...over,
+  postmaster_pid_file_before: false, startup_identity: { state: 'ABSENT', missing: [], recorded: null }, owned_processes_before: [], signals: [], port_before: port('none'),
+  termination_evidence: 'not_applicable', shutdown_proof: [], ...over,
 });
 const uninitialisedRecord = (over = {}) => notStartedRecord({ status: 'REMOVED_UNINITIALISED', root_existed_before: true, shutdown_proof: ['PG_VERSION absent, no postmaster.pid, no startup evidence, no process tied to the root'], ...over });
 const hasCommit = sha => spawnSync('git', ['-C', REPO, 'cat-file', '-e', `${sha}^{commit}`]).status === 0;
@@ -255,7 +262,7 @@ describe('F-CI-02: PostgreSQL cleanup must fail closed', () => {
     assert.equal(ev(uninitialisedRecord({ owned_processes_before: [{ pid: 551, role: 'postmaster', cwd: '/x' }] })).ok, false);
   });
   test('N1 a verified-running server cannot be closed by absence of files: STOPPED_VERIFIED without termination evidence is FAIL', () => {
-    for (const termination_evidence of ['not_applicable', undefined, 'none']) assert.equal(ev(cleanupRecord({ termination_evidence, owned_processes_before: [], pg_version_present_before: false })).ok, false, String(termination_evidence));
+    for (const termination_evidence of ['not_applicable', undefined, 'none']) assert.equal(ev(cleanupRecord({ termination_evidence, owned_processes_before: [], signals: [], stop_method: 'none', pg_version_present_before: false })).ok, false, String(termination_evidence));
   });
   test('N1 NOT_STARTED while start-up evidence says RUNNING_VERIFIED is FAIL', () => {
     assert.equal(ev(notStartedRecord({ startup_status: 'RUNNING_VERIFIED' })).ok, false);
@@ -310,6 +317,54 @@ describe('F-CI-02: PostgreSQL cleanup must fail closed', () => {
     assert.equal(ev(cleanupRecord({ owned_processes_before: [{ pid: 700, role: 'postmaster_unverified', cwd: '/x' }] })).ok, false);
   });
 
+  // C1 / C2: no signal and no success without a complete, matching start-up identity; shutdown must be structurally evidenced
+  test('S2-S4/S13 an incomplete recorded identity (any field missing or invalid) can never support a success', () => {
+    for (const field of ['pid', 'start_ticks', 'boot_id', 'exe', 'argv', 'data_directory']) {
+      const rec = { ...ID }; delete rec[field];
+      assert.equal(ev(cleanupRecord({ startup_identity: { state: 'COMPLETE', missing: [], recorded: rec } })).ok, false, `COMPLETE claimed without ${field}`);
+      assert.equal(ev(cleanupRecord({ startup_identity: { state: 'INCOMPLETE', missing: [field], recorded: null } })).ok, false, `INCOMPLETE (${field})`);
+    }
+    for (const bad of [{ pid: 0 }, { pid: '551' }, { start_ticks: '' }, { start_ticks: 'abc' }, { boot_id: '' }, { exe: '/bin/true' }, { argv: [] }, { argv: ['/x/postgres', '-D', '/other'] }])
+      assert.equal(ev(cleanupRecord({ startup_identity: { state: 'COMPLETE', missing: [], recorded: { ...ID, ...bad } } })).ok, false, JSON.stringify(bad));
+    assert.equal(ev(cleanupRecord({ startup_identity: { state: 'ABSENT', missing: [], recorded: null } })).ok, false);
+    assert.equal(ev(cleanupRecord({ startup_identity: { state: 'CORRUPT', missing: ['unparsable'], recorded: null } })).ok, false);
+    assert.equal(ev(cleanupRecord({ startup_identity: { state: 'INCOMPLETE', missing: ['boot_id'], recorded: ID } })).ok, false);   // attached identity contradicts the state
+  });
+  test('S5/S13 a "verified" postmaster that differs from the recorded identity in ANY field is FAIL', () => {
+    for (const diff of [{ pid: 552 }, { start_ticks: '1' }, { boot_id: 'other' }, { exe: '/usr/lib/postgresql/15/bin/postgres' }, { argv: [...ID.argv, '-c', 'x=1'] }, { cwd: '/var/tmp/elsewhere' }])
+      assert.equal(ev(cleanupRecord({ owned_processes_before: [pm(diff)], signals: [{ pid: diff.pid ?? 551, signal: 'INT', exited: true }] })).ok, false, JSON.stringify(diff));
+  });
+  test('C2 shutdown must be evidenced structurally, not by text: fabricated textual proof, signals without a verified target, undelivered or illegal signals are FAIL', () => {
+    assert.equal(ev(cleanupRecord({ signals: [], stop_method: 'none', owned_processes_before: [], shutdown_proof: ['pg_ctl stop completed', 'verified postmaster exited'] })).ok, false);   // text only
+    assert.equal(ev(cleanupRecord({ signals: [{ pid: 999, signal: 'INT', exited: true }] })).ok, false);                     // target never verified
+    assert.equal(ev(cleanupRecord({ signals: [{ pid: 551, signal: 'INT', exited: false }] })).ok, false);                   // did not exit
+    assert.equal(ev(cleanupRecord({ signals: [{ pid: 551, signal: 'KILL', exited: true }] })).ok, false);                    // not an allowed signal
+    assert.equal(ev(cleanupRecord({ signals: [], stop_method: 'signal' })).ok, false);                                       // method claims a signal
+    assert.equal(ev(cleanupRecord({ stop_method: 'none' })).ok, false);                                                      // signal sent, method denies it
+    assert.equal(ev(cleanupRecord({ termination_evidence: 'not_applicable' })).ok, false);                                   // postmaster stopped but evidence says otherwise
+    assert.equal(ev(cleanupRecord({ stop_mode: 'immediate' })).ok, false);                                                   // immediate without a SIGQUIT
+    assert.equal(ev(cleanupRecord({ owned_processes_before: [pm(), pm({ pid: 560 })] })).ok, false);                         // second verified postmaster never signalled
+    assert.equal(ev(cleanupRecord({ stop_method: 'none', signals: [], owned_processes_before: [], termination_evidence: 'stopped_by_cleanup' })).ok, false);
+  });
+  test('C2 stale-pid and repeat-cleanup evidence must name the RECORDED pid / an earlier verified stop', () => {
+    const stale = over => cleanupRecord({ stop_mode: 'already_stopped', stop_method: 'none', signals: [], owned_processes_before: [], port_before: port('none'), termination_evidence: 'stale_pidfile_dead_pid', stale_pidfile: { pid: 551, alive: false }, ...over });
+    assert.equal(ev(stale()).ok, true);
+    assert.equal(ev(stale({ stale_pidfile: { pid: 700, alive: false } })).ok, false);   // not the recorded postmaster
+    assert.equal(ev(stale({ stale_pidfile: null })).ok, false);
+    assert.equal(ev(stale({ stale_pidfile: { pid: 551, alive: true } })).ok, false);
+    assert.equal(ev(stale({ startup_identity: { state: 'ABSENT', missing: [], recorded: null } })).ok, false);
+    const prior = over => cleanupRecord({ stop_mode: 'already_stopped', stop_method: 'none', signals: [], root_existed_before: false, owned_processes_before: [], port_before: port('none'), termination_evidence: 'prior_verified_stop', prior_cleanup_status: 'STOPPED_VERIFIED', ...over });
+    assert.equal(ev(prior()).ok, true);
+    assert.equal(ev(prior({ prior_cleanup_status: 'FAILED' })).ok, false); assert.equal(ev(prior({ prior_cleanup_status: null })).ok, false);
+    assert.equal(ev(prior({ root_existed_before: true })).ok, false);
+  });
+  test('C2 NOT_STARTED / REMOVED_UNINITIALISED require NO start-up identity and no signal; an unverified-start STOPPED_VERIFIED with a live postmaster is FAIL', () => {
+    assert.equal(ev(notStartedRecord({ startup_identity: { state: 'COMPLETE', missing: [], recorded: ID } })).ok, false);
+    assert.equal(ev(uninitialisedRecord({ startup_identity: { state: 'INCOMPLETE', missing: ['boot_id'], recorded: null } })).ok, false);
+    assert.equal(ev(uninitialisedRecord({ signals: [{ pid: 551, signal: 'INT', exited: true }], stop_method: 'signal' })).ok, false);
+    assert.equal(ev(cleanupRecord({ startup_status: 'START_ATTEMPTED_UNVERIFIED', startup_identity: { state: 'ABSENT', missing: [], recorded: null } })).ok, false);   // live postmaster, nothing to match it to
+  });
+
   test('gate FAILED (not PASSED, not INCONCLUSIVE) on the original false-positive record', () => {
     const d = tmp(); fs.mkdirSync(path.join(d, 'postgres')); fs.writeFileSync(path.join(d, 'postgres', 'cleanup.json'), JSON.stringify(uninitialisedRecord({ startup_status: 'RUNNING_VERIFIED' })));
     const prof = { profile_id: 't', stage: 'R04', runtime: { requires: ['postgres'] }, checks: [] };
@@ -331,14 +386,87 @@ describe('F-CI-02: PostgreSQL cleanup must fail closed', () => {
   });
   test('P3 verified shutdown is PASS: pg_ctl stop, escalation, direct signal of a verified postmaster, stale pid of a dead server, repeat cleanup', () => {
     assert.equal(ev(cleanupRecord()).ok, true);
-    assert.equal(ev(cleanupRecord({ status: 'STOPPED_VERIFIED_AFTER_ESCALATION', stop_mode: 'immediate' })).ok, true);
-    assert.equal(ev(cleanupRecord({ stop_method: 'signal', pg_version_present_before: false })).ok, true);
-    assert.equal(ev(cleanupRecord({ stop_mode: 'already_stopped', stop_method: 'none', owned_processes_before: [], port_before: port('none'), termination_evidence: 'stale_pidfile_dead_pid', shutdown_proof: ['postmaster.pid named pid 551, which is not alive'] })).ok, true);
-    assert.equal(ev(cleanupRecord({ stop_mode: 'already_stopped', stop_method: 'none', root_existed_before: false, owned_processes_before: [], port_before: port('none'), termination_evidence: 'prior_verified_stop', shutdown_proof: ['earlier cleanup'] })).ok, true);
-    assert.equal(ev(cleanupRecord({ startup_status: 'NONE', termination_evidence: 'not_applicable', owned_processes_before: [], port_before: port('none'), stop_mode: 'already_stopped', stop_method: 'none' })).ok, true);
+    assert.equal(ev(cleanupRecord({ status: 'STOPPED_VERIFIED_AFTER_ESCALATION', stop_mode: 'immediate', signals: [{ pid: 551, signal: 'QUIT', exited: true }] })).ok, true);
+    assert.equal(ev(cleanupRecord({ pg_version_present_before: false })).ok, true);
+    assert.equal(ev(cleanupRecord({ stop_mode: 'already_stopped', stop_method: 'none', signals: [], owned_processes_before: [], port_before: port('none'), termination_evidence: 'stale_pidfile_dead_pid', stale_pidfile: { pid: 551, alive: false }, shutdown_proof: ['postmaster.pid named pid 551, which is not alive'] })).ok, true);
+    assert.equal(ev(cleanupRecord({ stop_mode: 'already_stopped', stop_method: 'none', signals: [], root_existed_before: false, owned_processes_before: [], port_before: port('none'), termination_evidence: 'prior_verified_stop', prior_cleanup_status: 'STOPPED_VERIFIED', shutdown_proof: ['earlier cleanup'] })).ok, true);
+    // a start that was attempted but never produced a server (nothing recorded, nothing running) is a legitimate verified no-op
+    assert.equal(ev(cleanupRecord({ startup_status: 'START_ATTEMPTED_UNVERIFIED', startup_identity: { state: 'ABSENT', missing: [], recorded: null }, termination_evidence: 'not_applicable', owned_processes_before: [], signals: [], port_before: port('none'), stop_mode: 'already_stopped', stop_method: 'none' })).ok, true);
   });
   test('P4 a foreign instance interfering with the cleanup record is FAIL; FAILED stays FAIL with its problems listed', () => {
     const r = ev({ status: 'FAILED', problems: ['a'] }); assert.equal(r.ok, false); assert.deepEqual(r.reasons, ['cleanup status FAILED', 'a']);
+  });
+});
+
+describe('C3: the runtime job conclusion bounds the sealed gate (S14-S16)', () => {
+  // All-PASS evidence + verified cleanup: only the runtime conclusion varies.
+  const profile = { profile_id: 't', stage: 'R04', runtime: { requires: ['postgres'] }, checks: [{ id: 'pure', title: 'p', class: 'PURE_PGLITE', kind: 'node-test', mandatory: true, requires: [], allow_skip: false, file_timeout_seconds: 60, files: [{ path: 'tests/a.test.ts', expect_tests: 2 }] }] };
+  const raw = (pass = true) => {
+    const d = tmp(); fs.mkdirSync(path.join(d, 'checks', 'pure'), { recursive: true }); fs.mkdirSync(path.join(d, 'postgres'));
+    fs.writeFileSync(path.join(d, 'checks', 'pure', 'result.json'), JSON.stringify({ state: 'EXECUTED', files: [{ path: 'tests/a.test.ts', state: 'EXECUTED', exit_code: pass ? 0 : 1, counts: { tests: 2, pass: pass ? 2 : 1, fail: pass ? 0 : 1, cancelled: 0, skipped: 0, todo: 0 } }] }));
+    fs.writeFileSync(path.join(d, 'postgres', 'cleanup.json'), JSON.stringify(notStartedRecord()));
+    return d;
+  };
+  const gate = (rr, dir = raw()) => classifyRun({ profile, rawDir: dir, identity: { ok: true }, runtimeResult: rr });
+  test('S16 success + complete evidence: normal classification, PASSED', () => { const r = gate('success'); assert.equal(r.gate, GATE.PASSED); assert.deepEqual(r.gate_reasons, []); });
+  test('S14 every check PASS but the runtime job failed: gate is not PASSED (FAILED), check statuses are preserved as PASS', () => {
+    const r = gate('failure'); assert.equal(r.gate, GATE.FAILED);
+    assert.ok(r.checks.every(c => c.status === S.PASS)); assert.match(r.gate_reasons.join(' '), /runtime job concluded failure/);
+  });
+  test('S15 cancelled and skipped runtime jobs: not PASSED (INCONCLUSIVE), checks preserved', () => {
+    for (const rr of ['cancelled', 'skipped']) { const r = gate(rr); assert.equal(r.gate, GATE.INCONCLUSIVE, rr); assert.ok(r.checks.every(c => c.status === S.PASS)); assert.match(r.gate_reasons.join(' '), new RegExp(rr)); }
+  });
+  test('S15 missing / unrecognised runtime result fails closed (FAILED)', () => {
+    for (const rr of [null, 'unknown', '', 'Success', 'success ', 'passed', 7]) assert.equal(gate(rr).gate, GATE.FAILED, String(rr));
+  });
+  test('the runtime result never upgrades: a FAILED or INCONCLUSIVE gate stays; a failed job with blocked evidence stays INCONCLUSIVE (explained), not FAILED', () => {
+    assert.equal(gate('success', raw(false)).gate, GATE.FAILED);
+    assert.equal(gate('failure', raw(false)).gate, GATE.FAILED);
+    assert.equal(gate('cancelled', raw(false)).gate, GATE.FAILED);
+    const blocked = tmp(); fs.mkdirSync(path.join(blocked, 'checks', 'pure'), { recursive: true }); fs.mkdirSync(path.join(blocked, 'postgres'));
+    fs.writeFileSync(path.join(blocked, 'checks', 'pure', 'result.json'), JSON.stringify({ state: 'BLOCKED', reason: 'dependency installation outcome: failure' }));
+    fs.writeFileSync(path.join(blocked, 'postgres', 'cleanup.json'), JSON.stringify(notStartedRecord()));
+    assert.equal(gate('success', blocked).gate, GATE.INCONCLUSIVE); assert.equal(gate('failure', blocked).gate, GATE.INCONCLUSIVE); assert.equal(gate('unknown', blocked).gate, GATE.FAILED);
+  });
+  test('undefined means "not applicable" (the runtime job\'s own preliminary classification) and changes nothing', () => {
+    assert.equal(classifyRun({ profile, rawDir: raw(), identity: { ok: true } }).gate, GATE.PASSED);
+    const r = { gate: GATE.PASSED, gate_reasons: [] }; assert.equal(applyRuntimeResult(r, 'failure').gate, GATE.FAILED);
+  });
+  test('seal.mjs CLI enforces it end-to-end, records the conclusion, and verify-evidence rejects a PASS sealed next to a failed runtime job', () => {
+    const { profile: realProfile, sha256 } = loadProfile(path.join(PROFILES, 'r04-cp02.json'));
+    const sealWith = rr => {
+      const d = tmp(); const rawDir = path.join(d, 'raw'); fs.mkdirSync(path.join(rawDir, 'postgres'), { recursive: true });
+      for (const c of realProfile.checks.filter(x => x.kind === 'node-test')) { fs.mkdirSync(path.join(rawDir, 'checks', c.id), { recursive: true });
+        fs.writeFileSync(path.join(rawDir, 'checks', c.id, 'result.json'), JSON.stringify({ state: 'EXECUTED', files: c.files.map(f => ({ path: f.path, state: 'EXECUTED', exit_code: 0, counts: { tests: f.expect_tests, pass: f.expect_tests, fail: 0, cancelled: 0, skipped: 0, todo: 0 } })) })); }
+      const pw = realProfile.checks.find(c => c.kind === 'playwright'); fs.mkdirSync(path.join(rawDir, 'checks', pw.id), { recursive: true });
+      fs.writeFileSync(path.join(rawDir, 'checks', pw.id, 'report.json'), JSON.stringify({ stats: { expected: pw.expect_passed, unexpected: 0, flaky: 0, skipped: 0 }, errors: [], suites: [{ title: 's', specs: Array.from({ length: pw.expect_passed }, (_, i) => ({ title: 't' + i, tests: [{ status: 'expected', results: [{ status: 'passed' }] }] })) }] }));
+      fs.writeFileSync(path.join(rawDir, 'checks', pw.id, 'result.json'), JSON.stringify({ state: 'EXECUTED', exit_code: 0, report: `checks/${pw.id}/report.json` }));
+      fs.writeFileSync(path.join(rawDir, 'postgres', 'cleanup.json'), JSON.stringify(cleanupRecord()));
+      const cand = { sha: R04, tree: realProfile.candidates[0].tree };
+      fs.writeFileSync(path.join(rawDir, 'identity-runtime.json'), JSON.stringify({ ok: true, candidate: cand }));
+      fs.writeFileSync(path.join(d, 'authorization.json'), JSON.stringify({ ok: true, request: { actor: 'Shamil9586', triggering_actor: 'Shamil9586' }, candidate: cand, profile: { sha256 } }));
+      fs.writeFileSync(path.join(d, 'identity-seal.json'), JSON.stringify({ ok: true, candidate: cand }));
+      const out = path.join(d, 'sealed');
+      const args = [path.join(LIB, 'seal.mjs'), '--profile', path.join(PROFILES, 'r04-cp02.json'), '--raw', rawDir, '--authorization', path.join(d, 'authorization.json'), '--identity', path.join(d, 'identity-seal.json'), ...(rr === undefined ? [] : ['--runtime-result', rr]), '--out', out];
+      const run = spawnSync('node', args, { encoding: 'utf8' });
+      const rec = JSON.parse(fs.readFileSync(path.join(out, 'acceptance-result.json'), 'utf8'));
+      const verify = spawnSync('node', [path.join(LIB, 'verify-evidence.mjs'), out, '--profile', path.join(PROFILES, 'r04-cp02.json')], { encoding: 'utf8' });
+      return { run, rec, verify, out };
+    };
+    const ok = sealWith('success');
+    assert.equal(ok.rec.result.gate, GATE.PASSED); assert.equal(ok.run.status, 0, ok.run.stdout + ok.run.stderr); assert.equal(ok.rec.github.runtime_job_result, 'success'); assert.equal(ok.verify.status, 0, ok.verify.stdout);
+    for (const [rr, expected] of [['failure', GATE.FAILED], ['cancelled', GATE.INCONCLUSIVE], ['skipped', GATE.INCONCLUSIVE], [undefined, GATE.FAILED], ['bogus', GATE.FAILED]]) {
+      const x = sealWith(rr);
+      assert.equal(x.rec.result.gate, expected, String(rr)); assert.notEqual(x.run.status, 0, String(rr));
+      assert.ok(x.rec.result.checks.filter(c => c.id !== 'postgres-cleanup').every(c => c.status === S.PASS), 'individual outcomes are preserved: ' + rr);
+      assert.equal(x.verify.status, 0, `${rr}: the sealed package verifies consistently\n${x.verify.stdout}`);
+    }
+    // forging the sealed gate to PASSED next to a failed runtime job is caught by independent re-classification
+    const f = sealWith('failure'); const recFile = path.join(f.out, 'acceptance-result.json');
+    fs.writeFileSync(recFile, fs.readFileSync(recFile, 'utf8').replace(/"gate": "TECHNICAL_GATES_FAILED"/, '"gate": "TECHNICAL_GATES_PASSED"'));
+    writeManifest(f.out, { gate: 'TECHNICAL_GATES_PASSED' });
+    const v = spawnSync('node', [path.join(LIB, 'verify-evidence.mjs'), f.out, '--profile', path.join(PROFILES, 'r04-cp02.json')], { encoding: 'utf8' });
+    assert.equal(v.status, 2, v.stdout); assert.match(v.stdout, /re-classification gives TECHNICAL_GATES_FAILED, sealed result claims TECHNICAL_GATES_PASSED/);
   });
 });
 
@@ -361,10 +489,10 @@ describe('evidence sealing and independent verification', () => {
     const identity = { ok: true, candidate: { sha: R04, tree: profile.candidates[0].tree } };
     fs.writeFileSync(path.join(d, 'identity-seal.json'), JSON.stringify(identity));
     fs.writeFileSync(path.join(d, 'authorization.json'), JSON.stringify({ ok: true, request: { actor: 'Shamil9586', triggering_actor: 'Shamil9586' }, candidate: { sha: R04 } }));
-    const result = classifyRun({ profile, rawDir: path.join(d, 'raw'), identity });
+    const result = classifyRun({ profile, rawDir: path.join(d, 'raw'), identity, runtimeResult: 'success' });
     assert.equal(result.gate, GATE.PASSED);
     assert.equal(result.by_class.NATIVE_POSTGRESQL.tests_pass, 27); assert.equal(result.by_class.PURE_PGLITE.tests_pass, 16); assert.equal(result.by_class.BROWSER_CHROMIUM.tests_pass, 22);
-    fs.writeFileSync(path.join(d, 'acceptance-result.json'), JSON.stringify({ profile: { id: profile.profile_id, sha256 }, git: { candidate_sha: R04, candidate_tree: profile.candidates[0].tree }, github: { run_id: '1', run_attempt: '1', workflow_sha: MAIN }, result }));
+    fs.writeFileSync(path.join(d, 'acceptance-result.json'), JSON.stringify({ profile: { id: profile.profile_id, sha256 }, git: { candidate_sha: R04, candidate_tree: profile.candidates[0].tree }, github: { run_id: '1', run_attempt: '1', workflow_sha: MAIN, runtime_job_result: 'success' }, result }));
     writeManifest(d, { gate: result.gate });
     const verify = (...extra) => spawnSync('node', [path.join(LIB, 'verify-evidence.mjs'), d, '--profile', profFile, ...extra], { encoding: 'utf8' });
     let v = verify('--expect-candidate', R04);

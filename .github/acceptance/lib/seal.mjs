@@ -84,7 +84,8 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
   if (authz && authz.candidate && identity && identity.candidate && authz.candidate.sha !== identity.candidate.sha) problems.push('sealed identity is a different candidate than the authorised one');
   const runtimeIdentity = readJson(path.join(rawDir, 'identity-runtime.json'));
   if (!runtimeIdentity || runtimeIdentity.ok !== true || runtimeIdentity.candidate?.sha !== authz?.candidate?.sha) problems.push('runtime pre-execution identity record missing or does not match the authorised candidate');
-  const result = classifyRun({ profile, rawDir, identity: problems.length ? { ok: false, refusals: [...problems, ...(identity?.refusals || [])] } : identity });
+  const runtimeResult = a['runtime-result'] || 'unknown';   // always enforced; an absent or unrecognised value fails closed (classify.mjs applyRuntimeResult)
+  const result = classifyRun({ profile, rawDir, identity: problems.length ? { ok: false, refusals: [...problems, ...(identity?.refusals || [])] } : identity, runtimeResult });
   if (!rawPresent) { result.gate = result.gate === GATE.FAILED ? GATE.FAILED : GATE.INCONCLUSIVE; result.gate_reasons.push('no raw runtime evidence was uploaded'); }
   const env = readJson(path.join(rawDir, 'environment.json'));
   const server = process.env.GITHUB_SERVER_URL || 'https://github.com';
@@ -96,7 +97,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
            baseline_sha: profile.baseline.sha, baseline_tree: profile.baseline.tree, diff_check: identity?.diff_check ?? null, changed_files_from_baseline: identity?.changed_files_from_baseline ?? null },
     github: { workflow_sha: process.env.GITHUB_SHA || authz?.workflow?.sha || null, workflow_ref: process.env.GITHUB_WORKFLOW_REF || null, run_id: process.env.GITHUB_RUN_ID || authz?.workflow?.run_id || null,
               run_attempt: process.env.GITHUB_RUN_ATTEMPT || authz?.workflow?.run_attempt || null, run_url: repo && process.env.GITHUB_RUN_ID ? `${server}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID}/attempts/${process.env.GITHUB_RUN_ATTEMPT || 1}` : null,
-              actor: authz?.request?.actor ?? null, triggering_actor: authz?.request?.triggering_actor ?? null, runtime_job_result: a['runtime-result'] || 'unknown' },
+              actor: authz?.request?.actor ?? null, triggering_actor: authz?.request?.triggering_actor ?? null, runtime_job_result: runtimeResult },
     environment: env, result, sealed_at: new Date().toISOString(),
     statement: 'Technical gates only. Not an acceptance, not an integration decision; authorises no merge, deployment, migration or LIVE access.',
   };

@@ -233,6 +233,102 @@ if [[ "$rc" != 0 && "$(field 990033 status)" == FAILED && -d $R33/data ]] && ali
 else bad T32 "rc=$rc alive=$(alive "$pm33" && echo y || echo n) $(cat "$EV/990033/postgres/cleanup.json" | head -c 800)"; fi
 sudo -u postgres "$PG_BIN/pg_ctl" -D "$R33/data" -m immediate -w stop >/dev/null 2>&1; sudo rm -rf "$R33"
 
+# ---- CI-safety closeout (C1/C2): NO signal without a COMPLETE, matching start-up identity -----------------------------------------------------
+# One real, running, owned postmaster per case. The recorded identity is damaged in one specific way; the cleanup must then refuse to signal the
+# (genuinely ours) server, keep its data, report FAILED with recovery diagnostics, and the classifier must reject the record. Afterwards the
+# identity is restored and the SAME cleanup stops that server verified — showing the refusal was about the missing proof, not about the server.
+ident_case() {  # $1 run id, $2 label, $3 mutation: "rm" | "rm-all" | "corrupt" | "truncate" | a jq filter applied to identity.json
+  local id="$1" label="$2" mut="$3" R="/var/tmp/gpr2-accept-$1-1" f="$EV/$1/postgres/identity.json" rc pm ok=true why=""
+  pgc "$id" bash "$LIB/pg-cluster.sh" start >"$EV/t$id.log" 2>&1 || { bad "$label" "start failed: $(tail -3 "$EV/t$id.log")"; return; }
+  pm="$(sudo head -1 "$R/data/postmaster.pid")"; cp "$f" "$EV/$id.identity.bak"
+  case "$mut" in
+    rm) rm -f "$f" ;;
+    rm-all) rm -f "$f" "$EV/$id/postgres/pg_ctl-start.log" ;;
+    corrupt) echo 'this is not json' > "$f" ;;
+    truncate) echo '{"status":"RUNNING_VERIFIED"' > "$f" ;;
+    *) jq "$mut" "$EV/$id.identity.bak" > "$f" ;;
+  esac
+  pgc "$id" bash "$LIB/pg-cluster.sh" stop >>"$EV/t$id.log" 2>&1; rc=$?
+  [[ "$rc" != 0 ]] || { ok=false; why+=" rc=0;"; }
+  [[ "$(field "$id" status)" == FAILED ]] || { ok=false; why+=" status=$(field "$id" status);"; }
+  alive "$pm" || { ok=false; why+=" postmaster not alive (signalled?);"; }
+  ! port_free || { ok=false; why+=" port free;"; }
+  sudo test -f "$R/data/postgresql.conf" || { ok=false; why+=" data dir gone;"; }
+  ! sudo grep -q -E 'received (fast|smart|immediate) shutdown request' "$R/server.log" || { ok=false; why+=" server log shows a shutdown request;"; }
+  [[ "$(field "$id" 'signals|length')" == 0 && "$(field "$id" stop_method)" == none ]] || { ok=false; why+=" signals recorded;"; }
+  jq -e '.problems|map(test("never signalled|cannot be proven|Recovery"))|any' "$EV/$id/postgres/cleanup.json" >/dev/null || { ok=false; why+=" no recovery diagnostics;"; }
+  ! classified "$id" || { ok=false; why+=" classifier accepted the record;"; }
+  # recovery path: restore the identity, the same cleanup now stops it verified
+  cp "$EV/$id.identity.bak" "$f"
+  pgc "$id" bash "$LIB/pg-cluster.sh" stop >>"$EV/t$id.log" 2>&1
+  if [[ "$(field "$id" status)" != STOPPED_VERIFIED ]] || alive "$pm" || [[ -e $R ]] || ! classified "$id"; then ok=false; why+=" recovery with restored identity failed ($(field "$id" status));"; fi
+  if [[ "$ok" == true ]]; then ok "$label"; else bad "$label" "$why $(jq -c '{status,problems,startup_identity,signals}' "$EV/$id/postgres/cleanup.json" 2>/dev/null | head -c 500)"; fi
+  if alive "$pm"; then sudo -u postgres "$PG_BIN/pg_ctl" -D "$R/data" -m immediate stop >/dev/null 2>&1; fi
+  sudo rm -rf "$R"
+}
+ident_case 990041 'S1 live postmaster, identity.json AND start evidence absent -> no signal, data kept, FAILED, recovery works' rm-all
+ident_case 990042 'S9 live postmaster, start attempted but identity.json absent -> no signal, data kept, FAILED' rm
+ident_case 990043 'S2 RUNNING_VERIFIED without postmaster_pid -> no signal, FAILED' 'del(.postmaster_pid)'
+ident_case 990044 'S3 RUNNING_VERIFIED without start ticks -> no signal, FAILED' 'del(.postmaster_start_ticks)'
+ident_case 990045 'S3b wrong start ticks -> no signal, FAILED' '.postmaster_start_ticks = "1"'
+ident_case 990046 'S4 RUNNING_VERIFIED without boot id -> no signal, FAILED' 'del(.boot_id)'
+ident_case 990047 'S4b wrong boot id -> no signal, FAILED' '.boot_id = "00000000-0000-4000-8000-000000000000"'
+ident_case 990048 'S5 wrong recorded pid (restarted / reused process) -> no signal, FAILED' '.postmaster_pid = 4194000'
+ident_case 990049 'S3c wrong executable -> no signal, FAILED' '.postmaster_exe = "/usr/lib/postgresql/15/bin/postgres"'
+ident_case 990050 'S3d different startup arguments -> no signal, FAILED' '.postmaster_argv += ["-c", "work_mem=1MB"]'
+ident_case 990051 'S3e missing executable and argv -> no signal, FAILED' 'del(.postmaster_exe, .postmaster_argv)'
+ident_case 990052 'S3f corrupted identity.json -> no signal, FAILED' corrupt
+ident_case 990053 'S3g truncated identity.json -> no signal, FAILED' truncate
+ident_case 990054 'S3h identity naming another data directory -> no signal, FAILED' '.data_directory = "/var/tmp/gpr2-accept-1-1/data"'
+
+# S6 + structured proof: a normal stop records everything the classifier needs, and it is exactly the recorded identity
+pgc 990055 bash "$LIB/pg-cluster.sh" start >"$EV/t55.log" 2>&1
+pm55="$(sudo head -1 /var/tmp/gpr2-accept-990055-1/data/postmaster.pid)"
+pgc 990055 bash "$LIB/pg-cluster.sh" stop >>"$EV/t55.log" 2>&1; rc=$?
+if [[ "$rc" == 0 && "$(field 990055 status)" == STOPPED_VERIFIED && "$(field 990055 startup_identity.state)" == COMPLETE ]] && ! alive "$pm55" && classified 990055 \
+   && jq -e --argjson p "$pm55" '(.signals|length)==1 and .signals[0].pid==$p and .signals[0].exited==true and (.owned_processes_before|map(select(.role=="postmaster"))|length)==1 and .startup_identity.recorded.pid==$p and (.owned_processes_after|length)==0' "$EV/990055/postgres/cleanup.json" >/dev/null; then
+  ok 'S6 complete identity + normal stop: one verified signal, exit evidenced, nothing owned left, classifier PASS'
+else bad S6 "rc=$rc $(head -c 600 "$EV/990055/postgres/cleanup.json")"; fi
+
+# Partial start-up through the real start(): a wrapper dir stands in for the PostgreSQL binaries and fails (or half-succeeds) on cue.
+WRAP=/var/tmp/gpr2-wrapbin
+sudo rm -rf "$WRAP"; sudo install -d -m 0755 "$WRAP"
+for b in postgres pg_isready psql; do [[ -e "$PG_BIN/$b" ]] && sudo ln -s "$PG_BIN/$b" "$WRAP/$b"; done
+printf '#!/bin/bash\n[[ "$(cat "$(dirname "$0")/mode")" == initdb-fail ]] && exit 1\nexec %s/initdb "$@"\n' "$PG_BIN" | sudo tee "$WRAP/initdb" >/dev/null
+printf '#!/bin/bash\nm="$(cat "$(dirname "$0")/mode")"\nfor a in "$@"; do if [[ "$a" == start ]]; then [[ "$m" == start-fail ]] && exit 1; [[ "$m" == start-then-fail ]] && { %s/pg_ctl "$@"; exit 1; }; fi; done\nexec %s/pg_ctl "$@"\n' "$PG_BIN" "$PG_BIN" | sudo tee "$WRAP/pg_ctl" >/dev/null
+sudo chmod 755 "$WRAP/initdb" "$WRAP/pg_ctl"
+wrap_mode() { echo "$1" | sudo tee "$WRAP/mode" >/dev/null; }
+
+# S8 initdb fails after the root was created: incomplete initialisation, no server was ever launched -> safe partial cleanup (REMOVED_UNINITIALISED)
+wrap_mode initdb-fail
+pgc 990056 env GPR2_PG_BIN="$WRAP" bash "$LIB/pg-cluster.sh" start >"$EV/t56.log" 2>&1; rc=$?
+pgc 990056 bash "$LIB/pg-cluster.sh" stop >>"$EV/t56.log" 2>&1; rc2=$?
+if [[ "$rc" != 0 && ! -e "$EV/990056/postgres/identity.json" && "$(jq -r '.server_launch_issued' "$EV/990056/postgres/startup-failure.json")" == false && "$rc2" == 0 && "$(field 990056 status)" == REMOVED_UNINITIALISED && ! -e /var/tmp/gpr2-accept-990056-1 ]] && classified 990056; then
+  ok 'S8 initdb failed: startup-failure.json kept, no RUNNING_VERIFIED, partial root removed as REMOVED_UNINITIALISED'
+else bad S8 "rc=$rc rc2=$rc2 $(cat "$EV/990056/postgres/startup-failure.json" 2>/dev/null) $(head -c 500 "$EV/990056/postgres/cleanup.json")"; fi
+
+# pg_ctl start fails without starting anything: attempted-but-unverified is NOT "never started"; nothing runs -> verified no-op, and never RUNNING_VERIFIED
+wrap_mode start-fail
+pgc 990057 env GPR2_PG_BIN="$WRAP" bash "$LIB/pg-cluster.sh" start >"$EV/t57.log" 2>&1; rc=$?
+pgc 990057 bash "$LIB/pg-cluster.sh" stop >>"$EV/t57.log" 2>&1; rc2=$?
+if [[ "$rc" != 0 && ! -e "$EV/990057/postgres/identity.json" && "$(jq -r '.server_launch_issued' "$EV/990057/postgres/startup-failure.json")" == true && "$rc2" == 0 \
+      && "$(field 990057 startup_status)" == START_ATTEMPTED_UNVERIFIED && "$(field 990057 status)" == STOPPED_VERIFIED && "$(field 990057 'signals|length')" == 0 ]] && classified 990057 && port_free; then
+  ok 'S9b start attempted, failed, nothing running: recorded as START_ATTEMPTED_UNVERIFIED (not NOT_STARTED), verified no-op cleanup, no signal'
+else bad S9b "rc=$rc rc2=$rc2 $(head -c 600 "$EV/990057/postgres/cleanup.json")"; fi
+
+# S9c pg_ctl reports failure but the postmaster DID come up: a live server that was never identity-verified. Never signalled, never deleted.
+wrap_mode start-then-fail
+pgc 990058 env GPR2_PG_BIN="$WRAP" bash "$LIB/pg-cluster.sh" start >"$EV/t58.log" 2>&1; rc=$?
+R58=/var/tmp/gpr2-accept-990058-1; pm58="$(sudo head -1 "$R58/data/postmaster.pid" 2>/dev/null)"
+pgc 990058 bash "$LIB/pg-cluster.sh" stop >>"$EV/t58.log" 2>&1; rc2=$?
+if [[ "$rc" != 0 && ! -e "$EV/990058/postgres/identity.json" && "$rc2" != 0 && "$(field 990058 status)" == FAILED && -n "$pm58" ]] && alive "$pm58" && ! port_free && sudo test -f "$R58/data/postgresql.conf" \
+   && ! sudo grep -q -E 'received (fast|smart|immediate) shutdown request' "$R58/server.log" && [[ "$(field 990058 'signals|length')" == 0 ]] && ! classified 990058 \
+   && jq -e '.problems|map(test("Recovery"))|any' "$EV/990058/postgres/cleanup.json" >/dev/null; then
+  ok 'S9c partial start leaves a live, never-verified postmaster: no signal, data kept, FAILED with recovery diagnostics'
+else bad S9c "rc=$rc rc2=$rc2 $(head -c 700 "$EV/990058/postgres/cleanup.json")"; fi
+if alive "$pm58"; then sudo -u postgres "$PG_BIN/pg_ctl" -D "$R58/data" -m immediate stop >/dev/null 2>&1; fi
+sudo rm -rf "$R58" "$WRAP"
+
 ls -d /var/tmp/gpr2-accept-99* 2>/dev/null && bad leftovers 'cluster roots left behind' || ok 'no cluster roots left behind'
 port_free 54329 && port_free 55432 && ok 'ports 54329 and 55432 free at the end' || bad ports 'a test server is still running'
 printf '%s\n' "${results[@]}" > "$EV/results.txt"

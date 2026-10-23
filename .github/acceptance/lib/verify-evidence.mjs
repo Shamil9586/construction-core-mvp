@@ -54,9 +54,10 @@ const authz = JSON.parse(fs.readFileSync(path.join(dir, 'authorization.json'), '
 if (authz.candidate?.sha !== record.git.candidate_sha) bad('authorization record names a different candidate'); else ok(`authorised by ${authz.request.actor} (triggering ${authz.request.triggering_actor})`);
 
 const identity = JSON.parse(fs.readFileSync(path.join(dir, 'identity-seal.json'), 'utf8'));
-const again = classifyRun({ profile, rawDir: path.join(dir, 'raw'), identity });
+const again = classifyRun({ profile, rawDir: path.join(dir, 'raw'), identity, runtimeResult: record.github?.runtime_job_result ?? null });
 const sealedGate = record.result.gate;
 // The seal can only downgrade (never upgrade) the gate for cross-record problems; an upgrade on re-classification is a mismatch.
+// The runtime job's recorded conclusion is part of that re-classification, so a PASS sealed next to a non-success runtime job cannot verify.
 const rank = { TECHNICAL_GATES_PASSED: 2, INCONCLUSIVE_ENVIRONMENT_BLOCKED: 1, TECHNICAL_GATES_FAILED: 0 };
 if (rank[again.gate] < rank[sealedGate]) bad(`re-classification gives ${again.gate}, sealed result claims ${sealedGate}`); else ok(`re-classification gate ${again.gate} (sealed ${sealedGate})`);
 for (const c of again.checks) {
