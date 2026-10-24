@@ -2,7 +2,7 @@ import { pool } from './db';
 import { Gpr2Hooks, Gpr2CommandContext } from './gpr2-command-guard';
 import { ledgerCommandOf, lookupReplay } from './command-ledger';
 import { resolveR05Owner } from './gpr2-r05-support';
-import { approveWorkTypePublication, createObjectWorkType, rejectWorkTypePublication, requestWorkTypePublication } from './gpr2-r05-catalog';
+import { approveWorkTypePublication, createAreaScope, createObjectWorkType, rejectWorkTypePublication, requestWorkTypePublication } from './gpr2-r05-catalog';
 import { CommandResult, Gpr2Error } from '../../../packages/domain/gpr2';
 
 /**
@@ -14,7 +14,8 @@ export const R05_HANDLERS: Readonly<Record<string, (ctx: Gpr2CommandContext) => 
     'work-type.create': createObjectWorkType,
     'work-type.publication.request': requestWorkTypePublication,
     'work-type.publication.approve': approveWorkTypePublication,
-    'work-type.publication.reject': rejectWorkTypePublication
+    'work-type.publication.reject': rejectWorkTypePublication,
+    'area-scope.create': createAreaScope
 });
 
 export const R05_HOOKS: Gpr2Hooks = Object.freeze({

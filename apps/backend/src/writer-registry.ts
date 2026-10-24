@@ -101,6 +101,10 @@ export const WRITERS = {
     'gpr2-r05-catalog.ts#requestWorkTypePublication': S('R05a publication proposal for an object WorkType; creates no Work'),
     'gpr2-r05-catalog.ts#approveWorkTypePublication': S('R05a Admin decision on a request of an object (lock taken on the request\'s object); rewrites no Work reference'),
     'gpr2-r05-catalog.ts#rejectWorkTypePublication': S('R05a Admin decision on a request of an object; the WorkType row is not written'),
+    'gpr2-r05-catalog.ts#createAreaScope': S('R05b object AreaScope (spatial identity); creates no Work'),
+    'gpr2-r05-catalog.ts#registerObjectFinishType': S('R05b object finish registry entry; creates no Work'),
+    'gpr2-r05-legacy.ts#recordLegacyFinishMapping': S('R05b append-only legacy finish mapping of an object; rewrites no legacy id, WEU or Work'),
+    'gpr2-r05-legacy.ts#recordLegacyWorkClassification': S('R05b append-only classification of a historical Work; the Work, its WEUs and facts are not written'),
     // ---- imports and files ------------------------------------------------------------------------------------------------------
     'importer.ts#commitImport': N('creates NEW objects (with their contractor link and monthly plan) from an import report; it creates no Work and touches no existing object, and nothing can contend for an object that does not exist yet'),
     'importer.ts#previewImport': N('writes an import report only; creates no object, Work or fact'),

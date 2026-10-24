@@ -85,7 +85,7 @@ test('A29 upgrade from the OLD runner\'s ledger: its rows stay, are reported UNV
     // --plan: nothing applied, no lock, no ledger change — even though the checksum column does not exist yet
     // R04 CP-02 (REG-02): R04 added 028 (additive expand: five DROP NOT NULL). The list is still pinned, and checked against the repository chain.
     // GPR-2 R05 adds 029+ (additive: new columns, tables, indexes and guards; no row of an existing table rewritten).
-    const AFTER_OLD_RUNNER = [26, 27, 28, 29];
+    const AFTER_OLD_RUNNER = [26, 27, 28, 29, 30];
     const newer = runner.readMigrationFiles('infra').filter((f: any) => f.version > 25);
     assert.deepEqual(newer.map((f: any) => f.version), AFTER_OLD_RUNNER, 'the migrations the old runner never knew');
     assert.deepEqual(newer.map((f: any) => f.class), AFTER_OLD_RUNNER.map(() => 'additive'), 'none of them is a contract step');

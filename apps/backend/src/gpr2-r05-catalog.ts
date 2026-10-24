@@ -4,8 +4,12 @@ import { runCommandTx } from './tx-context';
 import { coordinate } from './coordination-lock';
 import { ledgered, mapR05DbError } from './gpr2-r05-support';
 import type { Gpr2CommandContext } from './gpr2-command-guard';
+import { Actor } from './security';
+import { runLedgered } from './command-ledger';
+import { authorizeObjectCatalog } from './gpr2-r05-legacy';
 import {
-    CommandResult, Gpr2Error, WORK_TYPE_PUBLICATION_REQUEST, assertAggregateVersion, parseR05Payload, publicationRequestPayload, transitionForEndpoint, workTypeCreatePayload
+    CommandResult, Gpr2Error, WORK_TYPE_PUBLICATION_REQUEST, areaScopeCreatePayload, assertAggregateVersion, commandFingerprint, parseR05Payload, publicationRequestPayload,
+    transitionForEndpoint, workTypeCreatePayload, CODE_PATTERN
 } from '../../../packages/domain/gpr2';
 
 /**
@@ -116,6 +120,60 @@ export async function rejectWorkTypePublication(ctx: Gpr2CommandContext): Promis
                 WHERE tenant_id=$1 AND id=$2 RETURNING *`, [a.tenantId, req.id, a.id, reason]);
             await audit(c, a, 'WorkTypePublicationRequest', req.id, 'REJECT', req, decided);
             return ok([req.id], decided.version); // the WorkType row is not written: a rejection leaves the object type as it was (D05)
+        })).result;
+    }).catch(mapR05DbError);
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// GPR-2 R05b — AreaScopes and the object finish registry (TD §4.1, §5.2; D03, D20).
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+/**
+ * area-scope.create — РП, own object. A stable spatial identity: any kind may sit under any kind (no fixed building → section → floor → room
+ * hierarchy is imposed on an object), the parent must be an AreaScope of the SAME object, and a measured child can never make its parent's children
+ * measure more of the same unit than the parent (PostgreSQL checks it under a lock on the parent row — infra/030).
+ */
+export async function createAreaScope(ctx: Gpr2CommandContext): Promise<CommandResult> {
+    const d = parseR05Payload(areaScopeCreatePayload, ctx.command.payload);
+    return runCommandTx(async tx => {
+        await coordinate(tx.c, 'gpr2-r05-catalog.ts#createAreaScope', ctx.actor.tenantId, { object: ctx.objectId! });
+        const c = tx.c;
+        return (await ledgered(c, ctx, async a => {
+            if (d.parentId && !await one(c, 'SELECT id FROM object_area_scopes WHERE tenant_id=$1 AND object_id=$2 AND id=$3', [a.tenantId, ctx.objectId, d.parentId]))
+                throw new Gpr2Error('CROSS_SCOPE_REFERENCE', { violations: [{ path: 'parentId', rule: 'REFERENCE_NOT_IN_SCOPE' }] });
+            const row = await one(c, `INSERT INTO object_area_scopes(tenant_id,object_id,parent_id,kind,code,name,measure_quantity,measure_unit,created_by)
+                VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`, [a.tenantId, ctx.objectId, d.parentId ?? null, d.kind, d.code, d.name, d.measureQuantity ?? null, d.measureUnit ?? null, a.id]);
+            await audit(c, a, 'AreaScope', row.id, 'CREATE', null, row);
+            return ok([row.id], row.version);
+        })).result;
+    }).catch(mapR05DbError);
+}
+
+/** Inside a caller's transaction: a new entry of the object's finish registry. The code is a stable identity, unique in the object for ever. */
+export async function insertObjectFinishType(c: any, a: Actor, objectId: string, input: { code: string; name: string }) {
+    const row = await one(c, 'INSERT INTO object_finish_types(tenant_id,object_id,code,name,created_by) VALUES($1,$2,$3,$4,$5) RETURNING *', [a.tenantId, objectId, input.code, input.name, a.id]);
+    await audit(c, a, 'ObjectFinishType', row.id, 'CREATE', null, row);
+    return row;
+}
+
+/**
+ * Service entry (no own route: the HTTP path is finish-system.upsert, R05c): register an object finish type on its own — "Тип №1", "Тип №2" … —
+ * so a registry entry can exist before its first system version. Same authorisation as the object catalogue commands; idempotent with a key.
+ */
+export async function registerObjectFinishType(actor: Actor, objectId: string, input: { code: string; name: string }, idempotencyKey: string | null = null): Promise<CommandResult> {
+    if (typeof input?.code !== 'string' || !CODE_PATTERN.test(input.code) || typeof input?.name !== 'string' || !input.name.trim())
+        throw new Gpr2Error('VALIDATION_FAILED', { violations: [{ path: 'code', rule: 'FIELD_TYPE' }] });
+    const payload = { code: input.code, name: input.name.trim() };
+    return runCommandTx(async tx => {
+        await coordinate(tx.c, 'gpr2-r05-catalog.ts#registerObjectFinishType', actor.tenantId, { object: objectId });
+        const c = tx.c;
+        let current: Actor;
+        return (await runLedgered(c, {
+            tenantId: actor.tenantId, actorId: actor.id, commandKind: 'finish-type.register', scopeId: objectId.toLowerCase(), idempotencyKey,
+            fingerprint: commandFingerprint({ commandKind: 'finish-type.register', payload, expectedVersion: null, expectedScopeVersion: null, sourceVersions: {} })
+        }, {
+            authorize: async () => { current = await authorizeObjectCatalog(c, actor, objectId, true); },
+            execute: async () => { const row = await insertObjectFinishType(c, current, objectId, payload); return ok([row.id], row.version); }
         })).result;
     }).catch(mapR05DbError);
 }
