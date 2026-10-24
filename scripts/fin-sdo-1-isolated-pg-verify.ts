@@ -19,6 +19,8 @@ async function expectDbRefusal(label:string,sql:string,args:any[]=[]){
    await c.query('BEGIN');
    try{
      await c.query(sql,args);
+     // Constraint triggers are DEFERRABLE: an invalid mutation may only fail at COMMIT.
+     await c.query('COMMIT');
      failed++;
      console.error('FAIL (unexpected SQL success): '+label);
    }catch(e:any){
