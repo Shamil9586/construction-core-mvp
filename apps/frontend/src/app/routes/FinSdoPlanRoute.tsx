@@ -39,6 +39,9 @@ export function FinSdoPlanRoute(){
  const [book,setBook]=useState<Book|null>(null);
  const [lines,setLines]=useState<Line[]>([]);
  const [bufferId,setBufferId]=useState('');
+ const [bufferVersion,setBufferVersion]=useState(0);
+ const [dirty,setDirty]=useState(false);
+ const [savedBuffers,setSavedBuffers]=useState<Array<{id:string;version:number;total_rub:string;line_count:number}>>([]);
  const [effectiveOn,setEffectiveOn]=useState(new Date().toISOString().slice(0,10));
  const [reason,setReason]=useState('');
  const [historicalName,setHistoricalName]=useState('');
@@ -49,7 +52,8 @@ export function FinSdoPlanRoute(){
  const [showHistory,setShowHistory]=useState(false);
 
  const refresh=useCallback(async()=>{
-   const [directory,quarterBook]=await Promise.all([api('subjects'),api('quarter?year='+year+'&quarter='+quarter)]);
+   const [directory,quarterBook,buffers]=await Promise.all([api('subjects'),api('quarter?year='+year+'&quarter='+quarter),editable?api('buffers?year='+year+'&quarter='+quarter):Promise.resolve([])]);
+   setSavedBuffers(buffers);
    setDir(directory);setBook(quarterBook);
    const restored:Line[]=(quarterBook.lines??[]).map((r:any)=>({
      key:key(),coreObjectId:r.core_object_id??undefined,historicalSubjectId:r.historical_subject_id??undefined,
@@ -58,20 +62,37 @@ export function FinSdoPlanRoute(){
      amountMln:r.amount_rub?convertRub(r.amount_rub):'0.00'
    }));
    setLines(restored);
-   setBufferId('');
- },[year,quarter]);
+   setBufferId('');setBufferVersion(0);setDirty(false);
+ },[year,quarter,editable]);
  useEffect(()=>{if(!allowed)return;let active=true;setError('');refresh().catch(e=>{if(active)setError(e.message)});return()=>{active=false}},[allowed,refresh]);
  if(!allowed)return <RouteForbidden label="Финансовые планы недоступны для вашей роли." />;
- const patch=(id:string,p:Partial<Line>)=>setLines(old=>old.map(x=>x.key===id?{...x,...p}:x));
+ const patch=(id:string,p:Partial<Line>)=>{setDirty(true);setLines(old=>old.map(x=>x.key===id?{...x,...p}:x));};
  async function task(fn:()=>Promise<any>,ok:string){
    setBusy(true);setError('');setMessage('');
    try{await fn();setMessage(ok)}catch(e:any){setError(e?.message??'Ошибка записи')}finally{setBusy(false)}
  }
  const saveBuffer=()=>task(async()=>{
-   const s=await api('buffers','POST',{year,quarter,expectedBookVersion:book?.bookVersion??0,
-     lines:lines.map(({key:_,...r})=>({...r,amountMln:r.amountMln.replace(',','.')}))});
-   setBufferId(s.bufferId);
+   const payload={year,quarter,expectedBookVersion:book?.bookVersion??0,
+     lines:lines.map(({key:_,...r})=>({...r,amountMln:r.amountMln.replace(',','.')}))};
+   const s=bufferId
+     ?await api('buffers/'+encodeURIComponent(bufferId),'PATCH',{...payload,expectedBufferVersion:bufferVersion})
+     :await api('buffers','POST',payload);
+   setBufferId(s.bufferId);setBufferVersion(s.version);setDirty(false);
+   const available=await api('buffers?year='+year+'&quarter='+quarter);
+   setSavedBuffers(available);
  },'Технический ввод сохранён; в действующем плане не учтено.');
+ const loadBuffer=(id:string)=>task(async()=>{
+   const v=await api('buffers/'+encodeURIComponent(id));
+   if(Number(v.buffer.plan_year)!==year||Number(v.buffer.plan_quarter)!==quarter)
+      throw Error('Технический буфер другого квартала');
+   setLines((v.lines??[]).map((r:any)=>({
+      key:key(),coreObjectId:r.core_object_id??undefined,historicalSubjectId:r.historical_subject_id??undefined,
+      partyKind:r.party_kind,partyId:r.core_contractor_id??r.historical_party_id??undefined,
+      contractKind:r.contract_kind,contractNumber:r.contract_number??undefined,
+      amountMln:convertRub(r.amount_rub)
+   })));
+   setBufferId(id);setBufferVersion(Number(v.buffer.version));setDirty(false);
+ },'Технический ввод восстановлен.');
  const commit=()=>task(async()=>{
    if(!bufferId)throw Error('Сначала сохраните технический ввод');
    await api('commit','POST',{year,quarter,bufferId,expectedBookVersion:book?.bookVersion??0,effectiveOn,reason:reason||undefined,idempotencyKey:key()});
@@ -101,9 +122,10 @@ export function FinSdoPlanRoute(){
      {message&&<p role="status">{message}</p>}
      <h2>Действующий квартальный план</h2>
      {book?.status==='NO_PLAN'?<p>План ещё не записан (NO_PLAN). Нулевая строка не является действующим планом.</p>:
-      <p>Первоначальный: <strong>{moneyRender(book?.original)}</strong> · Текущий: <strong>{moneyRender(book?.current)}</strong> · версия {book?.bookVersion??'—'}</p>}
+      <p>Первоначальный: <strong>{book?.original?convertRub(book.original)+' млн ₽':'—'}</strong> · Текущий: <strong>{book?.current?convertRub(book.current)+' млн ₽':'—'}</strong> · версия {book?.bookVersion??'—'}</p>}
      {editable&&dir&&<>
        <h2>Незавершённый ввод — в плане не учтено</h2>
+       {savedBuffers.length>0&&<section aria-label="Сохранённые технические буферы"><p>Ваши сохранённые черновые вводы этого квартала:</p>{savedBuffers.slice(0,10).map(v=><button type="button" key={v.id} disabled={busy} onClick={()=>loadBuffer(v.id)} style={{marginRight:6,marginBottom:6}}>Продолжить {v.line_count} стр. / {convertRub(v.total_rub)} млн ₽</button>)}</section>}
        <p>Строки заполняются постепенно; действующая версия записывается только целиком, если общий итог ≥ 10,00 млн ₽.</p>
        <div style={{overflowX:'auto'}}>
        <table style={{width:'100%',borderCollapse:'collapse'}}>
@@ -124,15 +146,15 @@ export function FinSdoPlanRoute(){
          <td><input aria-label="Номер договора" style={{...formInput,width:150}} placeholder="Не указан" value={line.contractNumber??''}
            onChange={e=>patch(line.key,{contractKind:e.target.value.trim()?'KNOWN':'NOT_SPECIFIED',contractNumber:e.target.value||undefined})}/></td>
          <td><input aria-label="Сумма млн ₽" style={{...formInput,width:120}} inputMode="decimal" value={line.amountMln} onChange={e=>patch(line.key,{amountMln:e.target.value})}/></td>
-         <td><button type="button" onClick={()=>setLines(x=>x.filter(v=>v.key!==line.key))}>Удалить из ввода</button></td>
+         <td><button type="button" onClick={()=>{setDirty(true);setLines(x=>x.filter(v=>v.key!==line.key));}}>Удалить из ввода</button></td>
        </tr>)}</tbody></table></div>
-       <button type="button" disabled={busy} onClick={()=>setLines(x=>[...x,newLine()])}>Добавить строку</button>
+       <button type="button" disabled={busy} onClick={()=>{setDirty(true);setLines(x=>[...x,newLine()]);}}>Добавить строку</button>
        <p>Общий итог ввода: <strong>{totalMln(lines)} млн ₽</strong> {belowMin?'— ниже порога 10,00 млн ₽':''}</p>
        <p><button type="button" disabled={busy||!lines.length} onClick={saveBuffer}>Сохранить незавершённый ввод</button>
-       {' '}<label>ID буфера <input aria-label="ID буфера" style={{...formInput,width:280}} value={bufferId} onChange={e=>setBufferId(e.target.value)}/></label></p>
+       {' '}<small>Буфер: {bufferId?bufferId+' (v'+bufferVersion+')':'ещё не сохранён'}{dirty?' · Есть несохранённые изменения':''}</small></p>
        <label>Дата действия <input type="date" value={effectiveOn} onChange={e=>setEffectiveOn(e.target.value)}/></label>
        {' '}<label>Причина <input style={formInput} value={reason} onChange={e=>setReason(e.target.value)} placeholder={book?.status==='ACTIVE'?'Обязательна для корректировки':'Первоначальный план'}/></label>
-       <p><button type="button" disabled={busy||belowMin||!bufferId} onClick={commit}>Записать квартальный план</button></p>
+       <p><button type="button" disabled={busy||belowMin||!bufferId||dirty} onClick={commit}>Записать квартальный план</button></p>
        <h2>Исторические данные</h2>
        <label>Наименование объекта <input style={formInput} value={historicalName} onChange={e=>setHistoricalName(e.target.value)}/></label>
        {' '}<button type="button" disabled={busy||!historicalName.trim()} onClick={historical}>Создать исторический объект</button>

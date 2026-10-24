@@ -32,7 +32,15 @@ async function main(){
  let b=await service.saveBuffer(a,{...q,expectedBookVersion:0,lines:[line(h1.id,'6.00')]});
  let noPlan=await service.readBook(a,q);
  assert.equal(noPlan.status,'NO_PLAN');report('FIN1-06 technical buffer 6.00 is not official');
- b=await service.saveBuffer(a,{...q,expectedBookVersion:0,lines:[line(h1.id,'6.00'),line(h2.id,'4.00')]});
+ b=await service.updateBuffer(a,b.bufferId,{...q,expectedBookVersion:0,expectedBufferVersion:1,
+   lines:[line(h1.id,'6.00'),line(h2.id,'4.00')]});
+ assert.equal(b.version,2);
+ assert.equal((await service.readBuffer(a,b.bufferId)).lines.length,2);
+ assert.ok((await service.listBuffers(a,q)).some((v:any)=>v.id===b.bufferId));
+ report('FIN1-06 persisted private buffer extends from 6.00 to 6+4.00 with CAS');
+ await expectCode(()=>service.updateBuffer(a,b.bufferId,{...q,expectedBookVersion:0,expectedBufferVersion:1,
+   lines:[line(h1.id,'6.00'),line(h2.id,'4.00')]}),'FIN_BUFFER_CAS_CONFLICT');
+ report('FIN1-15 technical buffer stale update denied');
  const attempt={...q,expectedBookVersion:0,bufferId:b.bufferId,effectiveOn:'2027-01-01',idempotencyKey:randomUUID()};
  const saved=await service.commitBuffer(a,attempt);
  assert.equal(saved.totalRub,'10000000.00');

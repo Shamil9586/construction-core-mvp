@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Query, Param, Body, Req, Inject, HttpCode } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Query, Param, Body, Req, Inject, HttpCode } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { z } from 'zod';
 import { authenticate } from '../../security';
@@ -18,6 +18,7 @@ const line=z.object({
   amountMln:money
 }).strict();
 const buffer=period.extend({expectedBookVersion:z.number().int().min(0),lines:z.array(line).min(1).max(1000)}).strict();
+const bufferPatch=buffer.extend({expectedBufferVersion:z.number().int().min(1)}).strict();
 const commit=period.extend({bufferId:uuid,expectedBookVersion:z.number().int().min(0),effectiveOn:z.iso.date(),reason:z.string().trim().min(1).max(300).optional(),idempotencyKey:key}).strict();
 
 @Controller('fin-sdo-1')
@@ -47,6 +48,16 @@ export class FinSdo1Controller {
  saveBuffer(@Req()req:any,@Body()body:any){
   const b=buffer.parse(body);
   return authenticate(req).then(a=>this.svc.saveBuffer(a,b));
+ }
+ @Get('buffers')
+ listBuffers(@Req()req:any,@Query('year') y:string,@Query('quarter') q:string){
+   const year=z.coerce.number().int().parse(y),quarter=z.coerce.number().int().parse(q);
+   return authenticate(req).then(a=>this.svc.listBuffers(a,{year,quarter}));
+ }
+ @Patch('buffers/:id')
+ patchBuffer(@Req()req:any,@Param('id') id:string,@Body()body:any){
+   const b=bufferPatch.parse(body);
+   return authenticate(req).then(a=>this.svc.updateBuffer(a,uuid.parse(id),b));
  }
  @Get('buffers/:id')
  readBuffer(@Req()req:any,@Param('id') id:string){

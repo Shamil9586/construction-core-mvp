@@ -137,7 +137,42 @@ export class FinSdo1Service {
         await c.query('INSERT INTO fin_plan_edit_session_lines(tenant_id,edit_session_id,subject_id,party_scope_id,contract_scope_id,amount_rub) VALUES($1,$2,$3,$4,$5,$6::numeric)',[a.tenantId,session.id,s.subject_id,s.party_scope_id,s.contract_scope_id,rub(v.amountMln)]);
       }
       const total=await one(c,'SELECT coalesce(sum(amount_rub),0)::text AS total FROM fin_plan_edit_session_lines WHERE tenant_id=$1 AND edit_session_id=$2',[a.tenantId,session.id]);
-      return {bufferId:session.id,uncommitted:true,totalRub:total.total};
+      return {bufferId:session.id,version:1,uncommitted:true,totalRub:total.total};
+    });
+  }
+  async listBuffers(a:Actor,q:Quarter){
+    writeRole(a);quarter(q.year,q.quarter);
+    return runSnapshotRead(async tx=>query(tx.c,
+      'SELECT s.id,s.version,s.expected_book_version,s.updated_at,coalesce(sum(l.amount_rub),0)::text AS total_rub,count(l.id)::int AS line_count FROM fin_plan_edit_sessions s LEFT JOIN fin_plan_edit_session_lines l ON l.tenant_id=s.tenant_id AND l.edit_session_id=s.id WHERE s.tenant_id=$1 AND s.actor_id=$2 AND s.plan_year=$3 AND s.plan_quarter=$4 GROUP BY s.id ORDER BY s.updated_at DESC,s.id LIMIT 30',
+      [a.tenantId,a.id,q.year,q.quarter]
+    ));
+  }
+  async updateBuffer(a:Actor,id:string,b:BufferInput&{expectedBufferVersion:number}){
+    writeRole(a);quarter(b.year,b.quarter);
+    if(!Number.isInteger(b.expectedBufferVersion)||b.expectedBufferVersion<1||!Number.isInteger(b.expectedBookVersion)||b.expectedBookVersion<0||b.lines.length>1000)
+      throw new BadRequestException('FIN_BUFFER_INVALID');
+    b.lines.forEach(v=>rub(v.amountMln));
+    return runCommandTx(async tx=>{
+      const c=tx.c;await this.checkCurrentWriter(c,a);
+      const session=await one(c,'SELECT * FROM fin_plan_edit_sessions WHERE tenant_id=$1 AND actor_id=$2 AND id=$3 FOR UPDATE',[a.tenantId,a.id,id]);
+      if(!session)throw new NotFoundException('FIN_BUFFER_NOT_FOUND');
+      if(Number(session.version)!==b.expectedBufferVersion)error('FIN_BUFFER_CAS_CONFLICT');
+      if(Number(session.plan_year)!==b.year||Number(session.plan_quarter)!==b.quarter||Number(session.expected_book_version)!==b.expectedBookVersion)
+        error('FIN_BUFFER_QUARTER_MISMATCH');
+      const current=await one(c,"SELECT version FROM fin_quarter_plan_books WHERE tenant_id=$1 AND currency_code='RUB' AND plan_year=$2 AND plan_quarter=$3",[a.tenantId,b.year,b.quarter]);
+      if(Number(current?.version??0)!==b.expectedBookVersion)error('FIN_QUARTER_BOOK_VERSION_CONFLICT');
+      const seen=new Set<string>(),rows:({subject_id:string;party_scope_id:string;contract_scope_id:string;amount_rub:string})[]=[];
+      for(const v of b.lines){
+        const ids=await this.resolveLine(c,a,v),key=canonical(ids);
+        if(seen.has(key))throw new BadRequestException('FIN_DUPLICATE_PLAN_LINE');
+        seen.add(key);rows.push({...ids,amount_rub:rub(v.amountMln)});
+      }
+      await c.query('DELETE FROM fin_plan_edit_session_lines WHERE tenant_id=$1 AND edit_session_id=$2',[a.tenantId,id]);
+      for(const r of rows)await c.query('INSERT INTO fin_plan_edit_session_lines(tenant_id,edit_session_id,subject_id,party_scope_id,contract_scope_id,amount_rub) VALUES($1,$2,$3,$4,$5,$6::numeric)',[a.tenantId,id,r.subject_id,r.party_scope_id,r.contract_scope_id,r.amount_rub]);
+      const updated=await c.query('UPDATE fin_plan_edit_sessions SET version=version+1,updated_at=now() WHERE tenant_id=$1 AND actor_id=$2 AND id=$3 AND version=$4',[a.tenantId,a.id,id,b.expectedBufferVersion]);
+      if(updated.rowCount!==1)error('FIN_BUFFER_CAS_CONFLICT');
+      const result=await one(c,'SELECT coalesce(sum(amount_rub),0)::text AS total FROM fin_plan_edit_session_lines WHERE tenant_id=$1 AND edit_session_id=$2',[a.tenantId,id]);
+      return {bufferId:id,version:b.expectedBufferVersion+1,uncommitted:true,totalRub:result.total};
     });
   }
   async readBuffer(a:Actor,id:string){
@@ -145,7 +180,9 @@ export class FinSdo1Service {
     return runSnapshotRead(async tx=>{
       const b=await one(tx.c,'SELECT id,plan_year,plan_quarter,expected_book_version FROM fin_plan_edit_sessions WHERE tenant_id=$1 AND actor_id=$2 AND id=$3',[a.tenantId,a.id,id]);
       if(!b)throw new NotFoundException('FIN_BUFFER_NOT_FOUND');
-      return {buffer:b,lines:await query(tx.c,'SELECT subject_id,party_scope_id,contract_scope_id,amount_rub::text AS amount_rub FROM fin_plan_edit_session_lines WHERE tenant_id=$1 AND edit_session_id=$2',[a.tenantId,id])};
+      return {buffer:b,lines:await query(tx.c,
+        'SELECT l.subject_id,l.party_scope_id,l.contract_scope_id,l.amount_rub::text AS amount_rub,s.origin,s.core_object_id,s.historical_subject_id,p.kind AS party_kind,p.core_contractor_id,p.historical_party_id,k.kind AS contract_kind,k.number AS contract_number FROM fin_plan_edit_session_lines l JOIN fin_subjects s ON s.tenant_id=l.tenant_id AND s.id=l.subject_id JOIN fin_party_scopes p ON p.tenant_id=l.tenant_id AND p.id=l.party_scope_id JOIN fin_contract_scopes k ON k.tenant_id=l.tenant_id AND k.id=l.contract_scope_id WHERE l.tenant_id=$1 AND l.edit_session_id=$2 ORDER BY l.id',
+        [a.tenantId,id])};
     });
   }
   async readBook(a:Actor,b:Quarter,knownAt?:string){
