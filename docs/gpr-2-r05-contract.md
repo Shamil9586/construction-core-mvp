@@ -5,6 +5,9 @@ SHA-256 before work began): Technical Design `b80ba7315509b9a011b87a45957f7e9a3e
 `a4c27d19a731b0d32a70c75a14af4f04c289ff93007d4ed78fe308a6ab434f76`. Decisions D01, D03, D05, D06, D09, D20, C02/C03/C06; scenarios A01, A03, A07 (partial —
 see limits), A12, A19, A30. No LIVE change, no R06+ behaviour. Status: **IMPLEMENTED — PENDING INDEPENDENT REVIEW**.
 
+Corrective (same day): the first independent review (GPT, `GPT_REVIEW_20261024`, findings R05-GPT-B01…B05) is answered by the additive migration
+`033_gpr2_r05_corrective.sql` and a preview rule (B04); migrations 029–032 are unchanged. Status of the corrective: **IMPLEMENTED — PENDING GPT RE-REVIEW**.
+
 ## Surface
 
 All commands go through the R01 guard (`runGpr2Command`: permission → object scope → nested resource → envelope → replay → execute) and are mounted only
@@ -34,10 +37,11 @@ New error codes (`errors.ts`): 409 `STALE_PREVIEW`, `STALE_SOURCE_VERSION`; 422 
 
 | Migration | Adds |
 |---|---|
-| `029_gpr2_r05a_work_type_scope.sql` | `work_types.scope/object_id/origin_object_id/alias_of_work_type_id/created_by`, `work_type_publication_requests`, scope/alias/unit/use/origin guards (no new index on an existing table) |
+| `029_gpr2_r05a_work_type_scope.sql` | `work_types.scope/object_id/origin_object_id/alias_of_work_type_id/created_by`, `work_type_publication_requests`, scope/alias/unit/use/origin guards, and ONE partial index on the existing `work_types`: `work_types_object_idx (tenant_id, object_id) WHERE object_id IS NOT NULL` (non-unique; `object_id` is a column 029 itself adds, so no pre-R05 query references it and no existing plan can use the index — the full regression of the previous candidate ran with it). The 029 header sentence "no index is added to work_types" is inaccurate (R05-GPT-B05); 029 is not edited, its checksum stands. No index was added to `works`. |
 | `030_gpr2_r05b_finish_area_legacy.sql` | `object_finish_types`, `object_area_scopes`, `legacy_finish_mappings`, `legacy_work_classifications` |
 | `031_gpr2_r05c_templates.sql` | `finish_templates`, `finish_template_versions`, `finish_template_stages`, `object_finish_system_versions`, `finish_stage_occurrences`, `finish_stage_exclusions` |
 | `032_gpr2_r05d_work_generation.sql` | `work_scope_state` (scope version, trigger-maintained), `work_scope_bindings` (one active producer per obligation) |
+| `033_gpr2_r05_corrective.sql` | CHECK `work_types_object_origin_required` (NOT VALID, then VALIDATE — fails and rolls back if any OBJECT type lacks an origin; no value is invented) and six triggers: bound-Work identity, binding / classification Work lock, template-version identity + DRAFT-only insert, system-version identity, publication provenance. No table, column, index or row. |
 
 Existing rows: no Work, WEU, portion, confirmation, progress, legacy finish or legacy WorkType column is written. Existing WorkTypes read `CORPORATE`
 (constant default — the fact they already are: tenant-wide dictionary rows without an object).
@@ -55,7 +59,26 @@ Existing rows: no Work, WEU, portion, confirmation, progress, legacy finish or l
   checked; every source-template stage used or excluded exactly once at publication; holds stored only as `PROPOSAL`.
 - One producer: unique (tenant, object, finish type, occurrence key, AreaScope); ancestor/descendant overlap refused under a row lock on the finish type;
   the Work must be a new Work of the same object with the occurrence's WorkType and unit; one operation per Work; bindings append-only.
-- Scope version: bumped by triggers on every Work insert and every binding, whatever the path.
+- Scope version: bumped by triggers on every Work insert and every binding, whatever the path; since 033 also by every Work identity change (object,
+  WorkType, unit, tenant) and every legacy classification.
+- (033, B01) A Work with an active producer binding keeps tenant, object, WorkType and unit; a classified Work keeps tenant and object. The binding /
+  classification insert locks the Work row `FOR SHARE` and re-checks it; a Work identity change first writes the scope-state row(s) the binding /
+  classification also writes. READ COMMITTED: the later session waits, then is refused; REPEATABLE READ: 40001 serialization failure. R04 planning
+  completion, start, progress and inspection write none of these columns.
+- (033, B02) A template version is inserted only as DRAFT and keeps its `template_id`; an object version keeps `object_id`, `finish_type_id` and
+  `source_template_version_id` (DRAFT included). At publication every occurrence / exclusion names the version's own source, every INHERITED
+  occurrence is still an exact copy (`PROVENANCE_MISMATCH` otherwise).
+- (033, B03) An OBJECT WorkType has a non-NULL `origin_object_id = object_id` (029's CHECK let NULL through as UNKNOWN). Promotion keeps the origin.
+
+## Parent AreaScope coverage (R05-GPT-B04)
+
+A measured AreaScope with children is represented only by its leaves. For every MAIN occurrence, every node with children inside a selected subtree whose
+own measure is in the stage unit must be covered by its children (a child's own measure, or for an unmeasured child the effective measure of its
+children): less → blocker `MISSING_REQUIRED_DATA` / rule `AREA_COVERAGE_INCOMPLETE` naming that node, with `missingInputs` entry
+`{ kind: 'AREA_COVERAGE', areaScopeId, quantity: <uncovered>, unit }`; more → `AREA_SCOPE_CONFLICT` / `AREA_OVERLAP` (PostgreSQL already refuses such a
+child in the same unit). No remainder AreaScope is invented and no quantity is dropped: the РП models the remainder or selects leaves. A child without a
+measure is already `QUANTITY_MISSING`; a node without a measure in the stage unit declares nothing to cover; LOCAL stages are not concerned. The blocker is
+part of the preview fingerprint, and confirm recomputes it (refusal 422, nothing written).
 
 ## Confirm order (R03)
 
