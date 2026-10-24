@@ -7,7 +7,7 @@ import ts from 'typescript';
  * so the writer register (apps/backend/src/writer-registry.ts) can be proved complete. Used by tests only.
  *
  * A "writer site" is
- *   TX         a call to `transaction(…)` or `<x>.transaction(…)` — every code path that opens a write transaction
+ *   TX         a call to `transaction(…)`, `<x>.transaction(…)`, or `runCommandTx(…)` — every code path that opens a write transaction
  *   POOLWRITE  a write issued straight on the shared pool: pool.query('INSERT …'), insert(pool, …), one/rows(pool, 'UPDATE …')
  * Each is keyed `<file under apps/backend/src>#<enclosing method or function name>`.
  */
@@ -52,7 +52,7 @@ export function scanSource(relFile: string, text: string): WriterSite[] {
         if (ts.isCallExpression(n)) {
             const callee = n.expression.getText();
             const first = n.arguments[0];
-            if (callee === 'transaction' || callee.endsWith('.transaction')) {
+            if (callee === 'transaction' || callee.endsWith('.transaction') || callee === 'runCommandTx') {
                 const cb = n.arguments.find(a => ts.isArrowFunction(a) || ts.isFunctionExpression(a)) as WriterSite['callback'] | undefined;
                 add(n, 'TX', cb ?? null);
             }
