@@ -53,3 +53,5 @@ jobs:
         run: npm run db:migrate
       - name: Load UNNUMBERED FIN draft and prove selected native invariants
         run: node --import tsx scripts/fin-sdo-1-isolated-pg-verify.ts
+      - name: Verify FIN-SDO-1 service against native disposable PostgreSQL
+        run: node --import tsx scripts/fin-sdo-1-isolated-service-verify.ts
