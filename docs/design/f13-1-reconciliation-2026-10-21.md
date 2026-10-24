@@ -78,11 +78,11 @@
 - Reviewer проверяет, что итоговый diff — **Markdown-only**, не содержит новых обязательных архитектурных решений, не затрагивает R05, frontend/backend, DB/schema/migrations, CI/GitHub Actions и PR №4.
 - Полный повторный прогон PostgreSQL, Chromium, Design System или R04 **не требуется**. Независимую приёмку не объявлять выполненной до отдельного verdict.
 
-**PRODUCT CODE CHANGES: NONE**  
-**DATABASE CHANGES: NONE**  
-**LIVE CHANGES: NONE**  
-**R05 CHANGES: NONE**  
-**BRANCH DELETIONS: NONE**  
-**MERGE TO MAIN: NOT PERFORMED**
+- **PRODUCT CODE CHANGES: NONE**
+- **DATABASE CHANGES: NONE**
+- **LIVE CHANGES: NONE**
+- **R05 CHANGES: NONE**
+- **BRANCH DELETIONS: NONE**
+- **MERGE TO MAIN: NOT PERFORMED**
 
 **Итог:** полезные F13.1 принципы либо уже имеют действующий источник, либо отнесены к узким будущим точкам принятия решения. Историческая ветка не содержит продуктового кода для переноса. До отдельной независимой проверки статус — **CANDIDATE READY / PENDING ACCEPTANCE**, не MERGED и не CLOSED.
