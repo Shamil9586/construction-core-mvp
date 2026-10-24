@@ -4,7 +4,7 @@
  * Database unit: RUB NUMERIC(20,2), transferred as decimal strings.
  */
 export class FinPlanInputError extends Error {
-  constructor(readonly code: 'FIN_MONEY_INVALID' | 'FIN_QUARTER_TOTAL_BELOW_MIN' | 'FIN_QUARTER_TOTAL_OVERFLOW', message = code) {
+  constructor(readonly code: 'FIN_MONEY_INVALID' | 'FIN_QUARTER_TOTAL_BELOW_MIN' | 'FIN_QUARTER_TOTAL_OVERFLOW', message: string = code) {
     super(message);
     this.name = 'FinPlanInputError';
   }

@@ -188,7 +188,7 @@ export class FinSdo1Service {
         const old=await query(c,
           'SELECT l.id,l.subject_id,l.party_scope_id,l.contract_scope_id,r.new_amount_rub::text AS amount_rub,r.line_revision_no FROM fin_quarter_plan_lines l JOIN LATERAL (SELECT lr.new_amount_rub,lr.line_revision_no FROM fin_quarter_plan_line_revisions lr JOIN fin_quarter_book_revisions br ON br.id=lr.book_revision_id AND br.tenant_id=lr.tenant_id WHERE lr.tenant_id=l.tenant_id AND lr.plan_line_id=l.id AND br.revision_no<=$3 ORDER BY br.revision_no DESC LIMIT 1) r ON TRUE WHERE l.tenant_id=$1 AND l.book_id=$2',
           [a.tenantId,book.id,b.expectedBookVersion]);
-        const lookup=new Map(old.map((v:any)=>[canonical(v),v]));
+        const lookup=new Map<string,any>(old.map((v:any)=>[canonical(v),v]));
         const keys=new Set(incoming.map((v:any)=>canonical(v)));
         if(old.some((v:any)=>!keys.has(canonical(v))))throw new BadRequestException('FIN_EXISTING_LINE_OMITTED');
         const changed=incoming.filter((v:any)=>!lookup.has(canonical(v))||lookup.get(canonical(v)).amount_rub!==v.amount_rub);
