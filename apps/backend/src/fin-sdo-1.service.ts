@@ -206,7 +206,7 @@ export class FinSdo1Service {
             lineId=randomUUID();
             await c.query("INSERT INTO fin_quarter_plan_lines(id,tenant_id,book_id,subject_id,party_scope_id,contract_scope_id,currency_code,created_in_book_revision) VALUES($1,$2,$3,$4,$5,$6,'RUB',$7)",[lineId,a.tenantId,book.id,v.subject_id,v.party_scope_id,v.contract_scope_id,revision]);
           }
-          await c.query('INSERT INTO fin_quarter_plan_line_revisions(tenant_id,book_revision_id,book_id,plan_line_id,line_revision_no,previous_amount_rub,new_amount_rub,actor_id,effective_on,reason) VALUES($1,$2,$3,$4,$5,$6::numeric,$7::numeric,$8,$9::date,$10)',[a.tenantId,brId,book.id,Number(prior?.line_revision_no??0)+1,prior?.amount_rub??null,v.amount_rub,a.id,b.effectiveOn,b.reason??null]);
+          await c.query('INSERT INTO fin_quarter_plan_line_revisions(tenant_id,book_revision_id,book_id,plan_line_id,line_revision_no,previous_amount_rub,new_amount_rub,actor_id,effective_on,reason) VALUES($1,$2,$3,$4,$5,$6::numeric,$7::numeric,$8,$9::date,$10)',[a.tenantId,brId,book.id,lineId,Number(prior?.line_revision_no??0)+1,prior?.amount_rub??null,v.amount_rub,a.id,b.effectiveOn,b.reason??null]);
         }
         const cas=await c.query('UPDATE fin_quarter_plan_books SET head_revision_no=$4,version=$4 WHERE tenant_id=$1 AND id=$2 AND version=$3',[a.tenantId,book.id,b.expectedBookVersion,revision]);
         if(cas.rowCount!==1)error('FIN_QUARTER_BOOK_VERSION_CONFLICT');
