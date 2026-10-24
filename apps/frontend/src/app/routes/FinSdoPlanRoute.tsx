@@ -123,6 +123,24 @@ export function FinSdoPlanRoute(){
      <h2>Действующий квартальный план</h2>
      {book?.status==='NO_PLAN'?<p>План ещё не записан (NO_PLAN). Нулевая строка не является действующим планом.</p>:
       <p>Первоначальный: <strong>{book?.original?convertRub(book.original)+' млн ₽':'—'}</strong> · Текущий: <strong>{book?.current?convertRub(book.current)+' млн ₽':'—'}</strong> · версия {book?.bookVersion??'—'}</p>}
+     {book?.status==='ACTIVE'&&dir&&<section aria-label="Действующий финансовый план" style={{overflowX:'auto'}}>
+       <h2>План по объектам, исполнителям и договорам</h2>
+       <table style={{width:'100%',borderCollapse:'collapse'}}>
+         <thead><tr><th>Объект</th><th>Исполнитель</th><th>Договор</th><th>Original, млн ₽</th><th>Current, млн ₽</th></tr></thead>
+         <tbody>{(book.lines??[]).map((r:any)=><tr key={r.id}>
+           <td>{r.origin==='CORE'
+                ?dir.core.find(x=>x.id===r.core_object_id)?.name??r.core_object_id
+                :dir.historical.find(x=>x.id===r.historical_subject_id)?.name??r.historical_subject_id}</td>
+           <td>{r.party_kind==='UNALLOCATED'?'Не распределено':r.party_kind==='CORE_CONTRACTOR'
+                ?dir.contractors.find(x=>x.id===r.core_contractor_id)?.name??r.core_contractor_id
+                :dir.historicalParties.find(x=>x.id===r.historical_party_id)?.name??r.historical_party_id}</td>
+           <td>{r.contract_kind==='NOT_SPECIFIED'?'Не указан':r.contract_number}</td>
+           <td>{r.original_amount_rub===null?'—':convertRub(r.original_amount_rub)}</td>
+           <td>{convertRub(r.amount_rub)}</td>
+         </tr>)}</tbody>
+       </table>
+       <p style={{fontSize:13}}>Отчётные строки доступны только ролям с FIN_SDO_PLAN_READ; технические буферы здесь не учитываются.</p>
+     </section>}
      {editable&&dir&&<>
        <h2>Незавершённый ввод — в плане не учтено</h2>
        {savedBuffers.length>0&&<section aria-label="Сохранённые технические буферы"><p>Ваши сохранённые черновые вводы этого квартала:</p>{savedBuffers.slice(0,10).map(v=><button type="button" key={v.id} disabled={busy} onClick={()=>loadBuffer(v.id)} style={{marginRight:6,marginBottom:6}}>Продолжить {v.line_count} стр. / {convertRub(v.total_rub)} млн ₽</button>)}</section>}
