@@ -1,0 +1,24 @@
+name: FIN-SDO-1 isolated candidate checks
+on:
+  push:
+    branches: ['feature/fin-sdo-1-quarterly-planning']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  isolated-unit-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Typecheck and Vite build
+        run: npm run build
+      - name: FIN-SDO exact decimal/RBAC unit scenarios
+        run: node --import tsx --test tests/fin-sdo-1-money.test.ts

@@ -9,6 +9,7 @@ import { DocumentationRegistryRoute } from './routes/DocumentationRegistryRoute'
 import { PtoRoute } from './routes/PtoRoute';
 import { PackageDetailRoute } from './routes/PackageDetailRoute';
 import { SdoRoute } from './routes/SdoRoute';
+import { FinSdoPlanRoute } from './routes/FinSdoPlanRoute';
 import { SdoCaseDetailRoute } from './routes/SdoCaseDetailRoute';
 import { AdminUsersRoute } from './routes/AdminUsersRoute';
 import { TeamsRoute, MyTeamRoute } from './routes/TeamsRoute';
@@ -65,6 +66,7 @@ export function AppRoutes() {
       <Route path={ROUTE_PATHS.pto} element={<PtoRoute />} />
       <Route path={ROUTE_PATHS.package} element={<PackageDetailRoute />} />
       <Route path={ROUTE_PATHS.sdo} element={<SdoRoute />} />
+      {import.meta.env.VITE_FIN_SDO_1 === 'enabled' && <Route path={ROUTE_PATHS.finPlan} element={<FinSdoPlanRoute />} />}
       <Route path={ROUTE_PATHS.sdoCase} element={<SdoCaseDetailRoute />} />
       <Route path={ROUTE_PATHS.adminUsers} element={<AdminUsersRoute />} />
       <Route path={ROUTE_PATHS.teams} element={<TeamsRoute />} />

@@ -23,6 +23,7 @@ export const ROUTE_PATHS = {
   package: '/pto/package/:packageId',
   /** F8.3 — the SDO workspace: a separate top-level destination, not part of the object drill-down chain (mirrors `pto` above). */
   sdo: '/sdo',
+  finPlan: '/sdo/plan',
   /** F8.3 — SDO Case detail, reachable only from the SDO workspace's own "Активные дела СДО" table. */
   sdoCase: '/sdo/case/:caseId',
   /** PBX-2 — Администрирование → Пользователи и доступ (ADMIN only). */

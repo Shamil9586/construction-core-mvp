@@ -30,6 +30,11 @@ const TENANT = 'tenant-level dictionary or account data: no object, no productio
 const AUTHZ = 'changes who may act on an object; every command re-authorises against the current rows in its own transaction, and it holds no quantity invariant';
 
 export const WRITERS = {
+    // FIN-SDO-1: tenant financial planning only; never changes production objects or F8.3.
+    'fin-sdo-1.service.ts#createHistoricalSubject': N('FIN-only historical subject: own tenant row; no production object change'),
+    'fin-sdo-1.service.ts#createHistoricalParty': N('FIN-only historical party: no production party change'),
+    'fin-sdo-1.service.ts#saveBuffer': N('FIN technical input buffer, tenant/actor-scoped, no production quantity invariants'),
+    'fin-sdo-1.service.ts#commitBuffer': N('FIN quarter-book CAS and ledger, independent of production object coordination'),
     // ---- service.ts: objects, Works, production -------------------------------------------------------------------------------
     'service.ts#createObject': N('creates a new object: nothing can be racing on an object that does not exist yet'),
     'service.ts#assignContractor': S('the contractor assignment is the row progress() locks to admit a fact (eligibility)'),

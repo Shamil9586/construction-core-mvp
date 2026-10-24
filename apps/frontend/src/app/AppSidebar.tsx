@@ -30,6 +30,7 @@ const NAV_ITEMS: NavItem[] = [
   { key: 'company', label: 'Портфель' },
   { key: 'pto', label: 'ПТО' },
   { key: 'sdo', label: 'СДО' },
+  { key: 'fin-plan', label: 'План закрытия' },
   // PBX-3A: team management for leadership; own team for PTO / PTO_HEAD. Confirmed sessions only.
   { key: 'teams', label: 'Команды и объекты' },
   { key: 'my-team', label: 'Моя команда ПТО' },
@@ -58,6 +59,8 @@ export function AppSidebar() {
       ? 'company'
       : location.pathname === ROUTE_PATHS.pto
         ? 'pto'
+        : location.pathname === ROUTE_PATHS.finPlan
+          ? 'fin-plan'
         : location.pathname.startsWith('/sdo')
           ? 'sdo'
           : location.pathname === ROUTE_PATHS.adminUsers
@@ -88,12 +91,13 @@ export function AppSidebar() {
         (item) =>
           (item.key !== 'pto' || canManageDocumentation(session.user.role)) &&
           (item.key !== 'sdo' || canAccessSdoWorkspace(session.user.role)) &&
+          (item.key !== 'fin-plan' || (import.meta.env.VITE_FIN_SDO_1 === 'enabled' && ['SDO','SDO_HEAD','GENERAL_DIRECTOR','DEPUTY_DIRECTOR','ADMIN'].includes(session.user.role))) &&
           (item.key !== 'admin-users' || canAdministerUsers(session.user.role)) &&
           (item.key !== 'teams' || canViewTeamsOverview(session.user.role)) &&
           (item.key !== 'my-team' || canViewMyPtoTeam(session.user.role)) &&
           (item.key !== 'company-structure' || canViewCompanyStructure(session.user.role)),
       )
-    : NAV_ITEMS.filter((item) => item.key !== 'admin-users' && item.key !== 'teams' && item.key !== 'my-team' && item.key !== 'company-structure');
+    : NAV_ITEMS.filter((item) => item.key !== 'fin-plan' && item.key !== 'admin-users' && item.key !== 'teams' && item.key !== 'my-team' && item.key !== 'company-structure');
 
   return (
     <Sidebar
@@ -105,6 +109,7 @@ export function AppSidebar() {
         if (key === 'company') navigate(ROUTE_PATHS.company);
         if (key === 'pto') navigate(ROUTE_PATHS.pto);
         if (key === 'sdo') navigate(ROUTE_PATHS.sdo);
+        if (key === 'fin-plan') navigate(ROUTE_PATHS.finPlan);
         if (key === 'admin-users') navigate(ROUTE_PATHS.adminUsers);
         if (key === 'teams') navigate(ROUTE_PATHS.teams);
         if (key === 'my-team') navigate(ROUTE_PATHS.myTeam);

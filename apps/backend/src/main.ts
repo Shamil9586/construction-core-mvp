@@ -32,6 +32,7 @@ import { FunctionTeamsModule } from './modules/function-teams/function-teams.mod
 import { OrgStructureModule } from './modules/org-structure/org-structure.module';
 import { ProductionScheduleModule } from './modules/schedule/schedule.module';
 import { Gpr2ContractModule } from './modules/gpr2/gpr2.module';
+import { FinSdo1Module } from './modules/fin-sdo-1/fin-sdo-1.module';
 import { Gpr2HttpException } from './gpr2-command-guard';
 import { mountGpr2Contract } from '../../../packages/domain/gpr2';
 @Catch()
@@ -42,7 +43,9 @@ class Errors implements ExceptionFilter {
 // GPR-2 R01: the guarded /v2 command surface is mounted only when explicitly switched on (exactly 'enabled'; any other value leaves it out).
 // Without the flag the application's routes, providers and behaviour are exactly what they were.
 const gpr2Contract = process.env.GPR2_CONTRACT_ROUTES === 'enabled' ? [Gpr2ContractModule] : [];
-@Module({ imports: [HealthModule, AuthModule, BitrixModule, DashboardModule, ObjectsModule, WorksModule, InspectionsModule, ExecutionUnitsModule, DocumentationModule, AttachmentsModule, PtoModule, SdoModule, SdoClosingModule, FinancialModule, ContractorsModule, DictionariesModule, UsersModule, MaterialsModule, AuditModule, NotificationsModule, ImportsModule, FunctionTeamsModule, OrgStructureModule, ProductionScheduleModule, ...gpr2Contract] })
+// FIN-SDO-1 stays OFF until centrally numbered migration and native PostgreSQL security acceptance.
+const finSdo1 = process.env.FIN_SDO_1_ROUTES === 'enabled' ? [FinSdo1Module] : [];
+@Module({ imports: [HealthModule, AuthModule, BitrixModule, DashboardModule, ObjectsModule, WorksModule, InspectionsModule, ExecutionUnitsModule, DocumentationModule, AttachmentsModule, PtoModule, SdoModule, SdoClosingModule, FinancialModule, ContractorsModule, DictionariesModule, UsersModule, MaterialsModule, AuditModule, NotificationsModule, ImportsModule, FunctionTeamsModule, OrgStructureModule, ProductionScheduleModule, ...gpr2Contract, ...finSdo1] })
 class AppModule {
 }
 /**
