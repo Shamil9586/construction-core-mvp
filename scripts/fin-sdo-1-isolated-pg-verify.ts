@@ -76,9 +76,43 @@ async function main(){
  await expectDbRefusal('immutable quarter line revision','DELETE FROM fin_quarter_plan_line_revisions WHERE id=$1',[lrId]);
  await expectDbRefusal('duplicate line key',"INSERT INTO fin_quarter_plan_lines(tenant_id,book_id,subject_id,party_scope_id,contract_scope_id,created_in_book_revision) VALUES($1,$2,$3,$4,$5,1)",[t,bookId,subject.rows[0].id,party,contract.rows[0].id]);
  await expectDbRefusal('party other tenant',"INSERT INTO fin_party_scopes(tenant_id,kind,historical_party_id) VALUES($1,'HISTORICAL',$2)",[t2,party]);
+
+ await expectDbRefusal('immutable plan quarter identity',"UPDATE fin_quarter_plan_books SET plan_quarter=3 WHERE id=$1",[bookId]);
+ await expectDbRefusal('immutable historical identity',"UPDATE fin_historical_subjects SET name='Changed' WHERE id=$1",[h.rows[0].id]);
+ await expectDbRefusal('reject sub-centimillion line precision',
+ "INSERT INTO fin_quarter_plan_line_revisions(tenant_id,book_revision_id,book_id,plan_line_id,line_revision_no,previous_amount_rub,new_amount_rub,actor_id,effective_on) VALUES($1,$2,$3,$4,2,10000000.00,10000000.01,$5,'2026-10-24')",
+ [t,revId,bookId,lineId,u]);
+ await expectDbRefusal('reject second empty book revision',
+ "INSERT INTO fin_quarter_book_revisions(tenant_id,book_id,revision_no,previous_total_rub,new_total_rub,reason,actor_id,effective_on,command_id) VALUES($1,$2,2,10000000.00,11000000.00,'Correction',$3,'2026-10-24',gen_random_uuid())",
+ [t,bookId,u]);
+ const hparty=await pool.query("INSERT INTO fin_historical_parties(tenant_id,name,created_by) VALUES($1,'Second party',$2) RETURNING id",[t,u]);
+ const secondParty=await pool.query("INSERT INTO fin_party_scopes(tenant_id,kind,historical_party_id) VALUES($1,'HISTORICAL',$2) RETURNING id",[t,hparty.rows[0].id]);
+ const secondContract=await pool.query("INSERT INTO fin_contract_scopes(tenant_id,kind,party_scope_id,created_by) VALUES($1,'NOT_SPECIFIED',$2,$3) RETURNING id",[t,secondParty.rows[0].id,u]);
+ await expectDbRefusal('contract must belong to same party as line',
+ "INSERT INTO fin_quarter_plan_lines(tenant_id,book_id,subject_id,party_scope_id,contract_scope_id,created_in_book_revision) VALUES($1,$2,$3,$4,$5,1)",
+ [t,bookId,subject.rows[0].id,party,secondContract.rows[0].id]);
+ // Demonstrate what a restrictive FIN DB runtime role must deny:
+ // native proof with a dedicated role (application integration remains a release gate).
+ await pool.query('CREATE ROLE fin_sdo_limited_test NOLOGIN');
+ await pool.query('GRANT USAGE ON SCHEMA public TO fin_sdo_limited_test');
+ await pool.query('GRANT SELECT ON TABLE fin_quarter_plan_books TO fin_sdo_limited_test');
+ const client=await pool.connect();
+ try {
+   await client.query('BEGIN');
+   await client.query('SET LOCAL ROLE fin_sdo_limited_test');
+   try {
+     await client.query('UPDATE fin_quarter_plan_books SET head_revision_no=2,version=2 WHERE id=$1',[bookId]);
+     failed++;console.error('FAIL: limited role could modify book');
+   }catch(e:any) {
+     assert.equal(e.code,'42501');
+     passed++;console.log('PASS limited DB role forbids direct book UPDATE [42501]');
+   }
+   await client.query('ROLLBACK');
+ }finally{client.release()}
+
  const sum=await pool.query("SELECT b.new_total_rub::text AS total, sum(l.new_amount_rub)::text AS lines FROM fin_quarter_book_revisions b JOIN fin_quarter_plan_line_revisions l ON l.book_revision_id=b.id AND l.tenant_id=b.tenant_id WHERE b.id=$1 GROUP BY b.id",[revId]);
  assert.equal(sum.rows[0].total,'10000000.00');assert.equal(sum.rows[0].lines,'10000000.00');passed++;
- console.log(JSON.stringify({passed,failed,unproven:['runtime-role restricted write path','native concurrency','HTTP auth','DB full-book conservation','FIN1-01..27']},null,2));
+ console.log(JSON.stringify({passed,failed,unproven:['runtime-role restricted write path','native concurrency','role ownership/grants wired into application','full FIN1-01..27 acceptance','FIN1-01..27']},null,2));
  if(failed)process.exitCode=1;
 }
 main().catch(e=>{console.error(e);process.exitCode=1}).finally(()=>pool.end());

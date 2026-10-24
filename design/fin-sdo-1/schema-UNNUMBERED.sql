@@ -255,3 +255,108 @@ CREATE TRIGGER fin_party_scopes_immutable BEFORE UPDATE OR DELETE ON fin_party_s
  FOR EACH ROW EXECUTE FUNCTION immutable_history();
 CREATE TRIGGER fin_contract_scopes_immutable BEFORE UPDATE OR DELETE ON fin_contract_scopes
  FOR EACH ROW EXECUTE FUNCTION immutable_history();
+
+
+-- FIN-SDO-1 financial cross-entity identity constraints (native PostgreSQL).
+-- Matching tenant alone is not enough: the contract reference must belong to
+-- the SAME party used on the plan line; never cross-wire two subcontractors.
+ALTER TABLE fin_contract_scopes
+ ADD CONSTRAINT fin_contract_tenant_party_id_unique UNIQUE(tenant_id,party_scope_id,id);
+ALTER TABLE fin_quarter_plan_lines
+ ADD CONSTRAINT fin_quarter_line_party_contract_fk
+ FOREIGN KEY(tenant_id,party_scope_id,contract_scope_id)
+ REFERENCES fin_contract_scopes(tenant_id,party_scope_id,id);
+ALTER TABLE fin_plan_edit_session_lines
+ ADD CONSTRAINT fin_buffer_line_party_contract_fk
+ FOREIGN KEY(tenant_id,party_scope_id,contract_scope_id)
+ REFERENCES fin_contract_scopes(tenant_id,party_scope_id,id);
+
+-- DEC-02: each plan line is an exact hundredth million RUB = 10,000.00 RUB.
+ALTER TABLE fin_quarter_plan_line_revisions
+ ADD CONSTRAINT fin_line_decimal_precision CHECK(mod(new_amount_rub,10000.00)=0);
+ALTER TABLE fin_quarter_book_revisions
+ ADD CONSTRAINT fin_total_decimal_precision CHECK(mod(new_total_rub,10000.00)=0);
+
+-- No implicit change of the tenant, calendar quarter or author after original.
+-- A book head advances by one atomically. Whole-book conservation at commit
+-- rejects an advance without matching immutable history/line revisions.
+CREATE FUNCTION fin_guard_book_identity() RETURNS trigger LANGUAGE plpgsql AS $identity$
+BEGIN
+ IF TG_OP='DELETE' THEN
+  RAISE EXCEPTION 'FIN_BOOK_IDENTITY_IMMUTABLE' USING ERRCODE='23514';
+ END IF;
+ IF NEW.tenant_id IS DISTINCT FROM OLD.tenant_id
+    OR NEW.currency_code IS DISTINCT FROM OLD.currency_code
+    OR NEW.plan_year IS DISTINCT FROM OLD.plan_year
+    OR NEW.plan_quarter IS DISTINCT FROM OLD.plan_quarter
+    OR NEW.created_by IS DISTINCT FROM OLD.created_by
+    OR NEW.created_at IS DISTINCT FROM OLD.created_at
+    OR NEW.id IS DISTINCT FROM OLD.id THEN
+  RAISE EXCEPTION 'FIN_BOOK_IDENTITY_IMMUTABLE' USING ERRCODE='23514';
+ END IF;
+ IF NEW.version <> OLD.version+1 OR NEW.head_revision_no<>OLD.head_revision_no+1 THEN
+  RAISE EXCEPTION 'FIN_HEAD_MUST_ADVANCE_BY_ONE' USING ERRCODE='23514';
+ END IF;
+ RETURN NEW;
+END;
+$identity$;
+CREATE TRIGGER fin_book_guard BEFORE UPDATE OR DELETE ON fin_quarter_plan_books
+ FOR EACH ROW EXECUTE FUNCTION fin_guard_book_identity();
+
+-- FIN-1 supports create-only historical identities. Future edits would require
+-- a separately approved immutable history contract.
+CREATE TRIGGER fin_historical_subjects_immutable BEFORE UPDATE OR DELETE ON fin_historical_subjects
+ FOR EACH ROW EXECUTE FUNCTION immutable_history();
+CREATE TRIGGER fin_historical_parties_immutable BEFORE UPDATE OR DELETE ON fin_historical_parties
+ FOR EACH ROW EXECUTE FUNCTION immutable_history();
+
+-- At COMMIT, validate all before/after amounts and monotonically numbered
+-- line/book histories, not just today's book total (read snapshots depend on it).
+CREATE FUNCTION fin_assert_history_links() RETURNS trigger LANGUAGE plpgsql AS $history$
+DECLARE t uuid; b uuid;
+BEGIN
+ t:=NEW.tenant_id;
+ IF TG_TABLE_NAME='fin_quarter_book_revisions' THEN b:=NEW.book_id;
+ ELSIF TG_TABLE_NAME='fin_quarter_plan_line_revisions' THEN b:=NEW.book_id;
+ ELSE RAISE EXCEPTION 'FIN_HISTORY_SCOPE_INVALID' USING ERRCODE='23514';
+ END IF;
+
+ IF EXISTS (
+  SELECT 1 FROM (
+   SELECT revision_no,previous_total_rub,
+       row_number() OVER (ORDER BY revision_no) AS n,
+       lag(new_total_rub) OVER (ORDER BY revision_no) AS prev
+   FROM fin_quarter_book_revisions WHERE tenant_id=t AND book_id=b
+  ) r WHERE r.revision_no<>r.n OR r.previous_total_rub IS DISTINCT FROM r.prev
+ ) THEN RAISE EXCEPTION 'FIN_BOOK_REVISION_HISTORY_INVALID' USING ERRCODE='23514'; END IF;
+
+ IF EXISTS (
+  SELECT 1 FROM (
+   SELECT lr.plan_line_id,lr.line_revision_no,lr.previous_amount_rub,
+          row_number() OVER (PARTITION BY lr.plan_line_id ORDER BY br.revision_no) AS n,
+          lag(lr.new_amount_rub) OVER (PARTITION BY lr.plan_line_id ORDER BY br.revision_no) AS prev,
+          min(br.revision_no) OVER (PARTITION BY lr.plan_line_id) AS first_book_no
+   FROM fin_quarter_plan_line_revisions lr
+   JOIN fin_quarter_book_revisions br ON br.tenant_id=lr.tenant_id AND br.id=lr.book_revision_id
+   WHERE lr.tenant_id=t AND lr.book_id=b
+  ) r JOIN fin_quarter_plan_lines l ON l.tenant_id=t AND l.id=r.plan_line_id
+  WHERE r.line_revision_no<>r.n OR r.previous_amount_rub IS DISTINCT FROM r.prev
+        OR r.first_book_no<>l.created_in_book_revision
+ ) THEN RAISE EXCEPTION 'FIN_LINE_REVISION_HISTORY_INVALID' USING ERRCODE='23514'; END IF;
+
+ IF EXISTS (
+   SELECT 1 FROM fin_quarter_book_revisions br
+   WHERE br.tenant_id=t AND br.book_id=b AND NOT EXISTS (
+     SELECT 1 FROM fin_quarter_plan_line_revisions lr
+     WHERE lr.tenant_id=br.tenant_id AND lr.book_revision_id=br.id
+   )
+ ) THEN RAISE EXCEPTION 'FIN_EMPTY_BOOK_REVISION' USING ERRCODE='23514'; END IF;
+ RETURN NEW;
+END;
+$history$;
+CREATE CONSTRAINT TRIGGER fin_book_history_links
+ AFTER INSERT ON fin_quarter_book_revisions DEFERRABLE INITIALLY DEFERRED
+ FOR EACH ROW EXECUTE FUNCTION fin_assert_history_links();
+CREATE CONSTRAINT TRIGGER fin_line_history_links
+ AFTER INSERT ON fin_quarter_plan_line_revisions DEFERRABLE INITIALLY DEFERRED
+ FOR EACH ROW EXECUTE FUNCTION fin_assert_history_links();
