@@ -105,7 +105,10 @@ export enum Permission {
     SCHEDULE_VIEW = 'SCHEDULE_VIEW',
     SCHEDULE_EDIT = 'SCHEDULE_EDIT',
     SCHEDULE_APPROVE = 'SCHEDULE_APPROVE',
-    SCHEDULE_DELAY_REASON = 'SCHEDULE_DELAY_REASON'
+    SCHEDULE_DELAY_REASON = 'SCHEDULE_DELAY_REASON',
+    // FIN-SDO-1: tenant-scoped financial plan, separate from broad legacy FINANCE_VIEW/SDO_VIEW.
+    FIN_SDO_PLAN_READ = 'FIN_SDO_PLAN_READ',
+    FIN_SDO_PLAN_WRITE = 'FIN_SDO_PLAN_WRITE'
 }
 const view = [Permission.OBJECT_VIEW, Permission.WORK_VIEW, Permission.PTO_VIEW, Permission.SDO_VIEW, Permission.FINANCE_VIEW];
 // DEPUTY_DIRECTOR managerial grant — company/object/work visibility (`view`)
@@ -120,6 +123,10 @@ const sdoGrants = [...view, Permission.SDO_EDIT, Permission.SDO_CLOSE, Permissio
 const teamRead = [Permission.PTO_TEAM_READ];
 const orgRead = [Permission.ORG_STRUCTURE_READ];
 const grants: Record<Role, Permission[]> = { ADMIN: Object.values(Permission), GENERAL_DIRECTOR: [...view, ...teamRead, ...orgRead], DEPUTY_DIRECTOR: [...view, Permission.OBJECT_CREATE, Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE, Permission.EXECUTION_UNIT_MANAGE, Permission.FUNCTION_TEAM_MANAGE, Permission.OBJECT_FUNCTION_LEAD_ASSIGN, ...teamRead, ...orgRead], PROJECT_MANAGER: [...view, Permission.OBJECT_EDIT, Permission.OBJECT_MANAGE_CONTRACTORS, Permission.WORK_CREATE, Permission.EXECUTION_UNIT_MANAGE, Permission.WORK_UPDATE_PROGRESS, Permission.INSPECTION_REQUEST, Permission.ISSUE_RESOLVE], CONSTRUCTION_CONTROL: constructionControlGrants, CONSTRUCTION_CONTROL_HEAD: constructionControlGrants, PTO: [...ptoGrants, ...teamRead], PTO_HEAD: [...ptoGrants, Permission.PTO_OBJECT_TEAM_MANAGE, ...teamRead], SDO: sdoGrants, SDO_HEAD: sdoGrants, CONTRACTOR_VIEWER: [Permission.OBJECT_VIEW, Permission.WORK_VIEW] };
+// FIN-SDO-1 grants are intentionally NOT part of the broad internal view bundle.
+for(const role of ['GENERAL_DIRECTOR','DEPUTY_DIRECTOR','SDO','SDO_HEAD'] as const) grants[role].push(Permission.FIN_SDO_PLAN_READ);
+for(const role of ['SDO','SDO_HEAD'] as const) grants[role].push(Permission.FIN_SDO_PLAN_WRITE);
+// ADMIN already receives Object.values(Permission) above.
 // GPR-1 — who may do what with the Production Schedule. Appended (not folded into the matrix above) so it reads as one block and does
 // not rewrite the grants of any other slice. Every internal role may READ the schedule of an object it can open; CONTRACTOR_VIEWER may not
 // (it carries cross-contractor planning and management delay reasons — an external-participant view is a later product phase).

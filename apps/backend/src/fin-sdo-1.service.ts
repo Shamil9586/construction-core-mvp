@@ -2,13 +2,14 @@ import { createHash, randomUUID } from 'node:crypto';
 import { Injectable, ForbiddenException, BadRequestException, NotFoundException, ConflictException, UnprocessableEntityException } from '@nestjs/common';
 import { runCommandTx, runSnapshotRead } from './tx-context';
 import type { Actor } from './security';
-import { canReadFinPlan, canWriteFinPlan, millionRubToKopeks, kopeksToRub, FinPlanInputError } from '../../../packages/domain/fin-sdo-1';
+import { millionRubToKopeks, kopeksToRub, FinPlanInputError } from '../../../packages/domain/fin-sdo-1';
+import { Permission, hasPermission, type Role } from '../../../packages/domain';
 
 const query = async (c:any,sql:string,args:any[]=[]) => (await c.query(sql,args)).rows;
 const one = async (c:any,sql:string,args:any[]=[]) => (await query(c,sql,args))[0]??null;
 const error = (code:string):never => { throw new ConflictException({code}); };
-const writeRole=(a:Actor)=>{ if(!canWriteFinPlan(a.role))throw new ForbiddenException('FIN_ACCESS_DENIED'); };
-const readRole=(a:Actor)=>{ if(!canReadFinPlan(a.role))throw new ForbiddenException('FIN_ACCESS_DENIED'); };
+const writeRole=(a:Actor)=>{ if(!hasPermission(a.role,Permission.FIN_SDO_PLAN_WRITE))throw new ForbiddenException('FIN_ACCESS_DENIED'); };
+const readRole=(a:Actor)=>{ if(!hasPermission(a.role,Permission.FIN_SDO_PLAN_READ))throw new ForbiddenException('FIN_ACCESS_DENIED'); };
 const quarter=(year:number,q:number)=>{ if(!Number.isInteger(year)||year<2000||year>2200||![1,2,3,4].includes(q))throw new BadRequestException('FIN_QUARTER_INVALID'); };
 const rub=(million:string):string=>{
   try {return kopeksToRub(millionRubToKopeks(million));}
@@ -43,7 +44,7 @@ type CommitInput=Quarter&{bufferId:string;expectedBookVersion:number;effectiveOn
 export class FinSdo1Service {
   private async checkCurrentWriter(c:any,a:Actor){
     const u=await one(c,'SELECT role FROM users WHERE tenant_id=$1 AND id=$2 AND is_active=true FOR SHARE',[a.tenantId,a.id]);
-    if(!u||!canWriteFinPlan(u.role))throw new ForbiddenException('FIN_ACCESS_DENIED');
+    if(!u||!hasPermission(u.role as Role,Permission.FIN_SDO_PLAN_WRITE))throw new ForbiddenException('FIN_ACCESS_DENIED');
   }
   async discover(a:Actor){
     readRole(a);
