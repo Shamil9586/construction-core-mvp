@@ -78,10 +78,23 @@ async function main(){
  console.log('PASS FIN1-19 buffer read denied');
  const b=await request('buffers',tok.sdo,'POST',{year:2027,quarter:3,expectedBookVersion:0,lines:[]});
  assert.equal(b.status,400);console.log('PASS FIN1-22 rejects empty technical input');
+ // Create a real committed quarter via HTTP, then revoke SDO and attempt an exact idempotency replay.
+ const subj=(await request('subjects',tok.sdo)).json.historical[0].id;
+ const buf=await request('buffers',tok.sdo,'POST',{year:2027,quarter:4,expectedBookVersion:0,
+   lines:[{historicalSubjectId:subj,partyKind:'UNALLOCATED',contractKind:'NOT_SPECIFIED',amountMln:'10.00'}]});
+ assert.equal(buf.status,200);
+ const command={year:2027,quarter:4,bufferId:buf.json.bufferId,expectedBookVersion:0,effectiveOn:'2027-10-01',idempotencyKey:randomUUID()};
+ const first=await request('commit',tok.sdo,'POST',command);
+ assert.equal(first.status,200);assert.equal(first.json.totalRub,'10000000.00');
+ console.log('PASS FIN1-08 HTTP exact 10.00 million initial plan');
  // Test revoked role after token issuance; authenticates on every request.
  await pool.query("UPDATE users SET role='PTO' WHERE tenant_id=$1 AND id=$2",[tid,sdo.id]);
  p=await request('quarter?year=2027&quarter=1',tok.sdo);
  assert.equal(p.status,403);console.log('PASS FIN1-17 role revocation denies previously valid bearer');
+ p=await request('commit',tok.sdo,'POST',command);
+ assert.equal(p.status,403);
+ assert.ok(!JSON.stringify(p.json).includes('10000000.00'));
+ console.log('PASS FIN1-17 revoked writer receives 403 before idempotent replay');
  console.log('FIN-1 HTTP/RBAC smoke completed; no data moved outside disposable DB.');
 }
 main().catch(e=>{console.error(e);process.exitCode=1}).finally(async()=>{if(app)await app.close().catch(()=>{});await pool.end()});
