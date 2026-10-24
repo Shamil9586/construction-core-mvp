@@ -106,6 +106,7 @@ export const WRITERS = {
     'gpr2-r05-catalog.ts#draftFinishTemplate': N('R05c corporate template draft: tenant-level catalogue, no object, no Work, no production quantity'),
     'gpr2-r05-catalog.ts#publishFinishTemplate': N('R05c corporate template publication: tenant-level catalogue; a published version changes no existing object system or Work'),
     'gpr2-r05-catalog.ts#upsertFinishSystem': S('R05c new immutable object finish-system version; creates no Work (generation is the EXCLUSIVE confirm)'),
+    'gpr2-r05-generation.ts#confirmGeneration': X('R05d Work generation from a finish system: creates Works and producer bindings — changes the object scope (TD §12.3 item 1)'),
     'gpr2-r05-legacy.ts#recordLegacyFinishMapping': S('R05b append-only legacy finish mapping of an object; rewrites no legacy id, WEU or Work'),
     'gpr2-r05-legacy.ts#recordLegacyWorkClassification': S('R05b append-only classification of a historical Work; the Work, its WEUs and facts are not written'),
     // ---- imports and files ------------------------------------------------------------------------------------------------------

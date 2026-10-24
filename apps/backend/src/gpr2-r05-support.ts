@@ -37,8 +37,9 @@ export async function resolveR05Owner(db: any, ref: Gpr2ResourceRef): Promise<Gp
 }
 
 /** The caller as the database knows them NOW, re-checked against everything the guard checked before the lock. Returns the current actor row. */
-export async function reauthorize(c: any, ctx: Gpr2CommandContext, extra: { legacy?: Permission[] } = {}): Promise<Actor> {
-    const current: Actor | undefined = await one(c, 'SELECT * FROM users WHERE tenant_id=$1 AND id=$2 FOR SHARE', [ctx.actor.tenantId, ctx.actor.id]);
+export async function reauthorize(c: any, ctx: Gpr2CommandContext, extra: { legacy?: Permission[]; readOnly?: boolean } = {}): Promise<Actor> {
+    // A READ ONLY snapshot (a pure preview) cannot take a row lock; it reads the same rows in its one snapshot instead.
+    const current: Actor | undefined = await one(c, `SELECT * FROM users WHERE tenant_id=$1 AND id=$2 ${extra.readOnly ? '' : 'FOR SHARE'}`, [ctx.actor.tenantId, ctx.actor.id]);
     if (!current || !(current as any).isActive)
         throw permissionDenied();
     if (ctx.endpoint.authorization.type === 'EXISTING_RULES' || !isAuthorized({ tenantId: current.tenantId, userId: current.id, role: current.role }, ctx.endpoint.authorization, ctx.objectId))
@@ -74,7 +75,7 @@ const DB_CODES: Record<string, Gpr2Error['code']> = {
     CROSS_SCOPE_REFERENCE: 'CROSS_SCOPE_REFERENCE', ONE_PRODUCER_CONFLICT: 'ONE_PRODUCER_CONFLICT', AREA_SCOPE_CONFLICT: 'AREA_SCOPE_CONFLICT',
     INVALID_MEASUREMENT: 'INVALID_MEASUREMENT', UNIT_IMMUTABLE: 'INVALID_MEASUREMENT', VERSION_IMMUTABLE: 'VERSION_IMMUTABLE', DECIDED_IMMUTABLE: 'INVALID_TRANSITION',
     SCOPE_CHANGE_FORBIDDEN: 'INVALID_TRANSITION', ALIAS_FORBIDDEN: 'INVALID_TRANSITION', MISSING_REQUIRED_DATA: 'MISSING_REQUIRED_DATA', STALE_SOURCE_VERSION: 'STALE_SOURCE_VERSION',
-    PROVENANCE_MISMATCH: 'VALIDATION_FAILED', APPEND_ONLY: 'VERSION_IMMUTABLE', IDENTITY_IMMUTABLE: 'INVALID_TRANSITION'
+    PROVENANCE_MISMATCH: 'VALIDATION_FAILED', APPEND_ONLY: 'VERSION_IMMUTABLE', IDENTITY_IMMUTABLE: 'INVALID_TRANSITION', HISTORICAL_WORK: 'INVALID_TRANSITION'
 };
 /** Unique indexes whose violation is a business answer, not a 409 "data conflict". */
 const UNIQUE_CODES: Record<string, () => Gpr2Error> = {

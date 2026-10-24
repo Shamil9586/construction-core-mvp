@@ -3,6 +3,7 @@ import { Gpr2Hooks, Gpr2CommandContext } from './gpr2-command-guard';
 import { ledgerCommandOf, lookupReplay } from './command-ledger';
 import { resolveR05Owner } from './gpr2-r05-support';
 import { approveWorkTypePublication, createAreaScope, createObjectWorkType, draftFinishTemplate, publishFinishTemplate, rejectWorkTypePublication, requestWorkTypePublication, upsertFinishSystem } from './gpr2-r05-catalog';
+import { confirmGeneration, previewGeneration } from './gpr2-r05-generation';
 import { CommandResult, Gpr2Error } from '../../../packages/domain/gpr2';
 
 /**
@@ -18,7 +19,10 @@ export const R05_HANDLERS: Readonly<Record<string, (ctx: Gpr2CommandContext) => 
     'area-scope.create': createAreaScope,
     'finish-template.draft': draftFinishTemplate,
     'finish-template.publish': publishFinishTemplate,
-    'finish-system.upsert': upsertFinishSystem
+    'finish-system.upsert': upsertFinishSystem,
+    // A pure preview answers its projection (PreviewResponse), not a CommandResult: it is not a command and has no command id (register: pure).
+    'finish-system.preview': previewGeneration as unknown as (ctx: Gpr2CommandContext) => Promise<CommandResult>,
+    'finish-system.confirm': confirmGeneration
 });
 
 export const R05_HOOKS: Gpr2Hooks = Object.freeze({
