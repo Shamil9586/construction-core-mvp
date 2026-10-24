@@ -187,3 +187,71 @@ CREATE TRIGGER fin_command_ledger_immutable BEFORE UPDATE OR DELETE ON fin_comma
 -- FIN command mutations MUST be exposed through a reviewed SECURITY DEFINER write path, 
 -- with table ownership distinct from the restricted runtime role.
 -- Until role grants and DB-level full-book conservation function exist, THIS SCHEMA IS NOT PRODUCTION READY.
+
+
+-- SQL conservation proof (DRAFT): these checks run DEFERRED, after the complete
+-- multi-line book transaction. A book with head=0 can exist IN a transaction,
+-- but can never be committed as an incomplete or below-min official book.
+CREATE FUNCTION fin_assert_quarter_book() RETURNS trigger LANGUAGE plpgsql AS $fin$
+DECLARE
+ t uuid; b uuid; head_no integer; current_total numeric(20,2);
+ reported_total numeric(20,2); n_lines bigint; n_valid bigint;
+ n_revs bigint; max_no integer;
+BEGIN
+ t := NEW.tenant_id;
+ IF TG_TABLE_NAME = 'fin_quarter_plan_books' THEN b := NEW.id;
+ ELSIF TG_TABLE_NAME = 'fin_quarter_book_revisions' THEN b := NEW.book_id;
+ ELSIF TG_TABLE_NAME = 'fin_quarter_plan_lines' THEN b := NEW.book_id;
+ ELSIF TG_TABLE_NAME = 'fin_quarter_plan_line_revisions' THEN b := NEW.book_id;
+ ELSE RAISE EXCEPTION 'FIN_UNKNOWN_CONSERVATION_SOURCE' USING ERRCODE='23514';
+ END IF;
+ SELECT head_revision_no INTO head_no FROM fin_quarter_plan_books WHERE tenant_id=t AND id=b;
+ IF NOT FOUND THEN RAISE EXCEPTION 'FIN_BOOK_MISSING' USING ERRCODE='23514'; END IF;
+ IF head_no < 1 THEN RAISE EXCEPTION 'FIN_INCOMPLETE_BOOK' USING ERRCODE='23514'; END IF;
+ SELECT count(*),max(revision_no) INTO n_revs,max_no
+ FROM fin_quarter_book_revisions WHERE tenant_id=t AND book_id=b;
+ IF n_revs<>head_no OR max_no<>head_no THEN
+   RAISE EXCEPTION 'FIN_BOOK_HISTORY_GAP' USING ERRCODE='23514';
+ END IF;
+ SELECT new_total_rub INTO reported_total
+ FROM fin_quarter_book_revisions
+ WHERE tenant_id=t AND book_id=b AND revision_no=head_no;
+ IF reported_total IS NULL OR reported_total < 10000000.00 THEN
+   RAISE EXCEPTION 'FIN_QUARTER_TOTAL_BELOW_MIN' USING ERRCODE='23514';
+ END IF;
+ SELECT count(*),count(r.new_amount_rub),coalesce(sum(r.new_amount_rub),0)
+ INTO n_lines,n_valid,current_total
+ FROM fin_quarter_plan_lines l LEFT JOIN LATERAL (
+   SELECT lr.new_amount_rub
+   FROM fin_quarter_plan_line_revisions lr
+   JOIN fin_quarter_book_revisions br ON br.tenant_id=lr.tenant_id AND br.id=lr.book_revision_id
+   WHERE lr.tenant_id=l.tenant_id AND lr.plan_line_id=l.id AND br.revision_no <=head_no
+   ORDER BY br.revision_no DESC LIMIT 1
+ ) r ON TRUE
+ WHERE l.tenant_id=t AND l.book_id=b AND l.created_in_book_revision <=head_no;
+ IF n_lines=0 OR n_lines<>n_valid OR current_total<>reported_total THEN
+   RAISE EXCEPTION 'FIN_QUARTER_BOOK_CONSERVATION_FAILED' USING ERRCODE='23514';
+ END IF;
+ RETURN NEW;
+END;
+$fin$;
+CREATE CONSTRAINT TRIGGER fin_book_complete_on_book
+ AFTER INSERT OR UPDATE ON fin_quarter_plan_books DEFERRABLE INITIALLY DEFERRED
+ FOR EACH ROW EXECUTE FUNCTION fin_assert_quarter_book();
+CREATE CONSTRAINT TRIGGER fin_book_complete_on_book_revision
+ AFTER INSERT ON fin_quarter_book_revisions DEFERRABLE INITIALLY DEFERRED
+ FOR EACH ROW EXECUTE FUNCTION fin_assert_quarter_book();
+CREATE CONSTRAINT TRIGGER fin_book_complete_on_line
+ AFTER INSERT ON fin_quarter_plan_lines DEFERRABLE INITIALLY DEFERRED
+ FOR EACH ROW EXECUTE FUNCTION fin_assert_quarter_book();
+CREATE CONSTRAINT TRIGGER fin_book_complete_on_line_revision
+ AFTER INSERT ON fin_quarter_plan_line_revisions DEFERRABLE INITIALLY DEFERRED
+ FOR EACH ROW EXECUTE FUNCTION fin_assert_quarter_book();
+CREATE TRIGGER fin_plan_lines_immutable BEFORE UPDATE OR DELETE ON fin_quarter_plan_lines
+ FOR EACH ROW EXECUTE FUNCTION immutable_history();
+CREATE TRIGGER fin_subjects_immutable BEFORE UPDATE OR DELETE ON fin_subjects
+ FOR EACH ROW EXECUTE FUNCTION immutable_history();
+CREATE TRIGGER fin_party_scopes_immutable BEFORE UPDATE OR DELETE ON fin_party_scopes
+ FOR EACH ROW EXECUTE FUNCTION immutable_history();
+CREATE TRIGGER fin_contract_scopes_immutable BEFORE UPDATE OR DELETE ON fin_contract_scopes
+ FOR EACH ROW EXECUTE FUNCTION immutable_history();
