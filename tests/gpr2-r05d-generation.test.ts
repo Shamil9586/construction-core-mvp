@@ -294,11 +294,22 @@ test('R05d per-area grouping and legacy overlap warning: one Work per leaf on re
   const [ftPa, svPa] = sys.body.resultIds;
   await g.h.as(pilot.pm);
   await g.h.req('works', { objectId: pilot.object.id, workTypeId: T.plaster, name: 'Историческая штукатурка', unit: 'м²', plannedQuantity: '50', idempotencyKey: uuid() });
-  const p = (await preview({ systemVersionId: svPa, areaScopeIds: [A.S1], grouping: 'PER_AREA' }, { finishType: ftPa })).body.preview;
-  // S1's leaves today: F1-R1 (the room added under F1 above — F1 itself is no longer a leaf) and F2
-  assert.deepEqual(p.proposedWorks.map((w: any) => [w.areaScopeIds.length, w.quantity]).sort(), [[1, '100.0000'], [1, '400.0000']]);
+  // S1's leaves today: F1-R1 (100, the room added under F1 above — F1 600 itself is no longer a leaf) and F2 (400). F1's other 500 m² are not modelled:
+  // R05-GPT-B04 — the preview names the gap instead of silently generating 100 + 400 for a 1000 m² section.
+  const gap = (await preview({ systemVersionId: svPa, areaScopeIds: [A.S1], grouping: 'PER_AREA' }, { finishType: ftPa })).body.preview;
+  assert.equal(gap.canConfirm, false);
+  assert.deepEqual(gap.blockers.map((b: any) => [b.error, b.rule, b.areaScopeId]), [['MISSING_REQUIRED_DATA', 'AREA_COVERAGE_INCOMPLETE', A.F1]]);
+  assert.deepEqual(gap.missingInputs, [{ kind: 'AREA_COVERAGE', occurrenceKey: 'PLASTER', areaScopeId: A.F1, quantity: '500.0000', unit: 'м²' }]);
+  // a fully represented section: one Work per leaf
+  const mk = async (payload: any) => (await post(pmToken, `/objects/${pilot.object.id}/area-scopes`, { payload })).body.resultIds[0];
+  const PA = await mk({ parentId: A.B, kind: 'SECTION', code: 'S-PA', name: 'Секция захваток', measureQuantity: '700', measureUnit: 'м²' });
+  await mk({ parentId: PA, kind: 'FLOOR', code: 'S-PA-1', name: 'Захватка 1', measureQuantity: '300', measureUnit: 'м²' });
+  await mk({ parentId: PA, kind: 'FLOOR', code: 'S-PA-2', name: 'Захватка 2', measureQuantity: '400', measureUnit: 'м²' });
+  const p = (await preview({ systemVersionId: svPa, areaScopeIds: [PA], grouping: 'PER_AREA' }, { finishType: ftPa })).body.preview;
+  assert.deepEqual(p.blockers, []);
+  assert.deepEqual(p.proposedWorks.map((w: any) => [w.areaScopeIds.length, w.quantity]).sort(), [[1, '300.0000'], [1, '400.0000']]);
   assert.ok(p.warnings.some((w: any) => w.code === 'LEGACY_WORK_SAME_WORK_TYPE'), 'possible overlap with a historical Work is visible');
-  const r = await post(pmToken, `/objects/${pilot.object.id}/finish-systems/${ftPa}/confirm`, { expectedVersion: '1', expectedScopeVersion: p.scopeVersion, payload: { systemVersionId: svPa, areaScopeIds: [A.S1], grouping: 'PER_AREA', previewFingerprint: p.previewFingerprint, expectedSourceVersions: { systemVersion: svPa } } }, uuid());
+  const r = await post(pmToken, `/objects/${pilot.object.id}/finish-systems/${ftPa}/confirm`, { expectedVersion: '1', expectedScopeVersion: p.scopeVersion, payload: { systemVersionId: svPa, areaScopeIds: [PA], grouping: 'PER_AREA', previewFingerprint: p.previewFingerprint, expectedSourceVersions: { systemVersion: svPa } } }, uuid());
   assert.equal(r.status, 200, JSON.stringify(r.body)); assert.equal(r.body.resultIds.length, 2);
   assert.equal(Number((await q("SELECT count(*)::int AS n FROM works WHERE name='Историческая штукатурка'"))[0].n), 1, 'the historical Work is untouched and unbound');
 });

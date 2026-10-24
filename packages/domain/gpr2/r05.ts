@@ -17,7 +17,7 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { Gpr2Error, Gpr2ErrorCode, Gpr2ValidationRule, Gpr2Violation, validationFailed } from './errors';
-import { DecimalString, NORMATIVE, QUANTITY, addDecimals, compareDecimals, isPositiveDecimal, parseDecimal } from './decimal';
+import { DecimalString, NORMATIVE, QUANTITY, addDecimals, compareDecimals, isPositiveDecimal, parseDecimal, subtractFloorZero } from './decimal';
 import { canonicalJson } from './versions';
 import { reasonText, uuidSchema, zodViolations } from './schemas';
 
@@ -194,7 +194,7 @@ export interface PreviewInput {
     legacyWorks: readonly { workId: string; workTypeId: string }[];
     request: GenerationPreviewRequest;
 }
-export type BlockerRule = Extract<Gpr2ValidationRule, 'QUANTITY_MISSING' | 'UNIT_MISSING' | 'UNIT_MISMATCH' | 'AREA_OVERLAP' | 'PRODUCER_EXISTS' | 'NOTHING_TO_GENERATE' | 'REFERENCE_NOT_IN_SCOPE' | 'OUT_OF_RANGE'>;
+export type BlockerRule = Extract<Gpr2ValidationRule, 'QUANTITY_MISSING' | 'UNIT_MISSING' | 'UNIT_MISMATCH' | 'AREA_OVERLAP' | 'AREA_COVERAGE_INCOMPLETE' | 'PRODUCER_EXISTS' | 'NOTHING_TO_GENERATE' | 'REFERENCE_NOT_IN_SCOPE' | 'OUT_OF_RANGE'>;
 export interface PreviewBlocker { error: Gpr2ErrorCode; rule: BlockerRule | null; path: string; occurrenceKey: string | null; areaScopeId: string | null }
 export interface PreviewWarning { code: string; path: string }
 export type ItemStatus = 'PROPOSED' | 'EXISTING' | 'BLOCKED';
@@ -217,7 +217,8 @@ export interface GenerationPreview {
     proposedWorks: ProposedWork[];
     existingWorks: ExistingWork[];
     items: PreviewItem[];
-    missingInputs: { kind: 'QUANTITY' | 'UNIT'; occurrenceKey: string; areaScopeId: string | null }[];
+    /** QUANTITY / UNIT: a value nobody stated. AREA_COVERAGE: the part of a measured AreaScope its child AreaScopes do not represent (quantity, unit). */
+    missingInputs: { kind: 'QUANTITY' | 'UNIT' | 'AREA_COVERAGE'; occurrenceKey: string; areaScopeId: string | null; quantity?: string; unit?: string }[];
     blockers: PreviewBlocker[];
     warnings: PreviewWarning[];
     canConfirm: boolean;
@@ -235,6 +236,47 @@ export function leavesOf(rootId: string, children: ReadonlyMap<string, string[]>
         if (!kids.length) out.push(id); else stack.push(...kids);
     }
     return out.sort();
+}
+/**
+ * R05-GPT-B04. A measured AreaScope that has children is represented ONLY by its leaves, so the leaves must account for all of its measure in the
+ * stage's unit. For every node with children inside the selected subtree whose own measure is in `unit`, the effective measure of its children (a
+ * child's own measure in `unit`, or — for an unmeasured child with children — the effective measure of those) is compared with the node's measure:
+ *   less    → INCOMPLETE with the uncovered quantity (never filled in: no remainder AreaScope is invented, the PM models it or selects otherwise);
+ *   greater → EXCEEDED (the children count more space than the parent declares).
+ * A child whose measure in `unit` is unknown makes the node's coverage unknown: not reported here, because that leaf is already a QUANTITY_MISSING /
+ * UNIT_MISMATCH blocker. A node without a measure in `unit` declares nothing to cover.
+ */
+export function areaCoverageGaps(rootId: string, unit: string, areas: ReadonlyMap<string, PreviewArea>, children: ReadonlyMap<string, string[]>):
+        { areaScopeId: string; kind: 'INCOMPLETE' | 'EXCEEDED'; quantity: DecimalString }[] {
+    const measured = (id: string): DecimalString | null => {
+        const a = areas.get(id);
+        return a && a.measureQuantity !== null && a.measureUnit === unit ? a.measureQuantity as DecimalString : null;
+    };
+    const effective = (id: string): DecimalString | null => {
+        const own = measured(id);
+        if (own !== null) return own;
+        const kids = children.get(id) ?? [];
+        if (!kids.length) return null;
+        const parts = kids.map(effective);
+        return parts.every(p => p !== null) ? addDecimals(QUANTITY, parts as DecimalString[]) : null;
+    };
+    const out: { areaScopeId: string; kind: 'INCOMPLETE' | 'EXCEEDED'; quantity: DecimalString }[] = [];
+    const stack = [rootId];
+    while (stack.length) {
+        const id = stack.pop()!;
+        const kids = children.get(id) ?? [];
+        if (!kids.length) continue;
+        stack.push(...kids);
+        const own = measured(id);
+        if (own === null) continue;
+        const parts = kids.map(effective);
+        if (!parts.every(p => p !== null)) continue;
+        const covered = addDecimals(QUANTITY, parts as DecimalString[]);
+        const cmp = compareDecimals(covered, own);
+        if (cmp < 0) out.push({ areaScopeId: id, kind: 'INCOMPLETE', quantity: subtractFloorZero(QUANTITY, own, covered) });
+        else if (cmp > 0) out.push({ areaScopeId: id, kind: 'EXCEEDED', quantity: subtractFloorZero(QUANTITY, covered, own) });
+    }
+    return out.sort((a, b) => a.areaScopeId < b.areaScopeId ? -1 : a.areaScopeId > b.areaScopeId ? 1 : 0);
 }
 export function ancestorsOf(id: string, parent: ReadonlyMap<string, string | null>): string[] {
     const out: string[] = [];
@@ -288,6 +330,14 @@ export function computeGenerationPreview(input: PreviewInput): GenerationPreview
     const local = new Map(req.localQuantities.map(q => [q.occurrenceKey + '|' + q.areaScopeId, q.quantity]));
     const items: PreviewItem[] = [];
     for (const o of included) {
+        // R05-GPT-B04: a MAIN stage over a measured parent is generated only when the parent's measure is fully represented by its leaves.
+        if (o.measureScope === 'MAIN')
+            for (const gap of [...new Map(selected.flatMap(root => areaCoverageGaps(root, o.measureUnit, areas, children)).map(g => [g.areaScopeId, g])).values()]) {
+                if (gap.kind === 'INCOMPLETE') {
+                    missingInputs.push({ kind: 'AREA_COVERAGE', occurrenceKey: o.occurrenceKey, areaScopeId: gap.areaScopeId, quantity: gap.quantity, unit: o.measureUnit });
+                    block('MISSING_REQUIRED_DATA', 'AREA_COVERAGE_INCOMPLETE', 'areaScopeIds', o.occurrenceKey, gap.areaScopeId);
+                } else block('AREA_SCOPE_CONFLICT', 'AREA_OVERLAP', 'areaScopeIds', o.occurrenceKey, gap.areaScopeId);
+            }
         if (o.measureUnit !== o.workTypeUnit)
             block('INVALID_MEASUREMENT', 'UNIT_MISMATCH', 'occurrences.' + o.occurrenceKey, o.occurrenceKey);
         const descendantsBound = (leaf: string) => [...(boundAreasOf.get(o.occurrenceKey) ?? [])].some(b => b !== leaf && ancestorsOf(b, parent).includes(leaf));
