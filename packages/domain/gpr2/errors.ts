@@ -86,7 +86,7 @@ export const GPR2_VALIDATION_RULES = [
     'ID_MALFORMED', 'DATE_MALFORMED', 'FIELD_REQUIRED', 'FIELD_NOT_ALLOWED', 'FIELD_TYPE', 'OUT_OF_RANGE', 'ENUM_VALUE', 'REASON_REQUIRED',
     // R05: why a generation input cannot be applied (structured blockers; never the offending value).
     'QUANTITY_MISSING', 'UNIT_MISSING', 'UNIT_UNKNOWN', 'UNIT_MISMATCH', 'REFERENCE_NOT_IN_SCOPE', 'AREA_OVERLAP', 'PRODUCER_EXISTS', 'DUPLICATE_VALUE',
-    'NOTHING_TO_GENERATE', 'AREA_COVERAGE_INCOMPLETE'
+    'NOTHING_TO_GENERATE', 'AREA_COVERAGE_INCOMPLETE', 'PRODUCER_INCOMPATIBLE'
 ] as const;
 export type Gpr2ValidationRule = typeof GPR2_VALIDATION_RULES[number];
 export interface Gpr2Violation { path: string; rule: Gpr2ValidationRule }

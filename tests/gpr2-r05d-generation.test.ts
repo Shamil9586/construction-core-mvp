@@ -313,3 +313,33 @@ test('R05d per-area grouping and legacy overlap warning: one Work per leaf on re
   assert.equal(r.status, 200, JSON.stringify(r.body)); assert.equal(r.body.resultIds.length, 2);
   assert.equal(Number((await q("SELECT count(*)::int AS n FROM works WHERE name='Историческая штукатурка'"))[0].n), 1, 'the historical Work is untouched and unbound');
 });
+
+test('R05-IND-NEW-05 over HTTP: a version that keeps an occurrence key but changes its operation is not satisfied by the old producer — 422, nothing written; a compatible version reuses it', async () => {
+  const mk = async (code: string) => (await post(pmToken, `/objects/${pilot.object.id}/area-scopes`, { payload: { kind: 'ZONE', code, name: code, measureQuantity: '40', measureUnit: 'м²' } })).body.resultIds[0];
+  const R = await mk('NEW05-R');
+  const v1 = await post(pmToken, `/objects/${pilot.object.id}/finish-systems`, { payload: { finishType: { code: 'TYPE-NEW05', name: 'Смена операции' }, stages: [stage('SAME_KEY', 1, T.plaster)] } });
+  const [ftV, svV1] = v1.body.resultIds;
+  const pv = async (sv: string) => (await preview({ systemVersionId: sv, areaScopeIds: [R] }, { finishType: ftV })).body.preview;
+  const conf = (p: any, key = uuid()) => post(pmToken, `/objects/${pilot.object.id}/finish-systems/${ftV}/confirm`, { expectedVersion: '1', expectedScopeVersion: p.scopeVersion,
+    payload: { systemVersionId: p.systemVersionId, areaScopeIds: [R], previewFingerprint: p.previewFingerprint, expectedSourceVersions: { systemVersion: p.systemVersionId } } }, key);
+  const c1 = await conf(await pv(svV1)); assert.equal(c1.status, 200, JSON.stringify(c1.body));
+  const oldWork = c1.body.resultIds[0];
+  // version 2: SAME_KEY is now «Покраска» — another operation
+  const v2 = await post(pmToken, `/objects/${pilot.object.id}/finish-systems`, { payload: { finishTypeId: ftV, stages: [stage('SAME_KEY', 1, T.paint), stage('NEW_STAGE', 2, T.putty)] } });
+  assert.equal(v2.status, 200, JSON.stringify(v2.body));
+  const afterUpsert = await digestAll();
+  const p2 = await pv(v2.body.resultIds[1]);
+  assert.equal(p2.canConfirm, false);
+  assert.deepEqual(p2.blockers.map((b: any) => [b.error, b.rule, b.occurrenceKey]), [['ONE_PRODUCER_CONFLICT', 'PRODUCER_INCOMPATIBLE', 'SAME_KEY']]);
+  assert.deepEqual(p2.existingWorks, [], 'the old «Штукатурка» Work is not offered as the producer of «Покраска»');
+  const refused = await conf(p2);
+  assert.equal(refused.status, 422); assert.equal(refused.body.code, 'ONE_PRODUCER_CONFLICT');
+  assert.ok(refused.body.details.violations.some((v: any) => v.rule === 'PRODUCER_INCOMPATIBLE'));
+  assert.deepEqual(await digestAll(), afterUpsert, 'the refused confirm wrote nothing: no Work, binding, ledger, audit row or scope bump');
+  assert.equal((await q('SELECT work_type_id FROM works WHERE id=$1', [oldWork]))[0].work_type_id, T.plaster, 'the historical Work is not rewritten');
+  // version 3: SAME_KEY is «Штукатурка» again — a compatible transition: the producer of version 1 is EXISTING, only NEW_STAGE is created
+  const v3 = await post(pmToken, `/objects/${pilot.object.id}/finish-systems`, { payload: { finishTypeId: ftV, stages: [stage('SAME_KEY', 1, T.plaster), stage('NEW_STAGE', 2, T.putty)] } });
+  const p3 = await pv(v3.body.resultIds[1]);
+  assert.deepEqual(p3.blockers, []); assert.deepEqual(p3.existingWorks.map((w: any) => w.workId), [oldWork]);
+  const ok = await conf(p3); assert.equal(ok.status, 200, JSON.stringify(ok.body)); assert.equal(ok.body.resultIds.length, 1);
+});

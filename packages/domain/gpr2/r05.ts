@@ -178,7 +178,21 @@ export interface PreviewOccurrence {
     id: string; occurrenceKey: string; position: number; workTypeId: string; workTypeName: string; workTypeUnit: string;
     required: boolean; measureScope: MeasureScope; measureUnit: string; proposedHoldHours: string | null; overrideKind: OverrideKind
 }
-export interface PreviewBinding { id: string; workId: string; occurrenceKey: string; areaScopeId: string; systemVersionId: string; workName: string; workUnit: string; workQuantity: string }
+export interface PreviewBinding {
+    id: string; workId: string; occurrenceKey: string; areaScopeId: string; systemVersionId: string; workName: string; workUnit: string; workQuantity: string;
+    /** The operation the producer actually performs: its Work's WorkType, and the WorkType / unit / measure scope of the occurrence it was bound under. */
+    workTypeId: string; producedWorkTypeId: string; producedMeasureUnit: string; producedMeasureScope: MeasureScope;
+}
+/**
+ * R05-IND-NEW-05. An occurrence key names an obligation, not an operation: a producer bound under one version satisfies the same key of another version
+ * only when it performs the SAME operation — the same WorkType (its Work's and its occurrence's), the same unit and the same measure scope. Anything
+ * else is a different operation: the obligation is not met, the old Work is neither reused nor rewritten, and no duplicate producer is created
+ * (resolving it is a finish change, R09).
+ */
+export function producerCompatible(b: PreviewBinding, o: Pick<PreviewOccurrence, 'workTypeId' | 'measureUnit' | 'measureScope'>): boolean {
+    return b.workTypeId === o.workTypeId && b.producedWorkTypeId === o.workTypeId && b.workUnit === o.measureUnit && b.producedMeasureUnit === o.measureUnit
+        && b.producedMeasureScope === o.measureScope;
+}
 export interface PreviewInput {
     finishType: { id: string; code: string; name: string; version: number };
     systemVersion: { id: string; versionNumber: number; isCurrent: boolean };
@@ -194,7 +208,7 @@ export interface PreviewInput {
     legacyWorks: readonly { workId: string; workTypeId: string }[];
     request: GenerationPreviewRequest;
 }
-export type BlockerRule = Extract<Gpr2ValidationRule, 'QUANTITY_MISSING' | 'UNIT_MISSING' | 'UNIT_MISMATCH' | 'AREA_OVERLAP' | 'AREA_COVERAGE_INCOMPLETE' | 'PRODUCER_EXISTS' | 'NOTHING_TO_GENERATE' | 'REFERENCE_NOT_IN_SCOPE' | 'OUT_OF_RANGE'>;
+export type BlockerRule = Extract<Gpr2ValidationRule, 'QUANTITY_MISSING' | 'UNIT_MISSING' | 'UNIT_MISMATCH' | 'AREA_OVERLAP' | 'AREA_COVERAGE_INCOMPLETE' | 'PRODUCER_EXISTS' | 'PRODUCER_INCOMPATIBLE' | 'NOTHING_TO_GENERATE' | 'REFERENCE_NOT_IN_SCOPE' | 'OUT_OF_RANGE'>;
 export interface PreviewBlocker { error: Gpr2ErrorCode; rule: BlockerRule | null; path: string; occurrenceKey: string | null; areaScopeId: string | null }
 export interface PreviewWarning { code: string; path: string }
 export type ItemStatus = 'PROPOSED' | 'EXISTING' | 'BLOCKED';
@@ -344,6 +358,13 @@ export function computeGenerationPreview(input: PreviewInput): GenerationPreview
         let applicable = 0;
         for (const leaf of leaves) {
             const existing = bound.get(o.occurrenceKey + '|' + leaf);
+            if (existing && !producerCompatible(existing, o)) {
+                // the obligation is held by a producer of another operation: not satisfied, not duplicable here (one producer per obligation)
+                items.push({ occurrenceKey: o.occurrenceKey, occurrenceId: o.id, areaScopeId: leaf, status: 'BLOCKED', quantity: null, unit: o.measureUnit, existingWorkId: existing.workId });
+                block('ONE_PRODUCER_CONFLICT', 'PRODUCER_INCOMPATIBLE', 'areaScopeIds', o.occurrenceKey, leaf);
+                applicable++;
+                continue;
+            }
             if (existing) {
                 items.push({ occurrenceKey: o.occurrenceKey, occurrenceId: o.id, areaScopeId: leaf, status: 'EXISTING', quantity: existing.workQuantity, unit: existing.workUnit, existingWorkId: existing.workId });
                 applicable++;
