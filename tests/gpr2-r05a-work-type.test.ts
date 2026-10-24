@@ -195,6 +195,10 @@ test('R05a PostgreSQL guards hold without the API: scope change, alias, cross-ob
   await fails(`INSERT INTO work_execution_units(tenant_id,object_work_id,work_type_id,contractor_id,unit,planned_quantity) VALUES($1,$2,$3,$4,'м²',1)`, [tenant, pilot.neighbourWork.work.id, t.id, pilot.contractors[0].id], /GPR2_R05:CROSS_SCOPE_REFERENCE/);
   // the unit of a referenced corporate type cannot change (the pilot works use it)
   await fails("UPDATE work_types SET unit='м³' WHERE id=$1", [pilot.plaster.id], /GPR2_R05:UNIT_IMMUTABLE/);
+  // a request is only ever made for an object type of its own object (corporate type / another object's type / wrong object refused)
+  const reqSql = `INSERT INTO work_type_publication_requests(tenant_id,object_id,work_type_id,work_type_version,proposed_name,proposed_category_id,proposed_unit,requested_by) VALUES($1,$2,$3,1,'x',$4,'м²',$5)`;
+  await fails(reqSql, [tenant, pilot.object.id, pilot.plaster.id, categoryId, pilot.pm.id], /GPR2_R05:CROSS_SCOPE_REFERENCE/);
+  await fails(reqSql, [tenant, pilot.neighbour.id, t.id, categoryId, pilot.pm.id], /GPR2_R05:CROSS_SCOPE_REFERENCE/);
   // decided requests are immutable and nothing is ever deleted
   const req = (await post(pmToken, `/objects/${pilot.object.id}/work-types/${t.id}/publication-requests`, { expectedVersion: '1', payload: {} })).body.resultIds[0];
   await fails('DELETE FROM work_type_publication_requests WHERE id=$1', [req], /GPR2_R05:APPEND_ONLY/);

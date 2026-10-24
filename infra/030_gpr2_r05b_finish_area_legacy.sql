@@ -157,7 +157,8 @@ CREATE TABLE legacy_work_classifications(
     created_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE(tenant_id, id),
     UNIQUE(tenant_id, object_id, id),
-    FOREIGN KEY (tenant_id, object_id, work_id) REFERENCES works(tenant_id, object_id, id),
+    -- the Work is of THIS object: checked by gpr2_legacy_classification_chain_guard (no new index on works — see 029)
+    FOREIGN KEY (tenant_id, work_id) REFERENCES works(tenant_id, id),
     FOREIGN KEY (tenant_id, object_id, supersedes_classification_id) REFERENCES legacy_work_classifications(tenant_id, object_id, id),
     FOREIGN KEY (tenant_id, recorded_by) REFERENCES users(tenant_id, id)
 );
@@ -178,6 +179,9 @@ END $$;
 CREATE TRIGGER gpr2_legacy_mapping_chain_guard BEFORE INSERT ON legacy_finish_mappings FOR EACH ROW EXECUTE FUNCTION gpr2_legacy_mapping_chain_guard();
 CREATE FUNCTION gpr2_legacy_classification_chain_guard() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
+    IF NOT EXISTS (SELECT 1 FROM works w WHERE w.tenant_id = NEW.tenant_id AND w.id = NEW.work_id AND w.object_id = NEW.object_id) THEN
+        RAISE EXCEPTION 'GPR2_R05:CROSS_SCOPE_REFERENCE a classification is about a Work of its own object' USING ERRCODE = 'check_violation';
+    END IF;
     IF NEW.supersedes_classification_id IS NOT NULL AND NOT EXISTS (
             SELECT 1 FROM legacy_work_classifications w WHERE w.tenant_id = NEW.tenant_id AND w.id = NEW.supersedes_classification_id AND w.work_id = NEW.work_id) THEN
         RAISE EXCEPTION 'GPR2_R05:CROSS_SCOPE_REFERENCE a classification supersedes only a classification of the same Work' USING ERRCODE = 'check_violation';

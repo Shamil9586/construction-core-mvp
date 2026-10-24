@@ -16,7 +16,7 @@
 --   * a trigger refuses a producer whose AreaScope is an ancestor or a descendant of an AreaScope already produced for the same (finish type, occurrence
 --     key) — the parent and its child would count the same space twice. It runs under a row lock on the finish type, so two concurrent inserts are checked
 --     one after the other;
---   * the Work must be a Work of the same object whose WorkType and unit are the occurrence's, a new Work (no execution unit, no legacy fact, no
+--   * the Work must be a Work of the same object (trigger; the key is (tenant, work)) whose WorkType and unit are the occurrence's, a new Work (no execution unit, no legacy fact, no
 --     legacy classification: a historical Work is never re-bound or split by generation), and a Work produces ONE operation (one finish type and
 --     occurrence key); the occurrence's version must be PUBLISHED and belong to the same finish type;
 --   * bindings are append-only. Replacing a producer (reuse, finish change) is R09 and needs its own migration; an AreaScope with a producer is not retired.
@@ -59,7 +59,8 @@ CREATE TABLE work_scope_bindings(
     created_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE(tenant_id, id),
     UNIQUE(tenant_id, object_id, id),
-    FOREIGN KEY (tenant_id, object_id, work_id) REFERENCES works(tenant_id, object_id, id),
+    -- the Work is of THIS object: checked by gpr2_binding_guard (no new index on works — see 029)
+    FOREIGN KEY (tenant_id, work_id) REFERENCES works(tenant_id, id),
     FOREIGN KEY (tenant_id, object_id, finish_type_id, system_version_id) REFERENCES object_finish_system_versions(tenant_id, object_id, finish_type_id, id),
     FOREIGN KEY (tenant_id, object_id, system_version_id, occurrence_id) REFERENCES finish_stage_occurrences(tenant_id, object_id, system_version_id, id),
     FOREIGN KEY (tenant_id, object_id, area_scope_id) REFERENCES object_area_scopes(tenant_id, object_id, id),

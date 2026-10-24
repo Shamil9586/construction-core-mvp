@@ -176,6 +176,9 @@ test('R05b-8 historical mixed Work: evidence says MIXED, a classification is rec
   const fix = (await svc.recordLegacyWorkClassification(pilot.pm, { workId: work.id, classification: 'UNKNOWN', basis: 'нужна инвентаризация', supersedesClassificationId: cls })).resultIds[0];
   assert.equal((await svc.legacyWorkFinishEvidence(pilot.pm, work.id)).current?.id, fix);
   await fails("UPDATE legacy_work_classifications SET classification='SINGLE_FINISH' WHERE id=$1", [cls], /Append-only/);
+  // a classification is about a Work of its OWN object (direct SQL: the neighbour object's id with this Work)
+  await fails(`INSERT INTO legacy_work_classifications(tenant_id,object_id,work_id,classification,evidence,basis,recorded_by) VALUES($1,$2,$3,'UNKNOWN','{}','x',$4)`,
+    [tenant, pilot.neighbour.id, work.id, pilot.pm.id], /GPR2_R05:CROSS_SCOPE_REFERENCE/);
   // another РП cannot classify or read this Work's evidence
   await assert.rejects(svc.recordLegacyWorkClassification(pilot.other, { workId: work.id, classification: 'UNKNOWN', basis: 'x', supersedesClassificationId: fix }), (e: any) => e.code === 'RESOURCE_NOT_FOUND');
   await assert.rejects(svc.legacyWorkFinishEvidence(pilot.other, work.id), (e: any) => e.code === 'RESOURCE_NOT_FOUND');

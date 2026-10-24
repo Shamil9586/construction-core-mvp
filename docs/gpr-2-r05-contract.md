@@ -34,7 +34,7 @@ New error codes (`errors.ts`): 409 `STALE_PREVIEW`, `STALE_SOURCE_VERSION`; 422 
 
 | Migration | Adds |
 |---|---|
-| `029_gpr2_r05a_work_type_scope.sql` | `work_types.scope/object_id/origin_object_id/alias_of_work_type_id/created_by`, `work_type_publication_requests`, scope/alias/unit/use guards, `works(tenant_id,object_id,id)` unique index |
+| `029_gpr2_r05a_work_type_scope.sql` | `work_types.scope/object_id/origin_object_id/alias_of_work_type_id/created_by`, `work_type_publication_requests`, scope/alias/unit/use/origin guards (no new index on an existing table) |
 | `030_gpr2_r05b_finish_area_legacy.sql` | `object_finish_types`, `object_area_scopes`, `legacy_finish_mappings`, `legacy_work_classifications` |
 | `031_gpr2_r05c_templates.sql` | `finish_templates`, `finish_template_versions`, `finish_template_stages`, `object_finish_system_versions`, `finish_stage_occurrences`, `finish_stage_exclusions` |
 | `032_gpr2_r05d_work_generation.sql` | `work_scope_state` (scope version, trigger-maintained), `work_scope_bindings` (one active producer per obligation) |

@@ -6,10 +6,10 @@
 --   * scope is added NOT NULL with the constant default 'CORPORATE' (catalogue-only since PostgreSQL 11, no table rewrite). Every row that exists
 --     today was created through the tenant-wide dictionary (POST dictionaries/work-types, ADMIN_DICTIONARIES) and carries no object, so CORPORATE is
 --     what it already is — this states the existing fact, it does not decide a new one;
---   * object_id / origin_object_id / alias_of_work_type_id / created_by are added NULL; no existing row receives a value;
---   * a new UNIQUE index (tenant_id, object_id, id) on works lets the R05 tables point at a Work of the SAME object by foreign key. It is an index,
---     not a change of any row; it takes a SHARE lock on works for one scan (release plan, R22).
--- Works / WEU / QuantityPortion / confirmations / history are not touched: no column of theirs changes, no row is written.
+--   * object_id / origin_object_id / alias_of_work_type_id / created_by are added NULL; no existing row receives a value.
+-- Works / WEU / QuantityPortion / confirmations / history are not touched: no column, index or row of theirs changes. (A new index on works was tried and
+-- rejected: it changes the plan of existing unordered reads of works; the R05 tables check "a Work of the SAME object" by trigger instead. For the same
+-- reason no index is added to work_types: the request → origin-object rule below is a trigger, not a composite key.)
 --
 -- What PostgreSQL itself now guarantees (not only the API):
 --   * a WorkType is CORPORATE (no object) or OBJECT (exactly one object of the same tenant) — CHECK + composite FK;
@@ -42,11 +42,8 @@ ALTER TABLE work_types ADD CONSTRAINT work_types_object_fk FOREIGN KEY (tenant_i
 ALTER TABLE work_types ADD CONSTRAINT work_types_origin_object_fk FOREIGN KEY (tenant_id, origin_object_id) REFERENCES objects(tenant_id, id);
 ALTER TABLE work_types ADD CONSTRAINT work_types_alias_fk FOREIGN KEY (tenant_id, alias_of_work_type_id) REFERENCES work_types(tenant_id, id);
 ALTER TABLE work_types ADD CONSTRAINT work_types_created_by_fk FOREIGN KEY (tenant_id, created_by) REFERENCES users(tenant_id, id);
-CREATE UNIQUE INDEX work_types_tenant_origin_id_uq ON work_types(tenant_id, origin_object_id, id);
 CREATE INDEX work_types_object_idx ON work_types(tenant_id, object_id) WHERE object_id IS NOT NULL;
 
--- The R05 tables refer to "a Work of THIS object" by composite FK.
-CREATE UNIQUE INDEX works_tenant_object_id_uq ON works(tenant_id, object_id, id);
 
 CREATE TABLE work_type_publication_requests(
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -71,8 +68,9 @@ CREATE TABLE work_type_publication_requests(
     version int NOT NULL DEFAULT 1 CHECK (version > 0),
     UNIQUE(tenant_id, id),
     FOREIGN KEY (tenant_id, object_id) REFERENCES objects(tenant_id, id),
-    -- the requested type must be a type born in THIS object (origin_object_id is immutable, so the link survives a promotion)
-    FOREIGN KEY (tenant_id, object_id, work_type_id) REFERENCES work_types(tenant_id, origin_object_id, id),
+    -- the requested type must be a type born in THIS object (origin_object_id is immutable, so the link survives a promotion): checked on INSERT by
+    -- gpr2_publication_request_origin (no new index on an existing table — see the header)
+    FOREIGN KEY (tenant_id, work_type_id) REFERENCES work_types(tenant_id, id),
     FOREIGN KEY (tenant_id, proposed_category_id) REFERENCES work_categories(tenant_id, id),
     FOREIGN KEY (tenant_id, requested_by) REFERENCES users(tenant_id, id),
     FOREIGN KEY (tenant_id, decided_by) REFERENCES users(tenant_id, id),
@@ -104,6 +102,16 @@ BEGIN
     RETURN NEW;
 END $$;
 CREATE TRIGGER gpr2_publication_request_guard BEFORE UPDATE OR DELETE ON work_type_publication_requests FOR EACH ROW EXECUTE FUNCTION gpr2_publication_request_guard();
+
+CREATE FUNCTION gpr2_publication_request_origin() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.status <> 'PENDING' OR NOT EXISTS (SELECT 1 FROM work_types t WHERE t.tenant_id = NEW.tenant_id AND t.id = NEW.work_type_id AND t.scope = 'OBJECT'
+                                                AND t.object_id = NEW.object_id AND t.origin_object_id = NEW.object_id) THEN
+        RAISE EXCEPTION 'GPR2_R05:CROSS_SCOPE_REFERENCE a publication request is made for an object WorkType of its own object, as PENDING' USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+END $$;
+CREATE TRIGGER gpr2_publication_request_origin BEFORE INSERT ON work_type_publication_requests FOR EACH ROW EXECUTE FUNCTION gpr2_publication_request_origin();
 
 -- The WorkType side of the same rule.
 CREATE FUNCTION gpr2_work_type_scope_guard() RETURNS trigger LANGUAGE plpgsql AS $$
