@@ -22,3 +22,34 @@ jobs:
         run: npm run build
       - name: FIN-SDO exact decimal/RBAC unit scenarios
         run: node --import tsx --test tests/fin-sdo-1-money.test.ts
+  native-postgres-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: fin-test-only
+          POSTGRES_DB: fin_sdo_test
+        ports:
+          - 127.0.0.1:5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d fin_sdo_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://postgres:fin-test-only@127.0.0.1:5432/fin_sdo_test
+      FIN_SDO_ISOLATED_CONFIRM: 'YES'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Apply unchanged 001-028 to disposable native PostgreSQL
+        run: npm run db:migrate
+      - name: Load UNNUMBERED FIN draft and prove selected native invariants
+        run: node --import tsx scripts/fin-sdo-1-isolated-pg-verify.ts
