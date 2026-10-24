@@ -55,3 +55,5 @@ jobs:
         run: node --import tsx scripts/fin-sdo-1-isolated-pg-verify.ts
       - name: Verify FIN-SDO-1 service against native disposable PostgreSQL
         run: node --import tsx scripts/fin-sdo-1-isolated-service-verify.ts
+      - name: Verify FIN-SDO-1 direct HTTP RBAC and tenant isolation
+        run: node --import tsx scripts/fin-sdo-1-isolated-http-verify.ts
