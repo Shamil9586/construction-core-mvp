@@ -73,7 +73,8 @@ export function ledgered(c: any, ctx: Gpr2CommandContext, execute: (current: Act
 const DB_CODES: Record<string, Gpr2Error['code']> = {
     CROSS_SCOPE_REFERENCE: 'CROSS_SCOPE_REFERENCE', ONE_PRODUCER_CONFLICT: 'ONE_PRODUCER_CONFLICT', AREA_SCOPE_CONFLICT: 'AREA_SCOPE_CONFLICT',
     INVALID_MEASUREMENT: 'INVALID_MEASUREMENT', UNIT_IMMUTABLE: 'INVALID_MEASUREMENT', VERSION_IMMUTABLE: 'VERSION_IMMUTABLE', DECIDED_IMMUTABLE: 'INVALID_TRANSITION',
-    SCOPE_CHANGE_FORBIDDEN: 'INVALID_TRANSITION', ALIAS_FORBIDDEN: 'INVALID_TRANSITION', MISSING_REQUIRED_DATA: 'MISSING_REQUIRED_DATA', STALE_SOURCE_VERSION: 'STALE_SOURCE_VERSION'
+    SCOPE_CHANGE_FORBIDDEN: 'INVALID_TRANSITION', ALIAS_FORBIDDEN: 'INVALID_TRANSITION', MISSING_REQUIRED_DATA: 'MISSING_REQUIRED_DATA', STALE_SOURCE_VERSION: 'STALE_SOURCE_VERSION',
+    PROVENANCE_MISMATCH: 'VALIDATION_FAILED', APPEND_ONLY: 'VERSION_IMMUTABLE', IDENTITY_IMMUTABLE: 'INVALID_TRANSITION'
 };
 /** Unique indexes whose violation is a business answer, not a 409 "data conflict". */
 const UNIQUE_CODES: Record<string, () => Gpr2Error> = {
@@ -82,7 +83,11 @@ const UNIQUE_CODES: Record<string, () => Gpr2Error> = {
     work_type_publication_requests_one_approved: () => new Gpr2Error('INVALID_TRANSITION', { machine: 'WORK_TYPE_PUBLICATION_REQUEST', from: 'APPROVED', command: 'work-type.publication.request' }),
     object_area_scopes_code_uq: () => validationFailed([{ path: 'code', rule: 'DUPLICATE_VALUE' }]),
     object_finish_types_code_uq: () => validationFailed([{ path: 'finishType.code', rule: 'DUPLICATE_VALUE' }]),
-    finish_templates_code_uq: () => validationFailed([{ path: 'code', rule: 'DUPLICATE_VALUE' }])
+    finish_templates_code_uq: () => validationFailed([{ path: 'code', rule: 'DUPLICATE_VALUE' }]),
+    finish_template_versions_one_draft: () => new Gpr2Error('INVALID_TRANSITION', { machine: 'FINISH_TEMPLATE_VERSION', from: 'DRAFT', command: 'finish-template.draft' }),
+    object_finish_system_versions_one_draft: () => new Gpr2Error('INVALID_TRANSITION', { machine: 'FINISH_SYSTEM_VERSION', from: 'DRAFT', command: 'finish-system.upsert' }),
+    finish_template_versions_tenant_id_template_id_version_number_key: () => new Gpr2Error('STALE_VERSION', { token: 'expectedVersion' }),
+    object_finish_system_versions_tenant_id_finish_type_id_version_number_key: () => new Gpr2Error('STALE_SOURCE_VERSION')
 };
 
 /**
