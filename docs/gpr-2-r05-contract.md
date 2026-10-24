@@ -6,7 +6,11 @@ SHA-256 before work began): Technical Design `b80ba7315509b9a011b87a45957f7e9a3e
 see limits), A12, A19, A30. No LIVE change, no R06+ behaviour. Status: **IMPLEMENTED — PENDING INDEPENDENT REVIEW**.
 
 Corrective (same day): the first independent review (GPT, `GPT_REVIEW_20261024`, findings R05-GPT-B01…B05) is answered by the additive migration
-`033_gpr2_r05_corrective.sql` and a preview rule (B04); migrations 029–032 are unchanged. Status of the corrective: **IMPLEMENTED — PENDING GPT RE-REVIEW**.
+`033_gpr2_r05_corrective.sql` and a preview rule (B04); migrations 029–032 are unchanged.
+
+Independent-acceptance corrective (24.10.2026): the native-PostgreSQL acceptance (`INDEPENDENT_ACCEPTANCE_REPORT`, findings R05-IND-NEW-01…05) is
+answered by the additive migration `034_gpr2_r05_independent_corrective.sql` (NEW-01…04) and a preview rule (NEW-05); 029–033 are unchanged.
+Status: **IMPLEMENTED — PENDING GPT REVIEW**.
 
 ## Surface
 
@@ -41,6 +45,7 @@ New error codes (`errors.ts`): 409 `STALE_PREVIEW`, `STALE_SOURCE_VERSION`; 422 
 | `030_gpr2_r05b_finish_area_legacy.sql` | `object_finish_types`, `object_area_scopes`, `legacy_finish_mappings`, `legacy_work_classifications` |
 | `031_gpr2_r05c_templates.sql` | `finish_templates`, `finish_template_versions`, `finish_template_stages`, `object_finish_system_versions`, `finish_stage_occurrences`, `finish_stage_exclusions` |
 | `032_gpr2_r05d_work_generation.sql` | `work_scope_state` (scope version, trigger-maintained), `work_scope_bindings` (one active producer per obligation) |
+| `034_gpr2_r05_independent_corrective.sql` | three empty tables — `object_area_scope_child_revisions` (per parent), `work_scope_operations` (one row per producing Work, PK (tenant, work)), `work_type_reference_state` (per WorkType) — and the triggers of the four write-conflict protocols below; a precondition check that fails the run over data already violating NEW-01…04 (nothing is repaired or invented) |
 | `033_gpr2_r05_corrective.sql` | CHECK `work_types_object_origin_required` (NOT VALID, then VALIDATE — fails and rolls back if any OBJECT type lacks an origin; no value is invented) and six triggers: bound-Work identity, binding / classification Work lock, template-version identity + DRAFT-only insert, system-version identity, publication provenance. No table, column, index or row. |
 
 Existing rows: no Work, WEU, portion, confirmation, progress, legacy finish or legacy WorkType column is written. Existing WorkTypes read `CORPORATE`
@@ -69,6 +74,31 @@ Existing rows: no Work, WEU, portion, confirmation, progress, legacy finish or l
   `source_template_version_id` (DRAFT included). At publication every occurrence / exclusion names the version's own source, every INHERITED
   occurrence is still an exact copy (`PROVENANCE_MISMATCH` otherwise).
 - (033, B03) An OBJECT WorkType has a non-NULL `origin_object_id = object_id` (029's CHECK let NULL through as UNKNOWN). Promotion keeps the origin.
+
+## Concurrency protocols (034, R05-IND-NEW-01…04)
+
+Each guard of 030–033 that read committed rows under a lock of an UNMODIFIED row is completed by a real write to a shared row, so that under READ
+COMMITTED the later transaction waits and its guard (a new statement) sees the committed row, and under REPEATABLE READ it gets 40001 instead of passing
+on an old snapshot (a retry gets the business answer):
+
+| Invariant | Shared row both sides write | Re-check |
+|---|---|---|
+| NEW-01: active same-unit children ≤ a measured parent | `object_area_scope_child_revisions(parent)` — every child insert, before 030's sum | 030's sum |
+| NEW-02: one Work = one operation (finish type, occurrence key); several disjoint AreaScopes of the SAME operation stay allowed | `work_scope_operations(work)` — every producer binding claims it (`ON CONFLICT DO NOTHING`) | claim row and older bindings compared |
+| NEW-03: no RETIRED AreaScope with an ACTIVE producer | `work_scope_state(object)` — every binding (032) and every ACTIVE → RETIRED | the binding locks its AreaScope `FOR SHARE` and re-checks lifecycle; 032's producer guard on retirement |
+| NEW-04: the unit of a referenced WorkType never changes, a stage / occurrence measures in its WorkType's unit | `work_type_reference_state(type)` — the FIRST Work / WEU / stage / occurrence of the type, and every unit change | references lock the WorkType `FOR SHARE`; stages / occurrences re-check their unit on the locked row |
+
+A Work or WEU created after a committed unit change references the type with the unit it states itself (legacy Works carry their own unit; nothing is
+converted). Lock order: AreaScope → finish type → operation claim → Work → WorkType → scope state (binding); child revision → parent (child); AreaScope →
+scope state (retirement); WorkType → reference state (unit change).
+
+## Producer semantics across versions (R05-IND-NEW-05)
+
+An occurrence key names an obligation, not an operation. An existing producer (bound under any version) satisfies the obligation of the version being
+generated only when it performs the same operation: its Work's WorkType and its occurrence's WorkType equal the new occurrence's, and so do the unit and the
+measure scope (`producerCompatible`). Otherwise the item is BLOCKED with `ONE_PRODUCER_CONFLICT` / `PRODUCER_INCOMPATIBLE`: the old Work is not offered as
+EXISTING, is not rewritten, no second producer of the obligation is created, and confirm is refused (422, nothing written). Resolving the change is a finish
+change (R09). A compatible producer from another version stays EXISTING (warning `EXISTING_FROM_OTHER_VERSION`).
 
 ## Parent AreaScope coverage (R05-GPT-B04)
 
