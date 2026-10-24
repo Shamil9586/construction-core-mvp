@@ -86,7 +86,7 @@ async function main(){
  "INSERT INTO fin_quarter_book_revisions(tenant_id,book_id,revision_no,previous_total_rub,new_total_rub,reason,actor_id,effective_on,command_id) VALUES($1,$2,2,10000000.00,11000000.00,'Correction',$3,'2026-10-24',gen_random_uuid())",
  [t,bookId,u]);
  const hparty=await pool.query("INSERT INTO fin_historical_parties(tenant_id,name,created_by) VALUES($1,'Second party',$2) RETURNING id",[t,u]);
- const secondParty=await pool.query("INSERT INTO fin_party_scopes(tenant_id,kind,historical_party_id) VALUES($1,'HISTORICAL',$2) RETURNING id",[t,hparty.rows[0].id]);
+ const secondParty=await pool.query("INSERT INTO fin_party_scopes(tenant_id,kind,historical_party_id) VALUES($1,'HISTORICAL_PARTY',$2) RETURNING id",[t,hparty.rows[0].id]);
  const secondContract=await pool.query("INSERT INTO fin_contract_scopes(tenant_id,kind,party_scope_id,created_by) VALUES($1,'NOT_SPECIFIED',$2,$3) RETURNING id",[t,secondParty.rows[0].id,u]);
  await expectDbRefusal('contract must belong to same party as line',
  "INSERT INTO fin_quarter_plan_lines(tenant_id,book_id,subject_id,party_scope_id,contract_scope_id,created_in_book_revision) VALUES($1,$2,$3,$4,$5,1)",
