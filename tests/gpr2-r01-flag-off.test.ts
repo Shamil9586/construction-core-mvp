@@ -45,7 +45,7 @@ test('flag "enabled": the /v2 routes exist and authenticate first; the legacy ro
 test('R01-B05: the served API document outside the GPR-2 contract is byte-for-byte the same with the flag on and off — the contract is added, nothing else changes', () => {
   const off = probe('<unset>'), on = probe('enabled');
   assert.equal(off.v2PathCount, 0);
-  assert.equal(on.v2PathCount, 32, 'exactly the 32 mounted routes');
+  assert.equal(on.v2PathCount, 35, 'exactly the 35 mounted routes (R05: +3)');
   assert.ok(off.legacyPathCount > 50, 'a real document: ' + off.legacyPathCount + ' legacy paths');
   assert.equal(on.legacyPathCount, off.legacyPathCount);
   assert.equal(on.legacyDigest, off.legacyDigest, 'no legacy path, schema, tag or security scheme differs');

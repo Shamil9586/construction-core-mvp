@@ -27,7 +27,17 @@ export const GPR2_ERROR_STATUS = {
     UNSUPPORTED_DEPENDENCY_TYPE: 422,
     PAYLOAD_TOO_LARGE: 413,
     UNSUPPORTED_MEDIA_TYPE: 415,
-    COMMAND_NOT_ENABLED: 501
+    COMMAND_NOT_ENABLED: 501,
+    // R05 (WorkType / finish / templates / Work generation). Like R01: 409 only when the world changed under the caller (a stale preview, a superseded
+    // source version); every rule the input breaks as given — a second producer, a missing quantity, a wrong unit, a foreign reference — is 422.
+    STALE_PREVIEW: 409,
+    STALE_SOURCE_VERSION: 409,
+    ONE_PRODUCER_CONFLICT: 422,
+    MISSING_REQUIRED_DATA: 422,
+    INVALID_MEASUREMENT: 422,
+    CROSS_SCOPE_REFERENCE: 422,
+    AREA_SCOPE_CONFLICT: 422,
+    VERSION_IMMUTABLE: 422
 } as const;
 export type Gpr2ErrorCode = keyof typeof GPR2_ERROR_STATUS;
 export const GPR2_ERROR_CODES = Object.keys(GPR2_ERROR_STATUS) as Gpr2ErrorCode[];
@@ -37,7 +47,9 @@ export const GPR2_ERROR_PRODUCER: Record<Gpr2ErrorCode, string> = {
     PERMISSION_DENIED: 'R01', RESOURCE_NOT_FOUND: 'R01', VALIDATION_FAILED: 'R01', INVALID_TRANSITION: 'R01', REASON_REQUIRED: 'R01',
     SEPARATION_OF_DUTIES: 'R01', COMMAND_NOT_ENABLED: 'R01', UNSUPPORTED_DEPENDENCY_TYPE: 'R01',
     STALE_VERSION: 'R03', SCOPE_VERSION_CHANGED: 'R03', IDEMPOTENCY_PAYLOAD_MISMATCH: 'R03',
-    BELOW_PROTECTED_QUANTITY: 'R07', PAYLOAD_TOO_LARGE: 'R15', UNSUPPORTED_MEDIA_TYPE: 'R15'
+    BELOW_PROTECTED_QUANTITY: 'R07', PAYLOAD_TOO_LARGE: 'R15', UNSUPPORTED_MEDIA_TYPE: 'R15',
+    STALE_PREVIEW: 'R05', STALE_SOURCE_VERSION: 'R05', ONE_PRODUCER_CONFLICT: 'R05', MISSING_REQUIRED_DATA: 'R05', INVALID_MEASUREMENT: 'R05',
+    CROSS_SCOPE_REFERENCE: 'R05', AREA_SCOPE_CONFLICT: 'R05', VERSION_IMMUTABLE: 'R05'
 };
 
 const MESSAGES: Record<Gpr2ErrorCode, string> = {
@@ -55,7 +67,15 @@ const MESSAGES: Record<Gpr2ErrorCode, string> = {
     UNSUPPORTED_DEPENDENCY_TYPE: 'Этот тип зависимости не поддерживается',
     PAYLOAD_TOO_LARGE: 'Файл превышает допустимый размер',
     UNSUPPORTED_MEDIA_TYPE: 'Этот формат файла не поддерживается',
-    COMMAND_NOT_ENABLED: 'Команда пока не включена'
+    COMMAND_NOT_ENABLED: 'Команда пока не включена',
+    STALE_PREVIEW: 'Предпросмотр устарел. Повторите предпросмотр и подтвердите заново.',
+    STALE_SOURCE_VERSION: 'Версия источника изменилась. Повторите предпросмотр.',
+    ONE_PRODUCER_CONFLICT: 'Для этого производственного обязательства уже есть исполняющая работа',
+    MISSING_REQUIRED_DATA: 'Недостаточно обязательных данных для создания работы',
+    INVALID_MEASUREMENT: 'Единица или правило измерения не соответствуют виду работ',
+    CROSS_SCOPE_REFERENCE: 'Ссылка указывает на запись вне доступной области',
+    AREA_SCOPE_CONFLICT: 'Участки пересекаются или нарушают иерархию',
+    VERSION_IMMUTABLE: 'Опубликованная версия неизменна'
 };
 
 /** Closed set of rule identifiers a `VALIDATION_FAILED` violation may carry — the "rule code" of TD §11.1. */
@@ -63,7 +83,10 @@ export const GPR2_VALIDATION_RULES = [
     'DECIMAL_NOT_A_STRING', 'DECIMAL_MALFORMED', 'DECIMAL_SCALE_EXCEEDED', 'DECIMAL_OUT_OF_RANGE', 'DECIMAL_NEGATIVE_NOT_ALLOWED', 'DECIMAL_NEGATIVE_ZERO',
     'VERSION_TOKEN_NOT_A_STRING', 'VERSION_TOKEN_MALFORMED', 'VERSION_TOKEN_REQUIRED',
     'IDEMPOTENCY_KEY_REQUIRED', 'IDEMPOTENCY_KEY_MALFORMED',
-    'ID_MALFORMED', 'DATE_MALFORMED', 'FIELD_REQUIRED', 'FIELD_NOT_ALLOWED', 'FIELD_TYPE', 'OUT_OF_RANGE', 'ENUM_VALUE', 'REASON_REQUIRED'
+    'ID_MALFORMED', 'DATE_MALFORMED', 'FIELD_REQUIRED', 'FIELD_NOT_ALLOWED', 'FIELD_TYPE', 'OUT_OF_RANGE', 'ENUM_VALUE', 'REASON_REQUIRED',
+    // R05: why a generation input cannot be applied (structured blockers; never the offending value).
+    'QUANTITY_MISSING', 'UNIT_MISSING', 'UNIT_UNKNOWN', 'UNIT_MISMATCH', 'REFERENCE_NOT_IN_SCOPE', 'AREA_OVERLAP', 'PRODUCER_EXISTS', 'DUPLICATE_VALUE',
+    'NOTHING_TO_GENERATE'
 ] as const;
 export type Gpr2ValidationRule = typeof GPR2_VALIDATION_RULES[number];
 export interface Gpr2Violation { path: string; rule: Gpr2ValidationRule }

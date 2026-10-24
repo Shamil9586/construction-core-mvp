@@ -1,3 +1,4 @@
+import { NotFoundException } from '@nestjs/common';
 import { Gpr2Error } from '../../../packages/domain/gpr2';
 import { Gpr2HttpException } from './gpr2-command-guard';
 import Decimal from 'decimal.js';
@@ -54,7 +55,9 @@ export async function writeEarlyWork(c: any, a: Actor, input: any, workId?: stri
                 work = await one(c, `UPDATE works SET ${fields.map((f, i) => names[f] + '=$' + (i + 3)).join(',')},version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2 RETURNING *`, [a.tenantId, workId, ...fields.map(f => data[f])]);
                 await audit(c, a, 'Work', workId, 'COMPLETE_PLANNING', old, work);
             } else {
-                await scoped(c, 'work_types', data.workTypeId, a);
+                const type = await scoped(c, 'work_types', data.workTypeId, a);
+                // R05a: an OBJECT-scope WorkType exists only inside its object (the same 404 as a missing type; PostgreSQL refuses it too — infra/029).
+                if (type.scope === 'OBJECT' && type.objectId !== objectId) throw new NotFoundException('Запись не найдена');
                 await validatePlanning(c, a, objectId, data);
                 work = await insert(c, 'works', a.tenantId, data);
                 await audit(c, a, 'Work', work.id, 'CREATE', null, work);

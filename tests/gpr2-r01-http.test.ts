@@ -36,6 +36,8 @@ const PM = ['PROJECT_MANAGER'], DEPUTY = ['DEPUTY_DIRECTOR'], ADMIN = ['ADMIN'],
 // command id → the ONLY roles that may issue it (TD §11.3 / §11.2)
 const WHO: Record<string, string[]> = {
   'work-type.create': PM, 'work-type.publication.request': PM, 'work-type.publication.approve': ADMIN, 'work-type.publication.reject': ADMIN,
+  // R05: corporate template draft / publication — Admin dictionary grant (§11.2–11.3); the object AreaScope — object catalogue (РП)
+  'finish-template.draft': ADMIN, 'finish-template.publish': ADMIN, 'area-scope.create': PM,
   'finish-system.upsert': PM, 'finish-system.preview': PM, 'finish-system.confirm': PM,
   'quantity.request.create': PM, 'quantity.request.patch': PM, 'quantity.request.submit': PM, 'quantity.request.review-note': NOBODY,
   'quantity.request.approve': DEPUTY, 'quantity.request.return': DEPUTY,
@@ -57,9 +59,9 @@ const params = () => ({ objectId: pilot.object.id });
 const strip = (b: any) => { const { requestId, ...rest } = b ?? {}; return rest; };
 const rowCount = async (table: string) => Number((await (await import('../apps/backend/src/db')).pool.query(`SELECT count(*)::int AS n FROM ${table}`)).rows[0].n);
 
-test('the table covers exactly the mounted commands, and the register mounts 32 of them (the controller and the register agree route by route)', async () => {
+test('the table covers exactly the mounted commands, and the register mounts 35 of them (the controller and the register agree route by route)', async () => {
   assert.deepEqual(Object.keys(WHO).sort(), mountedEndpoints().map(e => e.id).sort());
-  assert.equal(mountedEndpoints().length, 32);
+  assert.equal(mountedEndpoints().length, 35); // R05: +finish-template.draft, +finish-template.publish, +area-scope.create
   const { Gpr2ContractController } = await import('../apps/backend/src/modules/gpr2/gpr2.controller');
   const methodName: Record<number, string> = { [RequestMethod.GET]: 'GET', [RequestMethod.POST]: 'POST', [RequestMethod.PATCH]: 'PATCH', [RequestMethod.PUT]: 'PUT' };
   const mounted = Object.getOwnPropertyNames(Gpr2ContractController.prototype).filter(n => n !== 'constructor' && n !== 'run')
@@ -67,7 +69,7 @@ test('the table covers exactly the mounted commands, and the register mounts 32 
   assert.deepEqual(mounted, mountedEndpoints().map(e => `${e.method} v2/${routeOf(e)}`).sort(), 'no route without a register row, no mounted row without a route');
 });
 
-test('A19 (HTTP): the whole role matrix — 32 commands × 11 roles — allowed roles reach the gate (501), every other role is refused with 403', async () => {
+test('A19 (HTTP): the whole role matrix — 35 commands × 11 roles — allowed roles reach the gate (501), every other role is refused with 403', async () => {
   const cells: string[] = [];
   for (const role of roles) {
     const token = await g.roleToken(role);
@@ -79,7 +81,7 @@ test('A19 (HTTP): the whole role matrix — 32 commands × 11 roles — allowed 
       cells.push(`${role}|${e.id}|${r.status}`);
     }
   }
-  assert.equal(cells.length, 11 * 32);
+  assert.equal(cells.length, 11 * 35);
   assert.equal(cells.filter(c => c.endsWith('|501')).length, Object.values(WHO).reduce((n, who) => n + who.length, 0), 'exactly the allowed cells got through');
 });
 
@@ -87,7 +89,7 @@ test('"no new Admin business grants": ADMIN is refused every GPR-2 business comm
   const token = await g.roleToken('ADMIN');
   const open: string[] = [];
   for (const e of mountedEndpoints()) if ((await send(token, e, params())).status !== 403) open.push(e.id);
-  assert.deepEqual(open.sort(), ['work-type.publication.approve', 'work-type.publication.reject']);
+  assert.deepEqual(open.sort(), ['finish-template.draft', 'finish-template.publish', 'work-type.publication.approve', 'work-type.publication.reject']);
   // and the PM and the deputy cannot decide publication — a РП proposes, the Admin decides
   for (const role of ['PROJECT_MANAGER', 'DEPUTY_DIRECTOR']) assert.equal((await send(await g.roleToken(role), endpointById('work-type.publication.approve')!, params())).status, 403, role);
 });
@@ -208,7 +210,7 @@ test('R01 writes nothing: an accepted-but-disabled command leaves audit, events,
     assert.deepEqual(strip(r.body), { statusCode: 501, code: 'COMMAND_NOT_ENABLED', message: 'Команда пока не включена' }, e.id);
     assert.match(r.body.requestId, /^[0-9a-f-]{36}$/);
   }
-  assert.equal(n, 30, 'every command anyone may issue');
+  assert.equal(n, 33, 'every command anyone may issue (R05: +3)');
   assert.deepEqual(await Promise.all(tables.map(rowCount)), before, tables.join(', '));
 });
 

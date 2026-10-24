@@ -5,6 +5,8 @@ import { pool, rows, one, transaction, insert } from '../../db';
 import { authenticate, requirePermission, scoped, audit, ensure, checkVersion } from '../../security';
 import { Permission as P } from '../../../../../packages/domain';
 import * as V from '../../validation';
+// GPR-2 R05a: the tenant dictionary lists the CORPORATE catalogue only — before R05 that was every row, so its answer for existing data is unchanged.
+// OBJECT-scope WorkTypes belong to one object and are never shown tenant-wide (no cross-object leak through the legacy read).
 @Controller()
 @ApiTags('Dictionaries')
 @ApiBearerAuth()
@@ -12,7 +14,7 @@ export class DictionariesController {
     @Get('dictionaries')
     async dictionaries(
     @Req()
-    r: any) { const a = await authenticate(r); requirePermission(a, P.WORK_VIEW); return { categories: await rows(pool, 'SELECT * FROM work_categories WHERE tenant_id=$1', [a.tenantId]), workTypes: await rows(pool, 'SELECT * FROM work_types WHERE tenant_id=$1', [a.tenantId]) }; }
+    r: any) { const a = await authenticate(r); requirePermission(a, P.WORK_VIEW); return { categories: await rows(pool, 'SELECT * FROM work_categories WHERE tenant_id=$1', [a.tenantId]), workTypes: await rows(pool, "SELECT * FROM work_types WHERE tenant_id=$1 AND scope='CORPORATE'", [a.tenantId]) }; }
     @Post('dictionaries/categories')
     async addCategory(
     @Req()

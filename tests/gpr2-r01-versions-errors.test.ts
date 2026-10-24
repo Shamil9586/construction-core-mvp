@@ -85,12 +85,15 @@ test('error contract: the status table is the §11.1 list (403/404/409/422/413/4
   assert.deepEqual(GPR2_ERROR_STATUS, {
     PERMISSION_DENIED: 403, RESOURCE_NOT_FOUND: 404, STALE_VERSION: 409, SCOPE_VERSION_CHANGED: 409, IDEMPOTENCY_PAYLOAD_MISMATCH: 409,
     VALIDATION_FAILED: 422, INVALID_TRANSITION: 422, REASON_REQUIRED: 422, SEPARATION_OF_DUTIES: 422, BELOW_PROTECTED_QUANTITY: 422, UNSUPPORTED_DEPENDENCY_TYPE: 422,
-    PAYLOAD_TOO_LARGE: 413, UNSUPPORTED_MEDIA_TYPE: 415, COMMAND_NOT_ENABLED: 501
+    PAYLOAD_TOO_LARGE: 413, UNSUPPORTED_MEDIA_TYPE: 415, COMMAND_NOT_ENABLED: 501,
+    // R05 producers (GPR-2 R05a–d): two more stale-world answers (409) and the rule codes of Work generation (422)
+    STALE_PREVIEW: 409, STALE_SOURCE_VERSION: 409, ONE_PRODUCER_CONFLICT: 422, MISSING_REQUIRED_DATA: 422, INVALID_MEASUREMENT: 422, CROSS_SCOPE_REFERENCE: 422,
+    AREA_SCOPE_CONFLICT: 422, VERSION_IMMUTABLE: 422
   });
   assert.deepEqual(Object.keys(GPR2_ERROR_PRODUCER).sort(), [...GPR2_ERROR_CODES].sort(), 'no code without a producer, no producer without a code');
   assert.deepEqual(new Set(Object.values(GPR2_ERROR_STATUS)), new Set([403, 404, 409, 422, 413, 415, 501]));
   // 409 is for concurrency and idempotency ONLY; a rule violation is 422
-  assert.deepEqual(GPR2_ERROR_CODES.filter(c => GPR2_ERROR_STATUS[c] === 409).sort(), ['IDEMPOTENCY_PAYLOAD_MISMATCH', 'SCOPE_VERSION_CHANGED', 'STALE_VERSION']);
+  assert.deepEqual(GPR2_ERROR_CODES.filter(c => GPR2_ERROR_STATUS[c] === 409).sort(), ['IDEMPOTENCY_PAYLOAD_MISMATCH', 'SCOPE_VERSION_CHANGED', 'STALE_PREVIEW', 'STALE_SOURCE_VERSION', 'STALE_VERSION']);
   for (const code of GPR2_ERROR_CODES) { const e = new Gpr2Error(code); assert.equal(e.status, GPR2_ERROR_STATUS[code]); assert.ok(e.message.length > 0); assert.equal(e.toBody().code, code); }
 });
 

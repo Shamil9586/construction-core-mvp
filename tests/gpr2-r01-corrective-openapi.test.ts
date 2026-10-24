@@ -33,7 +33,8 @@ after(async () => { undo(); await g?.h.close(); });
 
 const derived: any = buildGpr2OpenApi({ mountedOnly: true });
 const PM = 'PROJECT_MANAGER';
-const ROLE: Record<string, string> = { 'work-type.publication.approve': 'ADMIN', 'work-type.publication.reject': 'ADMIN', 'quantity.request.approve': 'DEPUTY_DIRECTOR', 'quantity.request.return': 'DEPUTY_DIRECTOR',
+// R05: the corporate template draft / publication are the Admin's (CORPORATE_PUBLICATION), like the WorkType publication decisions.
+const ROLE: Record<string, string> = { 'work-type.publication.approve': 'ADMIN', 'work-type.publication.reject': 'ADMIN', 'finish-template.draft': 'ADMIN', 'finish-template.publish': 'ADMIN', 'quantity.request.approve': 'DEPUTY_DIRECTOR', 'quantity.request.return': 'DEPUTY_DIRECTOR',
   'schedule.revision.approve': 'DEPUTY_DIRECTOR', 'schedule.revision.return': 'DEPUTY_DIRECTOR' };
 // the two N01 default-deny commands have no role that reaches the body; they are checked at the document level only
 const REACHABLE = () => mountedEndpoints().filter(e => e.id !== 'quantity.request.review-note' && e.id !== 'imports.estimate-labor.mapping-reviews');
@@ -54,7 +55,7 @@ test('R01-B05: the LIVE /api-docs-json carries every mounted /v2 operation exact
   assert.deepEqual(servedV2, derived.paths, 'and every path item is identical');
   let operations = 0;
   for (const e of mountedEndpoints()) { assert.deepEqual(servedOp(e), derived.paths['/v2' + e.path][e.method.toLowerCase()], e.id); operations++; }
-  assert.equal(operations, 32);
+  assert.equal(operations, 35); // R05: +finish-template.draft, +finish-template.publish (now mounted), +area-scope.create
   // nothing that is not mounted leaks into the served document
   for (const e of GPR2_ENDPOINTS.filter(x => !x.mounted)) assert.equal(served.paths['/v2' + e.path]?.[e.method.toLowerCase()], undefined, e.id + ' is catalogued, not mounted');
   for (const [name, schema] of Object.entries(derived.components.schemas)) assert.deepEqual(served.components.schemas[name], schema, 'schema ' + name);
@@ -251,7 +252,7 @@ test('R01-B05: every status the live routes produce is documented, every documen
     } finally { u(); }
   }
   // documented ⊆ observed (the tenant-level routes have no object to be missing: their 404 comes from the unknown aggregate)
-  const tenantLevel = REACHABLE().filter(e => e.scope === 'TENANT');
+  const tenantLevel = REACHABLE().filter(e => e.scope === 'TENANT' && e.resource); // R05: a tenant-level route without {id} (finish-template.draft) addresses nothing that could be missing
   for (const e of tenantLevel) {
     const u = await installHooks(g.h.app, recordingHooks(trusted).hooks);
     try { const req = validRequest(e, { id: uuid() }); check(e, await g.call(await g.roleToken(ROLE[e.id]), req.method, req.path, { body: req.body, headers: req.headers }), 404); } finally { u(); }

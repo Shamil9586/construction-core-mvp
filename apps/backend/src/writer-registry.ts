@@ -96,6 +96,11 @@ export const WRITERS = {
     'schedule-service.ts#recordDelayReason': S('delay reason attached to an approved revision of an object'),
     'schedule-service.ts#resolveDelayReason': S('delay reason attached to an approved revision of an object'),
     'schedule-service.ts#saveDelayCategory': N(TENANT),
+    // ---- GPR-2 R05 (runCommandTx writers; the scan covers runCommandTx call sites since R05) -----------------------------------
+    'gpr2-r05-catalog.ts#createObjectWorkType': S('R05a object WorkType catalogue of an object; creates no Work (no scope change)'),
+    'gpr2-r05-catalog.ts#requestWorkTypePublication': S('R05a publication proposal for an object WorkType; creates no Work'),
+    'gpr2-r05-catalog.ts#approveWorkTypePublication': S('R05a Admin decision on a request of an object (lock taken on the request\'s object); rewrites no Work reference'),
+    'gpr2-r05-catalog.ts#rejectWorkTypePublication': S('R05a Admin decision on a request of an object; the WorkType row is not written'),
     // ---- imports and files ------------------------------------------------------------------------------------------------------
     'importer.ts#commitImport': N('creates NEW objects (with their contractor link and monthly plan) from an import report; it creates no Work and touches no existing object, and nothing can contend for an object that does not exist yet'),
     'importer.ts#previewImport': N('writes an import report only; creates no object, Work or fact'),
