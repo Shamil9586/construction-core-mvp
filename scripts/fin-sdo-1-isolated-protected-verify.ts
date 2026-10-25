@@ -221,6 +221,48 @@ async function main(){
    const forbidden=await api('historical-parties',pto.token,'POST',{name:'Not allowed',idempotencyKey:randomUUID()});
    assert.equal(forbidden.status,403);
    console.log('PASS S-01 direct HTTP PTO cannot call restricted write');
+
+   // FIN1-19: actual Nest HTTP + restricted LOGIN role matrix, not just a
+   // TS helper permission predicate. Roles are obtained from DB sessions.
+   const headSdo=await actor('fin1-isolated.example.test','SDO_HEAD');
+   const admin=await actor('fin1-isolated.example.test','ADMIN');
+   const deputy=await actor('fin1-isolated.example.test','DEPUTY_DIRECTOR');
+   const ptoHead=await actor('fin1-isolated.example.test','PTO_HEAD');
+   const qualityHead=await actor('fin1-isolated.example.test','CONSTRUCTION_CONTROL_HEAD');
+   const pm=await actor('fin1-isolated.example.test','PROJECT_MANAGER');
+   const contractorViewer=await actor('fin1-isolated.example.test','CONTRACTOR_VIEWER');
+   for(const [label,principal] of [
+       ['SDO_HEAD',headSdo],['ADMIN',admin]
+   ] as const) {
+     const result=await api('historical-parties',principal.token,'POST',{
+        name:'Isolated FIN writer '+label,idempotencyKey:randomUUID()
+     });
+     assert.equal(result.status,200,label+' must be able to write FIN');
+     const row=await owner.query('SELECT tenant_id,created_by FROM fin_historical_parties WHERE id=$1',[result.body.id]);
+     assert.equal(row.rows[0].tenant_id,a.tenant);
+     assert.equal(row.rows[0].created_by,principal.uid);
+   }
+   const deputyRead=await api('subjects',deputy.token);
+   assert.equal(deputyRead.status,200);
+   assert.ok(deputyRead.body.historical.some((r:any)=>r.id===httpId));
+   const deputyWrite=await api('historical-parties',deputy.token,'POST',{
+      name:'Forbidden deputy finance edit',idempotencyKey:randomUUID()
+   });
+   assert.equal(deputyWrite.status,403);
+   for(const [label,principal] of [
+      ['PTO_HEAD',ptoHead],['CONSTRUCTION_CONTROL_HEAD',qualityHead],
+      ['PROJECT_MANAGER',pm],['CONTRACTOR_VIEWER',contractorViewer]
+   ] as const) {
+      const deniedRead=await api('subjects',principal.token);
+      const deniedWrite=await api('historical-parties',principal.token,'POST',{
+         name:'Forbidden '+label,idempotencyKey:randomUUID()
+      });
+      assert.equal(deniedRead.status,403,label+' must not read FIN');
+      assert.equal(deniedWrite.status,403,label+' must not write FIN');
+      assert.ok(!JSON.stringify(deniedRead.body).includes('HTTP protected identity'));
+   }
+   console.log('PASS S-01 FIN1-19 native HTTP full financial role matrix with limited DB LOGIN');
+
    const mismatch=await api('historical-subjects',a.token,'POST',{name:'DIFFERENT',idempotencyKey:httpKey});
    assert.equal(mismatch.status,409);
    assert.ok(!JSON.stringify(mismatch.body).includes('fin_command_ledger'));
