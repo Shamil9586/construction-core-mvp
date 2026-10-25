@@ -230,7 +230,12 @@ async function main(){
    const ptoHead=await actor('fin1-isolated.example.test','PTO_HEAD');
    const qualityHead=await actor('fin1-isolated.example.test','CONSTRUCTION_CONTROL_HEAD');
    const quality=await actor('fin1-isolated.example.test','CONSTRUCTION_CONTROL');
-   const unlisted=await actor('fin1-isolated.example.test','UNKNOWN');
+   // UNKNOWN cannot obtain a persisted session in this schema: enforce the
+   // underlying users.role CHECK, rather than inventing a non-existent actor.
+   await expectSqlState(()=>owner.query(
+     'INSERT INTO users(tenant_id,bitrix_user_id,name,role) VALUES($1,$2,$3,$4)',
+     [a.tenant,'fin-invalid-'+randomUUID(),'Forbidden unknown role','UNKNOWN']
+   ),'23514','unknown role cannot be persisted as FIN principal');
    const pm=await actor('fin1-isolated.example.test','PROJECT_MANAGER');
    const contractorViewer=await actor('fin1-isolated.example.test','CONTRACTOR_VIEWER');
    for(const [label,principal] of [
@@ -253,7 +258,7 @@ async function main(){
    assert.equal(deputyWrite.status,403);
    for(const [label,principal] of [
       ['PTO_HEAD',ptoHead],['CONSTRUCTION_CONTROL_HEAD',qualityHead],
-      ['CONSTRUCTION_CONTROL',quality],['UNKNOWN',unlisted],
+      ['CONSTRUCTION_CONTROL',quality],
       ['PROJECT_MANAGER',pm],['CONTRACTOR_VIEWER',contractorViewer]
    ] as const) {
       const deniedRead=await api('subjects',principal.token);
