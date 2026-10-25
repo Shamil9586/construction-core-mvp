@@ -12,6 +12,9 @@ Independent-acceptance corrective (24.10.2026): the native-PostgreSQL acceptance
 answered by the additive migration `034_gpr2_r05_independent_corrective.sql` (NEW-01…04) and a preview rule (NEW-05); 029–033 are unchanged.
 Status: **IMPLEMENTED — PENDING GPT REVIEW**.
 
+Third corrective (25.10.2026): the GPT review of that candidate (`GPT_REVIEW_20261025_R05_INDEPENDENT_CORRECTIVE`, R05-GPT-R3-B01 and the LOCAL-quantity
+case) is answered by the additive migration `035_gpr2_r05_operation_semantics.sql` and a preview rule; 029–034 are unchanged. Status: **PENDING GPT RE-REVIEW**.
+
 ## Surface
 
 All commands go through the R01 guard (`runGpr2Command`: permission → object scope → nested resource → envelope → replay → execute) and are mounted only
@@ -45,6 +48,7 @@ New error codes (`errors.ts`): 409 `STALE_PREVIEW`, `STALE_SOURCE_VERSION`; 422 
 | `030_gpr2_r05b_finish_area_legacy.sql` | `object_finish_types`, `object_area_scopes`, `legacy_finish_mappings`, `legacy_work_classifications` |
 | `031_gpr2_r05c_templates.sql` | `finish_templates`, `finish_template_versions`, `finish_template_stages`, `object_finish_system_versions`, `finish_stage_occurrences`, `finish_stage_exclusions` |
 | `032_gpr2_r05d_work_generation.sql` | `work_scope_state` (scope version, trigger-maintained), `work_scope_bindings` (one active producer per obligation) |
+| `035_gpr2_r05_operation_semantics.sql` | trigger `gpr2_binding_operation_semantics`: every ACTIVE producer binding of one Work names an occurrence of the same WorkType, unit and measure scope (R3-B01); a precondition check that fails the run over data already violating it |
 | `034_gpr2_r05_independent_corrective.sql` | three empty tables — `object_area_scope_child_revisions` (per parent), `work_scope_operations` (one row per producing Work, PK (tenant, work)), `work_type_reference_state` (per WorkType) — and the triggers of the four write-conflict protocols below; a precondition check that fails the run over data already violating NEW-01…04 (nothing is repaired or invented) |
 | `033_gpr2_r05_corrective.sql` | CHECK `work_types_object_origin_required` (NOT VALID, then VALIDATE — fails and rolls back if any OBJECT type lacks an origin; no value is invented) and six triggers: bound-Work identity, binding / classification Work lock, template-version identity + DRAFT-only insert, system-version identity, publication provenance. No table, column, index or row. |
 
@@ -92,6 +96,13 @@ A Work or WEU created after a committed unit change references the type with the
 converted). Lock order: AreaScope → finish type → operation claim → Work → WorkType → scope state (binding); child revision → parent (child); AreaScope →
 scope state (retirement); WorkType → reference state (unit change).
 
+## One operation per Work, in PostgreSQL (034 + 035)
+
+A Work's one operation is its finish type and occurrence key (034 claim) **and** the WorkType, unit and measure scope of the occurrences it produces
+(035). A binding under another version of the same key with another measure scope (MAIN vs LOCAL) is refused (SQLSTATE 23514,
+`GPR2_R05:ONE_PRODUCER_CONFLICT`); bindings of one compatible operation over several disjoint AreaScopes, under one version or several, stay allowed. The
+rule is exactly `producerCompatible` (below), so PostgreSQL and the preview agree.
+
 ## Producer semantics across versions (R05-IND-NEW-05)
 
 An occurrence key names an obligation, not an operation. An existing producer (bound under any version) satisfies the obligation of the version being
@@ -99,6 +110,10 @@ generated only when it performs the same operation: its Work's WorkType and its 
 measure scope (`producerCompatible`). Otherwise the item is BLOCKED with `ONE_PRODUCER_CONFLICT` / `PRODUCER_INCOMPATIBLE`: the old Work is not offered as
 EXISTING, is not rewritten, no second producer of the obligation is created, and confirm is refused (422, nothing written). Resolving the change is a finish
 change (R09). A compatible producer from another version stays EXISTING (warning `EXISTING_FROM_OTHER_VERSION`).
+
+LOCAL quantity (third corrective): a LOCAL producer was generated for the local quantity stated then (its binding's `basis_quantity`). When the same
+obligation is restated with another quantity, it is not satisfied by the old producer and is not silently replaced: blocker `ONE_PRODUCER_CONFLICT` /
+`PRODUCER_QUANTITY_CHANGED` (a quantity change is R06 / R07). Restating the same quantity, or stating none, shows the producer as EXISTING.
 
 ## Parent AreaScope coverage (R05-GPT-B04)
 
