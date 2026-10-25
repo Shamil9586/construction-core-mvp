@@ -66,6 +66,56 @@ async function main(){
  assert.equal(c3.revisionNo,3);
  await expectCode(()=>service.commitBuffer(a,{...q,bufferId:stale2.bufferId,expectedBookVersion:2,effectiveOn:'2027-01-15',reason:'Дубликат',idempotencyKey:randomUUID()}),'FIN_QUARTER_BOOK_VERSION_CONFLICT');
  report('FIN1-15 stale version cannot overwrite head');
+
+ // Native PostgreSQL two-connection races, with real simultaneous writes.
+ // The two independent idempotency keys intentionally do NOT serialize each
+ // other; book uniqueness plus row CAS must do the work.
+ const qi={year:2028,quarter:1};
+ const firstI=await service.saveBuffer(a,{...qi,expectedBookVersion:0,lines:[line(h1.id,'10.00')]});
+ const otherI=await service.saveBuffer(a,{...qi,expectedBookVersion:0,lines:[line(h2.id,'12.00')]});
+ const creations=await Promise.allSettled([
+  service.commitBuffer(a,{...qi,bufferId:firstI.bufferId,expectedBookVersion:0,effectiveOn:'2028-01-02',idempotencyKey:randomUUID()}),
+  service.commitBuffer(a,{...qi,bufferId:otherI.bufferId,expectedBookVersion:0,effectiveOn:'2028-01-02',idempotencyKey:randomUUID()})
+ ]);
+ assert.equal(creations.filter(x=>x.status==='fulfilled').length,1,'exactly one original may commit');
+ const rejectFirst=creations.find(x=>x.status==='rejected') as PromiseRejectedResult;
+ assert.ok(rejectFirst,'a second initial writer must fail with 409');
+ assert.equal(rejectFirst.reason?.status,409, 'initial race loser must be 409');
+ const firstRevisions=await pool.query('SELECT count(*)::int n FROM fin_quarter_book_revisions WHERE tenant_id=$1 AND book_id=(SELECT id FROM fin_quarter_plan_books WHERE tenant_id=$1 AND plan_year=2028 AND plan_quarter=1)',[a.tenantId]);
+ assert.equal(firstRevisions.rows[0].n,1);
+ assert.equal((await service.readBook(a,qi)).history.length,1);
+ report('FIN1-14 native concurrent initial book: one original, loser 409, no orphan');
+ const qr={year:2028,quarter:2};
+ const init=await service.saveBuffer(a,{...qr,expectedBookVersion:0,lines:[line(h1.id,'10.00')]});
+ await service.commitBuffer(a,{...qr,bufferId:init.bufferId,expectedBookVersion:0,effectiveOn:'2028-04-01',idempotencyKey:randomUUID()});
+ const changes=await Promise.all([
+  service.saveBuffer(a,{...qr,expectedBookVersion:1,lines:[line(h1.id,'11.00')]}),
+  service.saveBuffer(a,{...qr,expectedBookVersion:1,lines:[line(h1.id,'12.00')]})
+ ]);
+ const correctionRace=await Promise.allSettled(changes.map((v,i)=>service.commitBuffer(a,{
+    ...qr,bufferId:v.bufferId,expectedBookVersion:1,effectiveOn:'2028-04-10',
+    reason:'Parallel correction '+i,idempotencyKey:randomUUID()
+ })));
+ assert.equal(correctionRace.filter(x=>x.status==='fulfilled').length,1,'single concurrent correction');
+ const rejectCorrection=correctionRace.find(x=>x.status==='rejected') as PromiseRejectedResult;
+ assert.ok(rejectCorrection);assert.equal(rejectCorrection.reason?.status,409);
+ const raced=await service.readBook(a,qr);
+ assert.equal(raced.history.length,2);assert.equal(raced.bookVersion,2);
+ assert.equal(raced.original,'10000000.00');
+ assert.ok(['11000000.00','12000000.00'].includes(raced.current));
+ report('FIN1-15 native concurrent corrections: one CAS winner, immutable original');
+ const qHundred={year:2028,quarter:3};
+ const amounts=['100.00','110.00','105.00'];
+ for(let i=0;i<3;i++){
+  const v=await service.saveBuffer(a,{...qHundred,expectedBookVersion:i,lines:[line(h1.id,amounts[i])]});
+  await service.commitBuffer(a,{...qHundred,bufferId:v.bufferId,expectedBookVersion:i,effectiveOn:'2028-08-01',
+    ...(i?{reason:'Corrected version '+i}:{}),idempotencyKey:randomUUID()});
+ }
+ const hist=await service.readBook(a,qHundred);
+ assert.equal(hist.original,'100000000.00');assert.equal(hist.current,'105000000.00');
+ assert.deepEqual(hist.history.map((v:any)=>v.new_total_rub),['100000000.00','110000000.00','105000000.00']);
+ assert.deepEqual(hist.history.map((v:any)=>v.previous_total_rub),[null,'100000000.00','110000000.00']);
+ report('FIN1-11 actual 100 to 110 to 105 history');
  const noRights={...a,role:'PROJECT_MANAGER' as Actor['role']};
  await expectCode(()=>service.discover(noRights),'FIN_ACCESS_DENIED');report('FIN1-19 negative financial role');
  const stateAsKnown=await service.readBook(a,q,'2020-01-01T00:00:00+03:00');
