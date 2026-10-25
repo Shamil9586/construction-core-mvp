@@ -308,7 +308,7 @@ async function main(){
    // operations are not allowed to fall back to privileged product connection.
    for (const [path,method,payload] of [
      ['buffers?year=2027&quarter=1','GET',undefined],
-     ['buffers/{randomUUID()}','GET',undefined],
+     ['buffers/'+randomUUID(),'GET',undefined],
      ['commit','POST',{year:2028,quarter:1,bufferId:randomUUID(),expectedBookVersion:0,effectiveOn:'2028-01-01',idempotencyKey:randomUUID()}]
    ] as const){
      const result=await api(path,a.token,method,payload);
@@ -335,7 +335,7 @@ async function main(){
  }),'42501','role revocation blocks historical party idempotent replay');
 
  assert.equal((await owner.query('SELECT name FROM fin_historical_subjects WHERE id=$1',[result.id])).rows[0].name,'Protected SDO historical object');
- console.log('S-01 vertical slice isolated proof COMPLETE. OTHER FIN WRITERS AND READERS REMAIN BLOCKED.');
+ console.log('S-01 isolated protected readers and CREATE buffer verified. OFFICIAL BOOK COMMIT, BUFFER PATCH, PRIVATE BUFFER READ STILL BLOCKED.');
 }
 main().catch(e=>{console.error(e);process.exitCode=1}).finally(async()=>{
   // Ephemeral CI database gets destroyed after job. Never drop a role in production.
