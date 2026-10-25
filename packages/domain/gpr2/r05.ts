@@ -135,6 +135,22 @@ export const finishSystemUpsertPayload = z.strictObject({
 });
 
 const localQuantity = z.strictObject({ occurrenceKey: code, areaScopeId: uuidSchema, quantity: positiveQuantity });
+/**
+ * R05-IND3-01. One obligation (occurrence key, AreaScope) is stated at most ONCE per request — even with the same value. The indexes (in the client's
+ * order) of every repeated statement; the first statement is not "the" answer either: a repeated obligation is refused, never resolved by position.
+ */
+export function duplicateLocalQuantities(list: readonly { occurrenceKey?: unknown; areaScopeId?: unknown }[] | undefined): number[] {
+    const seen = new Set<string>(), out: number[] = [];
+    (list ?? []).forEach((q, i) => {
+        const k = String(q.occurrenceKey) + '|' + String(q.areaScopeId); // ids arrive lower-cased by uuidSchema
+        if (seen.has(k)) out.push(i); else seen.add(k);
+    });
+    return out;
+}
+const uniqueLocalQuantities = (d: { localQuantities?: { occurrenceKey?: string; areaScopeId?: string }[] }, ctx: z.RefinementCtx) => {
+    for (const i of duplicateLocalQuantities(d.localQuantities))
+        ctx.addIssue({ code: 'custom', message: 'DUPLICATE_VALUE', path: ['localQuantities', i] });
+};
 const previewShape = {
     systemVersionId: uuidSchema,
     areaScopeIds: z.array(uuidSchema).min(1).max(500),
@@ -142,13 +158,13 @@ const previewShape = {
     localQuantities: z.array(localQuantity).max(5000).optional(),
     grouping: z.enum(GENERATION_GROUPINGS).optional()
 };
-export const generationPreviewPayload = z.strictObject(previewShape);
+export const generationPreviewPayload = z.strictObject(previewShape).superRefine(uniqueLocalQuantities);
 export const generationConfirmPayload = z.strictObject({
     ...previewShape,
     previewFingerprint: z.unknown().transform((input, ctx) => typeof input === 'string' && /^[0-9a-f]{64}$/.test(input) ? input : fail(ctx, input === undefined ? 'FIELD_REQUIRED' : 'FIELD_TYPE')),
     // The fence of a confirm (TD §11.1): the one immutable source version the preview was built from, by name.
     expectedSourceVersions: z.strictObject({ systemVersion: uuidSchema })
-});
+}).superRefine(uniqueLocalQuantities);
 export type GenerationPreviewRequest = z.infer<typeof generationPreviewPayload>;
 
 export const legacyFinishMappingInput = z.strictObject({
@@ -210,7 +226,7 @@ export interface PreviewInput {
     legacyWorks: readonly { workId: string; workTypeId: string }[];
     request: GenerationPreviewRequest;
 }
-export type BlockerRule = Extract<Gpr2ValidationRule, 'QUANTITY_MISSING' | 'UNIT_MISSING' | 'UNIT_MISMATCH' | 'AREA_OVERLAP' | 'AREA_COVERAGE_INCOMPLETE' | 'PRODUCER_EXISTS' | 'PRODUCER_INCOMPATIBLE' | 'PRODUCER_QUANTITY_CHANGED' | 'NOTHING_TO_GENERATE' | 'REFERENCE_NOT_IN_SCOPE' | 'OUT_OF_RANGE'>;
+export type BlockerRule = Extract<Gpr2ValidationRule, 'QUANTITY_MISSING' | 'UNIT_MISSING' | 'UNIT_MISMATCH' | 'AREA_OVERLAP' | 'AREA_COVERAGE_INCOMPLETE' | 'PRODUCER_EXISTS' | 'PRODUCER_INCOMPATIBLE' | 'PRODUCER_QUANTITY_CHANGED' | 'NOTHING_TO_GENERATE' | 'REFERENCE_NOT_IN_SCOPE' | 'OUT_OF_RANGE' | 'DUPLICATE_VALUE'>;
 export interface PreviewBlocker { error: Gpr2ErrorCode; rule: BlockerRule | null; path: string; occurrenceKey: string | null; areaScopeId: string | null }
 export interface PreviewWarning { code: string; path: string }
 export type ItemStatus = 'PROPOSED' | 'EXISTING' | 'BLOCKED';
@@ -310,7 +326,7 @@ export function normalizedRequest(r: GenerationPreviewRequest) {
     };
 }
 
-const BLOCKER_PRIORITY: Gpr2ErrorCode[] = ['STALE_SOURCE_VERSION', 'AREA_SCOPE_CONFLICT', 'ONE_PRODUCER_CONFLICT', 'INVALID_MEASUREMENT', 'MISSING_REQUIRED_DATA'];
+const BLOCKER_PRIORITY: Gpr2ErrorCode[] = ['VALIDATION_FAILED', 'STALE_SOURCE_VERSION', 'AREA_SCOPE_CONFLICT', 'ONE_PRODUCER_CONFLICT', 'INVALID_MEASUREMENT', 'MISSING_REQUIRED_DATA'];
 
 export function computeGenerationPreview(input: PreviewInput): GenerationPreview {
     const req = normalizedRequest(input.request);
@@ -343,7 +359,15 @@ export function computeGenerationPreview(input: PreviewInput): GenerationPreview
     const bound = new Map(input.bindings.map(b => [b.occurrenceKey + '|' + b.areaScopeId, b]));
     const boundAreasOf = new Map<string, Set<string>>();
     for (const b of input.bindings) (boundAreasOf.get(b.occurrenceKey) ?? boundAreasOf.set(b.occurrenceKey, new Set()).get(b.occurrenceKey)!).add(b.areaScopeId);
-    const local = new Map(req.localQuantities.map(q => [q.occurrenceKey + '|' + q.areaScopeId, q.quantity]));
+    // R05-IND3-01: a repeated obligation is a blocker of its own and takes NO value from any of its statements (neither the first nor the last). The
+    // schemas already refuse it; the pure path refuses it too, for a caller that did not parse its input.
+    const duplicated = new Set<string>();
+    for (const i of duplicateLocalQuantities(input.request.localQuantities)) {
+        const q = input.request.localQuantities![i];
+        duplicated.add(q.occurrenceKey + '|' + q.areaScopeId);
+        block('VALIDATION_FAILED', 'DUPLICATE_VALUE', 'localQuantities.' + i, q.occurrenceKey, q.areaScopeId);
+    }
+    const local = new Map(req.localQuantities.filter(q => !duplicated.has(q.occurrenceKey + '|' + q.areaScopeId)).map(q => [q.occurrenceKey + '|' + q.areaScopeId, q.quantity]));
     const items: PreviewItem[] = [];
     for (const o of included) {
         // R05-GPT-B04: a MAIN stage over a measured parent is generated only when the parent's measure is fully represented by its leaves.
@@ -360,6 +384,11 @@ export function computeGenerationPreview(input: PreviewInput): GenerationPreview
         let applicable = 0;
         for (const leaf of leaves) {
             const existing = bound.get(o.occurrenceKey + '|' + leaf);
+            if (o.measureScope === 'LOCAL' && duplicated.has(o.occurrenceKey + '|' + leaf)) {
+                items.push({ occurrenceKey: o.occurrenceKey, occurrenceId: o.id, areaScopeId: leaf, status: 'BLOCKED', quantity: null, unit: o.measureUnit, existingWorkId: existing?.workId ?? null });
+                applicable++;
+                continue;
+            }
             if (existing && !producerCompatible(existing, o)) {
                 // the obligation is held by a producer of another operation: not satisfied, not duplicable here (one producer per obligation)
                 items.push({ occurrenceKey: o.occurrenceKey, occurrenceId: o.id, areaScopeId: leaf, status: 'BLOCKED', quantity: null, unit: o.measureUnit, existingWorkId: existing.workId });
