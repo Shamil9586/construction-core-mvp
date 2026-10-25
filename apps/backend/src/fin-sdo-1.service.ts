@@ -320,6 +320,15 @@ export class FinSdo1Service {
       return {status:'ACTIVE',bookId:book.id,bookVersion:book.version,revisionNo:last.revision_no,year:b.year,quarter:b.quarter,currencyCode:'RUB',original:history[0].new_total_rub,current:last.new_total_rub,history:visible,lines};
     });
   }
+  async commitBufferProtected(a:Actor,bearer:string,b:CommitInput){
+    writeRole(a);quarter(b.year,b.quarter);
+    if(!bearer||bearer.length<32||bearer.length>256)throw new ForbiddenException('FIN_ACCESS_DENIED');
+    return runFinSdoCommandTx(async tx=>{
+      const r=await tx.c.query('SELECT public.fin_sdo_commit_edit_buffer($1,$2,$3,$4::uuid,$5,$6::date,$7,$8) AS result',
+      [bearer,b.year,b.quarter,b.bufferId,b.expectedBookVersion,b.effectiveOn,b.reason??null,b.idempotencyKey]);
+      return r.rows[0].result;
+    }).catch(mapFinProtectedFailure);
+  }
   async commitBuffer(a:Actor,b:CommitInput){
     writeRole(a);quarter(b.year,b.quarter);
     if(!/^\d{4}-\d{2}-\d{2}$/.test(b.effectiveOn))throw new BadRequestException('FIN_EFFECTIVE_DATE_INVALID');
