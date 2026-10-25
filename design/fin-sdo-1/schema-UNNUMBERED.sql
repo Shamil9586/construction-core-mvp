@@ -477,3 +477,73 @@ $fin_create_subject$;
 REVOKE ALL ON FUNCTION public.fin_sdo_create_historical_subject(text,text,text,text,text) FROM PUBLIC;
 -- Deployment gate: GRANT EXECUTE only to FIN runtime role AFTER complete
 -- privilege review, not to the main product pool or arbitrary DB principals.
+
+
+-- S-01 protected historical party writer (isolated candidate).
+-- This remains unnumbered; no public EXECUTE grants. The tenant and actor are
+-- obtained from the active, role-checked bearer, never passed as input.
+CREATE FUNCTION public.fin_sdo_create_historical_party(
+  p_bearer_token text, p_name text, p_idempotency_key text
+) RETURNS jsonb
+LANGUAGE plpgsql VOLATILE SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $fin_create_party$
+DECLARE
+  v_tenant uuid;
+  v_actor uuid;
+  v_name text;
+  v_fp text;
+  v_existing record;
+  v_id uuid;
+  v_payload jsonb;
+  v_result jsonb;
+BEGIN
+  SELECT p.fin_tenant_id,p.fin_actor_id INTO v_tenant,v_actor
+  FROM public.fin_sdo_session_principal(p_bearer_token,'WRITE') p;
+
+  IF v_tenant IS NULL OR v_actor IS NULL THEN
+    RAISE EXCEPTION 'FIN_SESSION_OR_WRITE_ROLE_DENIED' USING ERRCODE='42501';
+  END IF;
+  v_name := pg_catalog.btrim(p_name);
+  IF v_name IS NULL OR pg_catalog.length(v_name) NOT BETWEEN 1 AND 250
+    OR p_idempotency_key IS NULL OR
+       pg_catalog.length(p_idempotency_key) NOT BETWEEN 8 AND 128 THEN
+    RAISE EXCEPTION 'FIN_PARTY_INPUT_INVALID' USING ERRCODE='23514';
+  END IF;
+
+  v_payload:=pg_catalog.jsonb_build_object('name',v_name);
+  v_fp:=pg_catalog.encode(
+      pg_catalog.sha256(pg_catalog.convert_to(v_payload::text,'UTF8')), 'hex'
+  );
+  PERFORM pg_catalog.pg_advisory_xact_lock(
+      pg_catalog.hashtextextended(v_tenant::text||':'||v_actor::text||
+        ':historical-party-create:'||p_idempotency_key,713)
+  );
+  SELECT l.fingerprint,l.result INTO v_existing
+  FROM public.fin_command_ledger l
+  WHERE l.tenant_id=v_tenant AND l.actor_id=v_actor
+    AND l.kind='historical-party-create'
+    AND l.scope_id=v_tenant AND l.idempotency_key=p_idempotency_key;
+
+  IF FOUND THEN
+    IF v_existing.fingerprint<>v_fp THEN
+      RAISE EXCEPTION 'FIN_IDEMPOTENCY_PAYLOAD_MISMATCH' USING ERRCODE='23505';
+    END IF;
+    RETURN v_existing.result;
+  END IF;
+
+  INSERT INTO public.fin_historical_parties(tenant_id,name,created_by)
+  VALUES (v_tenant,v_name,v_actor) RETURNING id INTO v_id;
+  v_result:=pg_catalog.jsonb_build_object('id',v_id,'name',v_name);
+  INSERT INTO public.fin_command_ledger(
+      tenant_id,actor_id,kind,scope_id,idempotency_key,fingerprint,result
+  ) VALUES (
+      v_tenant,v_actor,'historical-party-create',v_tenant,
+      p_idempotency_key,v_fp,v_result
+  );
+  RETURN v_result;
+END;
+$fin_create_party$;
+REVOKE ALL ON FUNCTION public.fin_sdo_create_historical_party(text,text,text) FROM PUBLIC;
+-- Grant EXECUTE to only the approved FIN restricted role following independent
+-- authorization and successful full protected-path tests, not in product LIVE.

@@ -27,9 +27,32 @@ async function expectSqlState(fn:()=>Promise<unknown>,sqlstate:string,label:stri
 
 async function main(){
  await owner.query("CREATE ROLE fin_sdo_isolated_login LOGIN PASSWORD '"+password+"'");
- await owner.query('GRANT USAGE ON SCHEMA public TO fin_sdo_isolated_login');
+ // A separate NOLOGIN, NO-BYPASSRLS, non-superuser owner executes strictly
+ // the privilege-whitelisted FIN SECURITY DEFINER commands. This models
+ // S-01 least privilege, unlike a function owned by the migration superuser.
+ await owner.query('CREATE ROLE fin_sdo_definer_test NOLOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE');
+ await owner.query('GRANT USAGE ON SCHEMA public TO fin_sdo_definer_test,fin_sdo_isolated_login');
+ await owner.query('GRANT SELECT ON TABLE public.sessions,public.users,public.fin_command_ledger TO fin_sdo_definer_test');
+ await owner.query('GRANT SELECT,INSERT ON TABLE public.fin_historical_subjects,public.fin_historical_parties TO fin_sdo_definer_test');
+ await owner.query('GRANT INSERT ON TABLE public.fin_command_ledger TO fin_sdo_definer_test');
+ await owner.query('ALTER FUNCTION public.fin_sdo_session_principal(text,text) OWNER TO fin_sdo_definer_test');
+ await owner.query('ALTER FUNCTION public.fin_sdo_create_historical_subject(text,text,text,text,text) OWNER TO fin_sdo_definer_test');
+ await owner.query('ALTER FUNCTION public.fin_sdo_create_historical_party(text,text,text) OWNER TO fin_sdo_definer_test');
  await owner.query('GRANT EXECUTE ON FUNCTION public.fin_sdo_session_principal(text,text) TO fin_sdo_isolated_login');
  await owner.query('GRANT EXECUTE ON FUNCTION public.fin_sdo_create_historical_subject(text,text,text,text,text) TO fin_sdo_isolated_login');
+ await owner.query('GRANT EXECUTE ON FUNCTION public.fin_sdo_create_historical_party(text,text,text) TO fin_sdo_isolated_login');
+
+ const pgRoles=await owner.query("SELECT rolname,rolsuper,rolbypassrls,rolcreaterole,rolcreatedb FROM pg_roles WHERE rolname IN ($1,$2)",[roleName,'fin_sdo_definer_test']);
+ assert.equal(pgRoles.rows.length,2);
+ for (const r of pgRoles.rows) {
+   assert.equal(r.rolsuper,false);assert.equal(r.rolbypassrls,false);
+   assert.equal(r.rolcreaterole,false);assert.equal(r.rolcreatedb,false);
+ }
+ const fnOwners=await owner.query("SELECT p.proname,r.rolname FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace JOIN pg_roles r ON r.oid=p.proowner WHERE n.nspname='public' AND p.proname IN ('fin_sdo_session_principal','fin_sdo_create_historical_subject','fin_sdo_create_historical_party')");
+ assert.equal(fnOwners.rows.length,3);
+ for (const row of fnOwners.rows) assert.equal(row.rolname,'fin_sdo_definer_test');
+ console.log('PASS S-01 all tested SECURITY DEFINER functions owned by minimal NOLOGIN/NOBYPASSRLS role');
+
 
  async function actor(tenantPortal:string,role:string){
    const tenant=(await owner.query('SELECT id FROM tenants WHERE portal=$1',[tenantPortal])).rows[0].id as string;
@@ -93,6 +116,39 @@ async function main(){
    ['00000000-0000-0000-0000-000000000000','Spoof','A','B',randomUUID()]);
  }),'42501','spoofed actor identifier cannot substitute for bearer');
 
+
+ const partyKey=randomUUID();
+ const partyResult=await runFinSdoCommandTx(async tx=>(await tx.c.query(
+   'SELECT public.fin_sdo_create_historical_party($1,$2,$3) AS result',
+   [a.token,'Historical planning subcontractor',partyKey])).rows[0].result);
+ const partyAgain=await runFinSdoCommandTx(async tx=>(await tx.c.query(
+   'SELECT public.fin_sdo_create_historical_party($1,$2,$3) AS result',
+   [a.token,'Historical planning subcontractor',partyKey])).rows[0].result);
+ assert.deepEqual(partyAgain,partyResult);
+ const partyRow=await owner.query('SELECT tenant_id,created_by,name FROM fin_historical_parties WHERE id=$1',[partyResult.id]);
+ assert.equal(partyRow.rows.length,1);assert.equal(partyRow.rows[0].tenant_id,a.tenant);
+ assert.equal(partyRow.rows[0].created_by,a.uid);
+ assert.equal((await owner.query("SELECT count(*)::int n FROM fin_command_ledger WHERE tenant_id=$1 AND actor_id=$2 AND kind='historical-party-create' AND idempotency_key=$3",[a.tenant,a.uid,partyKey])).rows[0].n,1);
+ console.log('PASS S-01 protected historical party created once under limited FIN role with actor/tenant from bearer');
+
+ await expectSqlState(()=>runFinSdoCommandTx(async tx=>{
+   await tx.c.query('SELECT public.fin_sdo_create_historical_party($1,$2,$3)',[a.token,'Conflicting payload',partyKey]);
+ }),'23505','historical party mismatched idempotency fingerprint denied');
+
+ await expectSqlState(()=>runFinSdoCommandTx(async tx=>{
+   await tx.c.query('SELECT public.fin_sdo_create_historical_party($1,$2,$3)',[pto.token,'Forbidden party',randomUUID()]);
+ }),'42501','PTO cannot call privileged historical-party creation');
+
+ await expectSqlState(()=>runFinSdoCommandTx(async tx=>{
+   await tx.c.query('INSERT INTO public.fin_historical_parties(tenant_id,name,created_by) VALUES($1,$2,$3)',[a.tenant,'Direct forged party',a.uid]);
+ }),'42501','same FIN restricted role cannot insert historical party directly');
+
+ const ownerPrivilege=await owner.query(
+   "SELECT has_table_privilege('fin_sdo_definer_test','public.objects','UPDATE') AS production_update, has_table_privilege('fin_sdo_definer_test','public.fin_quarter_plan_books','UPDATE') AS finance_book_update");
+ assert.equal(ownerPrivilege.rows[0].production_update,false);
+ assert.equal(ownerPrivilege.rows[0].finance_book_update,false);
+ console.log('PASS S-01 restricted DEFINER has no production/financial-book DML privileges');
+
  const foreign=await runFinSdoCommandTx(async tx=>(await tx.c.query(
    'SELECT public.fin_sdo_create_historical_subject($1,$2,$3,$4,$5) AS result',
    [b.token,'Other tenant protected','Street 2','Other client',randomUUID()])).rows[0].result);
@@ -106,6 +162,9 @@ async function main(){
    await tx.c.query('SELECT public.fin_sdo_create_historical_subject($1,$2,$3,$4,$5)',
    [a.token,'Protected SDO historical object','Street 1','Client',key]);
  }),'42501','role revocation blocks idempotent replay at DB authorization boundary');
+ await expectSqlState(()=>runFinSdoCommandTx(async tx=>{
+   await tx.c.query('SELECT public.fin_sdo_create_historical_party($1,$2,$3)',[a.token,'Historical planning subcontractor',partyKey]);
+ }),'42501','role revocation blocks historical party idempotent replay');
 
  assert.equal((await owner.query('SELECT name FROM fin_historical_subjects WHERE id=$1',[result.id])).rows[0].name,'Protected SDO historical object');
  console.log('S-01 vertical slice isolated proof COMPLETE. OTHER FIN WRITERS AND READERS REMAIN BLOCKED.');
