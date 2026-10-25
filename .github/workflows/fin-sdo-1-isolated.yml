@@ -22,6 +22,8 @@ jobs:
         run: npm run build
       - name: FIN-SDO exact decimal/RBAC unit scenarios
         run: node --import tsx --test tests/fin-sdo-1-money.test.ts
+      - name: FIN-SDO restricted connection TxContext invariants
+        run: node --import tsx --test tests/fin-sdo-1-restricted-transaction.test.ts
       - name: GPR-2 transaction context, writer registry and migration runner compatibility
         run: node --import tsx --test tests/gpr2-r03a-tx-context.test.ts tests/gpr2-r03b-writer-registry.test.ts tests/gpr2-r03d-migration-runner.test.ts
   native-postgres-smoke:
