@@ -237,7 +237,12 @@ export interface ProposedWork {
     contractorId: null; responsibleUserId: null; estimatedCost: null; plannedStartDate: null; plannedFinishDate: null;
     proposedHold: { hours: string; status: 'PROPOSAL' } | null;
 }
-export interface ExistingWork { workId: string; occurrenceKey: string; areaScopeId: string; bindingId: string; systemVersionId: string; name: string; unit: string; quantity: string }
+/**
+ * One row per existing producer BINDING (R05-IND3-02): `quantity` is that binding's own quantity on its AreaScope (`basisQuantity`), so the rows of one
+ * Work over several AreaScopes add up to the Work, never to a multiple of it. The Work's whole planned quantity is `workPlannedQuantity` — a property of
+ * the Work, repeated on each of its rows, not an amount to be summed.
+ */
+export interface ExistingWork { workId: string; occurrenceKey: string; areaScopeId: string; bindingId: string; systemVersionId: string; name: string; unit: string; quantity: string; workPlannedQuantity: string }
 export interface GenerationPreview {
     previewFingerprint: string;
     scopeVersion: string;
@@ -406,7 +411,8 @@ export function computeGenerationPreview(input: PreviewInput): GenerationPreview
                 continue;
             }
             if (existing) {
-                items.push({ occurrenceKey: o.occurrenceKey, occurrenceId: o.id, areaScopeId: leaf, status: 'EXISTING', quantity: existing.workQuantity, unit: existing.workUnit, existingWorkId: existing.workId });
+                // R05-IND3-02: the item is this leaf's obligation, so its quantity is this binding's quantity — not the whole Work's.
+                items.push({ occurrenceKey: o.occurrenceKey, occurrenceId: o.id, areaScopeId: leaf, status: 'EXISTING', quantity: existing.basisQuantity, unit: existing.workUnit, existingWorkId: existing.workId });
                 applicable++;
                 continue;
             }
@@ -468,7 +474,7 @@ export function computeGenerationPreview(input: PreviewInput): GenerationPreview
     }
     const existingWorks: ExistingWork[] = items.filter(it => it.status === 'EXISTING').map(it => {
         const b = bound.get(it.occurrenceKey + '|' + it.areaScopeId)!;
-        return { workId: b.workId, occurrenceKey: b.occurrenceKey, areaScopeId: b.areaScopeId, bindingId: b.id, systemVersionId: b.systemVersionId, name: b.workName, unit: b.workUnit, quantity: b.workQuantity };
+        return { workId: b.workId, occurrenceKey: b.occurrenceKey, areaScopeId: b.areaScopeId, bindingId: b.id, systemVersionId: b.systemVersionId, name: b.workName, unit: b.workUnit, quantity: b.basisQuantity, workPlannedQuantity: b.workQuantity };
     });
     if (!proposedWorks.length && !blockers.length)
         block(existingWorks.length ? 'ONE_PRODUCER_CONFLICT' : 'MISSING_REQUIRED_DATA', 'NOTHING_TO_GENERATE', 'areaScopeIds');
