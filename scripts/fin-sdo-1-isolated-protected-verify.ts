@@ -51,7 +51,7 @@ async function main(){
  await owner.query('ALTER FUNCTION public.fin_sdo_list_edit_buffers(text,integer,integer) OWNER TO fin_sdo_definer_test');
  await owner.query('ALTER FUNCTION public.fin_sdo_read_edit_buffer(text,uuid) OWNER TO fin_sdo_definer_test');
  await owner.query('ALTER FUNCTION public.fin_sdo_update_edit_buffer(text,uuid,integer,integer,integer,integer,jsonb) OWNER TO fin_sdo_definer_test');
- await owner.query('ALTER FUNCTION public.fin_sdo_commit_edit_buffer(text,integer,integer,uuid,integer,date,text,text) OWNER TO fin_sdo_definer_test');
+ await owner.query('ALTER FUNCTION public.fin_sdo_commit_edit_buffer(text,integer,integer,uuid,integer,integer,date,text,text) OWNER TO fin_sdo_definer_test');
  await owner.query('ALTER FUNCTION public.fin_assert_quarter_book() OWNER TO fin_sdo_definer_test');
  await owner.query('ALTER FUNCTION public.fin_assert_history_links() OWNER TO fin_sdo_definer_test');
  await owner.query('GRANT EXECUTE ON FUNCTION public.fin_sdo_session_principal(text,text) TO fin_sdo_isolated_login');
@@ -63,7 +63,7 @@ async function main(){
  await owner.query('GRANT EXECUTE ON FUNCTION public.fin_sdo_list_edit_buffers(text,integer,integer) TO fin_sdo_isolated_login');
  await owner.query('GRANT EXECUTE ON FUNCTION public.fin_sdo_read_edit_buffer(text,uuid) TO fin_sdo_isolated_login');
  await owner.query('GRANT EXECUTE ON FUNCTION public.fin_sdo_update_edit_buffer(text,uuid,integer,integer,integer,integer,jsonb) TO fin_sdo_isolated_login');
- await owner.query('GRANT EXECUTE ON FUNCTION public.fin_sdo_commit_edit_buffer(text,integer,integer,uuid,integer,date,text,text) TO fin_sdo_isolated_login');
+ await owner.query('GRANT EXECUTE ON FUNCTION public.fin_sdo_commit_edit_buffer(text,integer,integer,uuid,integer,integer,date,text,text) TO fin_sdo_isolated_login');
 
  const pgRoles=await owner.query("SELECT rolname,rolsuper,rolbypassrls,rolcreaterole,rolcreatedb FROM pg_roles WHERE rolname IN ($1,$2)",[roleName,'fin_sdo_definer_test']);
  assert.equal(pgRoles.rows.length,2);
