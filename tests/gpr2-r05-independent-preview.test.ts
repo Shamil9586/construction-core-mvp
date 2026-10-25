@@ -11,7 +11,7 @@ const U = 'м²';
 const occ = (x: Partial<PreviewOccurrence> = {}): PreviewOccurrence => ({ id: 'occ-v2', occurrenceKey: 'SAME_KEY', position: 1, workTypeId: 'wt-A', workTypeName: 'A', workTypeUnit: U,
   required: true, measureScope: 'MAIN', measureUnit: U, proposedHoldHours: null, overrideKind: 'ADDED_LOCAL', ...x });
 const producer = (x: Partial<PreviewBinding> = {}): PreviewBinding => ({ id: 'b1', workId: 'w-old', occurrenceKey: 'SAME_KEY', areaScopeId: 'R', systemVersionId: 'sv1', workName: 'old',
-  workUnit: U, workQuantity: '50.0000', workTypeId: 'wt-A', producedWorkTypeId: 'wt-A', producedMeasureUnit: U, producedMeasureScope: 'MAIN', ...x });
+  workUnit: U, workQuantity: '50.0000', workTypeId: 'wt-A', producedWorkTypeId: 'wt-A', producedMeasureUnit: U, producedMeasureScope: 'MAIN', basisQuantity: '50.0000', ...x });
 const input = (o: PreviewOccurrence, b: PreviewBinding, extra: any = {}): PreviewInput => ({
   finishType: { id: 'ft', code: 'T', name: 'Тип', version: 1 }, systemVersion: { id: 'sv2', versionNumber: 2, isCurrent: true }, scopeVersion: '3',
   occurrences: [o, occ({ id: 'occ-new', occurrenceKey: 'NEW_STAGE', position: 2, workTypeId: 'wt-A' })], areas: [{ id: 'R', parentId: null, code: 'R', name: 'R', kind: 'ZONE', measureQuantity: '50', measureUnit: U }],

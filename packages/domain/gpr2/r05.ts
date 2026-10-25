@@ -182,6 +182,8 @@ export interface PreviewBinding {
     id: string; workId: string; occurrenceKey: string; areaScopeId: string; systemVersionId: string; workName: string; workUnit: string; workQuantity: string;
     /** The operation the producer actually performs: its Work's WorkType, and the WorkType / unit / measure scope of the occurrence it was bound under. */
     workTypeId: string; producedWorkTypeId: string; producedMeasureUnit: string; producedMeasureScope: MeasureScope;
+    /** The quantity the binding was generated from (a LOCAL stage: the stated local quantity; MAIN: the leaf's measure). */
+    basisQuantity: string;
 }
 /**
  * R05-IND-NEW-05. An occurrence key names an obligation, not an operation: a producer bound under one version satisfies the same key of another version
@@ -208,7 +210,7 @@ export interface PreviewInput {
     legacyWorks: readonly { workId: string; workTypeId: string }[];
     request: GenerationPreviewRequest;
 }
-export type BlockerRule = Extract<Gpr2ValidationRule, 'QUANTITY_MISSING' | 'UNIT_MISSING' | 'UNIT_MISMATCH' | 'AREA_OVERLAP' | 'AREA_COVERAGE_INCOMPLETE' | 'PRODUCER_EXISTS' | 'PRODUCER_INCOMPATIBLE' | 'NOTHING_TO_GENERATE' | 'REFERENCE_NOT_IN_SCOPE' | 'OUT_OF_RANGE'>;
+export type BlockerRule = Extract<Gpr2ValidationRule, 'QUANTITY_MISSING' | 'UNIT_MISSING' | 'UNIT_MISMATCH' | 'AREA_OVERLAP' | 'AREA_COVERAGE_INCOMPLETE' | 'PRODUCER_EXISTS' | 'PRODUCER_INCOMPATIBLE' | 'PRODUCER_QUANTITY_CHANGED' | 'NOTHING_TO_GENERATE' | 'REFERENCE_NOT_IN_SCOPE' | 'OUT_OF_RANGE'>;
 export interface PreviewBlocker { error: Gpr2ErrorCode; rule: BlockerRule | null; path: string; occurrenceKey: string | null; areaScopeId: string | null }
 export interface PreviewWarning { code: string; path: string }
 export type ItemStatus = 'PROPOSED' | 'EXISTING' | 'BLOCKED';
@@ -362,6 +364,15 @@ export function computeGenerationPreview(input: PreviewInput): GenerationPreview
                 // the obligation is held by a producer of another operation: not satisfied, not duplicable here (one producer per obligation)
                 items.push({ occurrenceKey: o.occurrenceKey, occurrenceId: o.id, areaScopeId: leaf, status: 'BLOCKED', quantity: null, unit: o.measureUnit, existingWorkId: existing.workId });
                 block('ONE_PRODUCER_CONFLICT', 'PRODUCER_INCOMPATIBLE', 'areaScopeIds', o.occurrenceKey, leaf);
+                applicable++;
+                continue;
+            }
+            // R05-GPT-R3 (LOCAL quantity): a LOCAL producer was generated for the quantity stated then. A different quantity stated now is a change of the
+            // obligation's quantity (R06 / R07) — never satisfied by the old producer, never silently replaced: a structured blocker.
+            const restated = o.measureScope === 'LOCAL' ? local.get(o.occurrenceKey + '|' + leaf) : undefined;
+            if (existing && restated !== undefined && compareDecimals(restated as DecimalString, existing.basisQuantity as DecimalString) !== 0) {
+                items.push({ occurrenceKey: o.occurrenceKey, occurrenceId: o.id, areaScopeId: leaf, status: 'BLOCKED', quantity: null, unit: o.measureUnit, existingWorkId: existing.workId });
+                block('ONE_PRODUCER_CONFLICT', 'PRODUCER_QUANTITY_CHANGED', 'localQuantities', o.occurrenceKey, leaf);
                 applicable++;
                 continue;
             }

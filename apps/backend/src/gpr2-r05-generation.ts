@@ -56,7 +56,7 @@ async function loadPreviewInput(c: any, tenantId: string, objectId: string, fini
         throw new Gpr2Error('CROSS_SCOPE_REFERENCE', { violations: refs });
     // with the operation each producer performs (its Work's WorkType, its occurrence's WorkType / unit / measure scope) — R05-IND-NEW-05
     const bindings = await rows(c, `SELECT b.id, b.work_id, b.occurrence_key, b.area_scope_id, b.system_version_id, w.name AS work_name, w.unit AS work_unit, w.planned_quantity::text AS work_quantity,
-        w.work_type_id, o.work_type_id AS produced_work_type_id, o.measure_unit AS produced_measure_unit, o.measure_scope AS produced_measure_scope
+        w.work_type_id, b.basis_quantity::text AS basis_quantity, o.work_type_id AS produced_work_type_id, o.measure_unit AS produced_measure_unit, o.measure_scope AS produced_measure_scope
         FROM work_scope_bindings b JOIN works w ON w.tenant_id=b.tenant_id AND w.id=b.work_id JOIN finish_stage_occurrences o ON o.tenant_id=b.tenant_id AND o.id=b.occurrence_id WHERE b.tenant_id=$1 AND b.object_id=$2 AND b.finish_type_id=$3 AND b.binding_state='ACTIVE' ORDER BY b.id`, [tenantId, objectId, ft.id]);
     const other = await rows(c, "SELECT DISTINCT area_scope_id FROM work_scope_bindings WHERE tenant_id=$1 AND object_id=$2 AND finish_type_id<>$3 AND binding_state='ACTIVE' ORDER BY 1", [tenantId, objectId, ft.id]);
     const legacy = await rows(c, `SELECT w.id, w.work_type_id FROM works w WHERE w.tenant_id=$1 AND w.object_id=$2 AND w.work_type_id = ANY($3::uuid[])
@@ -70,7 +70,7 @@ async function loadPreviewInput(c: any, tenantId: string, objectId: string, fini
             required: o.required, measureScope: o.measureScope, measureUnit: o.measureUnit, proposedHoldHours: o.proposedHoldHours ?? null, overrideKind: o.overrideKind })),
         areas: areas.map((a: any) => ({ id: a.id, parentId: a.parentId ?? null, code: a.code, name: a.name, kind: a.kind, measureQuantity: a.measureQuantity ?? null, measureUnit: a.measureUnit ?? null })),
         bindings: bindings.map((b: any) => ({ id: b.id, workId: b.workId, occurrenceKey: b.occurrenceKey, areaScopeId: b.areaScopeId, systemVersionId: b.systemVersionId, workName: b.workName, workUnit: b.workUnit, workQuantity: b.workQuantity,
-            workTypeId: b.workTypeId, producedWorkTypeId: b.producedWorkTypeId, producedMeasureUnit: b.producedMeasureUnit, producedMeasureScope: b.producedMeasureScope })),
+            workTypeId: b.workTypeId, producedWorkTypeId: b.producedWorkTypeId, producedMeasureUnit: b.producedMeasureUnit, producedMeasureScope: b.producedMeasureScope, basisQuantity: b.basisQuantity })),
         otherFinishAreaIds: other.map((r: any) => r.areaScopeId),
         legacyWorks: legacy.map((w: any) => ({ workId: w.id, workTypeId: w.workTypeId })),
         request
