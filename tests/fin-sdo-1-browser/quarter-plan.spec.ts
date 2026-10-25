@@ -103,7 +103,7 @@ async function harness(page:Page,role:string,state:FinState){
   }
   else if(p==='/api/fin-sdo-1/commit'&&m==='POST'){
    const d=state.drafts.find(x=>x.id===body.bufferId);
-   if(!d||body.expectedBookVersion!==state.version){code=409;payload={message:'FIN_COMMAND_CONFLICT'};}
+   if(!d||body.expectedBookVersion!==state.version||body.expectedBufferVersion!==d.version){code=409;payload={message:'FIN_COMMAND_CONFLICT'};}
    else if(BigInt(rubOf(d.lines).split('.')[0])<10000000n){code=422;payload={message:'FIN_QUARTER_TOTAL_BELOW_MIN'};}
    else if(state.version>0&&!body.reason?.trim()){code=422;payload={message:'FIN_CORRECTION_REASON_REQUIRED'};}
    else {
@@ -154,7 +154,7 @@ test('FIN browser: SDO saves 6m draft, resumes to 10m, then commits original; ne
  expect(state.history).toHaveLength(1);
  const writes=state.calls.filter(x=>x.path==='/api/fin-sdo-1/commit');
  expect(writes).toHaveLength(1);
- expect(writes[0].body).toMatchObject({expectedBookVersion:0,bufferId:state.drafts[0].id});
+ expect(writes[0].body).toMatchObject({expectedBookVersion:0,expectedBufferVersion:2,bufferId:state.drafts[0].id});
  await expect(page.getByRole('heading',{name:'План по объектам, исполнителям и договорам'})).toBeVisible();
 });
 
