@@ -886,3 +886,147 @@ END;
 $fin_edit_buffer$;
 REVOKE ALL ON FUNCTION public.fin_sdo_create_edit_buffer(text,integer,integer,integer,jsonb) FROM PUBLIC;
 -- No app runtime privileges granted here; reserved migration 035 is NOT written.
+
+
+-- S-01: list only the actual author-owned technical edit buffers. READ-only
+-- director role is explicitly denied the author-scoped edit buffer API.
+CREATE FUNCTION public.fin_sdo_list_edit_buffers(
+  p_bearer_token text,p_year integer,p_quarter integer
+) RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
+SET search_path=pg_catalog,pg_temp AS $fin_list_buffers$
+DECLARE v_tenant uuid;v_actor uuid;v_result jsonb;
+BEGIN
+ SELECT fin_tenant_id,fin_actor_id INTO v_tenant,v_actor
+ FROM public.fin_sdo_session_principal(p_bearer_token,'WRITE');
+ IF v_actor IS NULL THEN
+   RAISE EXCEPTION 'FIN_SESSION_OR_WRITE_ROLE_DENIED' USING ERRCODE='42501';
+ END IF;
+ IF p_year NOT BETWEEN 2000 AND 2200 OR p_quarter NOT BETWEEN 1 AND 4 THEN
+   RAISE EXCEPTION 'FIN_QUARTER_INVALID' USING ERRCODE='23514';
+ END IF;
+ SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(x) ORDER BY x.updated_at DESC,x.id),'[]'::jsonb)
+ INTO v_result FROM (
+   SELECT s.id,s.version,s.expected_book_version,s.updated_at,
+      COALESCE(pg_catalog.sum(l.amount_rub),0)::text AS total_rub,
+      pg_catalog.count(l.id)::int AS line_count
+   FROM public.fin_plan_edit_sessions s
+   LEFT JOIN public.fin_plan_edit_session_lines l
+     ON l.tenant_id=s.tenant_id AND l.edit_session_id=s.id
+   WHERE s.tenant_id=v_tenant AND s.actor_id=v_actor
+     AND s.plan_year=p_year AND s.plan_quarter=p_quarter
+   GROUP BY s.id
+   ORDER BY s.updated_at DESC,s.id LIMIT 30
+ ) x;
+ RETURN v_result;
+END;
+$fin_list_buffers$;
+REVOKE ALL ON FUNCTION public.fin_sdo_list_edit_buffers(text,integer,integer) FROM PUBLIC;
+
+-- Private buffer view includes canonical subject/party/contract references
+-- and the CAS version so the client can safely resume its own incomplete work.
+CREATE FUNCTION public.fin_sdo_read_edit_buffer(
+  p_bearer_token text,p_buffer uuid
+) RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
+SET search_path=pg_catalog,pg_temp AS $fin_read_buffer$
+DECLARE v_tenant uuid;v_actor uuid;v_buf record;v_lines jsonb;
+BEGIN
+ SELECT fin_tenant_id,fin_actor_id INTO v_tenant,v_actor
+ FROM public.fin_sdo_session_principal(p_bearer_token,'WRITE');
+ IF v_actor IS NULL THEN
+   RAISE EXCEPTION 'FIN_SESSION_OR_WRITE_ROLE_DENIED' USING ERRCODE='42501';
+ END IF;
+ SELECT b.id,b.plan_year,b.plan_quarter,b.expected_book_version,b.version
+ INTO v_buf
+ FROM public.fin_plan_edit_sessions b
+ WHERE b.tenant_id=v_tenant AND b.actor_id=v_actor AND b.id=p_buffer;
+ IF NOT FOUND THEN
+   RAISE EXCEPTION 'FIN_BUFFER_NOT_FOUND_OR_DENIED' USING ERRCODE='42501';
+ END IF;
+ SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(l) ORDER BY l.id),'[]'::jsonb)
+ INTO v_lines FROM (
+    SELECT x.id,x.subject_id,x.party_scope_id,x.contract_scope_id,
+      x.amount_rub::text AS amount_rub,
+      s.origin,s.core_object_id,s.historical_subject_id,
+      p.kind AS party_kind,p.core_contractor_id,p.historical_party_id,
+      k.kind AS contract_kind,k.number AS contract_number
+    FROM public.fin_plan_edit_session_lines x
+    JOIN public.fin_subjects s ON s.tenant_id=x.tenant_id AND s.id=x.subject_id
+    JOIN public.fin_party_scopes p ON p.tenant_id=x.tenant_id AND p.id=x.party_scope_id
+    JOIN public.fin_contract_scopes k ON k.tenant_id=x.tenant_id AND k.id=x.contract_scope_id
+    WHERE x.tenant_id=v_tenant AND x.edit_session_id=p_buffer
+ ) l;
+ RETURN pg_catalog.jsonb_build_object('buffer',pg_catalog.to_jsonb(v_buf),'lines',v_lines);
+END;
+$fin_read_buffer$;
+REVOKE ALL ON FUNCTION public.fin_sdo_read_edit_buffer(text,uuid) FROM PUBLIC;
+
+-- Replace ALL draft lines via a temporary author-scoped buffer in the same
+-- tx.c. This reuses the protected canonical resolver and row/amount validators
+-- rather than trusting caller-supplied canonical SQL identifiers.
+-- The original id survives. If ANY operation fails, rollback restores all
+-- original lines and version; no effective FIN plan is modified.
+CREATE FUNCTION public.fin_sdo_update_edit_buffer(
+  p_bearer_token text,p_buffer uuid,p_expected_buffer_version integer,
+  p_year integer,p_quarter integer,p_expected_book_version integer,p_lines jsonb
+) RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER
+SET search_path=pg_catalog,pg_temp AS $fin_update_buffer$
+DECLARE
+ v_tenant uuid;v_actor uuid;v_existing record;
+ v_next jsonb;v_temporary uuid;v_total numeric;
+BEGIN
+ SELECT fin_tenant_id,fin_actor_id INTO v_tenant,v_actor
+ FROM public.fin_sdo_session_principal(p_bearer_token,'WRITE');
+ IF v_actor IS NULL THEN
+   RAISE EXCEPTION 'FIN_SESSION_OR_WRITE_ROLE_DENIED' USING ERRCODE='42501';
+ END IF;
+ IF p_expected_buffer_version IS NULL OR p_expected_buffer_version<1 THEN
+   RAISE EXCEPTION 'FIN_BUFFER_CAS_CONFLICT' USING ERRCODE='23505';
+ END IF;
+ SELECT b.id,b.version,b.plan_year,b.plan_quarter,b.expected_book_version
+ INTO v_existing
+ FROM public.fin_plan_edit_sessions b
+ WHERE b.tenant_id=v_tenant AND b.actor_id=v_actor AND b.id=p_buffer
+ FOR UPDATE;
+ IF NOT FOUND THEN
+   RAISE EXCEPTION 'FIN_BUFFER_NOT_FOUND_OR_DENIED' USING ERRCODE='42501';
+ END IF;
+ IF v_existing.version<>p_expected_buffer_version THEN
+   RAISE EXCEPTION 'FIN_BUFFER_CAS_CONFLICT' USING ERRCODE='23505';
+ END IF;
+ IF v_existing.plan_year<>p_year OR v_existing.plan_quarter<>p_quarter
+   OR v_existing.expected_book_version<>p_expected_book_version THEN
+   RAISE EXCEPTION 'FIN_BUFFER_QUARTER_MISMATCH' USING ERRCODE='23514';
+ END IF;
+ -- No other commands using FIN's privileged connection may bypass this
+ -- validation. A concurrently advanced official book invalidates the draft.
+ SELECT pg_catalog.jsonb_extract_path_text(
+   public.fin_sdo_create_edit_buffer(
+     p_bearer_token,p_year,p_quarter,p_expected_book_version,p_lines
+   ),'bufferId'
+ )::uuid INTO v_temporary;
+
+ DELETE FROM public.fin_plan_edit_session_lines
+ WHERE tenant_id=v_tenant AND edit_session_id=p_buffer;
+ UPDATE public.fin_plan_edit_session_lines
+ SET edit_session_id=p_buffer
+ WHERE tenant_id=v_tenant AND edit_session_id=v_temporary;
+
+ DELETE FROM public.fin_plan_edit_sessions
+ WHERE tenant_id=v_tenant AND actor_id=v_actor AND id=v_temporary;
+
+ UPDATE public.fin_plan_edit_sessions SET
+   version=version+1,updated_at=pg_catalog.now()
+ WHERE tenant_id=v_tenant AND actor_id=v_actor AND id=p_buffer
+   AND version=p_expected_buffer_version;
+
+ SELECT COALESCE(pg_catalog.sum(amount_rub),0) INTO v_total
+ FROM public.fin_plan_edit_session_lines
+ WHERE tenant_id=v_tenant AND edit_session_id=p_buffer;
+ RETURN pg_catalog.jsonb_build_object(
+   'bufferId',p_buffer,'version',p_expected_buffer_version+1,
+   'uncommitted',true,'totalRub',v_total::text
+ );
+END;
+$fin_update_buffer$;
+REVOKE ALL ON FUNCTION public.fin_sdo_update_edit_buffer(text,uuid,integer,integer,integer,integer,jsonb) FROM PUBLIC;
+-- S-01 still UNNUMBERED, all runtime grants limited to disposable test.

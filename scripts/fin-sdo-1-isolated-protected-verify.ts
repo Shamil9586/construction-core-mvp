@@ -39,18 +39,25 @@ async function main(){
  // neither finance books nor director-protected projections through SQL.
  await owner.query('GRANT SELECT ON TABLE public.objects,public.contractors,public.fin_subjects,public.fin_party_scopes,public.fin_contract_scopes,public.fin_quarter_plan_books,public.fin_quarter_book_revisions,public.fin_quarter_plan_lines,public.fin_quarter_plan_line_revisions TO fin_sdo_definer_test');
  await owner.query('GRANT SELECT,INSERT ON TABLE public.fin_subjects,public.fin_party_scopes,public.fin_contract_scopes,public.fin_plan_edit_sessions,public.fin_plan_edit_session_lines TO fin_sdo_definer_test');
+ await owner.query('GRANT UPDATE,DELETE ON TABLE public.fin_plan_edit_sessions,public.fin_plan_edit_session_lines TO fin_sdo_definer_test');
  await owner.query('ALTER FUNCTION public.fin_sdo_session_principal(text,text) OWNER TO fin_sdo_definer_test');
  await owner.query('ALTER FUNCTION public.fin_sdo_create_historical_subject(text,text,text,text,text) OWNER TO fin_sdo_definer_test');
  await owner.query('ALTER FUNCTION public.fin_sdo_create_historical_party(text,text,text) OWNER TO fin_sdo_definer_test');
  await owner.query('ALTER FUNCTION public.fin_sdo_read_directory(text) OWNER TO fin_sdo_definer_test');
  await owner.query('ALTER FUNCTION public.fin_sdo_read_quarter(text,integer,integer,timestamptz) OWNER TO fin_sdo_definer_test');
  await owner.query('ALTER FUNCTION public.fin_sdo_create_edit_buffer(text,integer,integer,integer,jsonb) OWNER TO fin_sdo_definer_test');
+ await owner.query('ALTER FUNCTION public.fin_sdo_list_edit_buffers(text,integer,integer) OWNER TO fin_sdo_definer_test');
+ await owner.query('ALTER FUNCTION public.fin_sdo_read_edit_buffer(text,uuid) OWNER TO fin_sdo_definer_test');
+ await owner.query('ALTER FUNCTION public.fin_sdo_update_edit_buffer(text,uuid,integer,integer,integer,integer,jsonb) OWNER TO fin_sdo_definer_test');
  await owner.query('GRANT EXECUTE ON FUNCTION public.fin_sdo_session_principal(text,text) TO fin_sdo_isolated_login');
  await owner.query('GRANT EXECUTE ON FUNCTION public.fin_sdo_create_historical_subject(text,text,text,text,text) TO fin_sdo_isolated_login');
  await owner.query('GRANT EXECUTE ON FUNCTION public.fin_sdo_create_historical_party(text,text,text) TO fin_sdo_isolated_login');
  await owner.query('GRANT EXECUTE ON FUNCTION public.fin_sdo_read_directory(text) TO fin_sdo_isolated_login');
  await owner.query('GRANT EXECUTE ON FUNCTION public.fin_sdo_read_quarter(text,integer,integer,timestamptz) TO fin_sdo_isolated_login');
  await owner.query('GRANT EXECUTE ON FUNCTION public.fin_sdo_create_edit_buffer(text,integer,integer,integer,jsonb) TO fin_sdo_isolated_login');
+ await owner.query('GRANT EXECUTE ON FUNCTION public.fin_sdo_list_edit_buffers(text,integer,integer) TO fin_sdo_isolated_login');
+ await owner.query('GRANT EXECUTE ON FUNCTION public.fin_sdo_read_edit_buffer(text,uuid) TO fin_sdo_isolated_login');
+ await owner.query('GRANT EXECUTE ON FUNCTION public.fin_sdo_update_edit_buffer(text,uuid,integer,integer,integer,integer,jsonb) TO fin_sdo_isolated_login');
 
  const pgRoles=await owner.query("SELECT rolname,rolsuper,rolbypassrls,rolcreaterole,rolcreatedb FROM pg_roles WHERE rolname IN ($1,$2)",[roleName,'fin_sdo_definer_test']);
  assert.equal(pgRoles.rows.length,2);
@@ -58,8 +65,8 @@ async function main(){
    assert.equal(r.rolsuper,false);assert.equal(r.rolbypassrls,false);
    assert.equal(r.rolcreaterole,false);assert.equal(r.rolcreatedb,false);
  }
- const fnOwners=await owner.query("SELECT p.proname,r.rolname FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace JOIN pg_roles r ON r.oid=p.proowner WHERE n.nspname='public' AND p.proname IN ('fin_sdo_session_principal','fin_sdo_create_historical_subject','fin_sdo_create_historical_party','fin_sdo_read_directory','fin_sdo_read_quarter','fin_sdo_create_edit_buffer')");
- assert.equal(fnOwners.rows.length,6);
+ const fnOwners=await owner.query("SELECT p.proname,r.rolname FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace JOIN pg_roles r ON r.oid=p.proowner WHERE n.nspname='public' AND p.proname IN ('fin_sdo_session_principal','fin_sdo_create_historical_subject','fin_sdo_create_historical_party','fin_sdo_read_directory','fin_sdo_read_quarter','fin_sdo_create_edit_buffer','fin_sdo_list_edit_buffers','fin_sdo_read_edit_buffer','fin_sdo_update_edit_buffer')");
+ assert.equal(fnOwners.rows.length,9);
  for (const row of fnOwners.rows) assert.equal(row.rolname,'fin_sdo_definer_test');
  console.log('PASS S-01 all tested SECURITY DEFINER functions owned by minimal NOLOGIN/NOBYPASSRLS role');
 
@@ -275,6 +282,55 @@ async function main(){
    });
    assert.equal(bTen.status,200);assert.equal(bTen.body.totalRub,'10000000.00');
    assert.notEqual(bSix.body.bufferId,bTen.body.bufferId);
+   const firstPrivate=await api('buffers/'+bSix.body.bufferId,a.token);
+   assert.equal(firstPrivate.status,200);
+   assert.equal(firstPrivate.body.buffer.version,1);
+   assert.equal(firstPrivate.body.lines.length,1);
+   const listPrivate=await api('buffers?year=2030&quarter=1',a.token);
+   assert.equal(listPrivate.status,200);
+   assert.ok(listPrivate.body.some((v:any)=>v.id===bSix.body.bufferId));
+   assert.ok(listPrivate.body.some((v:any)=>v.id===bTen.body.bufferId));
+   const deniedDirector=await api('buffers?year=2030&quarter=1',director.token);
+   assert.equal(deniedDirector.status,403);
+   const deniedDirectorById=await api('buffers/'+bSix.body.bufferId,director.token);
+   assert.equal(deniedDirectorById.status,403);
+   const deniedForeignById=await api('buffers/'+bSix.body.bufferId,b.token);
+   assert.equal(deniedForeignById.status,403);
+   const deniedPtoById=await api('buffers/'+bSix.body.bufferId,pto.token);
+   assert.equal(deniedPtoById.status,403);
+   console.log('PASS S-01 actor-only technical buffer list/read, director and cross-tenant denied');
+
+   const patchPayload={year:2030,quarter:1,expectedBookVersion:0,expectedBufferVersion:1,lines:[
+     {historicalSubjectId:httpId,partyKind:'UNALLOCATED',contractKind:'NOT_SPECIFIED',amountMln:'6.00'},
+     {coreObjectId:directory.body.core[0].id,partyKind:'HISTORICAL_PARTY',
+      partyId:httpParty.body.id,contractKind:'KNOWN',contractNumber:'FIN-C-2029',amountMln:'4.00'}
+   ]};
+   const patched=await api('buffers/'+bSix.body.bufferId,a.token,'PATCH',patchPayload);
+   assert.equal(patched.status,200);assert.equal(patched.body.version,2);
+   assert.equal(patched.body.bufferId,bSix.body.bufferId);
+   assert.equal(patched.body.totalRub,'10000000.00');
+   const afterPatch=await api('buffers/'+bSix.body.bufferId,a.token);
+   assert.equal(afterPatch.status,200);assert.equal(afterPatch.body.buffer.version,2);
+   assert.equal(afterPatch.body.lines.length,2);
+   const stalePatch=await api('buffers/'+bSix.body.bufferId,a.token,'PATCH',patchPayload);
+   assert.equal(stalePatch.status,409);
+   const unchanged=await api('buffers/'+bSix.body.bufferId,a.token);
+   assert.equal(unchanged.body.lines.length,2);assert.equal(unchanged.body.buffer.version,2);
+   const foreignPatch=await api('buffers/'+bSix.body.bufferId,b.token,'PATCH',patchPayload);
+   assert.equal(foreignPatch.status,403);
+   const directorPatch=await api('buffers/'+bSix.body.bufferId,director.token,'PATCH',patchPayload);
+   assert.equal(directorPatch.status,403);
+   const duplicatePatch=await api('buffers/'+bSix.body.bufferId,a.token,'PATCH',{
+     ...patchPayload,expectedBufferVersion:2,lines:[
+       {historicalSubjectId:httpId,partyKind:'UNALLOCATED',contractKind:'NOT_SPECIFIED',amountMln:'6.00'},
+       {historicalSubjectId:httpId,partyKind:'UNALLOCATED',contractKind:'NOT_SPECIFIED',amountMln:'4.00'}
+     ]
+   });
+   assert.equal(duplicatePatch.status,409);
+   assert.equal((await api('buffers/'+bSix.body.bufferId,a.token)).body.buffer.version,2);
+   assert.equal((await api('buffers/'+bSix.body.bufferId,a.token)).body.lines.length,2);
+   console.log('PASS S-01 6.00 to 10.00 protected PATCH via CAS with stale/foreign/duplicate rollback');
+
    const stillNoPlan=await api('quarter?year=2030&quarter=1',a.token);
    assert.equal(stillNoPlan.status,200);assert.equal(stillNoPlan.body.status,'NO_PLAN');
    console.log('PASS S-01 restricted DB technical buffer 6 then 6+4 without creating original');
@@ -304,18 +360,15 @@ async function main(){
    await expectSqlState(()=>runFinSdoCommandTx(async tx=>{
       await tx.c.query("INSERT INTO fin_plan_edit_sessions(tenant_id,actor_id,plan_year,plan_quarter) VALUES($1,$2,2030,2)",[a.tenant,a.uid]);
    }),'42501','limited FIN login cannot directly create edit buffer without definer');
-   // Fail CLOSED: unconverted book commit/edit and private buffer read/delete
-   // operations are not allowed to fall back to privileged product connection.
+   // Fail CLOSED: official quarter book writes have not been converted.
    for (const [path,method,payload] of [
-     ['buffers?year=2027&quarter=1','GET',undefined],
-     ['buffers/'+randomUUID(),'GET',undefined],
      ['commit','POST',{year:2028,quarter:1,bufferId:randomUUID(),expectedBookVersion:0,effectiveOn:'2028-01-01',idempotencyKey:randomUUID()}]
    ] as const){
      const result=await api(path,a.token,method,payload);
      assert.equal(result.status,503,path+' must remain unavailable until SEC-01 fixed');
      assert.ok(!JSON.stringify(result.body).includes('Protected SDO historical'));
    }
-   console.log('PASS S-01 protected mode blocks not-yet-converted buffer reads/patches and official book writes (503)');
+   console.log('PASS S-01 official book commit still FAIL-CLOSED while private buffer edit/read/list are protected');
  } finally {await finApp.close();}
  const foreign=await runFinSdoCommandTx(async tx=>(await tx.c.query(
    'SELECT public.fin_sdo_create_historical_subject($1,$2,$3,$4,$5) AS result',
@@ -335,7 +388,7 @@ async function main(){
  }),'42501','role revocation blocks historical party idempotent replay');
 
  assert.equal((await owner.query('SELECT name FROM fin_historical_subjects WHERE id=$1',[result.id])).rows[0].name,'Protected SDO historical object');
- console.log('S-01 isolated protected readers and CREATE buffer verified. OFFICIAL BOOK COMMIT, BUFFER PATCH, PRIVATE BUFFER READ STILL BLOCKED.');
+ console.log('S-01 private technical buffer read/list/PATCH and protected finance reads verified. OFFICIAL BOOK COMMIT STILL FAIL-CLOSED.');
 }
 main().catch(e=>{console.error(e);process.exitCode=1}).finally(async()=>{
   // Ephemeral CI database gets destroyed after job. Never drop a role in production.

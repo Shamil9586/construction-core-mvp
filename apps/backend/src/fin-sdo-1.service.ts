@@ -219,6 +219,46 @@ export class FinSdo1Service {
       return {bufferId:session.id,version:1,uncommitted:true,totalRub:total.total};
     });
   }
+  async listBuffersProtected(a:Actor,bearer:string,q:Quarter){
+    writeRole(a);quarter(q.year,q.quarter);
+    if(typeof bearer!=='string'||bearer.length<32||bearer.length>256)
+      throw new ForbiddenException('FIN_ACCESS_DENIED');
+    return runFinSdoSnapshotRead(async tx=>{
+      const result=await tx.c.query(
+        'SELECT public.fin_sdo_list_edit_buffers($1,$2,$3) AS result',
+        [bearer,q.year,q.quarter]
+      );
+      return result.rows[0].result;
+    }).catch(mapFinProtectedFailure);
+  }
+  async readBufferProtected(a:Actor,bearer:string,id:string){
+    writeRole(a);
+    if(typeof bearer!=='string'||bearer.length<32||bearer.length>256)
+      throw new ForbiddenException('FIN_ACCESS_DENIED');
+    return runFinSdoSnapshotRead(async tx=>{
+      const result=await tx.c.query(
+        'SELECT public.fin_sdo_read_edit_buffer($1,$2::uuid) AS result',
+        [bearer,id]
+      );
+      return result.rows[0].result;
+    }).catch(mapFinProtectedFailure);
+  }
+  async updateBufferProtected(a:Actor,bearer:string,id:string,b:BufferInput&{expectedBufferVersion:number}){
+    writeRole(a);quarter(b.year,b.quarter);
+    if(typeof bearer!=='string'||bearer.length<32||bearer.length>256)
+      throw new ForbiddenException('FIN_ACCESS_DENIED');
+    if(!Number.isInteger(b.expectedBufferVersion)||b.expectedBufferVersion<1||
+      !Number.isInteger(b.expectedBookVersion)||b.expectedBookVersion<0||
+      !b.lines.length||b.lines.length>1000)throw new BadRequestException('FIN_BUFFER_INVALID');
+    b.lines.forEach(v=>rub(v.amountMln));
+    return runFinSdoCommandTx(async tx=>{
+      const result=await tx.c.query(
+        'SELECT public.fin_sdo_update_edit_buffer($1,$2::uuid,$3,$4,$5,$6,$7::jsonb) AS result',
+        [bearer,id,b.expectedBufferVersion,b.year,b.quarter,b.expectedBookVersion,JSON.stringify(b.lines)]
+      );
+      return result.rows[0].result;
+    }).catch(mapFinProtectedFailure);
+  }
   async listBuffers(a:Actor,q:Quarter){
     writeRole(a);quarter(q.year,q.quarter);
     return runSnapshotRead(async tx=>query(tx.c,

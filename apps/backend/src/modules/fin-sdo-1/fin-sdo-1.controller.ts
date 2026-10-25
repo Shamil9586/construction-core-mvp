@@ -84,18 +84,21 @@ export class FinSdo1Controller {
  }
  @Get('buffers')
  listBuffers(@Req()req:any,@Query('year') y:string,@Query('quarter') q:string){
-   requireUnprotectedIsolation();
    const year=z.coerce.number().int().parse(y),quarter=z.coerce.number().int().parse(q);
+   if(protectedSlice())return authenticate(req).then(a=>this.svc.listBuffersProtected(a,requestBearer(req),{year,quarter}));
+   requireUnprotectedIsolation();
    return authenticate(req).then(a=>this.svc.listBuffers(a,{year,quarter}));
  }
  @Patch('buffers/:id')
  patchBuffer(@Req()req:any,@Param('id') id:string,@Body()body:any){
-   requireUnprotectedIsolation();
    const b=bufferPatch.parse(body);
+   if(protectedSlice())return authenticate(req).then(a=>this.svc.updateBufferProtected(a,requestBearer(req),uuid.parse(id),b));
+   requireUnprotectedIsolation();
    return authenticate(req).then(a=>this.svc.updateBuffer(a,uuid.parse(id),b));
  }
  @Get('buffers/:id')
  readBuffer(@Req()req:any,@Param('id') id:string){
+  if(protectedSlice())return authenticate(req).then(a=>this.svc.readBufferProtected(a,requestBearer(req),uuid.parse(id)));
   requireUnprotectedIsolation();
   return authenticate(req).then(a=>this.svc.readBuffer(a,uuid.parse(id)));
  }
