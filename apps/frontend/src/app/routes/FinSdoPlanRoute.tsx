@@ -95,7 +95,7 @@ export function FinSdoPlanRoute(){
  },'Технический ввод восстановлен.');
  const commit=()=>task(async()=>{
    if(!bufferId)throw Error('Сначала сохраните технический ввод');
-   await api('commit','POST',{year,quarter,bufferId,expectedBookVersion:book?.bookVersion??0,effectiveOn,reason:reason||undefined,idempotencyKey:key()});
+   await api('commit','POST',{year,quarter,bufferId,expectedBufferVersion:bufferVersion,expectedBookVersion:book?.bookVersion??0,effectiveOn,reason:reason||undefined,idempotencyKey:key()});
    await refresh();
  },'Новая действующая версия квартального плана записана.');
  const historical=()=>task(async()=>{
