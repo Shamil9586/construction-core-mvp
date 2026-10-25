@@ -1030,3 +1030,208 @@ END;
 $fin_update_buffer$;
 REVOKE ALL ON FUNCTION public.fin_sdo_update_edit_buffer(text,uuid,integer,integer,integer,integer,jsonb) FROM PUBLIC;
 -- S-01 still UNNUMBERED, all runtime grants limited to disposable test.
+
+-- S-01 protected official quarter-book commit. This is a separately gated
+-- candidate: SECURITY DEFINER owner holds only necessary FIN grants, runtime
+-- LOGIN has NO FIN table DML. A single caller-owned tx.c does all writes.
+CREATE FUNCTION public.fin_sdo_commit_edit_buffer(
+ p_bearer_token text,p_year integer,p_quarter integer,
+ p_buffer uuid,p_expected_book_version integer,
+ p_effective_on date,p_reason text,p_idempotency_key text
+) RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER
+SET search_path=pg_catalog,pg_temp AS $fin_commit_book$
+DECLARE
+ v_tenant uuid;v_actor uuid;v_scope uuid;v_fp text;
+ v_previous record;v_buffer record;v_book record;
+ v_total numeric;v_count bigint;v_revision integer;
+ v_prev_total numeric;v_book_revision_id uuid;
+ v_in record;v_old record;v_line_id uuid;v_changed integer:=0;
+ v_result jsonb;v_hex text;
+BEGIN
+ SELECT fin_tenant_id,fin_actor_id INTO v_tenant,v_actor
+ FROM public.fin_sdo_session_principal(p_bearer_token,'WRITE');
+ IF v_actor IS NULL THEN
+   RAISE EXCEPTION 'FIN_SESSION_OR_WRITE_ROLE_DENIED' USING ERRCODE='42501';
+ END IF;
+ IF p_year NOT BETWEEN 2000 AND 2200 OR p_quarter NOT BETWEEN 1 AND 4
+    OR p_expected_book_version IS NULL OR p_expected_book_version<0
+    OR p_effective_on IS NULL OR p_idempotency_key IS NULL
+    OR pg_catalog.length(p_idempotency_key) NOT BETWEEN 8 AND 128
+    OR p_buffer IS NULL OR pg_catalog.length(p_reason)>300 THEN
+    RAISE EXCEPTION 'FIN_COMMIT_INVALID' USING ERRCODE='23514';
+ END IF;
+ IF p_expected_book_version>0 AND pg_catalog.length(pg_catalog.btrim(COALESCE(p_reason,'')))=0 THEN
+   RAISE EXCEPTION 'FIN_CORRECTION_REASON_REQUIRED' USING ERRCODE='23514';
+ END IF;
+ v_hex:=pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(
+    v_tenant::text||':RUB:'||p_year::text||':'||p_quarter::text,'UTF8'
+ )),'hex');
+ v_scope:=(pg_catalog.substr(v_hex,1,8)||'-'||pg_catalog.substr(v_hex,9,4)||
+     '-4'||pg_catalog.substr(v_hex,14,3)||'-8'||pg_catalog.substr(v_hex,18,3)||
+     '-'||pg_catalog.substr(v_hex,21,12))::uuid;
+ v_fp:=pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(
+   pg_catalog.jsonb_build_object('bufferId',p_buffer,'year',p_year,
+     'quarter',p_quarter,'expectedBookVersion',p_expected_book_version,
+     'effectiveOn',p_effective_on,'reason',p_reason)::text,'UTF8'
+ )),'hex');
+
+ PERFORM pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(
+   v_tenant::text||'|'||v_actor::text||'|quarter-commit|'||
+   v_scope::text||'|'||p_idempotency_key,713));
+ SELECT l.fingerprint,l.result INTO v_previous
+ FROM public.fin_command_ledger l WHERE l.tenant_id=v_tenant AND
+   l.actor_id=v_actor AND l.kind='quarter-commit' AND
+   l.scope_id=v_scope AND l.idempotency_key=p_idempotency_key;
+ IF FOUND THEN
+   IF v_previous.fingerprint<>v_fp THEN
+     RAISE EXCEPTION 'FIN_IDEMPOTENCY_PAYLOAD_MISMATCH' USING ERRCODE='23505';
+   END IF;
+   RETURN v_previous.result;
+ END IF;
+
+ SELECT e.id,e.plan_year,e.plan_quarter,e.expected_book_version INTO v_buffer
+ FROM public.fin_plan_edit_sessions e
+ WHERE e.tenant_id=v_tenant AND e.actor_id=v_actor AND e.id=p_buffer
+ FOR UPDATE;
+ IF NOT FOUND THEN
+   RAISE EXCEPTION 'FIN_BUFFER_NOT_FOUND_OR_DENIED' USING ERRCODE='42501';
+ END IF;
+ IF v_buffer.plan_year<>p_year OR v_buffer.plan_quarter<>p_quarter OR
+    v_buffer.expected_book_version<>p_expected_book_version THEN
+   RAISE EXCEPTION 'FIN_BUFFER_VERSION_CONFLICT' USING ERRCODE='23505';
+ END IF;
+ SELECT COALESCE(pg_catalog.sum(amount_rub),0),pg_catalog.count(*)
+ INTO v_total,v_count
+ FROM public.fin_plan_edit_session_lines
+ WHERE tenant_id=v_tenant AND edit_session_id=p_buffer;
+ IF v_count=0 OR v_total<10000000.00 THEN
+   RAISE EXCEPTION 'FIN_QUARTER_TOTAL_BELOW_MIN' USING ERRCODE='23514';
+ END IF;
+
+ SELECT b.id,b.version,b.head_revision_no INTO v_book
+ FROM public.fin_quarter_plan_books b WHERE b.tenant_id=v_tenant
+ AND b.currency_code='RUB' AND b.plan_year=p_year AND b.plan_quarter=p_quarter
+ FOR UPDATE;
+ IF NOT FOUND THEN
+   IF p_expected_book_version<>0 THEN
+     RAISE EXCEPTION 'FIN_QUARTER_BOOK_VERSION_CONFLICT' USING ERRCODE='23505';
+   END IF;
+   INSERT INTO public.fin_quarter_plan_books(tenant_id,currency_code,plan_year,plan_quarter,created_by)
+   VALUES(v_tenant,'RUB',p_year,p_quarter,v_actor)
+   ON CONFLICT DO NOTHING RETURNING id,version,head_revision_no INTO v_book;
+   IF v_book.id IS NULL THEN
+     RAISE EXCEPTION 'FIN_QUARTER_BOOK_ALREADY_EXISTS' USING ERRCODE='23505';
+   END IF;
+ END IF;
+ IF v_book.version<>p_expected_book_version THEN
+   RAISE EXCEPTION 'FIN_QUARTER_BOOK_VERSION_CONFLICT' USING ERRCODE='23505';
+ END IF;
+ v_revision:=p_expected_book_version+1;
+ v_prev_total:=NULL;
+ IF p_expected_book_version>0 THEN
+   SELECT r.new_total_rub INTO v_prev_total
+   FROM public.fin_quarter_book_revisions r
+   WHERE r.tenant_id=v_tenant AND r.book_id=v_book.id
+     AND r.revision_no=p_expected_book_version;
+   IF v_prev_total IS NULL THEN
+     RAISE EXCEPTION 'FIN_BOOK_HISTORY_INVALID' USING ERRCODE='23514';
+   END IF;
+   -- Existing canonical rows must not be implicitly deleted by omissions.
+   IF EXISTS (
+     SELECT 1 FROM public.fin_quarter_plan_lines pl
+     WHERE pl.tenant_id=v_tenant AND pl.book_id=v_book.id
+     AND NOT EXISTS(
+       SELECT 1 FROM public.fin_plan_edit_session_lines src
+       WHERE src.tenant_id=v_tenant AND src.edit_session_id=p_buffer
+         AND src.subject_id=pl.subject_id
+         AND src.party_scope_id=pl.party_scope_id
+         AND src.contract_scope_id=pl.contract_scope_id
+     )
+   ) THEN
+     RAISE EXCEPTION 'FIN_EXISTING_LINE_OMITTED' USING ERRCODE='23514';
+   END IF;
+ END IF;
+
+ INSERT INTO public.fin_quarter_book_revisions(
+   tenant_id,book_id,revision_no,previous_total_rub,new_total_rub,
+   reason,actor_id,effective_on,command_id
+ ) VALUES(
+   v_tenant,v_book.id,v_revision,v_prev_total,v_total,p_reason,v_actor,
+   p_effective_on,pg_catalog.gen_random_uuid()
+ ) RETURNING id INTO v_book_revision_id;
+
+ FOR v_in IN SELECT subject_id,party_scope_id,contract_scope_id,amount_rub
+   FROM public.fin_plan_edit_session_lines
+   WHERE tenant_id=v_tenant AND edit_session_id=p_buffer
+   ORDER BY subject_id,party_scope_id,contract_scope_id
+ LOOP
+   v_line_id:=NULL;
+   SELECT pl.id,r.new_amount_rub,r.line_revision_no INTO v_old
+   FROM public.fin_quarter_plan_lines pl
+   JOIN LATERAL (
+     SELECT lr.new_amount_rub,lr.line_revision_no
+     FROM public.fin_quarter_plan_line_revisions lr
+     JOIN public.fin_quarter_book_revisions br
+       ON br.tenant_id=lr.tenant_id AND br.id=lr.book_revision_id
+     WHERE lr.tenant_id=pl.tenant_id AND lr.plan_line_id=pl.id
+       AND br.revision_no<=p_expected_book_version
+     ORDER BY br.revision_no DESC LIMIT 1
+   ) r ON TRUE
+   WHERE pl.tenant_id=v_tenant AND pl.book_id=v_book.id
+     AND pl.subject_id=v_in.subject_id
+     AND pl.party_scope_id=v_in.party_scope_id
+     AND pl.contract_scope_id=v_in.contract_scope_id;
+
+   IF v_old.id IS NULL THEN
+     INSERT INTO public.fin_quarter_plan_lines(
+       tenant_id,book_id,subject_id,party_scope_id,contract_scope_id,
+       currency_code,created_in_book_revision
+     ) VALUES(
+       v_tenant,v_book.id,v_in.subject_id,v_in.party_scope_id,
+       v_in.contract_scope_id,'RUB',v_revision
+     ) RETURNING id INTO v_line_id;
+     INSERT INTO public.fin_quarter_plan_line_revisions(
+       tenant_id,book_revision_id,book_id,plan_line_id,line_revision_no,
+       previous_amount_rub,new_amount_rub,actor_id,effective_on,reason
+     ) VALUES(
+       v_tenant,v_book_revision_id,v_book.id,v_line_id,1,
+       NULL,v_in.amount_rub,v_actor,p_effective_on,p_reason
+     );
+     v_changed:=v_changed+1;
+   ELSIF v_old.new_amount_rub IS DISTINCT FROM v_in.amount_rub THEN
+     INSERT INTO public.fin_quarter_plan_line_revisions(
+       tenant_id,book_revision_id,book_id,plan_line_id,line_revision_no,
+       previous_amount_rub,new_amount_rub,actor_id,effective_on,reason
+     ) VALUES(
+       v_tenant,v_book_revision_id,v_book.id,v_old.id,v_old.line_revision_no+1,
+       v_old.new_amount_rub,v_in.amount_rub,v_actor,p_effective_on,p_reason
+     );
+     v_changed:=v_changed+1;
+   END IF;
+ END LOOP;
+ IF v_changed=0 THEN
+   RAISE EXCEPTION 'FIN_NO_CHANGES' USING ERRCODE='23514';
+ END IF;
+
+ UPDATE public.fin_quarter_plan_books
+ SET version=v_revision,head_revision_no=v_revision
+ WHERE tenant_id=v_tenant AND id=v_book.id AND version=p_expected_book_version;
+ IF NOT FOUND THEN
+   RAISE EXCEPTION 'FIN_QUARTER_BOOK_VERSION_CONFLICT' USING ERRCODE='23505';
+ END IF;
+
+ v_result:=pg_catalog.jsonb_build_object(
+   'bookId',v_book.id,'bookVersion',v_revision,
+   'revisionNo',v_revision,'totalRub',v_total::text
+ );
+ INSERT INTO public.fin_command_ledger(
+   tenant_id,actor_id,kind,scope_id,idempotency_key,fingerprint,result
+ ) VALUES(
+   v_tenant,v_actor,'quarter-commit',v_scope,
+   p_idempotency_key,v_fp,v_result
+ );
+ RETURN v_result;
+END;
+$fin_commit_book$;
+REVOKE ALL ON FUNCTION public.fin_sdo_commit_edit_buffer(text,integer,integer,uuid,integer,date,text,text) FROM PUBLIC;
+-- Unnumbered isolated SQL only. FIN-SDO-1 acceptance still pending.
