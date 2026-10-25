@@ -49,12 +49,16 @@ const commit=period.extend({bufferId:uuid,expectedBookVersion:z.number().int().m
 export class FinSdo1Controller {
  constructor(@Inject(FinSdo1Service)private readonly svc:FinSdo1Service){}
  @Get('subjects')
- subjects(@Req() req:any){requireUnprotectedIsolation();return authenticate(req).then(a=>this.svc.discover(a));}
+ subjects(@Req() req:any){
+  if(protectedSlice())return authenticate(req).then(a=>this.svc.discoverProtected(a,requestBearer(req)));
+  requireUnprotectedIsolation();return authenticate(req).then(a=>this.svc.discover(a));
+ }
  @Get('quarter')
  quarter(@Req() req:any,@Query('year') y:string,@Query('quarter') q:string,@Query('knownAt') knownAt?:string){
-  requireUnprotectedIsolation();
   const year=z.coerce.number().int().parse(y),quarter=z.coerce.number().int().parse(q);
   if(knownAt!==undefined)z.iso.datetime({offset:true}).parse(knownAt);
+  if(protectedSlice())return authenticate(req).then(a=>this.svc.readBookProtected(a,requestBearer(req),{year,quarter},knownAt));
+  requireUnprotectedIsolation();
   return authenticate(req).then(a=>this.svc.readBook(a,{year,quarter},knownAt));
  }
  @Post('historical-subjects') @HttpCode(200)

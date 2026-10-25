@@ -547,3 +547,148 @@ $fin_create_party$;
 REVOKE ALL ON FUNCTION public.fin_sdo_create_historical_party(text,text,text) FROM PUBLIC;
 -- Grant EXECUTE to only the approved FIN restricted role following independent
 -- authorization and successful full protected-path tests, not in product LIVE.
+
+
+-- S-01 protected READ projections. Both functions are SECURITY DEFINER,
+-- derive tenant/role from CURRENT SESSION bearer, grant no direct FIN SELECT
+-- to the login, and expose no caller-selectable tenant_id or object UUID.
+-- Read commands use the same externally supplied REPEATABLE READ tx.c.
+
+CREATE FUNCTION public.fin_sdo_read_directory(p_bearer_token text)
+RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp AS $fin_directory$
+DECLARE v_tenant uuid; v_output jsonb;
+BEGIN
+  SELECT p.fin_tenant_id INTO v_tenant
+    FROM public.fin_sdo_session_principal(p_bearer_token,'READ') p;
+  IF v_tenant IS NULL THEN
+    RAISE EXCEPTION 'FIN_SESSION_OR_READ_ROLE_DENIED' USING ERRCODE='42501';
+  END IF;
+  SELECT pg_catalog.jsonb_build_object(
+    'core', COALESCE((
+      SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(c) ORDER BY c.name,c.id)
+      FROM (SELECT o.id,o.name,o.address,o.status FROM public.objects o
+            WHERE o.tenant_id=v_tenant) c
+    ),'[]'::jsonb),
+    'historical', COALESCE((
+      SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(h) ORDER BY h.name,h.id)
+      FROM (SELECT o.id,o.name,o.address,o.customer_name FROM public.fin_historical_subjects o
+            WHERE o.tenant_id=v_tenant) h
+    ),'[]'::jsonb),
+    'contractors', COALESCE((
+      SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(k) ORDER BY k.name,k.id)
+      FROM (SELECT o.id,o.name,o.status FROM public.contractors o
+            WHERE o.tenant_id=v_tenant) k
+    ),'[]'::jsonb),
+    'historicalParties', COALESCE((
+      SELECT pg_catalog.jsonb_agg(pg_catalog.to_jsonb(hp) ORDER BY hp.name,hp.id)
+      FROM (SELECT o.id,o.name FROM public.fin_historical_parties o
+            WHERE o.tenant_id=v_tenant) hp
+    ),'[]'::jsonb)
+  ) INTO v_output;
+  RETURN v_output;
+END;
+$fin_directory$;
+REVOKE ALL ON FUNCTION public.fin_sdo_read_directory(text) FROM PUBLIC;
+
+-- As-of recorded_at, not effective_on. A historical view cannot show a
+-- later line revision or a later added line, even when effective_on is earlier.
+-- No PLAN and explicit ZERO are distinct; director receives full plan
+-- history but never private edit buffers.
+CREATE FUNCTION public.fin_sdo_read_quarter(
+ p_bearer_token text,p_year integer,p_quarter integer,p_known_at timestamptz DEFAULT NULL
+) RETURNS jsonb LANGUAGE plpgsql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp AS $fin_read_quarter$
+DECLARE
+ v_tenant uuid; v_book record; v_last record;
+ v_history jsonb; v_lines jsonb; v_original text;
+BEGIN
+ SELECT p.fin_tenant_id INTO v_tenant
+ FROM public.fin_sdo_session_principal(p_bearer_token,'READ') p;
+ IF v_tenant IS NULL THEN
+   RAISE EXCEPTION 'FIN_SESSION_OR_READ_ROLE_DENIED' USING ERRCODE='42501';
+ END IF;
+ IF p_year NOT BETWEEN 2000 AND 2200 OR p_quarter NOT BETWEEN 1 AND 4 THEN
+   RAISE EXCEPTION 'FIN_QUARTER_INVALID' USING ERRCODE='23514';
+ END IF;
+ SELECT b.id,b.version INTO v_book
+ FROM public.fin_quarter_plan_books b
+ WHERE b.tenant_id=v_tenant AND b.currency_code='RUB'
+   AND b.plan_year=p_year AND b.plan_quarter=p_quarter;
+ IF NOT FOUND THEN
+   RETURN pg_catalog.jsonb_build_object(
+     'status','NO_PLAN','year',p_year,'quarter',p_quarter,
+     'currencyCode','RUB','original',NULL,'current',NULL,
+     'history','[]'::jsonb,'lines','[]'::jsonb
+   );
+ END IF;
+
+ SELECT r.revision_no,r.new_total_rub::text AS current
+ INTO v_last
+ FROM public.fin_quarter_book_revisions r
+ WHERE r.tenant_id=v_tenant AND r.book_id=v_book.id
+   AND (p_known_at IS NULL OR r.recorded_at<=p_known_at)
+ ORDER BY r.revision_no DESC LIMIT 1;
+ IF NOT FOUND THEN
+   RETURN pg_catalog.jsonb_build_object(
+     'status','NO_PLAN_AT_KNOWN_AT','year',p_year,'quarter',p_quarter,
+     'currencyCode','RUB','history','[]'::jsonb,'lines','[]'::jsonb
+   );
+ END IF;
+
+ SELECT r.new_total_rub::text INTO v_original
+ FROM public.fin_quarter_book_revisions r
+ WHERE r.tenant_id=v_tenant AND r.book_id=v_book.id AND r.revision_no=1;
+
+ SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(h) ORDER BY h.revision_no),'[]'::jsonb)
+ INTO v_history FROM (
+   SELECT r.id,r.revision_no,r.previous_total_rub::text AS previous_total_rub,
+     r.new_total_rub::text AS new_total_rub,r.reason,r.actor_id,r.effective_on,r.recorded_at
+   FROM public.fin_quarter_book_revisions r
+   WHERE r.tenant_id=v_tenant AND r.book_id=v_book.id
+     AND r.revision_no<=v_last.revision_no
+ ) h;
+
+ SELECT COALESCE(pg_catalog.jsonb_agg(pg_catalog.to_jsonb(l) ORDER BY l.id),'[]'::jsonb)
+ INTO v_lines FROM (
+   SELECT pl.id,pl.subject_id,pl.party_scope_id,pl.contract_scope_id,
+     pl.created_in_book_revision, lr.new_amount_rub::text AS amount_rub,
+     (CASE WHEN pl.created_in_book_revision=1 THEN (
+       SELECT r0.new_amount_rub::text
+       FROM public.fin_quarter_plan_line_revisions r0
+       JOIN public.fin_quarter_book_revisions b0
+         ON b0.tenant_id=r0.tenant_id AND b0.id=r0.book_revision_id
+       WHERE r0.tenant_id=pl.tenant_id AND r0.plan_line_id=pl.id
+         AND b0.revision_no=1 LIMIT 1
+     ) ELSE NULL END) AS original_amount_rub,
+     s.origin,s.core_object_id,s.historical_subject_id,
+     p.kind AS party_kind,p.core_contractor_id,p.historical_party_id,
+     k.kind AS contract_kind,k.number AS contract_number
+   FROM public.fin_quarter_plan_lines pl
+   JOIN public.fin_subjects s ON s.tenant_id=pl.tenant_id AND s.id=pl.subject_id
+   JOIN public.fin_party_scopes p ON p.tenant_id=pl.tenant_id AND p.id=pl.party_scope_id
+   JOIN public.fin_contract_scopes k ON k.tenant_id=pl.tenant_id AND k.id=pl.contract_scope_id
+   JOIN LATERAL (
+     SELECT r.new_amount_rub
+     FROM public.fin_quarter_plan_line_revisions r
+     JOIN public.fin_quarter_book_revisions br
+       ON br.tenant_id=r.tenant_id AND br.id=r.book_revision_id
+     WHERE r.tenant_id=pl.tenant_id AND r.plan_line_id=pl.id
+       AND br.revision_no<=v_last.revision_no
+     ORDER BY br.revision_no DESC LIMIT 1
+   ) lr ON TRUE
+   WHERE pl.tenant_id=v_tenant AND pl.book_id=v_book.id
+     AND pl.created_in_book_revision<=v_last.revision_no
+ ) l;
+
+ RETURN pg_catalog.jsonb_build_object(
+   'status','ACTIVE','bookId',v_book.id,'bookVersion',v_book.version,
+   'revisionNo',v_last.revision_no,'year',p_year,'quarter',p_quarter,
+   'currencyCode','RUB','original',v_original,'current',v_last.current,
+   'history',v_history,'lines',v_lines
+ );
+END;
+$fin_read_quarter$;
+REVOKE ALL ON FUNCTION public.fin_sdo_read_quarter(text,integer,integer,timestamptz) FROM PUBLIC;
+-- Runtime login EXECUTE grants are made only in controlled disposable tests
+-- and after separate deployment authorization; not from this draft schema.

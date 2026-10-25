@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { Injectable, ForbiddenException, BadRequestException, NotFoundException, ConflictException, UnprocessableEntityException } from '@nestjs/common';
 import { runCommandTx, runSnapshotRead } from './tx-context';
-import { runFinSdoCommandTx } from './fin-sdo-1-db';
+import { runFinSdoCommandTx, runFinSdoSnapshotRead } from './fin-sdo-1-db';
 import type { Actor } from './security';
 import { millionRubToKopeks, kopeksToRub, FinPlanInputError } from '../../../packages/domain/fin-sdo-1';
 import { Permission, hasPermission, type Role } from '../../../packages/domain';
@@ -53,6 +53,28 @@ export class FinSdo1Service {
   private async checkCurrentWriter(c:any,a:Actor){
     const u=await one(c,'SELECT role FROM users WHERE tenant_id=$1 AND id=$2 AND is_active=true FOR SHARE',[a.tenantId,a.id]);
     if(!u||!hasPermission(u.role as Role,Permission.FIN_SDO_PLAN_WRITE))throw new ForbiddenException('FIN_ACCESS_DENIED');
+  }
+  /** S-01 read-only PostgreSQL projection. No table SELECT for FIN login. */
+  async discoverProtected(a:Actor,bearer:string){
+    readRole(a);
+    if(typeof bearer!=='string'||bearer.length<32||bearer.length>256)
+      throw new ForbiddenException('FIN_ACCESS_DENIED');
+    return runFinSdoSnapshotRead(async tx=>{
+      const result=await tx.c.query('SELECT public.fin_sdo_read_directory($1) AS result',[bearer]);
+      return result.rows[0].result;
+    }).catch(mapFinProtectedFailure);
+  }
+  async readBookProtected(a:Actor,bearer:string,q:Quarter,knownAt?:string){
+    readRole(a);quarter(q.year,q.quarter);
+    if(typeof bearer!=='string'||bearer.length<32||bearer.length>256)
+      throw new ForbiddenException('FIN_ACCESS_DENIED');
+    return runFinSdoSnapshotRead(async tx=>{
+      const result=await tx.c.query(
+        'SELECT public.fin_sdo_read_quarter($1,$2,$3,$4::timestamptz) AS result',
+        [bearer,q.year,q.quarter,knownAt??null]
+      );
+      return result.rows[0].result;
+    }).catch(mapFinProtectedFailure);
   }
   async discover(a:Actor){
     readRole(a);

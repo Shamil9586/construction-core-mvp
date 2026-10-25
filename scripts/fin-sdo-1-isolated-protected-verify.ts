@@ -35,12 +35,19 @@ async function main(){
  await owner.query('GRANT SELECT ON TABLE public.sessions,public.users,public.fin_command_ledger TO fin_sdo_definer_test');
  await owner.query('GRANT SELECT,INSERT ON TABLE public.fin_historical_subjects,public.fin_historical_parties TO fin_sdo_definer_test');
  await owner.query('GRANT INSERT ON TABLE public.fin_command_ledger TO fin_sdo_definer_test');
+ // Only the SECURITY DEFINER owner sees financial tables; the LOGIN sees
+ // neither finance books nor director-protected projections through SQL.
+ await owner.query('GRANT SELECT ON TABLE public.objects,public.contractors,public.fin_subjects,public.fin_party_scopes,public.fin_contract_scopes,public.fin_quarter_plan_books,public.fin_quarter_book_revisions,public.fin_quarter_plan_lines,public.fin_quarter_plan_line_revisions TO fin_sdo_definer_test');
  await owner.query('ALTER FUNCTION public.fin_sdo_session_principal(text,text) OWNER TO fin_sdo_definer_test');
  await owner.query('ALTER FUNCTION public.fin_sdo_create_historical_subject(text,text,text,text,text) OWNER TO fin_sdo_definer_test');
  await owner.query('ALTER FUNCTION public.fin_sdo_create_historical_party(text,text,text) OWNER TO fin_sdo_definer_test');
+ await owner.query('ALTER FUNCTION public.fin_sdo_read_directory(text) OWNER TO fin_sdo_definer_test');
+ await owner.query('ALTER FUNCTION public.fin_sdo_read_quarter(text,integer,integer,timestamptz) OWNER TO fin_sdo_definer_test');
  await owner.query('GRANT EXECUTE ON FUNCTION public.fin_sdo_session_principal(text,text) TO fin_sdo_isolated_login');
  await owner.query('GRANT EXECUTE ON FUNCTION public.fin_sdo_create_historical_subject(text,text,text,text,text) TO fin_sdo_isolated_login');
  await owner.query('GRANT EXECUTE ON FUNCTION public.fin_sdo_create_historical_party(text,text,text) TO fin_sdo_isolated_login');
+ await owner.query('GRANT EXECUTE ON FUNCTION public.fin_sdo_read_directory(text) TO fin_sdo_isolated_login');
+ await owner.query('GRANT EXECUTE ON FUNCTION public.fin_sdo_read_quarter(text,integer,integer,timestamptz) TO fin_sdo_isolated_login');
 
  const pgRoles=await owner.query("SELECT rolname,rolsuper,rolbypassrls,rolcreaterole,rolcreatedb FROM pg_roles WHERE rolname IN ($1,$2)",[roleName,'fin_sdo_definer_test']);
  assert.equal(pgRoles.rows.length,2);
@@ -48,8 +55,8 @@ async function main(){
    assert.equal(r.rolsuper,false);assert.equal(r.rolbypassrls,false);
    assert.equal(r.rolcreaterole,false);assert.equal(r.rolcreatedb,false);
  }
- const fnOwners=await owner.query("SELECT p.proname,r.rolname FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace JOIN pg_roles r ON r.oid=p.proowner WHERE n.nspname='public' AND p.proname IN ('fin_sdo_session_principal','fin_sdo_create_historical_subject','fin_sdo_create_historical_party')");
- assert.equal(fnOwners.rows.length,3);
+ const fnOwners=await owner.query("SELECT p.proname,r.rolname FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace JOIN pg_roles r ON r.oid=p.proowner WHERE n.nspname='public' AND p.proname IN ('fin_sdo_session_principal','fin_sdo_create_historical_subject','fin_sdo_create_historical_party','fin_sdo_read_directory','fin_sdo_read_quarter')");
+ assert.equal(fnOwners.rows.length,5);
  for (const row of fnOwners.rows) assert.equal(row.rolname,'fin_sdo_definer_test');
  console.log('PASS S-01 all tested SECURITY DEFINER functions owned by minimal NOLOGIN/NOBYPASSRLS role');
 
@@ -64,6 +71,7 @@ async function main(){
  }
  const a=await actor('fin1-isolated.example.test','SDO');
  const b=await actor('fin2-isolated.example.test','SDO');
+ const director=await actor('fin1-isolated.example.test','GENERAL_DIRECTOR');
  const pto=await actor('fin1-isolated.example.test','PTO');
  const key=randomUUID();
 
@@ -200,19 +208,64 @@ async function main(){
    assert.equal(mismatch.status,409);
    assert.ok(!JSON.stringify(mismatch.body).includes('fin_command_ledger'));
    console.log('PASS S-01 HTTP conflicting idempotency replay is 409 without SQL leakage');
-   // Fail CLOSED: unconverted book/buffer writers and FIN legacy projections are
+   // Prove the FIN restricted connection is the only query path, including
+   // read-only GD access and cross-tenant isolation.
+   const directory=await api('subjects',a.token);
+   assert.equal(directory.status,200);
+   assert.ok(directory.body.historical.some((v:any)=>v.id===httpId));
+   assert.ok(directory.body.historicalParties.some((v:any)=>v.id===httpParty.body.id));
+   assert.ok(directory.body.core.some((v:any)=>v.name==='FIN CORE ACTIVE'));
+   console.log('PASS S-01 FIN restricted READ directory includes tenant CORE and HISTORICAL');
+
+   const plan=await api('quarter?year=2027&quarter=1',a.token);
+   assert.equal(plan.status,200);
+   assert.equal(plan.body.status,'ACTIVE');
+   assert.equal(plan.body.original,'10000000.00');
+   assert.equal(plan.body.current,'11000000.00');
+   assert.ok(plan.body.history.length>=3);
+   assert.equal(plan.body.lines.length,2);
+   console.log('PASS S-01 FIN protected quarter original/current/history and multi-line book');
+   const asOf=await api('quarter?year=2027&quarter=1&knownAt=2020-01-01T00%3A00%3A00%2B03%3A00',a.token);
+   assert.equal(asOf.status,200);assert.equal(asOf.body.status,'NO_PLAN_AT_KNOWN_AT');
+   console.log('PASS S-01 FIN read as-of excludes revisions recorded after cutoff');
+   const noPlan=await api('quarter?year=2030&quarter=4',a.token);
+   assert.equal(noPlan.status,200);assert.equal(noPlan.body.status,'NO_PLAN');
+   console.log('PASS S-01 empty quarter does not become implicit zero');
+
+   const gdPlan=await api('quarter?year=2027&quarter=1',director.token);
+   assert.equal(gdPlan.status,200);assert.equal(gdPlan.body.current,plan.body.current);
+   const gdSubjects=await api('subjects',director.token);
+   assert.equal(gdSubjects.status,200);
+   assert.ok(gdSubjects.body.historical.some((x:any)=>x.id===httpId));
+   const gdWrite=await api('historical-parties',director.token,'POST',{name:'Forbidden GD',idempotencyKey:randomUUID()});
+   assert.equal(gdWrite.status,403);
+   console.log('PASS S-01 director may read protected plans and subjects but not write');
+   const ptoRead=await api('quarter?year=2027&quarter=1',pto.token);
+   assert.equal(ptoRead.status,403);
+   assert.ok(!JSON.stringify(ptoRead.body).includes('11000000.00'));
+   console.log('PASS S-01 PTO protected quarter API denied without disclosure');
+   const foreignPlan=await api('quarter?year=2027&quarter=1',b.token);
+   assert.equal(foreignPlan.status,200);assert.equal(foreignPlan.body.status,'NO_PLAN');
+   const foreignDir=await api('subjects',b.token);
+   assert.equal(foreignDir.status,200);
+   assert.ok(!foreignDir.body.historical.some((v:any)=>v.id===httpId));
+   console.log('PASS S-01 different-tenant bearer has no cross-tenant plan, subject or record count');
+   await expectSqlState(()=>runFinSdoCommandTx(async tx=>{
+     await tx.c.query('SELECT * FROM public.fin_quarter_plan_books LIMIT 1');
+   }),'42501','FIN runtime login forbidden direct financial book SELECT');
+   // Fail CLOSED: unconverted book/buffer writers and private buffers are
    // *not* allowed to fall back to the main product pool in protected mode.
    for (const [path,method,payload] of [
-     ['quarter?year=2028&quarter=1','GET',undefined],
-     ['subjects','GET',undefined],
      ['buffers','POST',{year:2028,quarter:1,expectedBookVersion:0,lines:[]}],
+     ['buffers?year=2027&quarter=1','GET',undefined],
+     ['buffers/{randomUUID()}','GET',undefined],
      ['commit','POST',{year:2028,quarter:1,bufferId:randomUUID(),expectedBookVersion:0,effectiveOn:'2028-01-01',idempotencyKey:randomUUID()}]
    ] as const){
      const result=await api(path,a.token,method,payload);
      assert.equal(result.status,503,path+' must remain unavailable until SEC-01 fixed');
      assert.ok(!JSON.stringify(result.body).includes('Protected SDO historical'));
    }
-   console.log('PASS S-01 protected mode refuses ALL unconverted FIN readers and book writers (503)');
+   console.log('PASS S-01 protected mode blocks all not-yet-converted buffer and official book writers (503)');
  } finally {await finApp.close();}
  const foreign=await runFinSdoCommandTx(async tx=>(await tx.c.query(
    'SELECT public.fin_sdo_create_historical_subject($1,$2,$3,$4,$5) AS result',
