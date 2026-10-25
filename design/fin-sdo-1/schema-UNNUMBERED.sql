@@ -360,3 +360,35 @@ CREATE CONSTRAINT TRIGGER fin_book_history_links
 CREATE CONSTRAINT TRIGGER fin_line_history_links
  AFTER INSERT ON fin_quarter_plan_line_revisions DEFERRABLE INITIALLY DEFERRED
  FOR EACH ROW EXECUTE FUNCTION fin_assert_history_links();
+
+
+-- S-01 trust boundary DESIGN/ISOLATED TEST ONLY.
+-- A FIN PostgreSQL limited role must NOT be allowed to select sessions/users or
+-- supply arbitrary actor/tenant identity. Only possession of an active bearer
+-- session token, hashed with the SAME SHA-256 algorithm as security.ts, can
+-- resolve current DB tenant/actor/role. NO caller-writable GUC is trusted.
+-- Requires positive and negative native role tests. It is not a write command.
+CREATE FUNCTION public.fin_sdo_session_principal(
+    p_bearer_token text, p_operation text
+) RETURNS TABLE (fin_tenant_id uuid, fin_actor_id uuid, fin_role text)
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $fin_secure$
+    SELECT u.tenant_id, u.id, u.role
+    FROM public.sessions s
+    JOIN public.users u ON u.tenant_id=s.tenant_id AND u.id=s.user_id
+    WHERE s.token_hash = pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(p_bearer_token, 'UTF8')), 'hex')
+      AND s.expires_at > pg_catalog.now()
+      AND u.is_active = true
+      AND pg_catalog.length(p_bearer_token) BETWEEN 32 AND 256
+      AND (
+        (p_operation='READ' AND u.role IN ('SDO','SDO_HEAD','GENERAL_DIRECTOR','DEPUTY_DIRECTOR','ADMIN'))
+        OR (p_operation='WRITE' AND u.role IN ('SDO','SDO_HEAD','ADMIN'))
+      )
+      AND p_operation IN ('READ','WRITE')
+    LIMIT 1;
+$fin_secure$;
+REVOKE ALL ON FUNCTION public.fin_sdo_session_principal(text,text) FROM PUBLIC;
+-- Deliberately no GRANT EXECUTE here. The DB security deployment must grant
+-- solely to the exact restricted FIN runtime principal under separate review.
+-- A standalone legacy DB login must not gain FIN write capability by default.

@@ -6,6 +6,7 @@
 import { Pool } from 'pg';
 import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
+import { createHash, randomBytes } from 'node:crypto';
 import { resolve } from 'node:path';
 const url=process.env.DATABASE_URL;
 if (process.env.FIN_SDO_ISOLATED_CONFIRM!=='YES'||!url)throw Error('Requires explicit FIN_SDO_ISOLATED_CONFIRM=YES and isolated DATABASE_URL');
@@ -135,6 +136,61 @@ async function main(){
    await limited.query('ROLLBACK');
   }finally{limited.release()}
  }
+
+ // S-01 isolated native trust-boundary proof: FIN role can resolve an ACTIVE
+ // bearer-backed principal only via the fixed SECURITY DEFINER function.
+ // It has NO direct SELECT on sessions/users, NO arbitrary actor/tenant input.
+ await pool.query('GRANT EXECUTE ON FUNCTION public.fin_sdo_session_principal(text,text) TO fin_sdo_limited_test');
+ const createUser=async(tenantId:string,role:string)=>{
+   return (await pool.query("INSERT INTO users(tenant_id,bitrix_user_id,name,role) VALUES($1,gen_random_uuid()::text,'FIN security principal',$2) RETURNING id",[tenantId,role])).rows[0].id as string;
+ };
+ const pto=await createUser(t,'PTO');
+ const director=await createUser(t,'GENERAL_DIRECTOR');
+ const foreign=await createUser(t2,'SDO');
+ async function createSession(tid:string,uid:string,expiry="now() + interval '1 hour'"){
+  const token=randomBytes(32).toString('base64url');
+  const digest=createHash('sha256').update(token).digest('hex');
+  const sid=(await pool.query('INSERT INTO sessions(tenant_id,user_id,token_hash,expires_at) VALUES($1,$2,$3,'+expiry+') RETURNING id',[tid,uid,digest])).rows[0].id;
+  return {token,sid};
+ }
+ const sdoAuth=await createSession(t,u);
+ const ptoAuth=await createSession(t,pto);
+ const directorAuth=await createSession(t,director);
+ const foreignAuth=await createSession(t2,foreign);
+ async function asLimited(sql:string,args:any[]=[]):Promise<any[]>{
+   const c=await pool.connect();
+   try{
+      await c.query('BEGIN');
+      await c.query('SET LOCAL ROLE fin_sdo_limited_test');
+      const r=await c.query(sql,args);
+      await c.query('ROLLBACK');
+      return r.rows;
+   }catch(e){await c.query('ROLLBACK').catch(()=>{});throw e}finally{c.release()}
+ }
+ const resolvePrincipal=(token:string,operation:string)=>asLimited(
+   'SELECT * FROM public.fin_sdo_session_principal($1,$2)',[token,operation]);
+ const ownWrite=await resolvePrincipal(sdoAuth.token,'WRITE');
+ assert.equal(ownWrite.length,1);assert.equal(ownWrite[0].fin_tenant_id,t);assert.equal(ownWrite[0].fin_actor_id,u);
+ passed++;console.log('PASS S-01 limited role validates SDO bearer via SECURITY DEFINER');
+ assert.equal((await resolvePrincipal(ptoAuth.token,'READ')).length,0);
+ assert.equal((await resolvePrincipal(ptoAuth.token,'WRITE')).length,0);
+ assert.equal((await resolvePrincipal(directorAuth.token,'READ')).length,1);
+ assert.equal((await resolvePrincipal(directorAuth.token,'WRITE')).length,0);
+ passed++;console.log('PASS S-01 DB role matrix: PTO denied / director read-only');
+ const other=await resolvePrincipal(foreignAuth.token,'WRITE');
+ assert.equal(other.length,1);assert.equal(other[0].fin_tenant_id,t2);
+ assert.notEqual(other[0].fin_tenant_id,t);
+ assert.equal((await resolvePrincipal('forged','WRITE')).length,0);
+ assert.equal((await resolvePrincipal(sdoAuth.token,'ADMIN')).length,0);
+ passed++;console.log('PASS S-01 tenant identity derives only from bearer, no spoofable actor argument');
+ const expired=await createSession(t,u,"now() - interval '1 minute'");
+ assert.equal((await resolvePrincipal(expired.token,'WRITE')).length,0);
+ await pool.query("UPDATE users SET role='PTO' WHERE tenant_id=$1 AND id=$2",[t,u]);
+ assert.equal((await resolvePrincipal(sdoAuth.token,'WRITE')).length,0);
+ await pool.query("UPDATE users SET role='SDO' WHERE tenant_id=$1 AND id=$2",[t,u]);
+ passed++;console.log('PASS S-01 expiration and current-role revocation enforced in DB');
+ try{await asLimited('SELECT * FROM public.sessions LIMIT 1');failed++;console.error('FAIL S-01 limited role read sessions');}
+ catch(e:any){assert.equal(e.code,'42501');passed++;console.log('PASS S-01 restricted role has no session table SELECT [42501]');}
  const sum=await pool.query("SELECT b.new_total_rub::text AS total, sum(l.new_amount_rub)::text AS lines FROM fin_quarter_book_revisions b JOIN fin_quarter_plan_line_revisions l ON l.book_revision_id=b.id AND l.tenant_id=b.tenant_id WHERE b.id=$1 GROUP BY b.id",[revId]);
  assert.equal(sum.rows[0].total,'10000000.00');assert.equal(sum.rows[0].lines,'10000000.00');passed++;
  console.log(JSON.stringify({passed,failed,unproven:['runtime-role restricted write path','native concurrency','role ownership/grants wired into application','full FIN1-01..27 acceptance','FIN1-01..27']},null,2));
