@@ -382,15 +382,59 @@ async function main(){
    await expectSqlState(()=>runFinSdoCommandTx(async tx=>{
       await tx.c.query("INSERT INTO fin_plan_edit_sessions(tenant_id,actor_id,plan_year,plan_quarter) VALUES($1,$2,2030,2)",[a.tenant,a.uid]);
    }),'42501','limited FIN login cannot directly create edit buffer without definer');
-   // Fail CLOSED: official quarter book writes have not been converted.
-   for (const [path,method,payload] of [
-     ['commit','POST',{year:2028,quarter:1,bufferId:randomUUID(),expectedBookVersion:0,effectiveOn:'2028-01-01',idempotencyKey:randomUUID()}]
-   ] as const){
-     const result=await api(path,a.token,method,payload);
-     assert.equal(result.status,503,path+' must remain unavailable until SEC-01 fixed');
-     assert.ok(!JSON.stringify(result.body).includes('Protected SDO historical'));
-   }
-   console.log('PASS S-01 official book commit still FAIL-CLOSED while private buffer edit/read/list are protected');
+   // One genuine restricted-connection FIN quarter book commit. The
+   // 6→(6+4) private draft is not a plan until this atomic operation succeeds.
+   const originalCommand={year:2030,quarter:1,bufferId:bSix.body.bufferId,
+     expectedBookVersion:0,effectiveOn:'2030-01-10',idempotencyKey:randomUUID()};
+   const original=await api('commit',a.token,'POST',originalCommand);
+   assert.equal(original.status,200,JSON.stringify(original.body));
+   assert.equal(original.body.totalRub,'10000000.00');
+   assert.equal(original.body.bookVersion,1);
+   const firstOfficial=await api('quarter?year=2030&quarter=1',a.token);
+   assert.equal(firstOfficial.status,200);
+   assert.equal(firstOfficial.body.original,'10000000.00');
+   assert.equal(firstOfficial.body.current,'10000000.00');
+   assert.equal(firstOfficial.body.history.length,1);
+   assert.equal(firstOfficial.body.lines.length,2);
+   const replay=await api('commit',a.token,'POST',originalCommand);
+   assert.equal(replay.status,200);
+   assert.deepEqual(replay.body,original.body);
+   const conflictingReplay=await api('commit',a.token,'POST',
+     {...originalCommand,effectiveOn:'2030-01-11'});
+   assert.equal(conflictingReplay.status,409);
+   const staleOriginal=await api('commit',a.token,'POST',{
+     ...originalCommand,bufferId:bTen.body.bufferId,
+     idempotencyKey:randomUUID()
+   });
+   assert.equal(staleOriginal.status,409);
+   console.log('PASS S-01 protected first quarter plan at 10.00m, immutable original, CAS and replay');
+
+   const correctionBuffer=await api('buffers',a.token,'POST',{
+     year:2030,quarter:1,expectedBookVersion:1,lines:[
+       {historicalSubjectId:httpId,partyKind:'UNALLOCATED',
+        contractKind:'NOT_SPECIFIED',amountMln:'6.50'},
+       {coreObjectId:directory.body.core[0].id,partyKind:'HISTORICAL_PARTY',
+        partyId:httpParty.body.id,contractKind:'KNOWN',
+        contractNumber:'FIN-C-2029',amountMln:'4.00'}
+     ]
+   });
+   assert.equal(correctionBuffer.status,200,JSON.stringify(correctionBuffer.body));
+   const correction=await api('commit',a.token,'POST',{
+     year:2030,quarter:1,bufferId:correctionBuffer.body.bufferId,
+     expectedBookVersion:1,effectiveOn:'2030-02-10',
+     reason:'Техническая корректировка',idempotencyKey:randomUUID()
+   });
+   assert.equal(correction.status,200,JSON.stringify(correction.body));
+   assert.equal(correction.body.bookVersion,2);
+   assert.equal(correction.body.totalRub,'10500000.00');
+   const revised=await api('quarter?year=2030&quarter=1',director.token);
+   assert.equal(revised.status,200);
+   assert.equal(revised.body.original,'10000000.00');
+   assert.equal(revised.body.current,'10500000.00');
+   assert.equal(revised.body.history.length,2);
+   assert.equal(revised.body.lines.length,2);
+   console.log('PASS S-01 FIN protected correction and director-only immutable history');
+
  } finally {await finApp.close();}
  const foreign=await runFinSdoCommandTx(async tx=>(await tx.c.query(
    'SELECT public.fin_sdo_create_historical_subject($1,$2,$3,$4,$5) AS result',
@@ -410,7 +454,7 @@ async function main(){
  }),'42501','role revocation blocks historical party idempotent replay');
 
  assert.equal((await owner.query('SELECT name FROM fin_historical_subjects WHERE id=$1',[result.id])).rows[0].name,'Protected SDO historical object');
- console.log('S-01 private technical buffer read/list/PATCH and protected finance reads verified. OFFICIAL BOOK COMMIT STILL FAIL-CLOSED.');
+ console.log('S-01 protected book original/revision, draft CAS and restricted PostgreSQL tested; SEC-01 OPEN until full matrix and independent review.');
 }
 main().catch(e=>{console.error(e);process.exitCode=1}).finally(async()=>{
   // Ephemeral CI database gets destroyed after job. Never drop a role in production.
