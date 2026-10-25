@@ -83,7 +83,7 @@ async function main(){
  const buf=await request('buffers',tok.sdo,'POST',{year:2027,quarter:4,expectedBookVersion:0,
    lines:[{historicalSubjectId:subj,partyKind:'UNALLOCATED',contractKind:'NOT_SPECIFIED',amountMln:'10.00'}]});
  assert.equal(buf.status,200);
- const command={year:2027,quarter:4,bufferId:buf.json.bufferId,expectedBookVersion:0,effectiveOn:'2027-10-01',idempotencyKey:randomUUID()};
+ const command={year:2027,quarter:4,bufferId:buf.json.bufferId,expectedBufferVersion:buf.json.version,expectedBookVersion:0,effectiveOn:'2027-10-01',idempotencyKey:randomUUID()};
  const first=await request('commit',tok.sdo,'POST',command);
  assert.equal(first.status,200);assert.equal(first.json.totalRub,'10000000.00');
  console.log('PASS FIN1-08 HTTP exact 10.00 million initial plan');
