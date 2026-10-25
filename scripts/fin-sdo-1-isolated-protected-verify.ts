@@ -40,6 +40,8 @@ async function main(){
  await owner.query('GRANT SELECT ON TABLE public.objects,public.contractors,public.fin_subjects,public.fin_party_scopes,public.fin_contract_scopes,public.fin_quarter_plan_books,public.fin_quarter_book_revisions,public.fin_quarter_plan_lines,public.fin_quarter_plan_line_revisions TO fin_sdo_definer_test');
  await owner.query('GRANT SELECT,INSERT ON TABLE public.fin_subjects,public.fin_party_scopes,public.fin_contract_scopes,public.fin_plan_edit_sessions,public.fin_plan_edit_session_lines TO fin_sdo_definer_test');
  await owner.query('GRANT UPDATE,DELETE ON TABLE public.fin_plan_edit_sessions,public.fin_plan_edit_session_lines TO fin_sdo_definer_test');
+ await owner.query('GRANT INSERT ON TABLE public.fin_quarter_plan_books,public.fin_quarter_book_revisions,public.fin_quarter_plan_lines,public.fin_quarter_plan_line_revisions TO fin_sdo_definer_test');
+ await owner.query('GRANT UPDATE ON TABLE public.fin_quarter_plan_books TO fin_sdo_definer_test');
  await owner.query('ALTER FUNCTION public.fin_sdo_session_principal(text,text) OWNER TO fin_sdo_definer_test');
  await owner.query('ALTER FUNCTION public.fin_sdo_create_historical_subject(text,text,text,text,text) OWNER TO fin_sdo_definer_test');
  await owner.query('ALTER FUNCTION public.fin_sdo_create_historical_party(text,text,text) OWNER TO fin_sdo_definer_test');
@@ -49,6 +51,7 @@ async function main(){
  await owner.query('ALTER FUNCTION public.fin_sdo_list_edit_buffers(text,integer,integer) OWNER TO fin_sdo_definer_test');
  await owner.query('ALTER FUNCTION public.fin_sdo_read_edit_buffer(text,uuid) OWNER TO fin_sdo_definer_test');
  await owner.query('ALTER FUNCTION public.fin_sdo_update_edit_buffer(text,uuid,integer,integer,integer,integer,jsonb) OWNER TO fin_sdo_definer_test');
+ await owner.query('ALTER FUNCTION public.fin_sdo_commit_edit_buffer(text,integer,integer,uuid,integer,date,text,text) OWNER TO fin_sdo_definer_test');
  await owner.query('GRANT EXECUTE ON FUNCTION public.fin_sdo_session_principal(text,text) TO fin_sdo_isolated_login');
  await owner.query('GRANT EXECUTE ON FUNCTION public.fin_sdo_create_historical_subject(text,text,text,text,text) TO fin_sdo_isolated_login');
  await owner.query('GRANT EXECUTE ON FUNCTION public.fin_sdo_create_historical_party(text,text,text) TO fin_sdo_isolated_login');
@@ -58,6 +61,7 @@ async function main(){
  await owner.query('GRANT EXECUTE ON FUNCTION public.fin_sdo_list_edit_buffers(text,integer,integer) TO fin_sdo_isolated_login');
  await owner.query('GRANT EXECUTE ON FUNCTION public.fin_sdo_read_edit_buffer(text,uuid) TO fin_sdo_isolated_login');
  await owner.query('GRANT EXECUTE ON FUNCTION public.fin_sdo_update_edit_buffer(text,uuid,integer,integer,integer,integer,jsonb) TO fin_sdo_isolated_login');
+ await owner.query('GRANT EXECUTE ON FUNCTION public.fin_sdo_commit_edit_buffer(text,integer,integer,uuid,integer,date,text,text) TO fin_sdo_isolated_login');
 
  const pgRoles=await owner.query("SELECT rolname,rolsuper,rolbypassrls,rolcreaterole,rolcreatedb FROM pg_roles WHERE rolname IN ($1,$2)",[roleName,'fin_sdo_definer_test']);
  assert.equal(pgRoles.rows.length,2);
@@ -65,8 +69,8 @@ async function main(){
    assert.equal(r.rolsuper,false);assert.equal(r.rolbypassrls,false);
    assert.equal(r.rolcreaterole,false);assert.equal(r.rolcreatedb,false);
  }
- const fnOwners=await owner.query("SELECT p.proname,r.rolname FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace JOIN pg_roles r ON r.oid=p.proowner WHERE n.nspname='public' AND p.proname IN ('fin_sdo_session_principal','fin_sdo_create_historical_subject','fin_sdo_create_historical_party','fin_sdo_read_directory','fin_sdo_read_quarter','fin_sdo_create_edit_buffer','fin_sdo_list_edit_buffers','fin_sdo_read_edit_buffer','fin_sdo_update_edit_buffer')");
- assert.equal(fnOwners.rows.length,9);
+ const fnOwners=await owner.query("SELECT p.proname,r.rolname FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace JOIN pg_roles r ON r.oid=p.proowner WHERE n.nspname='public' AND p.proname IN ('fin_sdo_session_principal','fin_sdo_create_historical_subject','fin_sdo_create_historical_party','fin_sdo_read_directory','fin_sdo_read_quarter','fin_sdo_create_edit_buffer','fin_sdo_list_edit_buffers','fin_sdo_read_edit_buffer','fin_sdo_update_edit_buffer','fin_sdo_commit_edit_buffer')");
+ assert.equal(fnOwners.rows.length,10);
  for (const row of fnOwners.rows) assert.equal(row.rolname,'fin_sdo_definer_test');
  console.log('PASS S-01 all tested SECURITY DEFINER functions owned by minimal NOLOGIN/NOBYPASSRLS role');
 
