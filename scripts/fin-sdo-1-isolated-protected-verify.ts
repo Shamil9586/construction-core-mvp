@@ -438,7 +438,12 @@ async function main(){
    // One genuine restricted-connection FIN quarter book commit. The
    // 6→(6+4) private draft is not a plan until this atomic operation succeeds.
    const originalCommand={year:2030,quarter:1,bufferId:bSix.body.bufferId,
-     expectedBookVersion:0,effectiveOn:'2030-01-10',idempotencyKey:randomUUID()};
+     expectedBufferVersion:2,expectedBookVersion:0,effectiveOn:'2030-01-10',idempotencyKey:randomUUID()};
+   const staleDraftVersion=await api('commit',a.token,'POST',{...originalCommand,
+     expectedBufferVersion:1,idempotencyKey:randomUUID()});
+   assert.equal(staleDraftVersion.status,409);
+   assert.equal((await api('quarter?year=2030&quarter=1',a.token)).body.status,'NO_PLAN');
+   console.log('PASS S-01 FIN commit requires exact current buffer version; stale 1 vs saved 2 cannot commit');
    const original=await api('commit',a.token,'POST',originalCommand);
    assert.equal(original.status,200,JSON.stringify(original.body));
    assert.equal(original.body.totalRub,'10000000.00');
@@ -456,7 +461,7 @@ async function main(){
      {...originalCommand,effectiveOn:'2030-01-11'});
    assert.equal(conflictingReplay.status,409);
    const staleOriginal=await api('commit',a.token,'POST',{
-     ...originalCommand,bufferId:bTen.body.bufferId,
+     ...originalCommand,bufferId:bTen.body.bufferId,expectedBufferVersion:1,
      idempotencyKey:randomUUID()
    });
    assert.equal(staleOriginal.status,409);
@@ -474,7 +479,7 @@ async function main(){
    assert.equal(correctionBuffer.status,200,JSON.stringify(correctionBuffer.body));
    const correction=await api('commit',a.token,'POST',{
      year:2030,quarter:1,bufferId:correctionBuffer.body.bufferId,
-     expectedBookVersion:1,effectiveOn:'2030-02-10',
+     expectedBufferVersion:correctionBuffer.body.version,expectedBookVersion:1,effectiveOn:'2030-02-10',
      reason:'Техническая корректировка',idempotencyKey:randomUUID()
    });
    assert.equal(correction.status,200,JSON.stringify(correction.body));
@@ -500,7 +505,7 @@ async function main(){
    assert.equal(lowDraft.status,200);
    const lowReject=await api('commit',a.token,'POST',{
       year:2030,quarter:1,bufferId:lowDraft.body.bufferId,
-      expectedBookVersion:2,effectiveOn:'2030-03-03',
+      expectedBufferVersion:lowDraft.body.version,expectedBookVersion:2,effectiveOn:'2030-03-03',
       reason:'Below threshold',idempotencyKey:randomUUID()
    });
    assert.equal(lowReject.status,422,JSON.stringify(lowReject.body));
@@ -544,7 +549,7 @@ async function main(){
    const initialRace=await Promise.all(draftRace.map(x=>
      api('commit',a.token,'POST',{
        year:2031,quarter:1,bufferId:x.body.bufferId,
-       expectedBookVersion:0,effectiveOn:'2031-01-10',idempotencyKey:randomUUID()
+       expectedBufferVersion:x.body.version,expectedBookVersion:0,effectiveOn:'2031-01-10',idempotencyKey:randomUUID()
      })
    ));
    assert.deepEqual(initialRace.map(x=>x.status).sort((x,y)=>x-y),[200,409]);
@@ -572,7 +577,7 @@ async function main(){
    const twoCorrections=await Promise.all(correctionRaces.map((x,i)=>
      api('commit',a.token,'POST',{
        year:2030,quarter:1,bufferId:x.body.bufferId,
-       expectedBookVersion:2,effectiveOn:'2030-03-10',
+       expectedBufferVersion:x.body.version,expectedBookVersion:2,effectiveOn:'2030-03-10',
        reason:'Competing correction '+i,idempotencyKey:randomUUID()
      })
    ));
@@ -608,7 +613,7 @@ async function main(){
    assert.equal(insufficient.status,200);
    const deniedOriginal=await api('commit',a.token,'POST',{
      year:2032,quarter:2,bufferId:insufficient.body.bufferId,
-     expectedBookVersion:0,effectiveOn:'2032-04-02',idempotencyKey:randomUUID()
+     expectedBufferVersion:insufficient.body.version,expectedBookVersion:0,effectiveOn:'2032-04-02',idempotencyKey:randomUUID()
    });
    assert.equal(deniedOriginal.status,422);
    const notCommitted=await api('quarter?year=2032&quarter=2',a.token);
@@ -643,7 +648,7 @@ async function main(){
    assert.equal(withLateZero.status,200,JSON.stringify(withLateZero.body));
    const lateCommit=await api('commit',a.token,'POST',{
      year:2030,quarter:1,bufferId:withLateZero.body.bufferId,
-     expectedBookVersion:3,effectiveOn:'2030-04-01',
+     expectedBufferVersion:withLateZero.body.version,expectedBookVersion:3,effectiveOn:'2030-04-01',
      reason:'Late-added historical project line, explicit zero',
      idempotencyKey:randomUUID()
    });
