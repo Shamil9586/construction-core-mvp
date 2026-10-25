@@ -104,8 +104,9 @@ export class FinSdo1Controller {
  }
  @Post('commit') @HttpCode(200)
  commit(@Req()req:any,@Body()body:any){
-  requireUnprotectedIsolation();
   const b=commit.parse(body);
+  if(protectedSlice())return authenticate(req).then(a=>this.svc.commitBufferProtected(a,requestBearer(req),b));
+  requireUnprotectedIsolation();
   return authenticate(req).then(a=>this.svc.commitBuffer(a,b));
  }
 }
