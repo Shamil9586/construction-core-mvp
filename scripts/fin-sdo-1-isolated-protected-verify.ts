@@ -504,6 +504,72 @@ async function main(){
    assert.equal(single.body.history.length,1);
    console.log('PASS S-01 native two-connection protected initial commit race: one original, loser 409');
 
+   // FIN1-15: two concurrent corrections with the same current bookVersion.
+   // The actual restricted FIN login must enforce book CAS, even though both
+   // draft saves are valid when issued (neither relies on JavaScript floating).
+   const correctionRaces=await Promise.all(['7.00','6.75'].map(amount=>
+     api('buffers',a.token,'POST',{
+       year:2030,quarter:1,expectedBookVersion:2,lines:[
+         {historicalSubjectId:httpId,partyKind:'UNALLOCATED',
+          contractKind:'NOT_SPECIFIED',amountMln:amount},
+         {coreObjectId:directory.body.core[0].id,partyKind:'HISTORICAL_PARTY',
+          partyId:httpParty.body.id,contractKind:'KNOWN',
+          contractNumber:'FIN-C-2029',amountMln:'4.00'}
+       ]
+     })
+   ));
+   assert.ok(correctionRaces.every(x=>x.status===200));
+   const twoCorrections=await Promise.all(correctionRaces.map((x,i)=>
+     api('commit',a.token,'POST',{
+       year:2030,quarter:1,bufferId:x.body.bufferId,
+       expectedBookVersion:2,effectiveOn:'2030-03-10',
+       reason:'Competing correction '+i,idempotencyKey:randomUUID()
+     })
+   ));
+   assert.deepEqual(twoCorrections.map(x=>x.status).sort((a,b)=>a-b),[200,409]);
+   const correctionWinner=await api('quarter?year=2030&quarter=1',a.token);
+   assert.equal(correctionWinner.status,200);
+   assert.equal(correctionWinner.body.bookVersion,3);
+   assert.equal(correctionWinner.body.history.length,3);
+   assert.equal(correctionWinner.body.original,'10000000.00');
+   assert.ok(['11000000.00','10750000.00'].includes(correctionWinner.body.current));
+   console.log('PASS S-01 native restricted FIN concurrent correction CAS: one revision, other 409');
+
+   const knownPoint=await owner.query(
+     "SELECT to_char((r1.recorded_at + (r2.recorded_at-r1.recorded_at)/2) AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS known_at FROM fin_quarter_book_revisions r1 JOIN fin_quarter_book_revisions r2 ON r2.tenant_id=r1.tenant_id AND r2.book_id=r1.book_id AND r2.revision_no=2 JOIN fin_quarter_plan_books q ON q.tenant_id=r1.tenant_id AND q.id=r1.book_id WHERE q.tenant_id=$1 AND q.plan_year=2030 AND q.plan_quarter=1 AND r1.revision_no=1",
+     [a.tenant]);
+   assert.equal(knownPoint.rows.length,1);
+   const recordedSnapshot=await api('quarter?year=2030&quarter=1&knownAt='+encodeURIComponent(knownPoint.rows[0].known_at),a.token);
+   assert.equal(recordedSnapshot.status,200);
+   assert.equal(recordedSnapshot.body.bookVersion,1);
+   assert.equal(recordedSnapshot.body.revisionNo,1);
+   assert.equal(recordedSnapshot.body.history.length,1);
+   assert.equal(recordedSnapshot.body.original,'10000000.00');
+   assert.equal(recordedSnapshot.body.current,'10000000.00');
+   console.log('PASS S-01 FIN1-21 previous quarter snapshot excludes later recorded 2nd and 3rd revisions');
+
+   // Refuse first saved plan below tenant-quarter minimum without orphan parent.
+   const insufficient=await api('buffers',a.token,'POST',{
+     year:2032,quarter:2,expectedBookVersion:0,lines:[
+       {historicalSubjectId:httpId,partyKind:'UNALLOCATED',
+        contractKind:'NOT_SPECIFIED',amountMln:'9.99'}
+     ]
+   });
+   assert.equal(insufficient.status,200);
+   const deniedOriginal=await api('commit',a.token,'POST',{
+     year:2032,quarter:2,bufferId:insufficient.body.bufferId,
+     expectedBookVersion:0,effectiveOn:'2032-04-02',idempotencyKey:randomUUID()
+   });
+   assert.equal(deniedOriginal.status,422);
+   const notCommitted=await api('quarter?year=2032&quarter=2',a.token);
+   assert.equal(notCommitted.status,200);
+   assert.equal(notCommitted.body.status,'NO_PLAN');
+   assert.equal((await owner.query(
+     'SELECT count(*)::int n FROM fin_quarter_plan_books WHERE tenant_id=$1 AND plan_year=2032 AND plan_quarter=2',
+     [a.tenant])).rows[0].n,0);
+   console.log('PASS S-01 FIN1-07 first quarter 9.99m below threshold never creates original');
+
+
 
  } finally {await finApp.close();}
  const foreign=await runFinSdoCommandTx(async tx=>(await tx.c.query(
