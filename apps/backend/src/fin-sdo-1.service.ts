@@ -45,7 +45,7 @@ type LineInput={
 };
 type Quarter={year:number;quarter:number};
 type BufferInput=Quarter&{expectedBookVersion:number;lines:LineInput[]};
-type CommitInput=Quarter&{bufferId:string;expectedBookVersion:number;effectiveOn:string;reason?:string;idempotencyKey:string};
+type CommitInput=Quarter&{bufferId:string;expectedBufferVersion?:number;expectedBookVersion:number;effectiveOn:string;reason?:string;idempotencyKey:string};
 
 /** FIN-1 only: NONE in object coordination, never mutate production, GPR or F8.3. */
 @Injectable()
@@ -323,9 +323,11 @@ export class FinSdo1Service {
   async commitBufferProtected(a:Actor,bearer:string,b:CommitInput){
     writeRole(a);quarter(b.year,b.quarter);
     if(!bearer||bearer.length<32||bearer.length>256)throw new ForbiddenException('FIN_ACCESS_DENIED');
+    if(!Number.isInteger(b.expectedBufferVersion)||!b.expectedBufferVersion||b.expectedBufferVersion<1)
+      throw new BadRequestException('FIN_BUFFER_CAS_CONFLICT');
     return runFinSdoCommandTx(async tx=>{
-      const r=await tx.c.query('SELECT public.fin_sdo_commit_edit_buffer($1,$2,$3,$4::uuid,$5,$6::date,$7,$8) AS result',
-      [bearer,b.year,b.quarter,b.bufferId,b.expectedBookVersion,b.effectiveOn,b.reason??null,b.idempotencyKey]);
+      const r=await tx.c.query('SELECT public.fin_sdo_commit_edit_buffer($1,$2,$3,$4::uuid,$5,$6,$7::date,$8,$9) AS result',
+      [bearer,b.year,b.quarter,b.bufferId,b.expectedBufferVersion,b.expectedBookVersion,b.effectiveOn,b.reason??null,b.idempotencyKey]);
       return r.rows[0].result;
     }).catch(mapFinProtectedFailure);
   }
