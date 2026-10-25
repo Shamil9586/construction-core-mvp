@@ -692,3 +692,197 @@ $fin_read_quarter$;
 REVOKE ALL ON FUNCTION public.fin_sdo_read_quarter(text,integer,integer,timestamptz) FROM PUBLIC;
 -- Runtime login EXECUTE grants are made only in controlled disposable tests
 -- and after separate deployment authorization; not from this draft schema.
+
+
+-- S-01 protected technical buffer CREATE. Every line is resolved inside the
+-- privileged function using the verified bearer tenant and minimal DML grants.
+-- This draft does NOT create a quarterly plan, original or financial total.
+CREATE FUNCTION public.fin_sdo_create_edit_buffer(
+ p_bearer_token text, p_year integer, p_quarter integer,
+ p_expected_book_version integer, p_lines jsonb
+) RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $fin_edit_buffer$
+DECLARE
+ v_tenant uuid; v_actor uuid; v_current integer;
+ v_buffer uuid; v_line jsonb; v_amount numeric;
+ v_amount_str text; v_core text; v_hist text; v_party_id text;
+ v_subject uuid; v_party uuid; v_contract uuid; v_subject_target uuid;
+ v_party_kind text; v_contract_kind text; v_contract_number text;
+ v_rows integer; v_total numeric;
+BEGIN
+ SELECT fin_tenant_id,fin_actor_id INTO v_tenant,v_actor
+ FROM public.fin_sdo_session_principal(p_bearer_token,'WRITE');
+ IF v_actor IS NULL THEN
+   RAISE EXCEPTION 'FIN_SESSION_OR_WRITE_ROLE_DENIED' USING ERRCODE='42501';
+ END IF;
+ IF p_year NOT BETWEEN 2000 AND 2200 OR p_quarter NOT BETWEEN 1 AND 4
+   OR p_expected_book_version IS NULL OR p_expected_book_version < 0
+   OR pg_catalog.jsonb_typeof(p_lines) IS DISTINCT FROM 'array' THEN
+   RAISE EXCEPTION 'FIN_BUFFER_INVALID' USING ERRCODE='23514';
+ END IF;
+ v_rows:=pg_catalog.jsonb_array_length(p_lines);
+ IF v_rows NOT BETWEEN 1 AND 1000 THEN
+   RAISE EXCEPTION 'FIN_BUFFER_INVALID' USING ERRCODE='23514';
+ END IF;
+
+ SELECT b.version INTO v_current FROM public.fin_quarter_plan_books b
+ WHERE b.tenant_id=v_tenant AND b.currency_code='RUB'
+   AND b.plan_year=p_year AND b.plan_quarter=p_quarter;
+ IF COALESCE(v_current,0)<>p_expected_book_version THEN
+   RAISE EXCEPTION 'FIN_QUARTER_BOOK_VERSION_CONFLICT' USING ERRCODE='23505';
+ END IF;
+ INSERT INTO public.fin_plan_edit_sessions(
+   tenant_id,actor_id,plan_year,plan_quarter,expected_book_version
+ ) VALUES(v_tenant,v_actor,p_year,p_quarter,p_expected_book_version)
+ RETURNING id INTO v_buffer;
+
+ FOR v_line IN SELECT value FROM pg_catalog.jsonb_array_elements(p_lines)
+ LOOP
+   IF pg_catalog.jsonb_typeof(v_line)<>'object' THEN
+     RAISE EXCEPTION 'FIN_LINE_INVALID' USING ERRCODE='23514';
+   END IF;
+   v_core:=NULLIF(v_line->>'coreObjectId','');
+   v_hist:=NULLIF(v_line->>'historicalSubjectId','');
+   IF (v_core IS NULL)=(v_hist IS NULL) THEN
+     RAISE EXCEPTION 'FIN_SUBJECT_XOR' USING ERRCODE='23514';
+   END IF;
+   v_subject:=NULL;
+   IF v_core IS NOT NULL THEN
+     SELECT id INTO v_subject_target FROM public.objects
+       WHERE tenant_id=v_tenant AND id=v_core::uuid;
+     IF NOT FOUND THEN
+       RAISE EXCEPTION 'FIN_SUBJECT_NOT_FOUND' USING ERRCODE='42501';
+     END IF;
+     INSERT INTO public.fin_subjects(
+       tenant_id,origin,core_object_id,created_by
+     ) VALUES(v_tenant,'CORE',v_subject_target,v_actor)
+     ON CONFLICT DO NOTHING RETURNING id INTO v_subject;
+     IF v_subject IS NULL THEN
+       SELECT id INTO v_subject FROM public.fin_subjects
+       WHERE tenant_id=v_tenant AND core_object_id=v_subject_target;
+     END IF;
+   ELSE
+     SELECT id INTO v_subject_target FROM public.fin_historical_subjects
+       WHERE tenant_id=v_tenant AND id=v_hist::uuid;
+     IF NOT FOUND THEN
+       RAISE EXCEPTION 'FIN_SUBJECT_NOT_FOUND' USING ERRCODE='42501';
+     END IF;
+     INSERT INTO public.fin_subjects(
+       tenant_id,origin,historical_subject_id,created_by
+     ) VALUES(v_tenant,'HISTORICAL',v_subject_target,v_actor)
+     ON CONFLICT DO NOTHING RETURNING id INTO v_subject;
+     IF v_subject IS NULL THEN
+       SELECT id INTO v_subject FROM public.fin_subjects
+       WHERE tenant_id=v_tenant AND historical_subject_id=v_subject_target;
+     END IF;
+   END IF;
+   IF v_subject IS NULL THEN
+     RAISE EXCEPTION 'FIN_SUBJECT_CONFLICT' USING ERRCODE='23505';
+   END IF;
+
+   v_party_kind:=v_line->>'partyKind';
+   v_party_id:=NULLIF(v_line->>'partyId','');
+   v_party:=NULL;
+   IF v_party_kind='UNALLOCATED' THEN
+     IF v_party_id IS NOT NULL THEN
+       RAISE EXCEPTION 'FIN_PARTY_INVALID' USING ERRCODE='23514';
+     END IF;
+     INSERT INTO public.fin_party_scopes(tenant_id,kind)
+       VALUES(v_tenant,'UNALLOCATED')
+       ON CONFLICT DO NOTHING RETURNING id INTO v_party;
+     IF v_party IS NULL THEN
+       SELECT id INTO v_party FROM public.fin_party_scopes
+       WHERE tenant_id=v_tenant AND kind='UNALLOCATED';
+     END IF;
+   ELSIF v_party_kind IN ('CORE_CONTRACTOR','HISTORICAL_PARTY') THEN
+     IF v_party_id IS NULL THEN
+       RAISE EXCEPTION 'FIN_PARTY_REQUIRED' USING ERRCODE='23514';
+     END IF;
+     IF v_party_kind='CORE_CONTRACTOR' THEN
+       PERFORM 1 FROM public.contractors
+       WHERE tenant_id=v_tenant AND id=v_party_id::uuid;
+       IF NOT FOUND THEN RAISE EXCEPTION 'FIN_PARTY_NOT_FOUND' USING ERRCODE='42501'; END IF;
+       INSERT INTO public.fin_party_scopes(tenant_id,kind,core_contractor_id)
+         VALUES(v_tenant,'CORE_CONTRACTOR',v_party_id::uuid)
+         ON CONFLICT DO NOTHING RETURNING id INTO v_party;
+       IF v_party IS NULL THEN
+         SELECT id INTO v_party FROM public.fin_party_scopes
+         WHERE tenant_id=v_tenant AND core_contractor_id=v_party_id::uuid;
+       END IF;
+     ELSE
+       PERFORM 1 FROM public.fin_historical_parties
+       WHERE tenant_id=v_tenant AND id=v_party_id::uuid;
+       IF NOT FOUND THEN RAISE EXCEPTION 'FIN_PARTY_NOT_FOUND' USING ERRCODE='42501'; END IF;
+       INSERT INTO public.fin_party_scopes(tenant_id,kind,historical_party_id)
+         VALUES(v_tenant,'HISTORICAL_PARTY',v_party_id::uuid)
+         ON CONFLICT DO NOTHING RETURNING id INTO v_party;
+       IF v_party IS NULL THEN
+         SELECT id INTO v_party FROM public.fin_party_scopes
+         WHERE tenant_id=v_tenant AND historical_party_id=v_party_id::uuid;
+       END IF;
+     END IF;
+   ELSE
+     RAISE EXCEPTION 'FIN_PARTY_INVALID' USING ERRCODE='23514';
+   END IF;
+   IF v_party IS NULL THEN
+     RAISE EXCEPTION 'FIN_PARTY_CONFLICT' USING ERRCODE='23505';
+   END IF;
+
+   v_contract_kind:=v_line->>'contractKind';
+   v_contract_number:=NULLIF(pg_catalog.btrim(v_line->>'contractNumber'),'');
+   v_contract:=NULL;
+   IF v_contract_kind='NOT_SPECIFIED' THEN
+     IF v_contract_number IS NOT NULL THEN
+       RAISE EXCEPTION 'FIN_CONTRACT_INVALID' USING ERRCODE='23514';
+     END IF;
+     INSERT INTO public.fin_contract_scopes(tenant_id,kind,party_scope_id,created_by)
+       VALUES(v_tenant,'NOT_SPECIFIED',v_party,v_actor)
+       ON CONFLICT DO NOTHING RETURNING id INTO v_contract;
+     IF v_contract IS NULL THEN
+       SELECT id INTO v_contract FROM public.fin_contract_scopes
+         WHERE tenant_id=v_tenant AND party_scope_id=v_party AND kind='NOT_SPECIFIED';
+     END IF;
+   ELSIF v_contract_kind='KNOWN' THEN
+     IF v_contract_number IS NULL OR pg_catalog.length(v_contract_number)>150 THEN
+       RAISE EXCEPTION 'FIN_CONTRACT_INVALID' USING ERRCODE='23514';
+     END IF;
+     INSERT INTO public.fin_contract_scopes(
+       tenant_id,kind,party_scope_id,number,created_by
+     ) VALUES(v_tenant,'KNOWN',v_party,v_contract_number,v_actor)
+       ON CONFLICT DO NOTHING RETURNING id INTO v_contract;
+     IF v_contract IS NULL THEN
+       SELECT id INTO v_contract FROM public.fin_contract_scopes
+       WHERE tenant_id=v_tenant AND party_scope_id=v_party
+         AND kind='KNOWN' AND number=v_contract_number;
+     END IF;
+   ELSE
+     RAISE EXCEPTION 'FIN_CONTRACT_INVALID' USING ERRCODE='23514';
+   END IF;
+   IF v_contract IS NULL THEN
+     RAISE EXCEPTION 'FIN_CONTRACT_CONFLICT' USING ERRCODE='23505';
+   END IF;
+
+   v_amount_str:=v_line->>'amountMln';
+   IF v_amount_str IS NULL OR
+     v_amount_str !~ '^(0|[1-9][0-9]{0,13})\.[0-9]{2}$' THEN
+     RAISE EXCEPTION 'FIN_AMOUNT_INVALID' USING ERRCODE='23514';
+   END IF;
+   v_amount:=v_amount_str::numeric * 1000000;
+   IF v_amount>=1000000000000000000 THEN
+     RAISE EXCEPTION 'FIN_AMOUNT_OUT_OF_RANGE' USING ERRCODE='23514';
+   END IF;
+   INSERT INTO public.fin_plan_edit_session_lines(
+     tenant_id,edit_session_id,subject_id,party_scope_id,contract_scope_id,amount_rub
+   ) VALUES(v_tenant,v_buffer,v_subject,v_party,v_contract,v_amount);
+ END LOOP;
+ SELECT COALESCE(pg_catalog.sum(l.amount_rub),0)
+ INTO v_total FROM public.fin_plan_edit_session_lines l
+ WHERE l.tenant_id=v_tenant AND l.edit_session_id=v_buffer;
+ RETURN pg_catalog.jsonb_build_object(
+   'bufferId',v_buffer,'version',1,'uncommitted',true,'totalRub',v_total::text
+ );
+END;
+$fin_edit_buffer$;
+REVOKE ALL ON FUNCTION public.fin_sdo_create_edit_buffer(text,integer,integer,integer,jsonb) FROM PUBLIC;
+-- No app runtime privileges granted here; reserved migration 035 is NOT written.

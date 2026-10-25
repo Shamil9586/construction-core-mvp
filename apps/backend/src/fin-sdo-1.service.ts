@@ -177,6 +177,27 @@ export class FinSdo1Service {
     if(!k)error('FIN_CONTRACT_SCOPE_CONFLICT');
     return {subject_id:s.id,party_scope_id:p.id,contract_scope_id:k.id};
   }
+  /**
+   * FIN S-01 protected create-only technical edit buffer.
+   * PostgreSQL independently authenticates the bearer and resolves every
+   * tenant-qualified CORE/HISTORICAL subject, party and contract reference.
+   * No effective book, original, approved workflow or financial total created.
+   */
+  async saveBufferProtected(a:Actor,bearer:string,b:BufferInput){
+    writeRole(a);quarter(b.year,b.quarter);
+    if(typeof bearer!=='string'||bearer.length<32||bearer.length>256)
+      throw new ForbiddenException('FIN_ACCESS_DENIED');
+    if(!Number.isInteger(b.expectedBookVersion)||b.expectedBookVersion<0||!b.lines.length||b.lines.length>1000)
+      throw new BadRequestException('FIN_BUFFER_INVALID');
+    b.lines.forEach(v=>rub(v.amountMln));
+    return runFinSdoCommandTx(async tx=>{
+      const result=await tx.c.query(
+        'SELECT public.fin_sdo_create_edit_buffer($1,$2,$3,$4,$5::jsonb) AS result',
+        [bearer,b.year,b.quarter,b.expectedBookVersion,JSON.stringify(b.lines)]
+      );
+      return result.rows[0].result;
+    }).catch(mapFinProtectedFailure);
+  }
   async saveBuffer(a:Actor,b:BufferInput){
     writeRole(a);quarter(b.year,b.quarter);
     if(!Number.isInteger(b.expectedBookVersion)||b.expectedBookVersion<0||b.lines.length>1000)throw new BadRequestException('FIN_BUFFER_INVALID');

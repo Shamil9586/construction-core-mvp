@@ -77,8 +77,9 @@ export class FinSdo1Controller {
  }
  @Post('buffers') @HttpCode(200)
  saveBuffer(@Req()req:any,@Body()body:any){
-  requireUnprotectedIsolation();
   const b=buffer.parse(body);
+  if(protectedSlice())return authenticate(req).then(a=>this.svc.saveBufferProtected(a,requestBearer(req),b));
+  requireUnprotectedIsolation();
   return authenticate(req).then(a=>this.svc.saveBuffer(a,b));
  }
  @Get('buffers')

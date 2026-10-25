@@ -34,6 +34,7 @@ export const WRITERS = {
     'fin-sdo-1.service.ts#createHistoricalSubject': N('FIN-only historical subject: own tenant row; no production object change'),
     'fin-sdo-1.service.ts#createHistoricalParty': N('FIN-only historical party: no production party change'),
     'fin-sdo-1.service.ts#saveBuffer': N('FIN technical input buffer, tenant/actor-scoped, no production quantity invariants'),
+    'fin-sdo-1.service.ts#saveBufferProtected': N('FIN technical edit buffer via restricted PostgreSQL SECURITY DEFINER; financial draft only, no production quantity changes'),
     'fin-sdo-1.service.ts#updateBuffer': N('FIN-only author-scoped edit buffer CAS; replaces temporary rows without production object writes'),
     'fin-sdo-1.service.ts#commitBuffer': N('FIN quarter-book CAS and ledger, independent of production object coordination'),
     'fin-sdo-1-db.ts#runFinSdoCommandTx': N('FIN isolated restricted DB connector owns FIN-only transaction and no production object state'),

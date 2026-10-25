@@ -38,16 +38,19 @@ async function main(){
  // Only the SECURITY DEFINER owner sees financial tables; the LOGIN sees
  // neither finance books nor director-protected projections through SQL.
  await owner.query('GRANT SELECT ON TABLE public.objects,public.contractors,public.fin_subjects,public.fin_party_scopes,public.fin_contract_scopes,public.fin_quarter_plan_books,public.fin_quarter_book_revisions,public.fin_quarter_plan_lines,public.fin_quarter_plan_line_revisions TO fin_sdo_definer_test');
+ await owner.query('GRANT SELECT,INSERT ON TABLE public.fin_subjects,public.fin_party_scopes,public.fin_contract_scopes,public.fin_plan_edit_sessions,public.fin_plan_edit_session_lines TO fin_sdo_definer_test');
  await owner.query('ALTER FUNCTION public.fin_sdo_session_principal(text,text) OWNER TO fin_sdo_definer_test');
  await owner.query('ALTER FUNCTION public.fin_sdo_create_historical_subject(text,text,text,text,text) OWNER TO fin_sdo_definer_test');
  await owner.query('ALTER FUNCTION public.fin_sdo_create_historical_party(text,text,text) OWNER TO fin_sdo_definer_test');
  await owner.query('ALTER FUNCTION public.fin_sdo_read_directory(text) OWNER TO fin_sdo_definer_test');
  await owner.query('ALTER FUNCTION public.fin_sdo_read_quarter(text,integer,integer,timestamptz) OWNER TO fin_sdo_definer_test');
+ await owner.query('ALTER FUNCTION public.fin_sdo_create_edit_buffer(text,integer,integer,integer,jsonb) OWNER TO fin_sdo_definer_test');
  await owner.query('GRANT EXECUTE ON FUNCTION public.fin_sdo_session_principal(text,text) TO fin_sdo_isolated_login');
  await owner.query('GRANT EXECUTE ON FUNCTION public.fin_sdo_create_historical_subject(text,text,text,text,text) TO fin_sdo_isolated_login');
  await owner.query('GRANT EXECUTE ON FUNCTION public.fin_sdo_create_historical_party(text,text,text) TO fin_sdo_isolated_login');
  await owner.query('GRANT EXECUTE ON FUNCTION public.fin_sdo_read_directory(text) TO fin_sdo_isolated_login');
  await owner.query('GRANT EXECUTE ON FUNCTION public.fin_sdo_read_quarter(text,integer,integer,timestamptz) TO fin_sdo_isolated_login');
+ await owner.query('GRANT EXECUTE ON FUNCTION public.fin_sdo_create_edit_buffer(text,integer,integer,integer,jsonb) TO fin_sdo_isolated_login');
 
  const pgRoles=await owner.query("SELECT rolname,rolsuper,rolbypassrls,rolcreaterole,rolcreatedb FROM pg_roles WHERE rolname IN ($1,$2)",[roleName,'fin_sdo_definer_test']);
  assert.equal(pgRoles.rows.length,2);
@@ -55,8 +58,8 @@ async function main(){
    assert.equal(r.rolsuper,false);assert.equal(r.rolbypassrls,false);
    assert.equal(r.rolcreaterole,false);assert.equal(r.rolcreatedb,false);
  }
- const fnOwners=await owner.query("SELECT p.proname,r.rolname FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace JOIN pg_roles r ON r.oid=p.proowner WHERE n.nspname='public' AND p.proname IN ('fin_sdo_session_principal','fin_sdo_create_historical_subject','fin_sdo_create_historical_party','fin_sdo_read_directory','fin_sdo_read_quarter')");
- assert.equal(fnOwners.rows.length,5);
+ const fnOwners=await owner.query("SELECT p.proname,r.rolname FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace JOIN pg_roles r ON r.oid=p.proowner WHERE n.nspname='public' AND p.proname IN ('fin_sdo_session_principal','fin_sdo_create_historical_subject','fin_sdo_create_historical_party','fin_sdo_read_directory','fin_sdo_read_quarter','fin_sdo_create_edit_buffer')");
+ assert.equal(fnOwners.rows.length,6);
  for (const row of fnOwners.rows) assert.equal(row.rolname,'fin_sdo_definer_test');
  console.log('PASS S-01 all tested SECURITY DEFINER functions owned by minimal NOLOGIN/NOBYPASSRLS role');
 
@@ -253,10 +256,57 @@ async function main(){
    await expectSqlState(()=>runFinSdoCommandTx(async tx=>{
      await tx.c.query('SELECT * FROM public.fin_quarter_plan_books LIMIT 1');
    }),'42501','FIN runtime login forbidden direct financial book SELECT');
-   // Fail CLOSED: unconverted book/buffer writers and private buffers are
-   // *not* allowed to fall back to the main product pool in protected mode.
+   // Protected technical input (create only): 6.00 remains draft, and 6+4.00
+   // remains an actor-scoped draft, never an original/effective quarter book.
+   const bSix=await api('buffers',a.token,'POST',{
+     year:2030,quarter:1,expectedBookVersion:0,lines:[
+       {historicalSubjectId:httpId,partyKind:'UNALLOCATED',contractKind:'NOT_SPECIFIED',amountMln:'6.00'}
+     ]
+   });
+   assert.equal(bSix.status,200);assert.equal(bSix.body.totalRub,'6000000.00');
+   assert.equal(bSix.body.uncommitted,true);
+   assert.equal(bSix.body.version,1);
+   const bTen=await api('buffers',a.token,'POST',{
+     year:2030,quarter:1,expectedBookVersion:0,lines:[
+       {historicalSubjectId:httpId,partyKind:'UNALLOCATED',contractKind:'NOT_SPECIFIED',amountMln:'6.00'},
+       {coreObjectId:directory.body.core[0].id,partyKind:'HISTORICAL_PARTY',
+        partyId:httpParty.body.id,contractKind:'KNOWN',contractNumber:'FIN-C-2029',amountMln:'4.00'}
+     ]
+   });
+   assert.equal(bTen.status,200);assert.equal(bTen.body.totalRub,'10000000.00');
+   assert.notEqual(bSix.body.bufferId,bTen.body.bufferId);
+   const stillNoPlan=await api('quarter?year=2030&quarter=1',a.token);
+   assert.equal(stillNoPlan.status,200);assert.equal(stillNoPlan.body.status,'NO_PLAN');
+   console.log('PASS S-01 restricted DB technical buffer 6 then 6+4 without creating original');
+   const invalidForeign=await api('buffers',a.token,'POST',{
+     year:2030,quarter:1,expectedBookVersion:0,lines:[
+       {historicalSubjectId:b.uid,partyKind:'UNALLOCATED',contractKind:'NOT_SPECIFIED',amountMln:'12.00'}
+     ]
+   });
+   assert.equal(invalidForeign.status,403);
+   const ptoBuffer=await api('buffers',pto.token,'POST',{
+     year:2030,quarter:1,expectedBookVersion:0,lines:[
+       {historicalSubjectId:httpId,partyKind:'UNALLOCATED',contractKind:'NOT_SPECIFIED',amountMln:'12.00'}
+     ]
+   });
+   assert.equal(ptoBuffer.status,403);
+   console.log('PASS S-01 protected buffers reject foreign subject and PTO bearer');
+   const duplicate=await api('buffers',a.token,'POST',{
+     year:2030,quarter:1,expectedBookVersion:0,lines:[
+       {historicalSubjectId:httpId,partyKind:'UNALLOCATED',contractKind:'NOT_SPECIFIED',amountMln:'6.00'},
+       {historicalSubjectId:httpId,partyKind:'UNALLOCATED',contractKind:'NOT_SPECIFIED',amountMln:'4.00'}
+     ]
+   });
+   assert.equal(duplicate.status,409);
+   const bookSessions=await owner.query("SELECT count(*)::int n FROM fin_plan_edit_sessions WHERE tenant_id=$1 AND plan_year=2030 AND plan_quarter=1",[a.tenant]);
+   assert.equal(bookSessions.rows[0].n,2);
+   console.log('PASS S-01 rejected duplicate canonical row rolls back entire buffer (no partial session)');
+   await expectSqlState(()=>runFinSdoCommandTx(async tx=>{
+      await tx.c.query("INSERT INTO fin_plan_edit_sessions(tenant_id,actor_id,plan_year,plan_quarter) VALUES($1,$2,2030,2)",[a.tenant,a.uid]);
+   }),'42501','limited FIN login cannot directly create edit buffer without definer');
+   // Fail CLOSED: unconverted book commit/edit and private buffer read/delete
+   // operations are not allowed to fall back to privileged product connection.
    for (const [path,method,payload] of [
-     ['buffers','POST',{year:2028,quarter:1,expectedBookVersion:0,lines:[]}],
      ['buffers?year=2027&quarter=1','GET',undefined],
      ['buffers/{randomUUID()}','GET',undefined],
      ['commit','POST',{year:2028,quarter:1,bufferId:randomUUID(),expectedBookVersion:0,effectiveOn:'2028-01-01',idempotencyKey:randomUUID()}]
@@ -265,7 +315,7 @@ async function main(){
      assert.equal(result.status,503,path+' must remain unavailable until SEC-01 fixed');
      assert.ok(!JSON.stringify(result.body).includes('Protected SDO historical'));
    }
-   console.log('PASS S-01 protected mode blocks all not-yet-converted buffer and official book writers (503)');
+   console.log('PASS S-01 protected mode blocks not-yet-converted buffer reads/patches and official book writes (503)');
  } finally {await finApp.close();}
  const foreign=await runFinSdoCommandTx(async tx=>(await tx.c.query(
    'SELECT public.fin_sdo_create_historical_subject($1,$2,$3,$4,$5) AS result',
