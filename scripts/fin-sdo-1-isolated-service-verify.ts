@@ -92,6 +92,29 @@ async function main(){
  assert.equal(added.amount_rub,'0.00');
  assert.equal(book2.original,'10000000.00');assert.equal(book2.current,'10000000.00');
  report('FIN1-12/13 late zero line distinct from absent original and unchanged 10 million total');
+
+ // FIN1-20: concurrently resolve the same KNOWN contract and its party.
+ // Identity cannot be conflated with NOT_SPECIFIED, even within one tenant.
+ const contractorId=(await pool.query("INSERT INTO contractors(tenant_id,name) VALUES($1,'FIN subcontractor') RETURNING id",[a.tenantId])).rows[0].id;
+ const contractLine=(number:string)=>({historicalSubjectId:h1.id,partyKind:'CORE_CONTRACTOR' as const,
+   partyId:contractorId,contractKind:'KNOWN' as const,contractNumber:number,amountMln:'10.00'});
+ const knownQuarter={year:2029,quarter:1};
+ const bothKnown=await Promise.all([
+   service.saveBuffer(a,{...knownQuarter,expectedBookVersion:0,lines:[contractLine('FIN-C-100')]}),
+   service.saveBuffer(a,{...knownQuarter,expectedBookVersion:0,lines:[contractLine('FIN-C-100')]})
+ ]);
+ assert.equal(bothKnown.length,2);
+ const partyRows=await pool.query("SELECT id FROM fin_party_scopes WHERE tenant_id=$1 AND kind='CORE_CONTRACTOR' AND core_contractor_id=$2",[a.tenantId,contractorId]);
+ assert.equal(partyRows.rows.length,1);
+ const contractRows=await pool.query("SELECT id FROM fin_contract_scopes WHERE tenant_id=$1 AND party_scope_id=$2 AND kind='KNOWN' AND number='FIN-C-100'",[a.tenantId,partyRows.rows[0].id]);
+ assert.equal(contractRows.rows.length,1);
+ const unspecifiedBuffer=await service.saveBuffer(a,{...knownQuarter,expectedBookVersion:0,lines:[
+   {historicalSubjectId:h1.id,partyKind:'CORE_CONTRACTOR',partyId:contractorId,contractKind:'NOT_SPECIFIED',amountMln:'10.00'}
+ ]});
+ const distinct=await pool.query("SELECT id,kind FROM fin_contract_scopes WHERE tenant_id=$1 AND party_scope_id=$2",[a.tenantId,partyRows.rows[0].id]);
+ assert.equal(distinct.rows.length,2);
+ assert.notEqual(contractRows.rows[0].id,distinct.rows.find((v:any)=>v.kind==='NOT_SPECIFIED')?.id);
+ assert.ok(unspecifiedBuffer.uncommitted);report('FIN1-20 concurrent KNOWN contract dedupe; NOT_SPECIFIED retains distinct identity');
  // Native PostgreSQL two-connection races, with real simultaneous writes.
  // The two independent idempotency keys intentionally do NOT serialize each
  // other; book uniqueness plus row CAS must do the work.
@@ -141,6 +164,31 @@ async function main(){
  assert.deepEqual(hist.history.map((v:any)=>v.new_total_rub),['100000000.00','110000000.00','105000000.00']);
  assert.deepEqual(hist.history.map((v:any)=>v.previous_total_rub),[null,'100000000.00','110000000.00']);
  report('FIN1-11 actual 100 to 110 to 105 history');
+
+ // A correction reducing the tenant book from 11.00 to 9.99 is forbidden,
+ // including when an otherwise valid private buffer already exists.
+ const rejectDecrease=await service.saveBuffer(a,{...q,expectedBookVersion:3,
+   lines:[line(h1.id,'5.99'),line(h2.id,'4.00')]});
+ await expectCode(()=>service.commitBuffer(a,{...q,bufferId:rejectDecrease.bufferId,expectedBookVersion:3,
+   effectiveOn:'2027-01-20',reason:'Invalid below minimum',idempotencyKey:randomUUID()}),'FIN_QUARTER_TOTAL_BELOW_MIN');
+ const afterDecrease=await service.readBook(a,q);
+ assert.equal(afterDecrease.history.length,3);assert.equal(afterDecrease.current,'11000000.00');
+ report('FIN1-10 invalid book correction to 9.99 does not mutate head or immutable history');
+ // A valid redistribution across rows may leave the quarter total unchanged.
+ const redistribute=await service.saveBuffer(a,{...q,expectedBookVersion:3,
+   lines:[line(h1.id,'6.50'),line(h2.id,'4.50')]});
+ const redistributed=await service.commitBuffer(a,{...q,bufferId:redistribute.bufferId,expectedBookVersion:3,
+   effectiveOn:'2027-01-21',reason:'Equal-total redistribution',idempotencyKey:randomUUID()});
+ assert.equal(redistributed.totalRub,'11000000.00');
+ assert.equal((await service.readBook(a,q)).history.length,4);
+ report('FIN1-10 two-row atomic redistribution without changing total');
+ const q999={year:2029,quarter:2};
+ const nearMin=await service.saveBuffer(a,{...q999,expectedBookVersion:0,
+   lines:[line(h1.id,'9.99'),line(h2.id,'0.01')]});
+ const accepted=await service.commitBuffer(a,{...q999,bufferId:nearMin.bufferId,expectedBookVersion:0,
+   effectiveOn:'2029-04-01',idempotencyKey:randomUUID()});
+ assert.equal(accepted.totalRub,'10000000.00');
+ report('FIN1-09 9.99 + 0.01 accepted as quarter total 10.00, no per-contractor minimum');
  const noRights={...a,role:'PROJECT_MANAGER' as Actor['role']};
  await expectCode(()=>service.discover(noRights),'FIN_ACCESS_DENIED');report('FIN1-19 negative financial role');
  const stateAsKnown=await service.readBook(a,q,'2020-01-01T00:00:00+03:00');
