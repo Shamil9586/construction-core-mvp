@@ -36,6 +36,7 @@ export const WRITERS = {
     'fin-sdo-1.service.ts#saveBuffer': N('FIN technical input buffer, tenant/actor-scoped, no production quantity invariants'),
     'fin-sdo-1.service.ts#updateBuffer': N('FIN-only author-scoped edit buffer CAS; replaces temporary rows without production object writes'),
     'fin-sdo-1.service.ts#commitBuffer': N('FIN quarter-book CAS and ledger, independent of production object coordination'),
+    'fin-sdo-1-db.ts#runFinSdoCommandTx': N('FIN isolated restricted DB connector owns FIN-only transaction and no production object state'),
     // ---- service.ts: objects, Works, production -------------------------------------------------------------------------------
     'service.ts#createObject': N('creates a new object: nothing can be racing on an object that does not exist yet'),
     'service.ts#assignContractor': S('the contractor assignment is the row progress() locks to admit a fact (eligibility)'),
