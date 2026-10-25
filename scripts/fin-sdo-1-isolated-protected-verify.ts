@@ -166,10 +166,11 @@ async function main(){
  }),'42501','same FIN restricted role cannot insert historical party directly');
 
  const ownerPrivilege=await owner.query(
-   "SELECT has_table_privilege('fin_sdo_definer_test','public.objects','UPDATE') AS production_update, has_table_privilege('fin_sdo_definer_test','public.fin_quarter_plan_books','UPDATE') AS finance_book_update");
+   "SELECT has_table_privilege('fin_sdo_definer_test','public.objects','UPDATE') AS production_update, has_table_privilege('fin_sdo_definer_test','public.fin_quarter_plan_books','UPDATE') AS finance_book_update, has_table_privilege('fin_sdo_isolated_login','public.fin_quarter_plan_books','UPDATE') AS runtime_book_update");
  assert.equal(ownerPrivilege.rows[0].production_update,false);
- assert.equal(ownerPrivilege.rows[0].finance_book_update,false);
- console.log('PASS S-01 restricted DEFINER has no production/financial-book DML privileges');
+ assert.equal(ownerPrivilege.rows[0].finance_book_update,true);
+ assert.equal(ownerPrivilege.rows[0].runtime_book_update,false);
+ console.log('PASS S-01 DEFINER can CAS book head, runtime LOGIN cannot directly update book or production');
 
 
  // First real HTTP vertical slice: Nest authenticates the supplied bearer
