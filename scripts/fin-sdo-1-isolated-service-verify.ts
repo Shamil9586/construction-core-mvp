@@ -20,7 +20,7 @@ async function expectCode(fn:()=>Promise<unknown>,code:string){
  }
 }
 async function main(){
- const identity=await pool.query("SELECT u.id,u.tenant_id,u.name,u.role FROM users u JOIN tenants t ON t.id=u.tenant_id WHERE t.portal='fin1-isolated.example.test'");
+ const identity=await pool.query("SELECT u.id,u.tenant_id,u.name,u.role FROM users u JOIN tenants t ON t.id=u.tenant_id WHERE t.portal='fin1-isolated.example.test' AND u.bitrix_user_id='fin-isolated-user'");
  assert.equal(identity.rows.length,1);
  const a={...identity.rows[0],tenantId:identity.rows[0].tenant_id} as Actor;
  const q={year:2027,quarter:1};

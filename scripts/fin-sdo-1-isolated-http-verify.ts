@@ -12,7 +12,7 @@ process.env.MOCK_LOGIN_KEY='test-only-key-never-LIVE';
 process.env.APP_ORIGIN='http://127.0.0.1';
 let app:any;
 async function main(){
- const rows=(await pool.query("SELECT u.id,u.tenant_id,u.role FROM users u JOIN tenants t ON t.id=u.tenant_id WHERE t.portal='fin1-isolated.example.test'")).rows;
+ const rows=(await pool.query("SELECT u.id,u.tenant_id,u.role FROM users u JOIN tenants t ON t.id=u.tenant_id WHERE t.portal='fin1-isolated.example.test' AND u.bitrix_user_id='fin-isolated-user'")).rows;
  assert.equal(rows.length,1);
  const sdo=rows[0],tid=sdo.tenant_id;
  const otherTenant=(await pool.query("SELECT id FROM tenants WHERE portal='fin2-isolated.example.test'")).rows[0].id;
