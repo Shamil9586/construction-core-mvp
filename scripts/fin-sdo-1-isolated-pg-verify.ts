@@ -110,6 +110,31 @@ async function main(){
    await client.query('ROLLBACK');
  }finally{client.release()}
 
+
+ // The role has explicit SELECT on one finance table but NO finance table DML.
+ // 42501 (not immutable-trigger P0001 / numeric CHECK 23514) proves denial at
+ // the privilege boundary. Still NOT proof of deployment runtime-role wiring.
+ const privilegedBypassCases:[string,string,unknown[]][]=[
+  ['direct immutable book revision overwrite','UPDATE fin_quarter_book_revisions SET new_total_rub=12000000.00 WHERE id=$1',[revId]],
+  ['direct immutable book revision delete','DELETE FROM fin_quarter_book_revisions WHERE id=$1',[revId]],
+  ['direct immutable line history delete','DELETE FROM fin_quarter_plan_line_revisions WHERE id=$1',[lrId]],
+  ['direct current-quarter plan mutation','UPDATE fin_quarter_plan_books SET version=2,head_revision_no=2 WHERE id=$1',[bookId]],
+  ['direct FIN ledger insertion',"INSERT INTO fin_command_ledger(tenant_id,actor_id,kind,scope_id,idempotency_key,fingerprint,result) VALUES($1,$2,'fake',gen_random_uuid(),'forged-key','bad','{}')",[t,u]],
+  ['direct FIN original subject overwrite',"UPDATE fin_historical_subjects SET name='X' WHERE id=$1",[h.rows[0].id]],
+  ['direct cross-tenant edit-session creation',"INSERT INTO fin_plan_edit_sessions(tenant_id,actor_id,plan_year,plan_quarter) VALUES($1,$2,2028,2)",[t2,u]],
+  ['direct edit-buffer lines delete',"DELETE FROM fin_plan_edit_session_lines WHERE tenant_id=$1",[t]]
+ ];
+ for(const [label,sql,args] of privilegedBypassCases){
+  const limited=await pool.connect();
+  try{
+   await limited.query('BEGIN');
+   await limited.query('SET LOCAL ROLE fin_sdo_limited_test');
+   try { await limited.query(sql,args);
+      failed++;console.error('FAIL restricted role unexpectedly executed '+label);
+   }catch(e:any){assert.equal(e.code,'42501',label+' must be blocked by privileges');passed++;console.log('PASS restricted finance SQL privilege denial: '+label);}
+   await limited.query('ROLLBACK');
+  }finally{limited.release()}
+ }
  const sum=await pool.query("SELECT b.new_total_rub::text AS total, sum(l.new_amount_rub)::text AS lines FROM fin_quarter_book_revisions b JOIN fin_quarter_plan_line_revisions l ON l.book_revision_id=b.id AND l.tenant_id=b.tenant_id WHERE b.id=$1 GROUP BY b.id",[revId]);
  assert.equal(sum.rows[0].total,'10000000.00');assert.equal(sum.rows[0].lines,'10000000.00');passed++;
  console.log(JSON.stringify({passed,failed,unproven:['runtime-role restricted write path','native concurrency','role ownership/grants wired into application','full FIN1-01..27 acceptance','FIN1-01..27']},null,2));

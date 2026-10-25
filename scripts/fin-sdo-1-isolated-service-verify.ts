@@ -27,8 +27,19 @@ async function main(){
  const h1=await service.createHistoricalSubject(a,{name:'Same address',idempotencyKey:randomUUID()});
  const h2=await service.createHistoricalSubject(a,{name:'Same address',idempotencyKey:randomUUID()});
  assert.notEqual(h1.id,h2.id);report('FIN1-04 historical duplicate names retain unique identities');
+
+ const coreObjects=[];
+ for(const [i,status] of ['ACTIVE','COMPLETED','ARCHIVED'].entries()){
+  const obj=await pool.query("INSERT INTO objects(tenant_id,external_code,name,address,project_manager_id,start_date,planned_finish_date,contract_value,status) VALUES($1,$2,$3,'Isolated Core test', $4,'2026-01-01','2028-12-31',0,$5) RETURNING id",[a.tenantId,'fin-early-'+randomUUID(),'FIN CORE '+status,a.id,status]);
+  coreObjects.push({id:obj.rows[0].id,status});
+ }
+ const workCat=(await pool.query("INSERT INTO work_categories(tenant_id,name,code) VALUES($1,'Early Work','FIN-EARLY') RETURNING id",[a.tenantId])).rows[0].id;
+ const workType=(await pool.query("INSERT INTO work_types(tenant_id,category_id,name,unit) VALUES($1,$2,'Early Work','m2') RETURNING id",[a.tenantId,workCat])).rows[0].id;
+ await pool.query("INSERT INTO works(tenant_id,object_id,work_type_id,contractor_id,responsible_user_id,name,unit,planned_quantity,planned_start_date,planned_finish_date,estimated_cost) VALUES($1,$2,$3,NULL,NULL,'Nullable early work','m2',10,NULL,NULL,NULL)",[a.tenantId,coreObjects[0].id,workType]);
  const discovered=await service.discover(a);
  assert.ok(discovered.historical.some((o:any)=>o.id===h1.id));report('FIN1-01 subject discovery independent of F8.3');
+ for(const obj of coreObjects)assert.ok(discovered.core.some((v:any)=>v.id===obj.id && v.status===obj.status));
+ report('FIN1-01/02/03 CORE active/completed/archived discovery, including nullable Early Work and no F8.3 case');
  let b=await service.saveBuffer(a,{...q,expectedBookVersion:0,lines:[line(h1.id,'6.00')]});
  let noPlan=await service.readBook(a,q);
  assert.equal(noPlan.status,'NO_PLAN');report('FIN1-06 technical buffer 6.00 is not official');
@@ -67,6 +78,20 @@ async function main(){
  await expectCode(()=>service.commitBuffer(a,{...q,bufferId:stale2.bufferId,expectedBookVersion:2,effectiveOn:'2027-01-15',reason:'Дубликат',idempotencyKey:randomUUID()}),'FIN_QUARTER_BOOK_VERSION_CONFLICT');
  report('FIN1-15 stale version cannot overwrite head');
 
+ // FIN1-12: a later line receives NO quarter-original amount (rather than fake zero).
+ const qb={year:2028,quarter:4};
+ const firstBuffer=await service.saveBuffer(a,{...qb,expectedBookVersion:0,lines:[line(h1.id,'10.00')]});
+ await service.commitBuffer(a,{...qb,bufferId:firstBuffer.bufferId,expectedBookVersion:0,effectiveOn:'2028-10-01',idempotencyKey:randomUUID()});
+ const secondBuffer=await service.saveBuffer(a,{...qb,expectedBookVersion:1,lines:[line(h1.id,'10.00'),line(h2.id,'0.00')]});
+ const next=await service.commitBuffer(a,{...qb,bufferId:secondBuffer.bufferId,expectedBookVersion:1,
+   effectiveOn:'2028-10-20',reason:'Added explicit zero line',idempotencyKey:randomUUID()});
+ assert.equal(next.revisionNo,2);
+ const book2=await service.readBook(a,qb);
+ const added=book2.lines.find((x:any)=>x.historical_subject_id===h2.id);
+ assert.ok(added);assert.equal(added.original_amount_rub,null);
+ assert.equal(added.amount_rub,'0.00');
+ assert.equal(book2.original,'10000000.00');assert.equal(book2.current,'10000000.00');
+ report('FIN1-12/13 late zero line distinct from absent original and unchanged 10 million total');
  // Native PostgreSQL two-connection races, with real simultaneous writes.
  // The two independent idempotency keys intentionally do NOT serialize each
  // other; book uniqueness plus row CAS must do the work.
