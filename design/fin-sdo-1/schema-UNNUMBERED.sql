@@ -192,7 +192,8 @@ CREATE TRIGGER fin_command_ledger_immutable BEFORE UPDATE OR DELETE ON fin_comma
 -- SQL conservation proof (DRAFT): these checks run DEFERRED, after the complete
 -- multi-line book transaction. A book with head=0 can exist IN a transaction,
 -- but can never be committed as an incomplete or below-min official book.
-CREATE FUNCTION fin_assert_quarter_book() RETURNS trigger LANGUAGE plpgsql AS $fin$
+CREATE FUNCTION fin_assert_quarter_book() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+SET search_path=pg_catalog,pg_temp AS $fin$
 DECLARE
  t uuid; b uuid; head_no integer; current_total numeric(20,2);
  reported_total numeric(20,2); n_lines bigint; n_valid bigint;
@@ -205,26 +206,26 @@ BEGIN
  ELSIF TG_TABLE_NAME = 'fin_quarter_plan_line_revisions' THEN b := NEW.book_id;
  ELSE RAISE EXCEPTION 'FIN_UNKNOWN_CONSERVATION_SOURCE' USING ERRCODE='23514';
  END IF;
- SELECT head_revision_no INTO head_no FROM fin_quarter_plan_books WHERE tenant_id=t AND id=b;
+ SELECT head_revision_no INTO head_no FROM public.fin_quarter_plan_books WHERE tenant_id=t AND id=b;
  IF NOT FOUND THEN RAISE EXCEPTION 'FIN_BOOK_MISSING' USING ERRCODE='23514'; END IF;
  IF head_no < 1 THEN RAISE EXCEPTION 'FIN_INCOMPLETE_BOOK' USING ERRCODE='23514'; END IF;
  SELECT count(*),max(revision_no) INTO n_revs,max_no
- FROM fin_quarter_book_revisions WHERE tenant_id=t AND book_id=b;
+ FROM public.fin_quarter_book_revisions WHERE tenant_id=t AND book_id=b;
  IF n_revs<>head_no OR max_no<>head_no THEN
    RAISE EXCEPTION 'FIN_BOOK_HISTORY_GAP' USING ERRCODE='23514';
  END IF;
  SELECT new_total_rub INTO reported_total
- FROM fin_quarter_book_revisions
+ FROM public.fin_quarter_book_revisions
  WHERE tenant_id=t AND book_id=b AND revision_no=head_no;
  IF reported_total IS NULL OR reported_total < 10000000.00 THEN
    RAISE EXCEPTION 'FIN_QUARTER_TOTAL_BELOW_MIN' USING ERRCODE='23514';
  END IF;
  SELECT count(*),count(r.new_amount_rub),coalesce(sum(r.new_amount_rub),0)
  INTO n_lines,n_valid,current_total
- FROM fin_quarter_plan_lines l LEFT JOIN LATERAL (
+ FROM public.fin_quarter_plan_lines l LEFT JOIN LATERAL (
    SELECT lr.new_amount_rub
-   FROM fin_quarter_plan_line_revisions lr
-   JOIN fin_quarter_book_revisions br ON br.tenant_id=lr.tenant_id AND br.id=lr.book_revision_id
+   FROM public.fin_quarter_plan_line_revisions lr
+   JOIN public.fin_quarter_book_revisions br ON br.tenant_id=lr.tenant_id AND br.id=lr.book_revision_id
    WHERE lr.tenant_id=l.tenant_id AND lr.plan_line_id=l.id AND br.revision_no <=head_no
    ORDER BY br.revision_no DESC LIMIT 1
  ) r ON TRUE
@@ -312,7 +313,8 @@ CREATE TRIGGER fin_historical_parties_immutable BEFORE UPDATE OR DELETE ON fin_h
 
 -- At COMMIT, validate all before/after amounts and monotonically numbered
 -- line/book histories, not just today's book total (read snapshots depend on it).
-CREATE FUNCTION fin_assert_history_links() RETURNS trigger LANGUAGE plpgsql AS $history$
+CREATE FUNCTION fin_assert_history_links() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER
+SET search_path=pg_catalog,pg_temp AS $history$
 DECLARE t uuid; b uuid;
 BEGIN
  t:=NEW.tenant_id;
@@ -326,7 +328,7 @@ BEGIN
    SELECT revision_no,previous_total_rub,
        row_number() OVER (ORDER BY revision_no) AS n,
        lag(new_total_rub) OVER (ORDER BY revision_no) AS prev
-   FROM fin_quarter_book_revisions WHERE tenant_id=t AND book_id=b
+   FROM public.fin_quarter_book_revisions WHERE tenant_id=t AND book_id=b
   ) r WHERE r.revision_no<>r.n OR r.previous_total_rub IS DISTINCT FROM r.prev
  ) THEN RAISE EXCEPTION 'FIN_BOOK_REVISION_HISTORY_INVALID' USING ERRCODE='23514'; END IF;
 
@@ -336,18 +338,18 @@ BEGIN
           row_number() OVER (PARTITION BY lr.plan_line_id ORDER BY br.revision_no) AS n,
           lag(lr.new_amount_rub) OVER (PARTITION BY lr.plan_line_id ORDER BY br.revision_no) AS prev,
           min(br.revision_no) OVER (PARTITION BY lr.plan_line_id) AS first_book_no
-   FROM fin_quarter_plan_line_revisions lr
-   JOIN fin_quarter_book_revisions br ON br.tenant_id=lr.tenant_id AND br.id=lr.book_revision_id
+   FROM public.fin_quarter_plan_line_revisions lr
+   JOIN public.fin_quarter_book_revisions br ON br.tenant_id=lr.tenant_id AND br.id=lr.book_revision_id
    WHERE lr.tenant_id=t AND lr.book_id=b
-  ) r JOIN fin_quarter_plan_lines l ON l.tenant_id=t AND l.id=r.plan_line_id
+  ) r JOIN public.fin_quarter_plan_lines l ON l.tenant_id=t AND l.id=r.plan_line_id
   WHERE r.line_revision_no<>r.n OR r.previous_amount_rub IS DISTINCT FROM r.prev
         OR r.first_book_no<>l.created_in_book_revision
  ) THEN RAISE EXCEPTION 'FIN_LINE_REVISION_HISTORY_INVALID' USING ERRCODE='23514'; END IF;
 
  IF EXISTS (
-   SELECT 1 FROM fin_quarter_book_revisions br
+   SELECT 1 FROM public.fin_quarter_book_revisions br
    WHERE br.tenant_id=t AND br.book_id=b AND NOT EXISTS (
-     SELECT 1 FROM fin_quarter_plan_line_revisions lr
+     SELECT 1 FROM public.fin_quarter_plan_line_revisions lr
      WHERE lr.tenant_id=br.tenant_id AND lr.book_revision_id=br.id
    )
  ) THEN RAISE EXCEPTION 'FIN_EMPTY_BOOK_REVISION' USING ERRCODE='23514'; END IF;
