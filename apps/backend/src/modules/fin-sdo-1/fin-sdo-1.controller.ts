@@ -41,7 +41,7 @@ const requestBearer=(req:any):string=>{
  if(!m)throw new UnauthorizedException('FIN_BEARER_REQUIRED');
  return m[1];
 };
-const commit=period.extend({bufferId:uuid,expectedBookVersion:z.number().int().min(0),effectiveOn:z.iso.date(),reason:z.string().trim().min(1).max(300).optional(),idempotencyKey:key}).strict();
+const commit=period.extend({bufferId:uuid,expectedBufferVersion:z.number().int().min(1),expectedBookVersion:z.number().int().min(0),effectiveOn:z.iso.date(),reason:z.string().trim().min(1).max(300).optional(),idempotencyKey:key}).strict();
 
 @Controller('fin-sdo-1')
 @ApiBearerAuth()
