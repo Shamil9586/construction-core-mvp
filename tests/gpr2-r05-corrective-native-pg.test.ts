@@ -99,7 +99,8 @@ test('R05 corrective on native PostgreSQL: 033 upgrade, B01 bound-Work identity 
     const file033 = fs.readFileSync('infra/033_gpr2_r05_corrective.sql', 'utf8');
     assert.deepEqual(destructiveStatements(file033), [], '033 passes the additive scan');
     const plan = await planMigrationsOnDatabase();
-    assert.deepEqual(plan.pending.map((p: any) => [p.version, p.class, p.checksum]), [[33, 'additive', checksumOf(file033)], [34, 'additive', checksumOf(fs.readFileSync('infra/034_gpr2_r05_independent_corrective.sql', 'utf8'))]]);
+    assert.deepEqual(plan.pending.map((p: any) => [p.version, p.class, p.checksum]), [[33, 'additive', checksumOf(file033)], [34, 'additive', checksumOf(fs.readFileSync('infra/034_gpr2_r05_independent_corrective.sql', 'utf8'))],
+      [35, 'additive', checksumOf(fs.readFileSync('infra/035_gpr2_r05_operation_semantics.sql', 'utf8'))]]);
 
     // ---------------------------------------------------------------- a B03-violating row: 033 fails and leaves nothing
     const bad = (await one(pool, "INSERT INTO work_types(tenant_id,category_id,name,unit,scope,object_id,origin_object_id) VALUES($1,$2,'без происхождения','м²','OBJECT',$3,NULL) RETURNING id", [pm.tenantId, category.id, object.id])).id;
@@ -118,7 +119,7 @@ test('R05 corrective on native PostgreSQL: 033 upgrade, B01 bound-Work identity 
 
     // ---------------------------------------------------------------- 032 → 033
     const applied = await migrate();
-    assert.deepEqual(applied.applied.map((a: any) => a.version), [33, 34]); // 034 (the independent-acceptance corrective) follows in the same run
+    assert.deepEqual(applied.applied.map((a: any) => a.version), [33, 34, 35]); // 034 and 035 (the later correctives) follow in the same run
     assert.deepEqual(await snap(), before, 'no protected or R05 row changed by 033');
     const ledger33 = await one(pool, 'SELECT version, checksum, migration_class FROM schema_migrations WHERE version=33');
     assert.equal(ledger33.checksum, checksumOf(file033)); assert.equal(ledger33.migrationClass, 'additive');
@@ -126,7 +127,7 @@ test('R05 corrective on native PostgreSQL: 033 upgrade, B01 bound-Work identity 
     assert.deepEqual(await objectsOf033(), { ledger: 1, constraint: 1, triggers: 6, functions: 6 });
     assert.equal((await migrate()).applied.length, 0, 're-run is a no-op');
     evidence.upgrade = {
-      from: 32, fromState: 'previous candidate schema 029–032 with R05 data (bound Work, classification, published template, object WorkType)', applied: [33, 34],
+      from: 32, fromState: 'previous candidate schema 029–032 with R05 data (bound Work, classification, published template, object WorkType)', applied: [33, 34, 35],
       ledger: ledger33, checksumMatchesFile: true, rowsUnchanged: Object.keys(PROTECTED), digests: before, checkValidated: true, rerunNoop: true, additiveScan: []
     };
 

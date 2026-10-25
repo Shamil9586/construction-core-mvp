@@ -6,7 +6,7 @@ import { createIsolatedDatabase, scrubConnectionEnvironment, Session, until, wai
 /**
  * GPR-2 R05 — the claims PGlite cannot carry, on NATIVE PostgreSQL (the isolated cluster `gpr2-p1-isolated`, a fresh `gpr2_p1_*` database; never LIVE,
  * never an inherited DATABASE_URL):
- *   * upgrade 028 → 034 on a seeded database: every pre-existing Work / WEU / portion / confirmation / progress row and every legacy WorkType column is
+ *   * upgrade 028 → 035 on a seeded database: every pre-existing Work / WEU / portion / confirmation / progress row and every legacy WorkType column is
  *     byte-identical; the five new files (033: the corrective of GPT_REVIEW_20261024) are recorded with checksums as additive; a re-run is a no-op;
  *   * two confirms of the same preview with DIFFERENT keys, both proved waiting on the object's coordination lock: exactly one creates Works, the other is
  *     refused (scope changed) and leaves nothing;
@@ -33,7 +33,7 @@ test('R05 native PostgreSQL: upgrade, concurrent confirm, one-producer races, si
   const observer = await Session.open(db.url, 'r05-observer');
   const evidence: Record<string, unknown> = { cluster: db.evidence, database: db.name };
   try {
-    // ---------------------------------------------------------------- upgrade 028 → 034
+    // ---------------------------------------------------------------- upgrade 028 → 035
     await migrate({ through: 28 }); await seed();
     const digest = async (sql: string) => (await pool.query(`SELECT md5(coalesce(string_agg(t::text, '|' ORDER BY t::text), '')) AS d, count(*)::int AS n FROM (${sql}) t`)).rows[0];
     const PROTECTED = {
@@ -44,10 +44,10 @@ test('R05 native PostgreSQL: upgrade, concurrent confirm, one-producer races, si
     const snap = async () => Object.fromEntries(await Promise.all(Object.entries(PROTECTED).map(async ([k, sql]) => [k, await digest(sql)])));
     const before = await snap();
     const plan = await planMigrationsOnDatabase();
-    assert.deepEqual(plan.pending.map((p: any) => [p.version, p.class]), [[29, 'additive'], [30, 'additive'], [31, 'additive'], [32, 'additive'], [33, 'additive'], [34, 'additive']]);
+    assert.deepEqual(plan.pending.map((p: any) => [p.version, p.class]), [[29, 'additive'], [30, 'additive'], [31, 'additive'], [32, 'additive'], [33, 'additive'], [34, 'additive'], [35, 'additive']]);
     const applied = await migrate();
-    assert.deepEqual(applied.applied.map((a: any) => a.version), [29, 30, 31, 32, 33, 34]);
-    assert.deepEqual(await snap(), before, 'no protected row changed by 029–034');
+    assert.deepEqual(applied.applied.map((a: any) => a.version), [29, 30, 31, 32, 33, 34, 35]);
+    assert.deepEqual(await snap(), before, 'no protected row changed by 029–035');
     assert.equal((await pool.query("SELECT count(*)::int AS n FROM work_types WHERE scope<>'CORPORATE' OR object_id IS NOT NULL OR origin_object_id IS NOT NULL")).rows[0].n, 0, 'every existing WorkType reads CORPORATE');
     const ledger = (await pool.query('SELECT version, checksum, migration_class FROM schema_migrations WHERE version>=29 ORDER BY version')).rows;
     assert.ok(ledger.every((r: any) => /^[0-9a-f]{64}$/.test(r.checksum) && r.migration_class === 'additive'));

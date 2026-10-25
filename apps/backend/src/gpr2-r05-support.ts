@@ -92,7 +92,7 @@ const UNIQUE_CODES: Record<string, () => Gpr2Error> = {
 };
 
 /**
- * A refusal raised by an R05 trigger carries `GPR2_R05:<CODE>` (infra/029–034) and becomes the contract error; a violated R05 unique index becomes its
+ * A refusal raised by an R05 trigger carries `GPR2_R05:<CODE>` (infra/029–035) and becomes the contract error; a violated R05 unique index becomes its
  * business answer. Anything else propagates unchanged. Never echoes the database message to the caller.
  */
 export function mapR05DbError(e: any): never {

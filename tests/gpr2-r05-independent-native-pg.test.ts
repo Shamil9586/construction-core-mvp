@@ -116,7 +116,7 @@ test('R05 independent corrective on native PostgreSQL: NEW-01 sibling measures, 
       await tamper.begin(); await tamper.query("SET LOCAL session_replication_role = 'replica'");
       await tamper.query("UPDATE object_area_scopes SET lifecycle='ACTIVE' WHERE id=$1", [leaf0]); await tamper.commit(); await tamper.close(); // undo the fixture
       const applied = await migrate();
-      assert.deepEqual(applied.applied.map((x: any) => x.version), [34]);
+      assert.deepEqual(applied.applied.map((x: any) => x.version), [34, 35]); // 035 (the third corrective) follows in the same run
       const after = await snap();
       for (const t of TABLES) assert.deepEqual(after[t], before[t], t + ' unchanged by 034 (the tampered fixture row was restored byte-for-byte)');
       const ledger34 = await one(pool, 'SELECT version, checksum, migration_class FROM schema_migrations WHERE version=34');
@@ -124,7 +124,7 @@ test('R05 independent corrective on native PostgreSQL: NEW-01 sibling measures, 
       assert.deepEqual(await objects034(), { ledger: 1, tables: 3, triggers: 12 }); // 9 names; three of them on two tables each
       assert.equal(await count('SELECT ((SELECT count(*) FROM object_area_scope_child_revisions) + (SELECT count(*) FROM work_scope_operations) + (SELECT count(*) FROM work_type_reference_state))::int AS n'), 0, 'the new tables start empty: nothing is backfilled');
       assert.equal((await migrate()).applied.length, 0, 're-run is a no-op');
-      evidence.upgrade = { from: 33, fromState: 'previous candidate schema 029–033 with R05 data (area tree, finish system, confirmed Work + binding)', applied: [34],
+      evidence.upgrade = { from: 33, fromState: 'previous candidate schema 029–033 with R05 data (area tree, finish system, confirmed Work + binding)', applied: [34, 35],
         preconditionRefusal: String(failed.error.message).slice(0, 160), failedRunLeftNothing: true, ledger: ledger34, checksumMatchesFile: true, unchanged: TABLES, newTablesEmpty: true, rerunNoop: true, additiveScan: [] };
     }
     const pm = await one(pool, "SELECT * FROM users WHERE role='PROJECT_MANAGER' AND is_active=true ORDER BY created_at LIMIT 1");
