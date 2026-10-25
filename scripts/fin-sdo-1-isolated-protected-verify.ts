@@ -156,6 +156,9 @@ async function main(){
  // active user and tenant instead of trusting HTTP actor fields).
  process.env.FIN_SDO_1_ROUTES='enabled';
  process.env.FIN_SDO_PROTECTED_IDENTITY_COMMANDS='enabled';
+ process.env.AUTH_MODE='mock';
+ process.env.MOCK_LOGIN_KEY='test-only-key-never-LIVE';
+ process.env.APP_ORIGIN='http://127.0.0.1';
  const {createApp}=await import('../apps/backend/src/main');
  const finApp=await createApp();
  try {
