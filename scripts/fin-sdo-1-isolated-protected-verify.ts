@@ -149,6 +149,68 @@ async function main(){
  assert.equal(ownerPrivilege.rows[0].finance_book_update,false);
  console.log('PASS S-01 restricted DEFINER has no production/financial-book DML privileges');
 
+
+ // First real HTTP vertical slice: Nest authenticates the supplied bearer
+ // using existing sessions. The FIN service then uses the SAME token through
+ // the separate restricted PostgreSQL pool (the DB independently checks role,
+ // active user and tenant instead of trusting HTTP actor fields).
+ process.env.FIN_SDO_1_ROUTES='enabled';
+ process.env.FIN_SDO_PROTECTED_IDENTITY_COMMANDS='enabled';
+ const {createApp}=await import('../apps/backend/src/main');
+ const finApp=await createApp();
+ try {
+   await finApp.listen(0,'127.0.0.1');
+   const endpoint=finApp.getHttpServer().address();
+   assert.ok(endpoint && typeof endpoint!=='string');
+   const host='http://127.0.0.1:'+endpoint.port;
+   async function api(path:string,bearer:string,method='GET',payload?:unknown){
+      const response=await fetch(host+'/fin-sdo-1/'+path,{
+        method,headers:{Authorization:'Bearer '+bearer,...(payload===undefined?{}:{'Content-Type':'application/json'})},
+        ...(payload===undefined?{}:{body:JSON.stringify(payload)})
+      });
+      const body=await response.json();
+      return {status:response.status,body};
+   }
+   const httpKey=randomUUID();
+   let http=await api('historical-subjects',a.token,'POST',{
+     name:'HTTP protected identity',address:'Test street',customerName:'Test client',idempotencyKey:httpKey
+   });
+   assert.equal(http.status,200);
+   const httpId=http.body.id;
+   assert.ok(httpId);
+   const httpReplay=await api('historical-subjects',a.token,'POST',{
+     name:'HTTP protected identity',address:'Test street',customerName:'Test client',idempotencyKey:httpKey
+   });
+   assert.equal(httpReplay.status,200);assert.deepEqual(httpReplay.body,http.body);
+   const actualHttp=(await owner.query('SELECT tenant_id,created_by FROM fin_historical_subjects WHERE id=$1',[httpId])).rows;
+   assert.equal(actualHttp.length,1);assert.equal(actualHttp[0].tenant_id,a.tenant);
+   assert.equal(actualHttp[0].created_by,a.uid);
+   console.log('PASS S-01 direct HTTP protected historical subject and identical request replay');
+   const httpParty=await api('historical-parties',a.token,'POST',{name:'HTTP historical subcontractor',idempotencyKey:randomUUID()});
+   assert.equal(httpParty.status,200);
+   assert.equal((await owner.query('SELECT tenant_id FROM fin_historical_parties WHERE id=$1',[httpParty.body.id])).rows[0].tenant_id,a.tenant);
+   console.log('PASS S-01 direct HTTP historical party persisted from bearer-derived tenant');
+   const forbidden=await api('historical-parties',pto.token,'POST',{name:'Not allowed',idempotencyKey:randomUUID()});
+   assert.equal(forbidden.status,403);
+   console.log('PASS S-01 direct HTTP PTO cannot call restricted write');
+   const mismatch=await api('historical-subjects',a.token,'POST',{name:'DIFFERENT',idempotencyKey:httpKey});
+   assert.equal(mismatch.status,409);
+   assert.ok(!JSON.stringify(mismatch.body).includes('fin_command_ledger'));
+   console.log('PASS S-01 HTTP conflicting idempotency replay is 409 without SQL leakage');
+   // Fail CLOSED: unconverted book/buffer writers and FIN legacy projections are
+   // *not* allowed to fall back to the main product pool in protected mode.
+   for (const [path,method,payload] of [
+     ['quarter?year=2028&quarter=1','GET',undefined],
+     ['subjects','GET',undefined],
+     ['buffers','POST',{year:2028,quarter:1,expectedBookVersion:0,lines:[]}],
+     ['commit','POST',{year:2028,quarter:1,bufferId:randomUUID(),expectedBookVersion:0,effectiveOn:'2028-01-01',idempotencyKey:randomUUID()}]
+   ] as const){
+     const result=await api(path,a.token,method,payload);
+     assert.equal(result.status,503,path+' must remain unavailable until SEC-01 fixed');
+     assert.ok(!JSON.stringify(result.body).includes('Protected SDO historical'));
+   }
+   console.log('PASS S-01 protected mode refuses ALL unconverted FIN readers and book writers (503)');
+ } finally {await finApp.close();}
  const foreign=await runFinSdoCommandTx(async tx=>(await tx.c.query(
    'SELECT public.fin_sdo_create_historical_subject($1,$2,$3,$4,$5) AS result',
    [b.token,'Other tenant protected','Street 2','Other client',randomUUID()])).rows[0].result);

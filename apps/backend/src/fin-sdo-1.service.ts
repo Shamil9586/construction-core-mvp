@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { Injectable, ForbiddenException, BadRequestException, NotFoundException, ConflictException, UnprocessableEntityException } from '@nestjs/common';
 import { runCommandTx, runSnapshotRead } from './tx-context';
+import { runFinSdoCommandTx } from './fin-sdo-1-db';
 import type { Actor } from './security';
 import { millionRubToKopeks, kopeksToRub, FinPlanInputError } from '../../../packages/domain/fin-sdo-1';
 import { Permission, hasPermission, type Role } from '../../../packages/domain';
@@ -16,6 +17,13 @@ const rub=(million:string):string=>{
   catch(e){if(e instanceof FinPlanInputError)throw new UnprocessableEntityException({code:e.code});throw e;}
 };
 const canonical=(a:any)=>[a.subject_id,a.party_scope_id,a.contract_scope_id].join(':');
+const mapFinProtectedFailure=(e:any):never=>{
+  // Never expose PostgreSQL function internals, role names, object existence or SQL text via HTTP.
+  if(e?.code==='42501')throw new ForbiddenException('FIN_ACCESS_DENIED');
+  if(e?.code==='23505')throw new ConflictException('FIN_COMMAND_CONFLICT');
+  if(e?.code==='23514'||e?.code==='22001')throw new UnprocessableEntityException('FIN_COMMAND_INVALID');
+  throw e;
+};
 const commandScope=(tenant:string,year:number,q:number):string=>{
   const h=createHash('sha256').update(tenant+':RUB:'+year+':'+q).digest('hex').slice(0,32);
   return h.slice(0,8)+'-'+h.slice(8,12)+'-4'+h.slice(13,16)+'-8'+h.slice(17,20)+'-'+h.slice(20);
@@ -57,6 +65,34 @@ export class FinSdo1Service {
         historicalParties:await query(c,'SELECT id,name FROM fin_historical_parties WHERE tenant_id=$1 ORDER BY name,id',[a.tenantId])
       };
     });
+  }
+  /**
+   * S-01 protected FIN identity command, used only by the explicitly gated
+   * HTTP slice. The token is the actual authenticated bearer from the request.
+   * PostgreSQL re-authenticates it and derives actor/tenant in its own trust
+   * boundary; no application-supplied actor_id or tenant_id reaches SQL.
+   */
+  async createHistoricalSubjectProtected(a:Actor,bearer:string,b:{name:string;address?:string;customerName?:string;idempotencyKey:string}){
+    writeRole(a);
+    if(typeof bearer!=='string'||bearer.length<32||bearer.length>256)throw new ForbiddenException('FIN_ACCESS_DENIED');
+    return runFinSdoCommandTx(async tx=>{
+      const res=await tx.c.query(
+        'SELECT public.fin_sdo_create_historical_subject($1,$2,$3,$4,$5) AS result',
+        [bearer,b.name,b.address??null,b.customerName??null,b.idempotencyKey]
+      );
+      return res.rows[0].result;
+    }).catch(mapFinProtectedFailure);
+  }
+  async createHistoricalPartyProtected(a:Actor,bearer:string,b:{name:string;idempotencyKey:string}){
+    writeRole(a);
+    if(typeof bearer!=='string'||bearer.length<32||bearer.length>256)throw new ForbiddenException('FIN_ACCESS_DENIED');
+    return runFinSdoCommandTx(async tx=>{
+      const res=await tx.c.query(
+        'SELECT public.fin_sdo_create_historical_party($1,$2,$3) AS result',
+        [bearer,b.name,b.idempotencyKey]
+      );
+      return res.rows[0].result;
+    }).catch(mapFinProtectedFailure);
   }
   async createHistoricalSubject(a:Actor,b:{name:string;address?:string;customerName?:string;idempotencyKey:string}){
     writeRole(a);
