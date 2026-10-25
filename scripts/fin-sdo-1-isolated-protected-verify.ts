@@ -438,6 +438,73 @@ async function main(){
    assert.equal(revised.body.lines.length,2);
    console.log('PASS S-01 FIN protected correction and director-only immutable history');
 
+   // Invalid correction must leave current book/head/history identical.
+   const lowDraft=await api('buffers',a.token,'POST',{
+      year:2030,quarter:1,expectedBookVersion:2,lines:[
+       {historicalSubjectId:httpId,partyKind:'UNALLOCATED',
+        contractKind:'NOT_SPECIFIED',amountMln:'5.99'},
+       {coreObjectId:directory.body.core[0].id,partyKind:'HISTORICAL_PARTY',
+        partyId:httpParty.body.id,contractKind:'KNOWN',contractNumber:'FIN-C-2029',amountMln:'4.00'}
+      ]
+   });
+   assert.equal(lowDraft.status,200);
+   const lowReject=await api('commit',a.token,'POST',{
+      year:2030,quarter:1,bufferId:lowDraft.body.bufferId,
+      expectedBookVersion:2,effectiveOn:'2030-03-03',
+      reason:'Below threshold',idempotencyKey:randomUUID()
+   });
+   assert.equal(lowReject.status,422,JSON.stringify(lowReject.body));
+   const unchangedBook=await api('quarter?year=2030&quarter=1',a.token);
+   assert.equal(unchangedBook.body.current,'10500000.00');
+   assert.equal(unchangedBook.body.original,'10000000.00');
+   assert.equal(unchangedBook.body.bookVersion,2);
+   assert.equal(unchangedBook.body.history.length,2);
+   console.log('PASS S-01 9.99m protected correction atomically rejected without head/history change');
+
+   const ptoCommit=await api('commit',pto.token,'POST',{...originalCommand,idempotencyKey:randomUUID()});
+   assert.equal(ptoCommit.status,403);
+   const directorCommit=await api('commit',director.token,'POST',{...originalCommand,idempotencyKey:randomUUID()});
+   assert.equal(directorCommit.status,403);
+   const foreignCommit=await api('commit',b.token,'POST',{...originalCommand,idempotencyKey:randomUUID()});
+   assert.equal(foreignCommit.status,403);
+   await expectSqlState(()=>runFinSdoCommandTx(async tx=>{
+     await tx.c.query('UPDATE public.fin_quarter_plan_books SET head_revision_no=50,version=50 WHERE id=$1',
+       [original.body.bookId]);
+   }),'42501','actual restricted FIN login denied direct book head mutation');
+   await expectSqlState(()=>runFinSdoCommandTx(async tx=>{
+     await tx.c.query('DELETE FROM public.fin_quarter_book_revisions WHERE id=$1',
+       [firstOfficial.body.history[0].id]);
+   }),'42501','actual restricted FIN login denied immutable book history DELETE');
+   await expectSqlState(()=>runFinSdoCommandTx(async tx=>{
+     await tx.c.query('UPDATE public.fin_command_ledger SET result=$1::jsonb WHERE id=$2',
+       ['{}',randomUUID()]);
+   }),'42501','actual restricted FIN login denied finance command-ledger rewrite');
+   console.log('PASS S-01 protected FIN book tenant/role negative API and direct SQL integrity denials');
+
+   // Two initially valid drafts race: at most one original in one quarter.
+   const draftRace=await Promise.all(['10.00','12.00'].map(amount=>
+     api('buffers',a.token,'POST',{
+       year:2031,quarter:1,expectedBookVersion:0,lines:[
+         {historicalSubjectId:httpId,partyKind:'UNALLOCATED',
+          contractKind:'NOT_SPECIFIED',amountMln:amount}
+       ]
+     })
+   ));
+   assert.ok(draftRace.every(x=>x.status===200));
+   const initialRace=await Promise.all(draftRace.map(x=>
+     api('commit',a.token,'POST',{
+       year:2031,quarter:1,bufferId:x.body.bufferId,
+       expectedBookVersion:0,effectiveOn:'2031-01-10',idempotencyKey:randomUUID()
+     })
+   ));
+   assert.deepEqual(initialRace.map(x=>x.status).sort((x,y)=>x-y),[200,409]);
+   const single=await api('quarter?year=2031&quarter=1',a.token);
+   assert.equal(single.status,200);
+   assert.equal(single.body.bookVersion,1);
+   assert.equal(single.body.history.length,1);
+   console.log('PASS S-01 native two-connection protected initial commit race: one original, loser 409');
+
+
  } finally {await finApp.close();}
  const foreign=await runFinSdoCommandTx(async tx=>(await tx.c.query(
    'SELECT public.fin_sdo_create_historical_subject($1,$2,$3,$4,$5) AS result',
