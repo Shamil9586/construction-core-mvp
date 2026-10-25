@@ -235,6 +235,24 @@ async function main(){
    assert.ok(plan.body.history.length>=3);
    assert.equal(plan.body.lines.length,2);
    console.log('PASS S-01 FIN protected quarter original/current/history and multi-line book');
+
+   // Snapshot knownAt must expose neither the later amount nor the future
+   // mutable head *version*. Construct a native-PG microsecond midpoint so
+   // node Date rounding cannot make this test flaky.
+   const point=await owner.query(
+      "SELECT to_char((r1.recorded_at+(r2.recorded_at-r1.recorded_at)/2) AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') AS known_at FROM fin_quarter_book_revisions r1 JOIN fin_quarter_book_revisions r2 ON r2.tenant_id=r1.tenant_id AND r2.book_id=r1.book_id AND r2.revision_no=2 JOIN fin_quarter_plan_books b ON b.id=r1.book_id AND b.tenant_id=r1.tenant_id WHERE r1.revision_no=1 AND r1.tenant_id=$1 AND b.plan_year=2027 AND b.plan_quarter=1",
+      [a.tenant]
+   );
+   assert.equal(point.rows.length,1);
+   const retrospective=await api('quarter?year=2027&quarter=1&knownAt='+encodeURIComponent(point.rows[0].known_at),a.token);
+   assert.equal(retrospective.status,200);
+   assert.equal(retrospective.body.status,'ACTIVE');
+   assert.equal(retrospective.body.current,'10000000.00');
+   assert.equal(retrospective.body.revisionNo,1);
+   assert.equal(retrospective.body.bookVersion,1);
+   assert.equal(retrospective.body.history.length,1);
+   console.log('PASS S-01 FIN as-of view never leaks future head-version, amount, or revision count');
+
    const asOf=await api('quarter?year=2027&quarter=1&knownAt=2020-01-01T00%3A00%3A00%2B03%3A00',a.token);
    assert.equal(asOf.status,200);assert.equal(asOf.body.status,'NO_PLAN_AT_KNOWN_AT');
    console.log('PASS S-01 FIN read as-of excludes revisions recorded after cutoff');
