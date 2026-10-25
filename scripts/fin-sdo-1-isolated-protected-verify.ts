@@ -569,6 +569,80 @@ async function main(){
      [a.tenant])).rows[0].n,0);
    console.log('PASS S-01 FIN1-07 first quarter 9.99m below threshold never creates original');
 
+   // FIN1-04, FIN1-12, FIN1-13, FIN1-27: the same human-readable name
+   // is NOT a financial identity. Add a separate HISTORICAL UUID after the
+   // original and preserve its original_amount_rub = null (NOT fake zero).
+   const homonym=await api('historical-subjects',a.token,'POST',{
+     name:'HTTP protected identity',address:'Same name, different legal project',
+     customerName:'Different historical record',idempotencyKey:randomUUID()
+   });
+   assert.equal(homonym.status,200,JSON.stringify(homonym.body));
+   assert.notEqual(homonym.body.id,httpId);
+   const changedRowAmount=correctionWinner.body.current==='11000000.00'?'7.00':'6.75';
+   const withLateZero=await api('buffers',a.token,'POST',{
+     year:2030,quarter:1,expectedBookVersion:3,lines:[
+       {historicalSubjectId:httpId,partyKind:'UNALLOCATED',
+        contractKind:'NOT_SPECIFIED',amountMln:changedRowAmount},
+       {coreObjectId:directory.body.core[0].id,partyKind:'HISTORICAL_PARTY',
+        partyId:httpParty.body.id,contractKind:'KNOWN',
+        contractNumber:'FIN-C-2029',amountMln:'4.00'},
+       {historicalSubjectId:homonym.body.id,partyKind:'UNALLOCATED',
+        contractKind:'NOT_SPECIFIED',amountMln:'0.00'}
+     ]
+   });
+   assert.equal(withLateZero.status,200,JSON.stringify(withLateZero.body));
+   const lateCommit=await api('commit',a.token,'POST',{
+     year:2030,quarter:1,bufferId:withLateZero.body.bufferId,
+     expectedBookVersion:3,effectiveOn:'2030-04-01',
+     reason:'Late-added historical project line, explicit zero',
+     idempotencyKey:randomUUID()
+   });
+   assert.equal(lateCommit.status,200,JSON.stringify(lateCommit.body));
+   assert.equal(lateCommit.body.bookVersion,4);
+   assert.equal(lateCommit.body.totalRub,correctionWinner.body.current);
+   const appended=await api('quarter?year=2030&quarter=1',a.token);
+   assert.equal(appended.status,200);
+   assert.equal(appended.body.lines.length,3);
+   assert.equal(appended.body.history.length,4);
+   assert.equal(appended.body.original,'10000000.00');
+   const newZero=appended.body.lines.find((l:any)=>l.historical_subject_id===homonym.body.id);
+   assert.ok(newZero,'late-added distinct historical UUID must survive despite same name');
+   assert.equal(newZero.amount_rub,'0.00');
+   assert.equal(newZero.original_amount_rub,null);
+   const backInTime=await api('quarter?year=2030&quarter=1&knownAt='+encodeURIComponent(knownPoint.rows[0].known_at),a.token);
+   assert.equal(backInTime.status,200);
+   assert.equal(backInTime.body.bookVersion,1);
+   assert.equal(backInTime.body.lines.length,2);
+   assert.ok(!backInTime.body.lines.some((l:any)=>l.historical_subject_id===homonym.body.id));
+   console.log('PASS S-01 FIN1-04/12/13/27 duplicate historical name distinct UUID, late-added zero has NULL original, as-of excludes future line');
+
+   // FIN1-17: authorization is checked BEFORE reading an already-completed
+   // ledger entry. A revoked user must not receive a saved financial amount
+   // even if the idempotency key and payload exactly match an earlier write.
+   const completedBeforeRevoke=await owner.query(
+      "SELECT count(*)::int AS n FROM fin_command_ledger WHERE tenant_id=$1 AND actor_id=$2 AND kind='quarter-commit' AND idempotency_key=$3",
+      [a.tenant,a.uid,originalCommand.idempotencyKey]
+   );
+   assert.equal(completedBeforeRevoke.rows[0].n,1);
+   await owner.query("UPDATE users SET role='PTO' WHERE tenant_id=$1 AND id=$2",[a.tenant,a.uid]);
+   try {
+     const deniedReplay=await api('commit',a.token,'POST',originalCommand);
+     assert.equal(deniedReplay.status,403);
+     assert.ok(!JSON.stringify(deniedReplay.body).includes('10000000.00'));
+     const deniedHistory=await api('quarter?year=2030&quarter=1',a.token);
+     assert.equal(deniedHistory.status,403);
+     assert.ok(!JSON.stringify(deniedHistory.body).includes('10500000.00'));
+     console.log('PASS S-01 FIN1-17 revoked writer receives no ledger replay or historical amounts');
+   } finally {
+     await owner.query("UPDATE users SET role='SDO' WHERE tenant_id=$1 AND id=$2",[a.tenant,a.uid]);
+   }
+   const ledgerStillOnce=await owner.query(
+      "SELECT count(*)::int AS n FROM fin_command_ledger WHERE tenant_id=$1 AND actor_id=$2 AND kind='quarter-commit' AND idempotency_key=$3",
+      [a.tenant,a.uid,originalCommand.idempotencyKey]
+   );
+   assert.equal(ledgerStillOnce.rows[0].n,1);
+
+
 
 
  } finally {await finApp.close();}
