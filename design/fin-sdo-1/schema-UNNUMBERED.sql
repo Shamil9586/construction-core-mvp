@@ -682,7 +682,7 @@ BEGIN
  ) l;
 
  RETURN pg_catalog.jsonb_build_object(
-   'status','ACTIVE','bookId',v_book.id,'bookVersion',v_book.version,
+   'status','ACTIVE','bookId',v_book.id,'bookVersion',v_last.revision_no,
    'revisionNo',v_last.revision_no,'year',p_year,'quarter',p_quarter,
    'currencyCode','RUB','original',v_original,'current',v_last.current,
    'history',v_history,'lines',v_lines
