@@ -1038,7 +1038,7 @@ REVOKE ALL ON FUNCTION public.fin_sdo_update_edit_buffer(text,uuid,integer,integ
 -- LOGIN has NO FIN table DML. A single caller-owned tx.c does all writes.
 CREATE FUNCTION public.fin_sdo_commit_edit_buffer(
  p_bearer_token text,p_year integer,p_quarter integer,
- p_buffer uuid,p_expected_book_version integer,
+ p_buffer uuid,p_expected_buffer_version integer,p_expected_book_version integer,
  p_effective_on date,p_reason text,p_idempotency_key text
 ) RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER
 SET search_path=pg_catalog,pg_temp AS $fin_commit_book$
@@ -1059,7 +1059,8 @@ BEGIN
     OR p_expected_book_version IS NULL OR p_expected_book_version<0
     OR p_effective_on IS NULL OR p_idempotency_key IS NULL
     OR pg_catalog.length(p_idempotency_key) NOT BETWEEN 8 AND 128
-    OR p_buffer IS NULL OR pg_catalog.length(p_reason)>300 THEN
+    OR p_buffer IS NULL OR p_expected_buffer_version IS NULL OR p_expected_buffer_version<1
+    OR pg_catalog.length(p_reason)>300 THEN
     RAISE EXCEPTION 'FIN_COMMIT_INVALID' USING ERRCODE='23514';
  END IF;
  IF p_expected_book_version>0 AND pg_catalog.length(pg_catalog.btrim(COALESCE(p_reason,'')))=0 THEN
@@ -1072,7 +1073,7 @@ BEGIN
      '-4'||pg_catalog.substr(v_hex,14,3)||'-8'||pg_catalog.substr(v_hex,18,3)||
      '-'||pg_catalog.substr(v_hex,21,12))::uuid;
  v_fp:=pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(
-   pg_catalog.jsonb_build_object('bufferId',p_buffer,'year',p_year,
+   pg_catalog.jsonb_build_object('bufferId',p_buffer,'expectedBufferVersion',p_expected_buffer_version,'year',p_year,
      'quarter',p_quarter,'expectedBookVersion',p_expected_book_version,
      'effectiveOn',p_effective_on,'reason',p_reason)::text,'UTF8'
  )),'hex');
@@ -1091,12 +1092,15 @@ BEGIN
    RETURN v_previous.result;
  END IF;
 
- SELECT e.id,e.plan_year,e.plan_quarter,e.expected_book_version INTO v_buffer
+ SELECT e.id,e.plan_year,e.plan_quarter,e.expected_book_version,e.version INTO v_buffer
  FROM public.fin_plan_edit_sessions e
  WHERE e.tenant_id=v_tenant AND e.actor_id=v_actor AND e.id=p_buffer
  FOR UPDATE;
  IF NOT FOUND THEN
    RAISE EXCEPTION 'FIN_BUFFER_NOT_FOUND_OR_DENIED' USING ERRCODE='42501';
+ END IF;
+ IF v_buffer.version<>p_expected_buffer_version THEN
+   RAISE EXCEPTION 'FIN_BUFFER_CAS_CONFLICT' USING ERRCODE='23505';
  END IF;
  IF v_buffer.plan_year<>p_year OR v_buffer.plan_quarter<>p_quarter OR
     v_buffer.expected_book_version<>p_expected_book_version THEN
@@ -1235,5 +1239,5 @@ BEGIN
  RETURN v_result;
 END;
 $fin_commit_book$;
-REVOKE ALL ON FUNCTION public.fin_sdo_commit_edit_buffer(text,integer,integer,uuid,integer,date,text,text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.fin_sdo_commit_edit_buffer(text,integer,integer,uuid,integer,integer,date,text,text) FROM PUBLIC;
 -- Unnumbered isolated SQL only. FIN-SDO-1 acceptance still pending.
