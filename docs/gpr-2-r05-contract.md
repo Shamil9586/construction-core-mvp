@@ -15,6 +15,10 @@ Status: **IMPLEMENTED — PENDING GPT REVIEW**.
 Third corrective (25.10.2026): the GPT review of that candidate (`GPT_REVIEW_20261025_R05_INDEPENDENT_CORRECTIVE`, R05-GPT-R3-B01 and the LOCAL-quantity
 case) is answered by the additive migration `035_gpr2_r05_operation_semantics.sql` and a preview rule; 029–034 are unchanged. Status: **PENDING GPT RE-REVIEW**.
 
+Preview corrective (25.10.2026): the independent native acceptance of `7a838ca` (`2026-10-25-7a838ca-findings.md`, R05-IND3-01 and R05-IND3-02) is
+answered in the pure preview and the payload schemas only (`packages/domain/gpr2/r05.ts`); no SQL changed, 029–035 are unchanged, no migration added.
+Status: **CORRECTIVE IMPLEMENTED — PENDING NARROW INDEPENDENT RE-ACCEPTANCE**.
+
 ## Surface
 
 All commands go through the R01 guard (`runGpr2Command`: permission → object scope → nested resource → envelope → replay → execute) and are mounted only
@@ -113,7 +117,23 @@ change (R09). A compatible producer from another version stays EXISTING (warning
 
 LOCAL quantity (third corrective): a LOCAL producer was generated for the local quantity stated then (its binding's `basis_quantity`). When the same
 obligation is restated with another quantity, it is not satisfied by the old producer and is not silently replaced: blocker `ONE_PRODUCER_CONFLICT` /
-`PRODUCER_QUANTITY_CHANGED` (a quantity change is R06 / R07). Restating the same quantity, or stating none, shows the producer as EXISTING.
+`PRODUCER_QUANTITY_CHANGED` (a quantity change is R06 / R07). Restating the same quantity, or stating none, shows the producer as EXISTING. (Whether
+"stating none" keeps that meaning is an open owner decision; the code does not settle it.)
+
+## One statement per obligation (R05-IND3-01)
+
+`localQuantities` names an obligation `(occurrenceKey, areaScopeId)` at most once per request — even with the same value. Both payload schemas
+(`generationPreviewPayload`, `generationConfirmPayload`) refuse a repeat with 422 `VALIDATION_FAILED`, rule `DUPLICATE_VALUE`, path
+`localQuantities.<index of the repeat>` (every repeat is named), before anything is computed — so a repeated confirm writes nothing and a stored result
+is never reached. Neither the first nor the last statement is chosen. The pure `computeGenerationPreview` refuses the same input for a caller that did
+not parse it: blocker `VALIDATION_FAILED` / `DUPLICATE_VALUE`, the obligation's item is BLOCKED and takes no value, `canConfirm=false`.
+
+## EXISTING per binding (R05-IND3-02)
+
+An EXISTING item and an `existingWorks` row are ONE producer binding: their `quantity` is that binding's `basisQuantity` on its AreaScope (the leaf's
+measure for MAIN, the stated local quantity for LOCAL) — the same meaning as a PROPOSED item's quantity. The Work's whole planned quantity is the separate
+`existingWorks[].workPlannedQuantity`, repeated on each row of that Work: a property of the Work, not an amount to add up. One Work 1000 over A 600 + B 400
+is shown as 600 and 400 (A alone: 600); its rows add up to 1000. Both values are part of the preview fingerprint; no stored row changes.
 
 ## Parent AreaScope coverage (R05-GPT-B04)
 
