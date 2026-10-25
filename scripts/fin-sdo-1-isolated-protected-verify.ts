@@ -229,6 +229,8 @@ async function main(){
    const deputy=await actor('fin1-isolated.example.test','DEPUTY_DIRECTOR');
    const ptoHead=await actor('fin1-isolated.example.test','PTO_HEAD');
    const qualityHead=await actor('fin1-isolated.example.test','CONSTRUCTION_CONTROL_HEAD');
+   const quality=await actor('fin1-isolated.example.test','CONSTRUCTION_CONTROL');
+   const unlisted=await actor('fin1-isolated.example.test','UNKNOWN');
    const pm=await actor('fin1-isolated.example.test','PROJECT_MANAGER');
    const contractorViewer=await actor('fin1-isolated.example.test','CONTRACTOR_VIEWER');
    for(const [label,principal] of [
@@ -251,6 +253,7 @@ async function main(){
    assert.equal(deputyWrite.status,403);
    for(const [label,principal] of [
       ['PTO_HEAD',ptoHead],['CONSTRUCTION_CONTROL_HEAD',qualityHead],
+      ['CONSTRUCTION_CONTROL',quality],['UNKNOWN',unlisted],
       ['PROJECT_MANAGER',pm],['CONTRACTOR_VIEWER',contractorViewer]
    ] as const) {
       const deniedRead=await api('subjects',principal.token);
