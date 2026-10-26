@@ -8,20 +8,31 @@ import { Permission, hasPermission, type Role } from '../../../packages/domain';
 
 const query = async (c:any,sql:string,args:any[]=[]) => (await c.query(sql,args)).rows;
 const one = async (c:any,sql:string,args:any[]=[]) => (await query(c,sql,args))[0]??null;
-const error = (code:string):never => { throw new ConflictException({code}); };
+// String form: the global HTTP filter returns exception.message, so the §7.2 FIN code reaches the client
+// (an object response would surface only Nest's generic 'Conflict Exception').
+const error = (code:string):never => { throw new ConflictException(code); };
 const writeRole=(a:Actor)=>{ if(!hasPermission(a.role,Permission.FIN_SDO_PLAN_WRITE))throw new ForbiddenException('FIN_ACCESS_DENIED'); };
 const readRole=(a:Actor)=>{ if(!hasPermission(a.role,Permission.FIN_SDO_PLAN_READ))throw new ForbiddenException('FIN_ACCESS_DENIED'); };
 const quarter=(year:number,q:number)=>{ if(!Number.isInteger(year)||year<2000||year>2200||![1,2,3,4].includes(q))throw new BadRequestException('FIN_QUARTER_INVALID'); };
 const rub=(million:string):string=>{
   try {return kopeksToRub(millionRubToKopeks(million));}
-  catch(e){if(e instanceof FinPlanInputError)throw new UnprocessableEntityException({code:e.code});throw e;}
+  catch(e){if(e instanceof FinPlanInputError)throw new UnprocessableEntityException(e.code);throw e;}
 };
 const canonical=(a:any)=>[a.subject_id,a.party_scope_id,a.contract_scope_id].join(':');
+/**
+ * §7.2 public FIN error codes raised by the protected SQL commands. They are raised only AFTER the
+ * definer has authenticated the bearer and resolved the actor's own tenant/buffer/book, so they
+ * describe the caller's own command and disclose nothing of another tenant or actor.
+ */
+const FIN_PUBLIC_CONFLICTS=new Set(['FIN_QUARTER_BOOK_VERSION_CONFLICT','FIN_QUARTER_BOOK_ALREADY_EXISTS','FIN_IDEMPOTENCY_PAYLOAD_MISMATCH','FIN_BUFFER_CAS_CONFLICT','FIN_BUFFER_VERSION_CONFLICT']);
+const FIN_PUBLIC_INVALID=new Set(['FIN_QUARTER_TOTAL_BELOW_MIN','FIN_CORRECTION_REASON_REQUIRED','FIN_EXISTING_LINE_OMITTED','FIN_NO_CHANGES','FIN_BUFFER_QUARTER_MISMATCH','FIN_AMOUNT_INVALID','FIN_AMOUNT_OUT_OF_RANGE']);
 const mapFinProtectedFailure=(e:any):never=>{
-  // Never expose PostgreSQL function internals, role names, object existence or SQL text via HTTP.
+  // Never expose PostgreSQL function internals, role names, object existence or SQL text via HTTP:
+  // only an exact allow-listed FIN code passes; any other message collapses to the generic code.
+  const code=typeof e?.message==='string'?e.message:'';
   if(e?.code==='42501')throw new ForbiddenException('FIN_ACCESS_DENIED');
-  if(e?.code==='23505')throw new ConflictException('FIN_COMMAND_CONFLICT');
-  if(e?.code==='23514'||e?.code==='22001')throw new UnprocessableEntityException('FIN_COMMAND_INVALID');
+  if(e?.code==='23505')throw new ConflictException(FIN_PUBLIC_CONFLICTS.has(code)?code:'FIN_COMMAND_CONFLICT');
+  if(e?.code==='23514'||e?.code==='22001')throw new UnprocessableEntityException(FIN_PUBLIC_INVALID.has(code)?code:'FIN_COMMAND_INVALID');
   throw e;
 };
 const commandScope=(tenant:string,year:number,q:number):string=>{
@@ -344,7 +355,7 @@ export class FinSdo1Service {
         const incoming=await query(c,'SELECT subject_id,party_scope_id,contract_scope_id,amount_rub::text AS amount_rub FROM fin_plan_edit_session_lines WHERE tenant_id=$1 AND edit_session_id=$2 ORDER BY subject_id,party_scope_id,contract_scope_id',[a.tenantId,e.id]);
         const total=await one(c,'SELECT coalesce(sum(amount_rub),0)::text AS value FROM fin_plan_edit_session_lines WHERE tenant_id=$1 AND edit_session_id=$2',[a.tenantId,e.id]);
         if(!incoming.length||!(await one(c,'SELECT ($1::numeric>=10000000.00) AS allowed',[total.value])).allowed)
-          throw new UnprocessableEntityException({code:'FIN_QUARTER_TOTAL_BELOW_MIN'});
+          throw new UnprocessableEntityException('FIN_QUARTER_TOTAL_BELOW_MIN');
         let book=await one(c,"SELECT * FROM fin_quarter_plan_books WHERE tenant_id=$1 AND currency_code='RUB' AND plan_year=$2 AND plan_quarter=$3 FOR UPDATE",[a.tenantId,b.year,b.quarter]);
         if(!book){
           if(b.expectedBookVersion!==0)error('FIN_QUARTER_BOOK_VERSION_CONFLICT');

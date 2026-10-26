@@ -12,13 +12,15 @@ export default defineConfig({
   retries: 0,
   timeout: 60000,
   expect: { timeout: 10000 },
-  reporter: [['list']],
+  outputDir: 'test-results/fin-sdo-1-browser',
+  reporter: [['list'], ['json', { outputFile: 'test-results/fin-sdo-1-browser/results.json' }]],
   use: {
     baseURL: 'http://127.0.0.1:5173',
     viewport: { width: 1440, height: 1000 },
     locale: 'ru-RU',
     timezoneId: 'Europe/Moscow',
     screenshot: 'only-on-failure',
+    trace: 'retain-on-failure',
     launchOptions: { executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH },
   },
   webServer: {

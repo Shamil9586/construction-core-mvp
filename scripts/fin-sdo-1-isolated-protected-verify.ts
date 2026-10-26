@@ -697,8 +697,151 @@ async function main(){
    );
    assert.equal(ledgerStillOnce.rows[0].n,1);
 
+   // ===== FIN-SDO-1 browser-QA gap checks (native PostgreSQL + real HTTP; never intercepted) =====
+   const finCode=/^FIN_[A-Z0-9_]+$/;
+   const expectFin=(r:{status:number;body:any},status:number,code:string,label:string)=>{
+     assert.equal(r.status,status,label+': '+JSON.stringify(r.body));
+     assert.equal(r.body.message,code,label+' must return the §7.2 FIN code');
+     assert.ok(!/public\.|fin_[a-z_]+\(|SQLSTATE|duplicate key|violates/i.test(JSON.stringify(r.body)),label+' must not leak SQL');
+   };
+   const oneLine=(amountMln:string,subject=httpId)=>({historicalSubjectId:subject,partyKind:'UNALLOCATED',contractKind:'NOT_SPECIFIED',amountMln});
+   async function draft(year:number,quarter:number,expectedBookVersion:number,lines:any[],token=a.token){
+     const r=await api('buffers',token,'POST',{year,quarter,expectedBookVersion,lines});
+     assert.equal(r.status,200,JSON.stringify(r.body));return r.body;
+   }
+   const commitOf=(year:number,quarter:number,d:any,expectedBookVersion:number,extra:Record<string,unknown>={})=>({
+     year,quarter,bufferId:d.bufferId,expectedBufferVersion:d.version,expectedBookVersion,effectiveOn:year+'-01-15',idempotencyKey:randomUUID(),...extra});
 
+   // §7.2 error contract over the protected path (previously all collapsed to FIN_COMMAND_CONFLICT/INVALID).
+   expectFin(await api('commit',a.token,'POST',{year:2032,quarter:2,bufferId:insufficient.body.bufferId,
+     expectedBufferVersion:insufficient.body.version,expectedBookVersion:0,effectiveOn:'2032-04-02',idempotencyKey:randomUUID()}),
+     422,'FIN_QUARTER_TOTAL_BELOW_MIN','9.99 first commit');
+   expectFin(await api('commit',a.token,'POST',{...originalCommand,effectiveOn:'2030-01-12'}),409,'FIN_IDEMPOTENCY_PAYLOAD_MISMATCH','same key other payload');
+   expectFin(await api('buffers',a.token,'POST',{year:2030,quarter:1,expectedBookVersion:3,lines:[oneLine('10.00')]}),
+     409,'FIN_QUARTER_BOOK_VERSION_CONFLICT','buffer on stale book head');
+   const casDraft=await draft(2033,1,0,[oneLine('10.00')]);
+   const casPatched=await api('buffers/'+casDraft.bufferId,a.token,'PATCH',{year:2033,quarter:1,expectedBookVersion:0,expectedBufferVersion:1,lines:[oneLine('11.00')]});
+   assert.equal(casPatched.status,200);
+   expectFin(await api('commit',a.token,'POST',commitOf(2033,1,casDraft,0)),409,'FIN_BUFFER_CAS_CONFLICT','commit of stale buffer version');
+   const headLines=appended.body.lines.map((l:any)=>({
+     ...(l.core_object_id?{coreObjectId:l.core_object_id}:{historicalSubjectId:l.historical_subject_id}),
+     partyKind:l.party_kind,...(l.party_kind==='UNALLOCATED'?{}:{partyId:l.core_contractor_id??l.historical_party_id}),
+     contractKind:l.contract_kind,...(l.contract_kind==='KNOWN'?{contractNumber:l.contract_number}:{}),
+     amountMln:(BigInt(l.amount_rub.replace('.',''))/1000000n/100n).toString()+'.'+((BigInt(l.amount_rub.replace('.',''))/1000000n)%100n).toString().padStart(2,'0')}));
+   const sameAsHead=await draft(2030,1,4,headLines);
+   expectFin(await api('commit',a.token,'POST',commitOf(2030,1,sameAsHead,4,{reason:'Без изменений'})),422,'FIN_NO_CHANGES','identical correction');
+   const raised=headLines.map((l:any)=>l.amountMln==='0.00'?{...l,amountMln:'0.50'}:l);
+   assert.equal(raised.filter((l:any)=>l.amountMln==='0.50').length,1);
+   const noReason=await draft(2030,1,4,raised);
+   expectFin(await api('commit',a.token,'POST',commitOf(2030,1,noReason,4)),422,'FIN_CORRECTION_REASON_REQUIRED','correction without reason');
+   const omitted=await draft(2030,1,4,[headLines[0],{...headLines[1],amountMln:'20.00'}]);
+   expectFin(await api('commit',a.token,'POST',commitOf(2030,1,omitted,4,{reason:'Пропущена строка'})),422,'FIN_EXISTING_LINE_OMITTED','correction omitting a line');
+   const otherQuarter=await api('buffers/'+noReason.bufferId,a.token,'PATCH',{year:2030,quarter:2,expectedBookVersion:4,expectedBufferVersion:1,lines:raised});
+   expectFin(otherQuarter,422,'FIN_BUFFER_QUARTER_MISMATCH','buffer patched into another quarter');
+   assert.equal((await api('quarter?year=2030&quarter=1',a.token)).body.bookVersion,4);
+   console.log('PASS FIN-QA §7.2 protected API returns exact FIN codes (BELOW_MIN, IDEMPOTENCY_MISMATCH, BOOK_VERSION, BUFFER_CAS, NO_CHANGES, REASON_REQUIRED, LINE_OMITTED, QUARTER_MISMATCH) without SQL leakage; head unchanged');
 
+   // FIN1-08 / FIN1-09: exact DEC-02 totals committed natively, stored as exact NUMERIC(20,2) RUB.
+   const exact:Array<[number,number,string[],string]>=[[2034,1,['6.00','4.00'],'10000000.00'],[2034,2,['10.50'],'10500000.00'],
+     [2034,3,['25.75'],'25750000.00'],[2034,4,['120.00'],'120000000.00'],[2035,1,['9.99','0.01'],'10000000.00']];
+   for(const [year,q,amounts,rubTotal] of exact){
+     const subjects=[httpId,homonym.body.id];
+     const d=await draft(year,q,0,amounts.map((v,i)=>oneLine(v,subjects[i])));
+     assert.equal(d.totalRub,rubTotal);
+     const c=await api('commit',a.token,'POST',commitOf(year,q,d,0));
+     assert.equal(c.status,200,JSON.stringify(c.body));assert.equal(c.body.totalRub,rubTotal);
+     const read=await api('quarter?year='+year+'&quarter='+q,director.token);
+     assert.equal(read.body.original,rubTotal);assert.equal(read.body.current,rubTotal);
+     const stored=await owner.query("SELECT r.new_total_rub::text t,(SELECT string_agg(lr.new_amount_rub::text,',' ORDER BY lr.new_amount_rub) FROM fin_quarter_plan_line_revisions lr WHERE lr.book_revision_id=r.id) lines FROM fin_quarter_book_revisions r JOIN fin_quarter_plan_books b ON b.id=r.book_id AND b.tenant_id=r.tenant_id WHERE b.tenant_id=$1 AND b.plan_year=$2 AND b.plan_quarter=$3",[a.tenant,year,q]);
+     assert.equal(stored.rows.length,1);assert.equal(stored.rows[0].t,rubTotal);
+     assert.equal(stored.rows[0].lines,amounts.map(v=>(BigInt(v.replace('.',''))*10000n).toString()+'.00').sort((x,y)=>Number(BigInt(x.split('.')[0])-BigInt(y.split('.')[0]))).join(','));
+   }
+   console.log('PASS FIN-QA FIN1-08/09 native exact 10.00/10.50/25.75/120.00 and 9.99+0.01 stored as exact RUB, read back identically by director');
+
+   // FIN1-22: zero/invalid decimals rejected atomically, nothing rounded, no partial buffer.
+   const sessions=async()=>(await owner.query('SELECT count(*)::int n FROM fin_plan_edit_sessions WHERE tenant_id=$1',[a.tenant])).rows[0].n;
+   const before=await sessions();
+   for(const bad of ['10.001','-0.01','1e7','NaN','10.0','10','',' 10.00','10,00','00.50',10.5,null]){
+     const r=await api('buffers',a.token,'POST',{year:2036,quarter:2,expectedBookVersion:0,lines:[oneLine('5.00'),oneLine(bad as any,homonym.body.id)]});
+     assert.equal(r.status,400,'amountMln '+JSON.stringify(bad)+' must be rejected: '+JSON.stringify(r.body));
+   }
+   const overflow=await api('buffers',a.token,'POST',{year:2036,quarter:2,expectedBookVersion:0,lines:[oneLine('99999999999999.99')]});
+   assert.ok([400,422].includes(overflow.status),'NUMERIC(20,2) overflow rejected: '+overflow.status);
+   assert.equal(await sessions(),before,'no partial technical buffer after invalid input');
+   const zero=await draft(2036,2,0,[oneLine('0.00')]);
+   expectFin(await api('commit',a.token,'POST',commitOf(2036,2,zero,0)),422,'FIN_QUARTER_TOTAL_BELOW_MIN','0.00 quarter total');
+   assert.equal((await api('quarter?year=2036&quarter=2',a.token)).body.status,'NO_PLAN');
+   console.log('PASS FIN-QA FIN1-22 exponent/negative/>2dp/float/comma/blank rejected with no partial buffer; 0.00 total 422 and stays NO_PLAN');
+
+   // FIN1-16: real lost HTTP response — the full request is written, the socket is destroyed before
+   // reading the answer, the server still commits; the replay with the same key returns the same outcome.
+   const lostDraft=await draft(2037,1,0,[oneLine('15.25')]);
+   const lostCommand=commitOf(2037,1,lostDraft,0);
+   const {connect}=await import('node:net');
+   await new Promise<void>((resolve,reject)=>{
+     const payload=JSON.stringify(lostCommand);
+     const s=connect(Number(new URL(host).port),'127.0.0.1',()=>{
+       s.write('POST /fin-sdo-1/commit HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer '+a.token+'\r\nContent-Type: application/json\r\nContent-Length: '+Buffer.byteLength(payload)+'\r\nConnection: close\r\n\r\n'+payload,()=>{s.destroy();resolve();});
+     });
+     s.on('error',reject);
+   });
+   let applied=0;
+   for(let i=0;i<50&&!applied;i++){
+     applied=(await owner.query("SELECT count(*)::int n FROM fin_command_ledger WHERE tenant_id=$1 AND actor_id=$2 AND kind='quarter-commit' AND idempotency_key=$3",[a.tenant,a.uid,lostCommand.idempotencyKey])).rows[0].n;
+     if(!applied)await new Promise(r=>setTimeout(r,100));
+   }
+   assert.equal(applied,1,'server must have committed although the client never read the response');
+   const replayLost=await api('commit',a.token,'POST',lostCommand);
+   assert.equal(replayLost.status,200,JSON.stringify(replayLost.body));
+   assert.equal(replayLost.body.bookVersion,1);assert.equal(replayLost.body.totalRub,'15250000.00');
+   const lostBook=await owner.query('SELECT b.version,(SELECT count(*)::int FROM fin_quarter_book_revisions r WHERE r.book_id=b.id) revs,(SELECT count(*)::int FROM fin_quarter_plan_line_revisions r WHERE r.book_id=b.id) line_revs FROM fin_quarter_plan_books b WHERE b.tenant_id=$1 AND b.plan_year=2037 AND b.plan_quarter=1',[a.tenant]);
+   assert.deepEqual(lostBook.rows[0],{version:1,revs:1,line_revs:1});
+   console.log('PASS FIN-QA FIN1-16 genuinely lost HTTP response: server committed once; same-key replay returns the stored outcome, no second book/line revision');
+
+   // FIN1-18 / FIN1-27: foreign tenant UUIDs — denial without leakage in totals, errors, counts, lists, history.
+   const bSubject=await api('historical-subjects',b.token,'POST',{name:'B-tenant secret project',idempotencyKey:randomUUID()});
+   assert.equal(bSubject.status,200);
+   const bDraft=await draft(2038,1,0,[oneLine('11.11',bSubject.body.id)],b.token);
+   assert.equal((await api('commit',b.token,'POST',commitOf(2038,1,bDraft,0))).status,200);
+   const bOpen=await draft(2038,2,0,[oneLine('3.33',bSubject.body.id)],b.token);
+   const adminA=await actor('fin1-isolated.example.test','ADMIN');
+   const secrets=['B-tenant secret project','11110000.00','3330000.00',bSubject.body.id,bDraft.bufferId,bOpen.bufferId];
+   const noLeak=(r:{body:any},label:string)=>{const t=JSON.stringify(r.body);for(const s of secrets)assert.ok(!t.includes(s),label+' leaked '+s);};
+   for(const [who,token] of [['SDO',a.token],['ADMIN',adminA.token]] as const){
+     const random=randomUUID();
+     const foreignRead=await api('buffers/'+bOpen.bufferId,token),randomRead=await api('buffers/'+random,token);
+     assert.equal(foreignRead.status,403);assert.deepEqual({s:randomRead.status,m:randomRead.body.message},{s:foreignRead.status,m:foreignRead.body.message},'foreign and nonexistent buffer are indistinguishable');
+     noLeak(foreignRead,who+' foreign buffer read');
+     const foreignPatch=await api('buffers/'+bOpen.bufferId,token,'PATCH',{year:2038,quarter:2,expectedBookVersion:0,expectedBufferVersion:1,lines:[oneLine('12.00')]});
+     assert.equal(foreignPatch.status,403);noLeak(foreignPatch,who+' foreign buffer patch');
+     const foreignSubject=await api('buffers',token,'POST',{year:2038,quarter:3,expectedBookVersion:0,lines:[oneLine('10.00',bSubject.body.id)]});
+     assert.equal(foreignSubject.status,403);noLeak(foreignSubject,who+' foreign subject in buffer');
+     const foreignCommit=await api('commit',token,'POST',commitOf(2038,2,bOpen,0));
+     assert.equal(foreignCommit.status,403);noLeak(foreignCommit,who+' foreign buffer commit');
+     const ownView=await api('quarter?year=2038&quarter=1',token);
+     assert.equal(ownView.status,200);assert.equal(ownView.body.status,'NO_PLAN');noLeak(ownView,who+' quarter');
+     const asOf=await api('quarter?year=2038&quarter=1&knownAt='+encodeURIComponent(new Date().toISOString()),token);
+     assert.equal(asOf.body.status,'NO_PLAN');noLeak(asOf,who+' known_at');
+     const list=await api('buffers?year=2038&quarter=2',token);
+     assert.equal(list.status,200);assert.deepEqual(list.body,[]);
+     const dir=await api('subjects',token);noLeak(dir,who+' directory');
+   }
+   assert.equal((await owner.query('SELECT version FROM fin_plan_edit_sessions WHERE id=$1',[bOpen.bufferId])).rows[0].version,1);
+   const bView=await api('quarter?year=2038&quarter=1',b.token);
+   assert.equal(bView.body.current,'11110000.00');
+   console.log('PASS FIN-QA FIN1-18/27 tenant-A SDO and tenant-A ADMIN: foreign buffer/subject/commit 403 indistinguishable from nonexistent; no leakage in quarter, known_at, buffer list, directory; foreign data untouched');
+
+   // FIN1-26 / FIN1-24: no FIN-SDO-2/3 surface and no production writes reachable from the FIN principals.
+   for(const [method,path] of [['POST','customer-submissions'],['POST','agreed'],['POST','overrides'],['POST','attribution'],
+     ['GET','export'],['GET','export.xlsx'],['POST','closing-items'],['POST','quarter-plans/2030/1/approve'],['GET','customer-facts']]){
+     const r=await api(path,a.token,method,method==='POST'?{}:undefined);
+     assert.equal(r.status,404,method+' /fin-sdo-1/'+path+' must not exist');
+   }
+   const forbiddenColumns=await owner.query("SELECT table_name,column_name FROM information_schema.columns WHERE table_schema='public' AND table_name LIKE 'fin\\_%' AND (column_name ~* '(agreed|override|attribution|submission|stage|warning|d03|export|customer_amount|fact)' OR table_name ~* '(agreed|override|attribution|submission|closing_item|warning|export|fact)')");
+   assert.deepEqual(forbiddenColumns.rows,[],'no FIN-2/3 table or column in the FIN-1 schema');
+   const productionWrite=await owner.query("SELECT r.rolname,c.relname,p.priv FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace CROSS JOIN (VALUES ('INSERT'),('UPDATE'),('DELETE'),('TRUNCATE')) p(priv) CROSS JOIN (SELECT rolname FROM pg_roles WHERE rolname IN ('fin_sdo_isolated_login','fin_sdo_definer_test')) r WHERE n.nspname='public' AND c.relkind IN ('r','p') AND c.relname NOT LIKE 'fin\\_%' AND has_table_privilege(r.rolname,c.oid,p.priv)");
+   assert.deepEqual(productionWrite.rows,[],'FIN principals hold no write privilege on any non-FIN (production, F8.3, GPR) table');
+   console.log('PASS FIN-QA FIN1-26/24 no customer/AGREED/override/attribution/export/approve endpoints (404), no FIN-2/3 schema, FIN login and definer cannot write any production/F8.3/GPR table');
 
  } finally {await finApp.close();}
  const foreign=await runFinSdoCommandTx(async tx=>(await tx.c.query(
