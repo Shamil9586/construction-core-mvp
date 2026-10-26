@@ -2,7 +2,7 @@ name: FIN-SDO-1 isolated candidate checks
 on:
   push:
     # FIN-only isolated branches: the shared FIN branch and its browser-QA child candidate.
-    branches: ['feature/fin-sdo-1-quarterly-planning', 'claude/busy-mccarthy-a06kuf']
+    branches: ['feature/fin-sdo-1-quarterly-planning', 'claude/busy-mccarthy-a06kuf', 'claude/fin-sdo-1-sec01-f01-corrective']
   workflow_dispatch:
 permissions:
   contents: read
@@ -25,6 +25,8 @@ jobs:
         run: node --import tsx --test tests/fin-sdo-1-money.test.ts
       - name: FIN-SDO UI exact plan-money formatting
         run: node --import tsx --test tests/fin-sdo-1-plan-money-format.test.ts
+      - name: FIN-SDO protected error boundary is fail-closed (SEC-01-F01)
+        run: node --import tsx --test tests/fin-sdo-1-protected-error-boundary.test.ts
       - name: FIN-SDO restricted connection TxContext invariants
         run: node --import tsx --test tests/fin-sdo-1-restricted-transaction.test.ts
       - name: GPR-2 transaction context, writer registry and migration runner compatibility
@@ -66,6 +68,8 @@ jobs:
         run: node --import tsx scripts/fin-sdo-1-isolated-http-verify.ts
       - name: Verify privileged FIN writer through actual separate restricted PostgreSQL LOGIN
         run: node --import tsx scripts/fin-sdo-1-isolated-protected-verify.ts
+      - name: SEC-01-F01 malformed input, forced unexpected SQLSTATE, cache headers, auth regression (real HTTP + restricted LOGIN)
+        run: node --import tsx scripts/fin-sdo-1-isolated-sec01-f01-verify.ts
   # Real Chromium against the real React/Vite FIN screen. /api/* is answered by the test's page.route
   # mock: UI-behaviour evidence only, NOT PostgreSQL, RBAC or tenant-isolation proof (see native job).
   browser-chromium-intercepted:

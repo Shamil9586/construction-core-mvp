@@ -8,6 +8,12 @@ const key=z.string().min(8).max(128);
 const text=z.string().trim().min(1).max(250);
 const period=z.object({year:z.number().int().min(2000).max(2200),quarter:z.number().int().min(1).max(4)});
 const money=z.string().regex(/^(?:0|[1-9]\d{0,13})\.\d{2}$/);
+// SEC-01-F01: dates are validated here, before any PostgreSQL ::date / ::timestamptz cast. zod accepts
+// calendar year 0000, which PostgreSQL rejects (22008); such a value is malformed input (400), not a
+// database failure.
+const pgYear=(v:string)=>Number(v.slice(0,4))>=1;
+const businessDate=z.iso.date().refine(pgYear);
+const knownAtInstant=z.iso.datetime({offset:true}).refine(pgYear);
 const line=z.object({
   coreObjectId:uuid.optional(),
   historicalSubjectId:uuid.optional(),
@@ -41,7 +47,7 @@ const requestBearer=(req:any):string=>{
  if(!m)throw new UnauthorizedException('FIN_BEARER_REQUIRED');
  return m[1];
 };
-const commit=period.extend({bufferId:uuid,expectedBufferVersion:z.number().int().min(1),expectedBookVersion:z.number().int().min(0),effectiveOn:z.iso.date(),reason:z.string().trim().min(1).max(300).optional(),idempotencyKey:key}).strict();
+const commit=period.extend({bufferId:uuid,expectedBufferVersion:z.number().int().min(1),expectedBookVersion:z.number().int().min(0),effectiveOn:businessDate,reason:z.string().trim().min(1).max(300).optional(),idempotencyKey:key}).strict();
 
 @Controller('fin-sdo-1')
 @ApiBearerAuth()
@@ -56,7 +62,7 @@ export class FinSdo1Controller {
  @Get('quarter')
  quarter(@Req() req:any,@Query('year') y:string,@Query('quarter') q:string,@Query('knownAt') knownAt?:string){
   const year=z.coerce.number().int().parse(y),quarter=z.coerce.number().int().parse(q);
-  if(knownAt!==undefined)z.iso.datetime({offset:true}).parse(knownAt);
+  if(knownAt!==undefined)knownAtInstant.parse(knownAt);
   if(protectedSlice())return authenticate(req).then(a=>this.svc.readBookProtected(a,requestBearer(req),{year,quarter},knownAt));
   requireUnprotectedIsolation();
   return authenticate(req).then(a=>this.svc.readBook(a,{year,quarter},knownAt));
