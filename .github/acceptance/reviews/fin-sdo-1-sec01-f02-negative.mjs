@@ -145,7 +145,7 @@ async function main() {
   const f02fn='fin_f02_negative_'+f02tag;
   const f02tr='fin_f02_trigger_'+f02tag;
   await admin.query(`CREATE FUNCTION public.${f02fn}() RETURNS trigger LANGUAGE plpgsql AS
-    $fin_f02$ BEGIN RAISE EXCEPTION 'F02-PRIVATE-DB-DETAIL-DO-NOT-EXPOSE' USING ERRCODE = 'XX000'; END $fin_f02$`);
+    $fin_f02$ BEGIN RAISE EXCEPTION 'F02-PRIVATE-DB-DETAIL-DO-NOT-EXPOSE' USING ERRCODE = 'XX000'; END; $fin_f02$`);
   try {
     await admin.query(`CREATE TRIGGER ${f02tr} BEFORE INSERT ON public.fin_historical_subjects
       FOR EACH ROW EXECUTE FUNCTION public.${f02fn}()`);
