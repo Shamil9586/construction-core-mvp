@@ -14,19 +14,41 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { loadProfile, findCandidate } from './profile.mjs';
 import { classifyRun, GATE, S } from './classify.mjs';
+import { RECORD_SCHEMA, REQUIRED_STEPS, sourcePin } from './source-bundle.mjs';
 
 export const EVIDENCE_SCHEMA = 'construction-core/gpr2-acceptance-evidence@1';
 const readJson = f => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return null; } };
 const sha256File = f => crypto.createHash('sha256').update(fs.readFileSync(f)).digest('hex');
 
-/** Problems binding the three archived-source records to the registered candidate's pinned bundle (empty when the candidate has no source). */
-export function sourceBindingProblems(cand, records) {
+const PHASES = ['authorize', 'runtime', 'seal'];
+const sameJson = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+/**
+ * Problems binding the three archived-source records to the registered candidate's pinned bundle (empty when the candidate has no source).
+ * A raw ok:true is never enough: each record must be of its own phase, for this profile id and digest (the workflow-commit profile, never the
+ * copy inside the evidence), name this candidate, carry the registered pin verbatim and show every restoration step as passed.
+ * `ctx` = { profileId, profileSha256 }; without it a candidate that has a source cannot be bound at all (fail closed).
+ */
+export function sourceBindingProblems(cand, records, ctx) {
   if (!cand || !cand.source) return [];
   const problems = [];
-  for (const [phase, rec] of Object.entries(records)) {
-    if (!rec || rec.ok !== true) problems.push(`${phase}-phase archived-source record missing or not OK`);
-    else if (rec.candidate?.sha !== cand.sha || rec.candidate?.tree !== cand.tree || rec.observed?.sha256 !== cand.source.sha256 || rec.observed?.blob !== cand.source.blob)
-      problems.push(`${phase}-phase archived-source record is not bound to candidate ${cand.sha} / bundle ${cand.source.sha256}`);
+  const pin = sourcePin(cand.source);
+  if (!ctx || typeof ctx.profileId !== 'string' || typeof ctx.profileSha256 !== 'string') problems.push('archived-source binding has no profile identity to check against');
+  for (const phase of PHASES) {
+    const rec = records ? records[phase] : undefined;
+    const bad = m => problems.push(`${phase}-phase archived-source record ${m}`);
+    if (!rec || rec.ok !== true) { bad('missing or not OK'); continue; }
+    if (rec.schema !== RECORD_SCHEMA) bad(`has schema ${JSON.stringify(rec.schema)}, expected ${RECORD_SCHEMA}`);
+    if (rec.phase !== phase) bad(`is a ${JSON.stringify(rec.phase)}-phase record, not ${phase}`);
+    if (!ctx || rec.profile_id !== ctx.profileId) bad(`is for profile ${JSON.stringify(rec.profile_id)}, not ${JSON.stringify(ctx?.profileId)}`);
+    if (!ctx || rec.profile_sha256 !== ctx.profileSha256) bad(`was made under profile digest ${JSON.stringify(rec.profile_sha256)}, not ${JSON.stringify(ctx?.profileSha256)}`);
+    if (rec.candidate_sha !== cand.sha || rec.candidate?.sha !== cand.sha || rec.candidate?.tree !== cand.tree || rec.observed?.sha256 !== cand.source.sha256 || rec.observed?.blob !== cand.source.blob || rec.observed?.bytes !== cand.source.bytes)
+      bad(`is not bound to candidate ${cand.sha} / bundle ${cand.source.sha256}`);
+    if (!rec.pin || !sameJson({ ...rec.pin, prerequisites: [...(rec.pin.prerequisites || [])].sort() }, { ...pin, prerequisites: [...pin.prerequisites].sort() })) bad('does not carry the registered source pin');
+    const steps = Array.isArray(rec.steps) ? rec.steps : [];
+    const missing = REQUIRED_STEPS.filter(name => !steps.some(s => s && s.step === name && s.ok === true));
+    const failed = steps.filter(s => !s || s.ok !== true).map(s => s?.step);
+    if (missing.length) bad(`lacks passed restoration step(s): ${missing.join(', ')}`);
+    if (failed.length) bad(`contains failed or malformed step(s): ${failed.join(', ')}`);
   }
   return problems;
 }
@@ -101,7 +123,8 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
   const runtimeIdentity = readJson(path.join(rawDir, 'identity-runtime.json'));
   if (!runtimeIdentity || runtimeIdentity.ok !== true || runtimeIdentity.candidate?.sha !== authz?.candidate?.sha) problems.push('runtime pre-execution identity record missing or does not match the authorised candidate');
   problems.push(...sourceBindingProblems(findCandidate(profile, authz?.candidate?.sha ?? ''), { authorize: readJson(path.join(out, 'source-bundle-authorize.json')),
-    runtime: readJson(path.join(rawDir, 'source-bundle-runtime.json')), seal: readJson(path.join(out, 'source-bundle-seal.json')) }));
+    runtime: readJson(path.join(rawDir, 'source-bundle-runtime.json')), seal: readJson(path.join(out, 'source-bundle-seal.json')) },
+    { profileId: profile.profile_id, profileSha256: sha256 }));
   const runtimeResult = a['runtime-result'] || 'unknown';   // always enforced; an absent or unrecognised value fails closed (classify.mjs applyRuntimeResult)
   const result = classifyRun({ profile, rawDir, identity: problems.length ? { ok: false, refusals: [...problems, ...(identity?.refusals || [])] } : identity, runtimeResult });
   if (!rawPresent) { result.gate = result.gate === GATE.FAILED ? GATE.FAILED : GATE.INCONCLUSIVE; result.gate_reasons.push('no raw runtime evidence was uploaded'); }

@@ -16,8 +16,8 @@ import { validateProfile, loadProfile } from '../lib/profile.mjs';
 import { authorize, stepOutputs, ARCHIVE_TRANSPORT_APPROVED } from '../lib/authorize.mjs';
 import { verifyIdentity, testInventory } from '../lib/identity.mjs';
 import { classifyRun, classifyFullRegression, S, GATE } from '../lib/classify.mjs';
-import { restoreFromBundle, parseBundleHeader, gitBlobId, gitEnv, CANDIDATE_REF } from '../lib/source-bundle.mjs';
-import { sourceBindingProblems } from '../lib/seal.mjs';
+import { restoreFromBundle, parseBundleHeader, gitBlobId, gitEnv, CANDIDATE_REF, REQUIRED_STEPS, RECORD_SCHEMA, sourcePin } from '../lib/source-bundle.mjs';
+import { sourceBindingProblems, writeManifest } from '../lib/seal.mjs';
 import { rehearse, parseMergeTree } from '../lib/merge-tree.mjs';
 import { baseEnv } from '../lib/run-profile.mjs';
 
@@ -319,7 +319,7 @@ describe('full regression oracle (classify.mjs)', () => {
   test('PASS only when the inventory matches exactly and every one of the expected tests passed', () => {
     const r = run(profile(), all());
     assert.equal(fr(r).status, S.PASS, fr(r).reasons.join('; ')); assert.equal(r.gate, GATE.PASSED);
-    assert.deepEqual(fr(r).totals, { files: 3, files_with_summary: 3, expected_files: 3, expected_tests: 6, tests: 6, pass: 6, inventory_files: 3 });
+    assert.deepEqual(fr(r).totals, { files: 3, files_with_summary: 3, expected_files: 3, expected_tests: 6, expected_skipped: 0, tests: 6, pass: 6, skipped: 0, inventory_files: 3 });
   });
   test('FAIL when the candidate has a test file the profile does not cover', () => {
     const r = run(profile(), all(), [...INV, 'tests/d.test.ts']);
@@ -367,7 +367,7 @@ describe('sealing an archived candidate: all three source records must bind, Pos
     port_before: { pg_isready_exit: 0, responder: 'owned', detail: '' }, port_after: { pg_isready_exit: 2, responder: 'none', detail: '' }, termination_evidence: 'stopped_by_cleanup',
     shutdown_proof: ['verified postmaster pid 551 exited after SIGINT'], foreign_instances_untouched: true, problems: [], notes: [] });
   /** Builds an all-PASS synthetic evidence set for the (activated) R05 profile and runs the real seal.mjs and verify-evidence.mjs CLIs. */
-  function sealR05({ dropSource = null, cleanupRecord = cleanup(), tamper = null } = {}) {
+  function sealR05({ dropSource = null, cleanupRecord = cleanup(), tamper = null, records = (_phase, rec) => rec, afterSeal = null } = {}) {
     const p = activated(); const d = tmp();
     const pf = path.join(d, 'profiles', 'r05-final-verification.json'); fs.mkdirSync(path.dirname(pf), { recursive: true }); fs.writeFileSync(pf, JSON.stringify(p, null, 2));
     const { sha256: profileSha } = loadProfile(pf);
@@ -375,7 +375,7 @@ describe('sealing an archived candidate: all three source records must bind, Pos
     const raw = path.join(d, 'raw'); fs.mkdirSync(path.join(raw, 'postgres'), { recursive: true });
     for (const c of p.checks) {
       const cd = path.join(raw, 'checks', c.id); fs.mkdirSync(cd, { recursive: true });
-      if (c.kind === 'node-test') fs.writeFileSync(path.join(cd, 'result.json'), JSON.stringify({ state: 'EXECUTED', files: c.files.map(f => ({ path: f.path, state: 'EXECUTED', exit_code: 0, counts: { tests: f.expect_tests, pass: f.expect_tests, fail: 0, cancelled: 0, skipped: 0, todo: 0 } })) }));
+      if (c.kind === 'node-test') fs.writeFileSync(path.join(cd, 'result.json'), JSON.stringify({ state: 'EXECUTED', files: c.files.map(f => ({ path: f.path, state: 'EXECUTED', exit_code: 0, counts: { tests: f.expect_tests, pass: f.expect_tests - (f.expect_skipped ?? 0), fail: 0, cancelled: 0, skipped: f.expect_skipped ?? 0, todo: 0 } })) }));
       else if (c.kind === 'playwright') { fs.writeFileSync(path.join(cd, 'report.json'), JSON.stringify({ stats: { expected: c.expect_passed, unexpected: 0, flaky: 0, skipped: 0 }, errors: [], suites: [{ title: 's', specs: Array.from({ length: c.expect_passed }, (_, i) => ({ title: 't' + i, tests: [{ status: 'expected', results: [{ status: 'passed' }] }] })) }] }));
         fs.writeFileSync(path.join(cd, 'result.json'), JSON.stringify({ state: 'EXECUTED', exit_code: 0, report: `checks/${c.id}/report.json` })); }
       else fs.writeFileSync(path.join(cd, 'result.json'), JSON.stringify({ state: 'EXECUTED', exit_code: 0 }));
@@ -383,11 +383,14 @@ describe('sealing an archived candidate: all three source records must bind, Pos
     if (cleanupRecord) fs.writeFileSync(path.join(raw, 'postgres', 'cleanup.json'), JSON.stringify(cleanupRecord));
     const inventory = p.full_regression.checks.flatMap(id => p.checks.find(c => c.id === id).files.map(f => f.path)).sort();
     fs.writeFileSync(path.join(raw, 'identity-runtime.json'), JSON.stringify({ ok: true, candidate: candId, test_inventory: inventory }));
-    const src = phase => ({ schema: 'construction-core/gpr2-source-bundle@1', phase, ok: true, candidate: candId, observed: { bytes: cand.source.bytes, sha256: cand.source.sha256, blob: cand.source.blob } });
+    // A realistic restoration record, exactly as source-bundle.mjs writes it (phase, profile identity, pin, every step passed).
+    const src = phase => ({ schema: RECORD_SCHEMA, phase, profile_id: p.profile_id, profile_sha256: profileSha, candidate_sha: cand.sha, ok: true, refusals: [],
+      steps: REQUIRED_STEPS.map(step => ({ step, ok: true, detail: 'x' })), pin: sourcePin(cand.source), observed: { bytes: cand.source.bytes, sha256: cand.source.sha256, blob: cand.source.blob },
+      candidate: { sha: cand.sha, tree: cand.tree, ref: 'refs/gpr2-acceptance/candidate', checked_out: cand.sha }, verified_at: 'x' });
     const authzDir = path.join(d, 'authz'); fs.mkdirSync(authzDir);
     fs.writeFileSync(path.join(authzDir, 'authorization.json'), JSON.stringify({ ok: true, request: { actor: 'Shamil9586', triggering_actor: 'Shamil9586' }, candidate: { ...candId, source: cand.source }, profile: { sha256: profileSha } }));
     const recs = { authorize: path.join(authzDir, 'source-bundle-authorize.json'), runtime: path.join(raw, 'source-bundle-runtime.json'), seal: path.join(d, 'source-bundle-seal.json') };
-    for (const [ph, f] of Object.entries(recs)) if (ph !== dropSource) fs.writeFileSync(f, JSON.stringify(src(ph)));
+    for (const [ph, f] of Object.entries(recs)) if (ph !== dropSource) fs.writeFileSync(f, JSON.stringify(records(ph, src(ph))));
     if (tamper === 'runtime-sha') fs.writeFileSync(recs.runtime, JSON.stringify({ ...src('runtime'), observed: { ...src('runtime').observed, sha256: '0'.repeat(64) } }));
     fs.writeFileSync(path.join(d, 'identity-seal.json'), JSON.stringify({ ok: true, candidate: candId, test_inventory: inventory }));
     const out = path.join(d, 'sealed');
@@ -396,6 +399,7 @@ describe('sealing an archived candidate: all three source records must bind, Pos
     const rec = JSON.parse(fs.readFileSync(path.join(out, 'acceptance-result.json'), 'utf8'));
     if (tamper === 'drop-file') fs.rmSync(path.join(out, 'raw', 'checks', 'browser-gpr1', 'report.json'));
     if (tamper === 'extra-file') fs.writeFileSync(path.join(out, 'raw', 'injected.log'), 'x');
+    if (afterSeal) afterSeal(out);
     if (tamper === 'manifest-edit') { const m = JSON.parse(fs.readFileSync(path.join(out, 'manifest.json'), 'utf8')); m.files.pop(); fs.writeFileSync(path.join(out, 'manifest.json'), JSON.stringify(m)); }
     const verify = spawnSync('node', [path.join(LIB, 'verify-evidence.mjs'), out, '--profile', pf, '--expect-candidate', R05], { encoding: 'utf8' });
     return { run, rec, verify, out };
@@ -418,6 +422,44 @@ describe('sealing an archived candidate: all three source records must bind, Pos
     const { rec } = sealR05({ tamper: 'runtime-sha' });
     assert.equal(rec.result.gate, GATE.FAILED); assert.ok(rec.result.gate_reasons.some(x => x.includes('runtime-phase archived-source record is not bound')));
   });
+  // F-CI-R05-01: a record that merely says ok:true with the right candidate/digest must still be of ITS phase, for THIS profile, with the registered pin and every step passed.
+  const bindingCases = [
+    ['one authorize-phase record reused in all three slots', (ph, rec) => ({ ...rec, phase: 'authorize' }), /(runtime|seal)-phase archived-source record is a "authorize"-phase record/],
+    ['a record of the wrong phase (runtime record in the seal slot)', (ph, rec) => (ph === 'seal' ? { ...rec, phase: 'runtime' } : rec), /seal-phase archived-source record is a "runtime"-phase record/],
+    ['a record without any phase', (ph, rec) => { const r = { ...rec }; if (ph === 'runtime') delete r.phase; return r; }, /runtime-phase archived-source record is a undefined-phase record|runtime-phase archived-source record is a .*phase record/],
+    ['a record made for another profile id', (ph, rec) => (ph === 'runtime' ? { ...rec, profile_id: 'r04-cp02' } : rec), /runtime-phase archived-source record is for profile "r04-cp02"/],
+    ['a record made under another profile digest (edited profile)', (ph, rec) => (ph === 'seal' ? { ...rec, profile_sha256: 'f'.repeat(64) } : rec), /seal-phase archived-source record was made under profile digest/],
+    ['a record naming another candidate_sha', (ph, rec) => (ph === 'authorize' ? { ...rec, candidate_sha: '9'.repeat(40) } : rec), /authorize-phase archived-source record is not bound to candidate/],
+    ['a record without a pin', (ph, rec) => { const r = { ...rec }; if (ph === 'runtime') delete r.pin; return r; }, /runtime-phase archived-source record does not carry the registered source pin/],
+    ['a record with another pin (other archive commit)', (ph, rec) => (ph === 'runtime' ? { ...rec, pin: { ...rec.pin, commit: 'b'.repeat(40) } } : rec), /runtime-phase archived-source record does not carry the registered source pin/],
+    ['a record with other prerequisites in the pin', (ph, rec) => (ph === 'seal' ? { ...rec, pin: { ...rec.pin, prerequisites: ['c'.repeat(40)] } } : rec), /seal-phase archived-source record does not carry the registered source pin/],
+    ['a record without steps', (ph, rec) => { const r = { ...rec }; if (ph === 'authorize') delete r.steps; return r; }, /authorize-phase archived-source record lacks passed restoration step\(s\): descriptor, file/],
+    ['a record missing the fsck step', (ph, rec) => (ph === 'runtime' ? { ...rec, steps: rec.steps.filter(x => x.step !== 'fsck') } : rec), /runtime-phase archived-source record lacks passed restoration step\(s\): fsck/],
+    ['a record with a failed step', (ph, rec) => (ph === 'seal' ? { ...rec, steps: rec.steps.map(x => (x.step === 'tree' ? { ...x, ok: false } : x)) } : rec), /seal-phase archived-source record (lacks passed restoration step\(s\): tree|contains failed)/],
+    ['a record of another schema', (ph, rec) => (ph === 'authorize' ? { ...rec, schema: 'x' } : rec), /authorize-phase archived-source record has schema/],
+  ];
+  for (const [name, records, expected] of bindingCases) {
+    test(`F-CI-R05-01 sealing refuses ${name}`, () => {
+      const { run, rec } = sealR05({ records });
+      assert.equal(run.status, 1, run.stdout); assert.equal(rec.result.gate, GATE.FAILED);
+      assert.ok(rec.result.gate_reasons.some(x => expected.test(x)), rec.result.gate_reasons.join('\n'));
+    });
+    test(`F-CI-R05-01 verify-evidence refuses ${name} even when the manifest is rebuilt (checksums consistent)`, () => {
+      // Seal honest evidence, then swap the saved source records for the tampered ones and REBUILD manifest + SHA256SUMS, so only the binding can reject it.
+      const { verify: honest, out } = sealR05({ afterSeal: out => {
+        const honestRec = ph => JSON.parse(fs.readFileSync(path.join(out, ph === 'runtime' ? 'raw/source-bundle-runtime.json' : `source-bundle-${ph}.json`), 'utf8'));
+        for (const ph of ['authorize', 'runtime', 'seal']) fs.writeFileSync(path.join(out, ph === 'runtime' ? 'raw/source-bundle-runtime.json' : `source-bundle-${ph}.json`), JSON.stringify(records(ph, honestRec(ph))));
+        const { files, file_count, ...meta } = JSON.parse(fs.readFileSync(path.join(out, 'manifest.json'), 'utf8')); writeManifest(out, (({ schema, ...m }) => m)(meta));
+      } });
+      assert.equal(honest.status, 2, honest.stdout);
+      assert.doesNotMatch(honest.stdout, /checksum mismatch|not covered by SHA256SUMS|manifest entry differs/);
+      assert.ok(honest.stdout.split('\n').some(l => l.includes('FAIL') && expected.test(l)), honest.stdout);
+    });
+  }
+  test('F-CI-R05-01 control: the same rebuilt-manifest procedure with untampered records still verifies', () => {
+    const { verify } = sealR05({ afterSeal: out => { const { files, file_count, schema, ...meta } = JSON.parse(fs.readFileSync(path.join(out, 'manifest.json'), 'utf8')); writeManifest(out, meta); } });
+    assert.equal(verify.status, 0, verify.stdout); assert.match(verify.stdout, /archived source bound in all three phases/);
+  });
   test('a PostgreSQL teardown failure (or missing teardown evidence) is never a PASS', () => {
     const bad = sealR05({ cleanupRecord: { ...cleanup(), owned_processes_after: [{ pid: 551, role: 'postmaster' }] } });
     assert.equal(bad.rec.result.gate, GATE.FAILED); assert.equal(bad.rec.result.checks.find(c => c.id === 'postgres-cleanup').status, S.FAIL);
@@ -428,9 +470,65 @@ describe('sealing an archived candidate: all three source records must bind, Pos
     test(`verify-evidence rejects ${name}`, () => { const { verify } = sealR05({ tamper }); assert.equal(verify.status, 2, verify.stdout); assert.match(verify.stdout, /EVIDENCE INTEGRITY: FAILED/); });
   test('binding helper: no source -> no requirement; any mismatch is reported per phase', () => {
     assert.deepEqual(sourceBindingProblems({ sha: 'a', tree: 'b' }, {}), []);
-    const cand = { sha: 'a', tree: 'b', source: { sha256: 'c', blob: 'd' } }; const ok = { ok: true, candidate: { sha: 'a', tree: 'b' }, observed: { sha256: 'c', blob: 'd' } };
-    assert.deepEqual(sourceBindingProblems(cand, { authorize: ok, runtime: ok, seal: ok }), []);
-    assert.equal(sourceBindingProblems(cand, { authorize: ok, runtime: { ...ok, candidate: { sha: 'x', tree: 'b' } }, seal: { ...ok, ok: false } }).length, 2);
+    const source = { kind: 'git-bundle', repository: 'Shamil9586/construction-core-acceptance-evidence', commit: 'e'.repeat(40), path: 'x/c.bundle', blob: 'd'.repeat(40), bytes: 9, sha256: 'c'.repeat(64), ref: 'refs/heads/f', prerequisites: ['1'.repeat(40)] };
+    const cand = { sha: 'a'.repeat(40), tree: 'b'.repeat(40), source }; const ctx = { profileId: 'p', profileSha256: '7'.repeat(64) };
+    const mk = phase => ({ schema: RECORD_SCHEMA, phase, profile_id: 'p', profile_sha256: ctx.profileSha256, candidate_sha: cand.sha, ok: true, steps: REQUIRED_STEPS.map(step => ({ step, ok: true })), pin: sourcePin(source),
+      observed: { bytes: 9, sha256: source.sha256, blob: source.blob }, candidate: { sha: cand.sha, tree: cand.tree } });
+    const good = { authorize: mk('authorize'), runtime: mk('runtime'), seal: mk('seal') };
+    assert.deepEqual(sourceBindingProblems(cand, good, ctx), []);
+    assert.equal(sourceBindingProblems(cand, { ...good, runtime: { ...good.runtime, candidate: { sha: 'x', tree: cand.tree } }, seal: { ...good.seal, ok: false } }, ctx).length, 2);
+    // the three weaknesses reproduced by the independent reviewer (F-CI-R05-01):
+    const sameThrice = { authorize: good.authorize, runtime: good.authorize, seal: good.authorize };
+    assert.equal(sourceBindingProblems(cand, sameThrice, ctx).length, 2, 'one authorize record in all three slots');
+    assert.ok(sourceBindingProblems(cand, { ...good, runtime: { ...good.runtime, profile_sha256: '0'.repeat(64) } }, ctx).length >= 1, 'edited profile digest');
+    assert.ok(sourceBindingProblems(cand, { ...good, runtime: { schema: RECORD_SCHEMA, ok: true, candidate: { sha: cand.sha, tree: cand.tree }, observed: good.runtime.observed } }, ctx).length >= 1, 'no phase / pin / steps / profile');
+    // a missing profile context cannot bind anything (fail closed)
+    assert.ok(sourceBindingProblems(cand, good).length >= 1); assert.ok(sourceBindingProblems(cand, good, {}).length >= 1);
+  });
+});
+
+describe('F-CI-R05-01 follow-up: documented exact skip (profile files[].expect_skipped)', () => {
+  const synthSkip = () => { const p = synth().profile; p.checks[0].files[0].expect_skipped = 1; p.checks[0].files[0].skip_reason = 'external documents are not available on a hosted runner'; p.full_regression.expect_skipped = 1; return p; };
+  const execd = (pth, t, over = {}) => ({ path: pth, state: 'EXECUTED', exit_code: 0, counts: { tests: t, pass: t, fail: 0, cancelled: 0, skipped: 0, todo: 0, ...over } });
+  const INV = ['tests/a.test.ts', 'tests/b.test.ts', 'tests/c.test.ts'];
+  const run = (p, files) => { const d = tmp(); fs.mkdirSync(path.join(d, 'checks', 'unit'), { recursive: true }); fs.writeFileSync(path.join(d, 'checks', 'unit', 'result.json'), JSON.stringify({ state: 'EXECUTED', files }));
+    return classifyRun({ profile: p, rawDir: d, identity: { ok: true, test_inventory: INV } }); };
+  const frOf = r => r.checks.find(c => c.id === 'full-regression-inventory'); const unit = r => r.checks.find(c => c.id === 'unit');
+  const okFiles = () => [execd('tests/a.test.ts', 2, { pass: 1, skipped: 1 }), execd('tests/b.test.ts', 3), execd('tests/c.test.ts', 1)];
+  test('the profile with a documented skip validates; the skip is reported, not hidden', () => {
+    assert.deepEqual(validateProfile(synthSkip()), []);
+    const r = run(synthSkip(), okFiles());
+    assert.equal(unit(r).status, S.PASS, JSON.stringify(unit(r).reasons)); assert.equal(frOf(r).status, S.PASS, frOf(r).reasons.join('; '));
+    assert.equal(unit(r).totals.skipped, 1); assert.equal(unit(r).files[0].expected_skipped, 1); assert.equal(frOf(r).totals.skipped, 1); assert.equal(frOf(r).totals.pass, 5);
+    assert.equal(r.by_class.UNIT.tests_skip, 1);
+  });
+  test('FAIL when the documented skip does not happen (no skip at all), when a second test of that file is skipped, and when ANOTHER file skips', () => {
+    for (const [files, why] of [
+      [[execd('tests/a.test.ts', 2), execd('tests/b.test.ts', 3), execd('tests/c.test.ts', 1)], 'expected skip missing'],
+      [[execd('tests/a.test.ts', 2, { pass: 0, skipped: 2 }), execd('tests/b.test.ts', 3), execd('tests/c.test.ts', 1)], 'two skipped in the excepted file'],
+      [[execd('tests/a.test.ts', 2, { pass: 1, skipped: 1 }), execd('tests/b.test.ts', 3, { pass: 2, skipped: 1 }), execd('tests/c.test.ts', 1)], 'a skip in a file without the exception'],
+      [[execd('tests/a.test.ts', 2, { pass: 1, skipped: 1 }), execd('tests/b.test.ts', 3), execd('tests/c.test.ts', 1, { pass: 0, skipped: 1 })], 'a different file entirely skipped'],
+    ]) { const r = run(synthSkip(), files); assert.equal(r.gate, GATE.FAILED, why); assert.notEqual(unit(r).status, S.PASS, why); }
+  });
+  test('without the exception the same single skip is still a FAIL (no general relaxation, allow_skip untouched)', () => {
+    const r = run(synth().profile, okFiles()); assert.equal(r.gate, GATE.FAILED); assert.equal(unit(r).status, S.FAIL); assert.equal(frOf(r).status, S.FAIL);
+  });
+  test('the full-regression total must also account for the skip exactly', () => {
+    const p = synthSkip(); p.full_regression.expect_skipped = 2;
+    assert.ok(validateProfile(p).some(x => x.includes('full_regression.expect_skipped is 2 but the listed files expect 1')));
+    const q = synthSkip(); delete q.full_regression.expect_skipped;
+    assert.ok(validateProfile(q).some(x => x.includes('full_regression.expect_skipped is 0 but the listed files expect 1')));
+  });
+  test('profile schema: expect_skipped is bounded, needs a reason, and a reason alone is invalid', () => {
+    for (const [mut, msg] of [[p => { p.checks[0].files[0].expect_skipped = 2; }, 'expect_skipped must be a positive count smaller than expect_tests'],
+      [p => { delete p.checks[0].files[0].skip_reason; }, 'skip_reason must state why'], [p => { delete p.checks[0].files[0].expect_skipped; delete p.full_regression.expect_skipped; }, 'skip_reason is only valid with expect_skipped'],
+      [p => { p.checks[0].allow_skip = true; }, 'may not allow skipped']]) { const p = synthSkip(); mut(p); assert.ok(validateProfile(p).some(x => x.includes(msg)), msg); }
+  });
+  test('the R05 TEMPLATE pins exactly one expected skip, in gpr2-r01-normative-expectations only (8 tests / 7 pass / 1 skipped), full regression 1258 / 1257 / 1', () => {
+    const p = r05(); const files = p.checks.flatMap(c => c.files || []);
+    assert.deepEqual(files.filter(f => f.expect_skipped !== undefined).map(f => [f.path, f.expect_tests, f.expect_skipped]), [['tests/gpr2-r01-normative-expectations.test.ts', 8, 1]]);
+    assert.equal(p.full_regression.expect_skipped, 1); assert.equal(p.status, 'TEMPLATE'); assert.deepEqual(p.candidates, []);
+    assert.ok(p.checks.every(c => c.allow_skip !== true));
   });
 });
 

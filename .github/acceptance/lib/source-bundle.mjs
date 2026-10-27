@@ -22,6 +22,12 @@ export const RECORD_SCHEMA = 'construction-core/gpr2-source-bundle@1';
 export const CANDIDATE_REF = 'refs/gpr2-acceptance/candidate';
 const HEADER_MAX = 64 * 1024;
 
+/** The restoration steps a successful record must contain, each with ok:true (seal.mjs / verify-evidence.mjs bind a record to them). */
+export const REQUIRED_STEPS = ['descriptor', 'file', 'size', 'sha256', 'git-blob', 'header', 'header-ref', 'header-prerequisites', 'prerequisites-present', 'shallow',
+  'bundle-verify', 'bundle-list-heads', 'fetch', 'fetched-sha', 'fsck', 'ancestry', 'baseline-ancestry', 'tree', 'checkout'];
+/** The pin recorded in a restoration record: exactly the registered source descriptor, without its kind. */
+export const sourcePin = src => ({ repository: src.repository, commit: src.commit, path: src.path, blob: src.blob, bytes: src.bytes, sha256: src.sha256, ref: src.ref, prerequisites: src.prerequisites });
+
 /** The only environment Git receives here: nothing inherited except PATH, so no token, credential helper, askpass or config can leak in. */
 export function gitEnv(env = process.env) {
   return { PATH: env.PATH || '/usr/bin:/bin', LC_ALL: 'C', GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null', GIT_ASKPASS: '/bin/false', SSH_ASKPASS: '/bin/false' };
@@ -63,7 +69,7 @@ export function restoreFromBundle({ profile, candidateSha, bundle, repo, checkou
   if (!step('descriptor', !!cand, cand ? 'candidate registered' : `candidate ${candidateSha} is not registered in profile ${profile.profile_id}`)) return result(false);
   const src = cand.source;
   if (!step('descriptor', !!src && src.kind === 'git-bundle', src ? `source kind ${src.kind}` : 'the registered candidate has no git-bundle source')) return result(false);
-  const pin = { repository: src.repository, commit: src.commit, path: src.path, blob: src.blob, bytes: src.bytes, sha256: src.sha256, ref: src.ref, prerequisites: src.prerequisites };
+  const pin = sourcePin(src);
 
   let st = null;
   try { st = fs.lstatSync(bundle); } catch { /* reported below */ }
