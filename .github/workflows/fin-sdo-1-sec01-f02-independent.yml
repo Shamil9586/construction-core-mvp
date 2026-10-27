@@ -1,0 +1,159 @@
+# SEC-01-F02 REVIEW-ONLY CI CONFIG: manual, one pinned candidate, test-only PostgreSQL 16.
+# Do not dispatch until independently reviewed and separately authorized to merge into main.
+# NO product code, LIVE, deployments, secrets or migration number allocations.
+name: FIN-SDO-1 SEC01-F02 independent native security review
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: 'Type exactly APPROVE-FIN-SEC01-F02-1D89ECD'
+        required: true
+        type: string
+        default: DO_NOT_RUN
+
+permissions: {}
+
+concurrency:
+  group: fin-sdo-1-sec01-f02-independent
+  cancel-in-progress: false
+
+jobs:
+  native-review:
+    if: >-
+      github.repository == 'Shamil9586/construction-core-mvp' &&
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
+      github.actor == 'Shamil9586' &&
+      github.triggering_actor == 'Shamil9586' &&
+      github.run_attempt == 1 &&
+      inputs.confirmation == 'APPROVE-FIN-SEC01-F02-1D89ECD'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: fin-test-only
+          POSTGRES_DB: fin_sdo_test
+        ports:
+          - 127.0.0.1:5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d fin_sdo_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      CI: 'true'
+      DATABASE_URL: postgres://postgres:fin-test-only@127.0.0.1:5432/fin_sdo_test
+      FIN_SDO_ISOLATED_CONFIRM: 'YES'
+      TZ: UTC
+    steps:
+      - name: Checkout independently reviewed CI harness (not candidate)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          path: harness
+          persist-credentials: false
+
+      - name: Checkout immutable FIN candidate, no credentials
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: 1d89ecd342e77d1fe9f13bc9bacdc49b41526ead
+          path: core
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Pin SHA, tree, first parent, clean checkout BEFORE candidate code
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C core rev-parse HEAD)" = "1d89ecd342e77d1fe9f13bc9bacdc49b41526ead"
+          test "$(git -C core rev-parse HEAD^{tree})" = "27c46dafb99c223fc459f366018dadd73840e7c7"
+          test "$(git -C core rev-parse HEAD^)" = "946fa3028f167b4e9e1db86bcfa42e02a7eb2faf"
+          test "$(git -C core rev-parse --is-shallow-repository)" = false
+          test -z "$(git -C core status --porcelain --untracked-files=all)"
+          git -C core diff --check 946fa3028f167b4e9e1db86bcfa42e02a7eb2faf HEAD
+          test -f harness/.github/acceptance/reviews/fin-sdo-1-sec01-f02-negative.mjs
+          mkdir -p evidence-raw
+          git -C core rev-parse HEAD HEAD^{tree} HEAD^ > evidence-raw/git-identity.txt
+
+      - name: Pin Node.js 22.22.0 (no dependency cache)
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22.22.0'
+
+      - name: Install candidate dependencies with full raw log and exit code
+        shell: bash
+        run: |
+          mkdir -p evidence-raw
+          set +e
+          (cd core && npm ci --no-audit --no-fund) > evidence-raw/npm-ci.stdout.log 2> evidence-raw/npm-ci.stderr.log
+          rc=$?
+          echo "$rc" > evidence-raw/npm-ci.exit
+          exit "$rc"
+
+      - name: PostgreSQL migrations, native FIN suites, reviewer negatives, unit
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence-raw
+          run_check() {
+            label="$1"; shift
+            set +e
+            (cd core && "$@") > "evidence-raw/${label}.stdout.log" 2> "evidence-raw/${label}.stderr.log"
+            rc=$?
+            set -e
+            printf '%s\n' "$rc" > "evidence-raw/${label}.exit"
+            if [[ "$rc" -ne 0 ]]; then
+              echo "FAIL ${label}: exit ${rc} (see raw artifact)" >&2
+              return "$rc"
+            fi
+            echo "PASS ${label}"
+          }
+          # Every subsequent native check reuses the *same* disposable FIN database/role state.
+          run_check migrate-001-028 npm run db:migrate
+          run_check native-pg node --import tsx scripts/fin-sdo-1-isolated-pg-verify.ts
+          run_check native-service node --import tsx scripts/fin-sdo-1-isolated-service-verify.ts
+          run_check native-http node --import tsx scripts/fin-sdo-1-isolated-http-verify.ts
+          run_check native-protected node --import tsx scripts/fin-sdo-1-isolated-protected-verify.ts
+          run_check native-sec01-f01 node --import tsx scripts/fin-sdo-1-isolated-sec01-f01-verify.ts
+          run_check negative-f02 node --import tsx ../harness/.github/acceptance/reviews/fin-sdo-1-sec01-f02-negative.mjs
+          run_check unit-f01 node --import tsx --test tests/fin-sdo-1-protected-error-boundary.test.ts
+
+      - name: Capture synthetic PostgreSQL logs and teardown
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p evidence-raw
+          echo "PostgreSQL service is isolated and auto-destroyed by the GitHub runner" > evidence-raw/teardown.txt
+          cid="$(docker ps --format '{{.ID}} {{.Image}}' | awk '$2 ~ /^postgres:16/ {print $1; exit}')"
+          if [[ -n "$cid" ]]; then
+            docker logs "$cid" > evidence-raw/postgres-container.log 2>&1
+            set +e
+            docker stop "$cid" > evidence-raw/postgres-stop.log 2>&1
+            rc=$?
+            set -e
+            printf 'docker_stop_exit=%s\n' "$rc" >> evidence-raw/teardown.txt
+          else
+            printf 'postgres_container=NOT_FOUND\n' >> evidence-raw/teardown.txt
+          fi
+          {
+            printf 'runner_os=%s\n' "${{ runner.os }}"
+            printf 'run_id=%s\n' "${{ github.run_id }}"
+            printf 'run_attempt=%s\n' "${{ github.run_attempt }}"
+            printf 'candidate=%s\n' "1d89ecd342e77d1fe9f13bc9bacdc49b41526ead"
+            printf 'workflow_sha=%s\n' "${{ github.sha }}"
+          } > evidence-raw/run-identity.txt
+          find evidence-raw -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > evidence-raw/SHA256SUMS
+          if [[ -n "${cid}" && "${rc}" != "0" ]]; then exit "${rc}"; fi
+
+      - name: Upload immutable-run-id raw logs and SHA-256 evidence, even on FAIL
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fin-sdo-1-sec01-f02-run${{ github.run_id }}-a${{ github.run_attempt }}
+          path: evidence-raw/
+          if-no-files-found: error
+          retention-days: 30
