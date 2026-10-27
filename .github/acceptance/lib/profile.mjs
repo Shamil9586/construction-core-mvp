@@ -37,6 +37,8 @@ const PW_CONFIG = /^playwright\.[A-Za-z0-9._-]+\.config\.ts$/;
 const NPM_SCRIPT = /^[a-z0-9][a-z0-9:._-]{0,40}$/;
 const NODE_VERSION = /^[0-9]{2}\.[0-9]{1,2}\.[0-9]{1,2}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
+const EXTERNAL_ENV = /^GPR2_[A-Z0-9_]{2,40}$/;
+const EXTERNAL_FILENAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,150}$/;
 const BUNDLE_PATH = /^(?!\/)(?!.*\.\.)(?!.*\/\/)[A-Za-z0-9._\/-]{1,300}\.bundle$/;
 const BUNDLE_REF = /^refs\/heads\/(?!.*\.\.)(?!.*\/\/)(?!.*\/$)[A-Za-z0-9._\/-]{1,200}$/;
 const TOP_LEVEL_TEST = /^tests\/[A-Za-z0-9._-]+\.test\.ts$/;
@@ -145,15 +147,22 @@ export function validateProfile(p, { fileName } = {}) {
         if (!Array.isArray(c.files) || c.files.length === 0) e.push(`${w}.files must be a non-empty array`);
         else c.files.forEach((f, j) => {
           const fw = `${w}.files[${j}]`;
-          if (!keys(f, ['path', 'expect_tests', 'expect_skipped', 'skip_reason'], fw, e)) return;
+          if (!keys(f, ['path', 'expect_tests', 'external_inputs'], fw, e)) return;
           if (!isStr(f.path, TEST_FILE)) e.push(`${fw}.path must be a tests/**/*.test.ts path without ".."`);
           if (allFiles.has(f.path)) e.push(`${fw}.path is listed twice in this profile`); allFiles.add(f.path);
           if (!isInt(f.expect_tests, 1, 5000)) e.push(`${fw}.expect_tests must be an exact positive test count`);
-          // A documented, file-scoped exception: exactly this many tests of THIS file are expected to be skipped (never the whole check).
-          if (f.expect_skipped !== undefined) {
-            if (!isInt(f.expect_skipped, 1, 5000) || (Number.isInteger(f.expect_tests) && f.expect_skipped >= f.expect_tests)) e.push(`${fw}.expect_skipped must be a positive count smaller than expect_tests`);
-            if (!isStr(f.skip_reason)) e.push(`${fw}.skip_reason must state why the skip is expected`);
-          } else if (f.skip_reason !== undefined) e.push(`${fw}.skip_reason is only valid with expect_skipped`);
+          // Approved external documents this test file reads (never in the repository). Pinned by SHA-256; supplied only by the harness (run-profile.mjs).
+          if (f.external_inputs !== undefined) {
+            if (!Array.isArray(f.external_inputs) || f.external_inputs.length === 0) e.push(`${fw}.external_inputs must be a non-empty array`);
+            else f.external_inputs.forEach((x, k) => {
+              const xw = `${fw}.external_inputs[${k}]`;
+              if (!keys(x, ['env', 'filename', 'sha256'], xw, e)) return;
+              if (!isStr(x.env, EXTERNAL_ENV)) e.push(`${xw}.env must match ${EXTERNAL_ENV}`);
+              if (!isStr(x.filename, EXTERNAL_FILENAME)) e.push(`${xw}.filename must be a plain file name`);
+              if (!isStr(x.sha256, SHA256)) e.push(`${xw}.sha256 must be 64 lowercase hex digits`);
+              if (f.external_inputs.findIndex(y => y && y.env === x.env) !== k) e.push(`${xw}.env is listed twice`);
+            });
+          }
         });
         if (!isInt(c.file_timeout_seconds, 30, 3600)) e.push(`${w}.file_timeout_seconds must be 30..3600`);
         if (typeof c.fresh_database_per_file !== 'boolean') e.push(`${w}.fresh_database_per_file must be boolean`);
@@ -181,12 +190,11 @@ export function validateProfile(p, { fileName } = {}) {
 
   // full_regression: the listed node-test checks together ARE the complete regression — statically exact here (file and test totals), and at
   // run time the candidate's own inventory must equal their file union (classify.mjs, check "full-regression-inventory").
-  if (p.full_regression !== undefined && keys(p.full_regression, ['inventory', 'checks', 'expect_files', 'expect_tests', 'expect_skipped'], 'full_regression', e)) {
+  if (p.full_regression !== undefined && keys(p.full_regression, ['inventory', 'checks', 'expect_files', 'expect_tests'], 'full_regression', e)) {
     const fr = p.full_regression;
     if (!INVENTORIES.includes(fr.inventory)) e.push(`full_regression.inventory must be one of ${INVENTORIES.join('|')}`);
     if (!isInt(fr.expect_files, 1, 5000)) e.push('full_regression.expect_files must be the exact number of test files');
     if (!isInt(fr.expect_tests, 1, 100000)) e.push('full_regression.expect_tests must be the exact number of tests');
-    if (fr.expect_skipped !== undefined && !isInt(fr.expect_skipped, 1, 100000)) e.push('full_regression.expect_skipped must be the exact number of expected skipped tests (omit it for none)');
     if (!Array.isArray(fr.checks) || fr.checks.length === 0 || !fr.checks.every(x => isStr(x, ID))) e.push('full_regression.checks must list check ids');
     else if (new Set(fr.checks).size !== fr.checks.length) e.push('full_regression.checks are duplicated');
     else if (Array.isArray(p.checks)) {
@@ -202,8 +210,6 @@ export function validateProfile(p, { fileName } = {}) {
       if (isInt(fr.expect_files, 1, 5000) && files.length !== fr.expect_files) e.push(`full_regression.expect_files is ${fr.expect_files} but the listed checks have ${files.length} files`);
       const total = files.reduce((a, f) => a + (Number.isInteger(f.expect_tests) ? f.expect_tests : 0), 0);
       if (isInt(fr.expect_tests, 1, 100000) && total !== fr.expect_tests) e.push(`full_regression.expect_tests is ${fr.expect_tests} but the listed files expect ${total}`);
-      const skipTotal = files.reduce((a, f) => a + (Number.isInteger(f.expect_skipped) ? f.expect_skipped : 0), 0);
-      if (skipTotal !== (fr.expect_skipped ?? 0)) e.push(`full_regression.expect_skipped is ${fr.expect_skipped ?? 0} but the listed files expect ${skipTotal} skipped`);
     }
   }
   return e;

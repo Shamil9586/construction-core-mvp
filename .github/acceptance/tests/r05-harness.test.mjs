@@ -15,11 +15,11 @@ import { fileURLToPath } from 'node:url';
 import { validateProfile, loadProfile } from '../lib/profile.mjs';
 import { authorize, stepOutputs, ARCHIVE_TRANSPORT_APPROVED } from '../lib/authorize.mjs';
 import { verifyIdentity, testInventory } from '../lib/identity.mjs';
-import { classifyRun, classifyFullRegression, S, GATE } from '../lib/classify.mjs';
+import { classifyRun, classifyFullRegression, classifyNodeFile, S, GATE } from '../lib/classify.mjs';
 import { restoreFromBundle, parseBundleHeader, gitBlobId, gitEnv, CANDIDATE_REF, REQUIRED_STEPS, RECORD_SCHEMA, sourcePin } from '../lib/source-bundle.mjs';
 import { sourceBindingProblems, writeManifest } from '../lib/seal.mjs';
 import { rehearse, parseMergeTree } from '../lib/merge-tree.mjs';
-import { baseEnv } from '../lib/run-profile.mjs';
+import { baseEnv, resolveExternalInputs } from '../lib/run-profile.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ACC = path.resolve(HERE, '..');
@@ -319,7 +319,7 @@ describe('full regression oracle (classify.mjs)', () => {
   test('PASS only when the inventory matches exactly and every one of the expected tests passed', () => {
     const r = run(profile(), all());
     assert.equal(fr(r).status, S.PASS, fr(r).reasons.join('; ')); assert.equal(r.gate, GATE.PASSED);
-    assert.deepEqual(fr(r).totals, { files: 3, files_with_summary: 3, expected_files: 3, expected_tests: 6, expected_skipped: 0, tests: 6, pass: 6, skipped: 0, inventory_files: 3 });
+    assert.deepEqual(fr(r).totals, { files: 3, files_with_summary: 3, expected_files: 3, expected_tests: 6, tests: 6, pass: 6, inventory_files: 3 });
   });
   test('FAIL when the candidate has a test file the profile does not cover', () => {
     const r = run(profile(), all(), [...INV, 'tests/d.test.ts']);
@@ -375,7 +375,8 @@ describe('sealing an archived candidate: all three source records must bind, Pos
     const raw = path.join(d, 'raw'); fs.mkdirSync(path.join(raw, 'postgres'), { recursive: true });
     for (const c of p.checks) {
       const cd = path.join(raw, 'checks', c.id); fs.mkdirSync(cd, { recursive: true });
-      if (c.kind === 'node-test') fs.writeFileSync(path.join(cd, 'result.json'), JSON.stringify({ state: 'EXECUTED', files: c.files.map(f => ({ path: f.path, state: 'EXECUTED', exit_code: 0, counts: { tests: f.expect_tests, pass: f.expect_tests - (f.expect_skipped ?? 0), fail: 0, cancelled: 0, skipped: f.expect_skipped ?? 0, todo: 0 } })) }));
+      if (c.kind === 'node-test') fs.writeFileSync(path.join(cd, 'result.json'), JSON.stringify({ state: 'EXECUTED', files: c.files.map(f => ({ path: f.path, state: 'EXECUTED', exit_code: 0, counts: { tests: f.expect_tests, pass: f.expect_tests, fail: 0, cancelled: 0, skipped: 0, todo: 0 },
+        ...(f.external_inputs && tamper !== 'drop-input-record' ? { external_inputs: f.external_inputs.map(x => ({ env: x.env, filename: x.filename, sha256: tamper === 'wrong-input-sha' ? '0'.repeat(64) : x.sha256, bytes: 1 })) } : {}) })) }));
       else if (c.kind === 'playwright') { fs.writeFileSync(path.join(cd, 'report.json'), JSON.stringify({ stats: { expected: c.expect_passed, unexpected: 0, flaky: 0, skipped: 0 }, errors: [], suites: [{ title: 's', specs: Array.from({ length: c.expect_passed }, (_, i) => ({ title: 't' + i, tests: [{ status: 'expected', results: [{ status: 'passed' }] }] })) }] }));
         fs.writeFileSync(path.join(cd, 'result.json'), JSON.stringify({ state: 'EXECUTED', exit_code: 0, report: `checks/${c.id}/report.json` })); }
       else fs.writeFileSync(path.join(cd, 'result.json'), JSON.stringify({ state: 'EXECUTED', exit_code: 0 }));
@@ -460,6 +461,13 @@ describe('sealing an archived candidate: all three source records must bind, Pos
     const { verify } = sealR05({ afterSeal: out => { const { files, file_count, schema, ...meta } = JSON.parse(fs.readFileSync(path.join(out, 'manifest.json'), 'utf8')); writeManifest(out, meta); } });
     assert.equal(verify.status, 0, verify.stdout); assert.match(verify.stdout, /archived source bound in all three phases/);
   });
+  test('D1-A/NORM sealing: all documents verified -> PASS; a missing or wrong document record in the evidence fails the gate and verify-evidence', () => {
+    assert.equal(sealR05().rec.result.gate, GATE.PASSED);
+    for (const tamper of ['drop-input-record', 'wrong-input-sha']) {
+      const { rec } = sealR05({ tamper });
+      assert.equal(rec.result.gate, GATE.FAILED, tamper); assert.ok(JSON.stringify(rec.result.checks).includes('is not recorded as verified'), tamper);
+    }
+  });
   test('a PostgreSQL teardown failure (or missing teardown evidence) is never a PASS', () => {
     const bad = sealR05({ cleanupRecord: { ...cleanup(), owned_processes_after: [{ pid: 551, role: 'postmaster' }] } });
     assert.equal(bad.rec.result.gate, GATE.FAILED); assert.equal(bad.rec.result.checks.find(c => c.id === 'postgres-cleanup').status, S.FAIL);
@@ -487,48 +495,65 @@ describe('sealing an archived candidate: all three source records must bind, Pos
   });
 });
 
-describe('F-CI-R05-01 follow-up: documented exact skip (profile files[].expect_skipped)', () => {
-  const synthSkip = () => { const p = synth().profile; p.checks[0].files[0].expect_skipped = 1; p.checks[0].files[0].skip_reason = 'external documents are not available on a hosted runner'; p.full_regression.expect_skipped = 1; return p; };
-  const execd = (pth, t, over = {}) => ({ path: pth, state: 'EXECUTED', exit_code: 0, counts: { tests: t, pass: t, fail: 0, cancelled: 0, skipped: 0, todo: 0, ...over } });
-  const INV = ['tests/a.test.ts', 'tests/b.test.ts', 'tests/c.test.ts'];
-  const run = (p, files) => { const d = tmp(); fs.mkdirSync(path.join(d, 'checks', 'unit'), { recursive: true }); fs.writeFileSync(path.join(d, 'checks', 'unit', 'result.json'), JSON.stringify({ state: 'EXECUTED', files }));
-    return classifyRun({ profile: p, rawDir: d, identity: { ok: true, test_inventory: INV } }); };
-  const frOf = r => r.checks.find(c => c.id === 'full-regression-inventory'); const unit = r => r.checks.find(c => c.id === 'unit');
-  const okFiles = () => [execd('tests/a.test.ts', 2, { pass: 1, skipped: 1 }), execd('tests/b.test.ts', 3), execd('tests/c.test.ts', 1)];
-  test('the profile with a documented skip validates; the skip is reported, not hidden', () => {
-    assert.deepEqual(validateProfile(synthSkip()), []);
-    const r = run(synthSkip(), okFiles());
-    assert.equal(unit(r).status, S.PASS, JSON.stringify(unit(r).reasons)); assert.equal(frOf(r).status, S.PASS, frOf(r).reasons.join('; '));
-    assert.equal(unit(r).totals.skipped, 1); assert.equal(unit(r).files[0].expected_skipped, 1); assert.equal(frOf(r).totals.skipped, 1); assert.equal(frOf(r).totals.pass, 5);
-    assert.equal(r.by_class.UNIT.tests_skip, 1);
-  });
-  test('FAIL when the documented skip does not happen (no skip at all), when a second test of that file is skipped, and when ANOTHER file skips', () => {
-    for (const [files, why] of [
-      [[execd('tests/a.test.ts', 2), execd('tests/b.test.ts', 3), execd('tests/c.test.ts', 1)], 'expected skip missing'],
-      [[execd('tests/a.test.ts', 2, { pass: 0, skipped: 2 }), execd('tests/b.test.ts', 3), execd('tests/c.test.ts', 1)], 'two skipped in the excepted file'],
-      [[execd('tests/a.test.ts', 2, { pass: 1, skipped: 1 }), execd('tests/b.test.ts', 3, { pass: 2, skipped: 1 }), execd('tests/c.test.ts', 1)], 'a skip in a file without the exception'],
-      [[execd('tests/a.test.ts', 2, { pass: 1, skipped: 1 }), execd('tests/b.test.ts', 3), execd('tests/c.test.ts', 1, { pass: 0, skipped: 1 })], 'a different file entirely skipped'],
-    ]) { const r = run(synthSkip(), files); assert.equal(r.gate, GATE.FAILED, why); assert.notEqual(unit(r).status, S.PASS, why); }
-  });
-  test('without the exception the same single skip is still a FAIL (no general relaxation, allow_skip untouched)', () => {
-    const r = run(synth().profile, okFiles()); assert.equal(r.gate, GATE.FAILED); assert.equal(unit(r).status, S.FAIL); assert.equal(frOf(r).status, S.FAIL);
-  });
-  test('the full-regression total must also account for the skip exactly', () => {
-    const p = synthSkip(); p.full_regression.expect_skipped = 2;
-    assert.ok(validateProfile(p).some(x => x.includes('full_regression.expect_skipped is 2 but the listed files expect 1')));
-    const q = synthSkip(); delete q.full_regression.expect_skipped;
-    assert.ok(validateProfile(q).some(x => x.includes('full_regression.expect_skipped is 0 but the listed files expect 1')));
-  });
-  test('profile schema: expect_skipped is bounded, needs a reason, and a reason alone is invalid', () => {
-    for (const [mut, msg] of [[p => { p.checks[0].files[0].expect_skipped = 2; }, 'expect_skipped must be a positive count smaller than expect_tests'],
-      [p => { delete p.checks[0].files[0].skip_reason; }, 'skip_reason must state why'], [p => { delete p.checks[0].files[0].expect_skipped; delete p.full_regression.expect_skipped; }, 'skip_reason is only valid with expect_skipped'],
-      [p => { p.checks[0].allow_skip = true; }, 'may not allow skipped']]) { const p = synthSkip(); mut(p); assert.ok(validateProfile(p).some(x => x.includes(msg)), msg); }
-  });
-  test('the R05 TEMPLATE pins exactly one expected skip, in gpr2-r01-normative-expectations only (8 tests / 7 pass / 1 skipped), full regression 1258 / 1257 / 1', () => {
+describe('D1-A/NORM: the normative documents are pinned external inputs — no skip, no waiver', () => {
+  const crypto2 = crypto;
+  const doc = (name, text) => { const d = tmp(); fs.writeFileSync(path.join(d, name), text); return { d, sha: sha256(Buffer.from(text)) }; };
+  const NORM = 'tests/gpr2-r01-normative-expectations.test.ts';
+  const normSpec = () => r05().checks.flatMap(c => c.files || []).find(f => f.path === NORM);
+  test('the R05 TEMPLATE keeps the original criterion (145 files / 1258 tests, no skip anywhere) and pins exactly the two approved documents for the normative file only', () => {
     const p = r05(); const files = p.checks.flatMap(c => c.files || []);
-    assert.deepEqual(files.filter(f => f.expect_skipped !== undefined).map(f => [f.path, f.expect_tests, f.expect_skipped]), [['tests/gpr2-r01-normative-expectations.test.ts', 8, 1]]);
-    assert.equal(p.full_regression.expect_skipped, 1); assert.equal(p.status, 'TEMPLATE'); assert.deepEqual(p.candidates, []);
+    assert.deepEqual([p.full_regression.expect_files, p.full_regression.expect_tests, p.full_regression.expect_skipped], [145, 1258, undefined]);
+    assert.ok(files.every(f => f.expect_skipped === undefined && f.skip_reason === undefined), 'no skip exception exists');
     assert.ok(p.checks.every(c => c.allow_skip !== true));
+    assert.deepEqual(files.filter(f => f.external_inputs).map(f => f.path), [NORM]);
+    assert.equal(normSpec().expect_tests, 8);
+    assert.deepEqual(normSpec().external_inputs.map(x => [x.env, x.filename, x.sha256]), [
+      ['GPR2_TD_PATH', 'Construction_Core_GPR-2_Final_Technical_Design_2026-10-15.md', 'b80ba7315509b9a011b87a45957f7e9a3eaf802624c1ca241f7072fab8879368'],
+      ['GPR2_ROADMAP_PATH', 'Construction_Core_GPR-2_Implementation_Roadmap_2026-10-15.md', 'a4c27d19a731b0d32a70c75a14af4f04c289ff93007d4ed78fe308a6ab434f76']]);
+    assert.equal(p.status, 'TEMPLATE'); assert.deepEqual(p.candidates, []);
+  });
+  test('the pins equal the hashes the repository itself pins (tests/helpers/gpr2-decision-index.ts)', () => {
+    const src = fs.readFileSync(path.resolve(ACC, '..', '..', 'tests', 'helpers', 'gpr2-decision-index.ts'), 'utf8');
+    const pinned = k => new RegExp(`export const ${k} = '([0-9a-f]{64})'`).exec(src)?.[1];
+    const [td, rm] = normSpec().external_inputs;
+    assert.equal(td.sha256, pinned('TD_SHA256')); assert.equal(rm.sha256, pinned('ROADMAP_SHA256'));
+  });
+  test('profile schema: external_inputs is strict (env name, plain file name, 64-hex digest, no duplicates, non-empty)', () => {
+    const base = () => { const p = r05(); return { p, f: p.checks.flatMap(c => c.files || []).find(x => x.path === NORM) }; };
+    for (const [mut, msg] of [[f => { f.external_inputs[0].env = 'PATH'; }, 'env must match'], [f => { f.external_inputs[0].filename = '../x.md'; }, 'filename must be a plain file name'],
+      [f => { f.external_inputs[0].filename = '/etc/passwd'; }, 'filename must be a plain file name'], [f => { f.external_inputs[0].sha256 = 'ABC'; }, 'sha256 must be 64 lowercase hex'],
+      [f => { f.external_inputs[1].env = 'GPR2_TD_PATH'; }, 'is listed twice'], [f => { f.external_inputs = []; }, 'must be a non-empty array'], [f => { f.external_inputs[0].url = 'https://x'; }, 'url']]) {
+      const { p, f } = base(); mut(f); assert.ok(validateProfile(p).some(x => x.includes(msg)), msg);
+    }
+    const { p, f } = base(); f.expect_skipped = 1; assert.ok(validateProfile(p).length > 0, 'expect_skipped is no longer a valid key');
+  });
+  test('resolveExternalInputs: verified byte for byte; missing dir, missing file, same-size substitute, wrong content and symbolic links are refused', () => {
+    const { d, sha } = doc('a.md', 'approved text');
+    const spec = [{ env: 'GPR2_TD_PATH', filename: 'a.md', sha256: sha }];
+    const ok = resolveExternalInputs(spec, d);
+    assert.equal(ok.reason, undefined); assert.equal(ok.env.GPR2_TD_PATH, path.join(d, 'a.md')); assert.deepEqual(ok.records, [{ env: 'GPR2_TD_PATH', filename: 'a.md', sha256: sha, bytes: 13 }]);
+    assert.deepEqual(resolveExternalInputs(undefined, d), { env: {}, records: [] });
+    assert.match(resolveExternalInputs(spec, undefined).reason, /not supplied/); assert.match(resolveExternalInputs(spec, 'relative/dir').reason, /not supplied/);
+    assert.match(resolveExternalInputs([{ ...spec[0], filename: 'b.md' }], d).reason, /missing or is not a regular file/);
+    const swapped = doc('a.md', 'forged  text!');                      // same length (13 bytes), different content
+    assert.match(resolveExternalInputs(spec, swapped.d).reason, /has sha256 .* pinned /);
+    const lnk = tmp(); fs.writeFileSync(path.join(lnk, 'real.md'), 'approved text'); fs.symlinkSync(path.join(lnk, 'real.md'), path.join(lnk, 'a.md'));
+    assert.match(resolveExternalInputs(spec, lnk).reason, /not a regular file/);
+    const dirAsFile = tmp(); fs.mkdirSync(path.join(dirAsFile, 'a.md')); assert.match(resolveExternalInputs(spec, dirAsFile).reason, /not a regular file/);
+  });
+  test('the directory variable never reaches a candidate process (baseEnv scrubs GPR2_EXTERNAL_INPUTS_DIR)', () => {
+    const before = process.env.GPR2_EXTERNAL_INPUTS_DIR; process.env.GPR2_EXTERNAL_INPUTS_DIR = '/x';
+    try { assert.equal(baseEnv().GPR2_EXTERNAL_INPUTS_DIR, undefined); } finally { if (before === undefined) delete process.env.GPR2_EXTERNAL_INPUTS_DIR; else process.env.GPR2_EXTERNAL_INPUTS_DIR = before; }
+  });
+  test('classification: PASS only with 8/8 and the pinned documents on record; unsupplied documents are ENVIRONMENT BLOCKED, never a skip and never PASS', () => {
+    const spec = normSpec(); const check = { file_timeout_seconds: 60 };
+    const recOk = { path: NORM, state: 'EXECUTED', exit_code: 0, counts: { tests: 8, pass: 8, fail: 0, cancelled: 0, skipped: 0, todo: 0 }, external_inputs: spec.external_inputs.map(x => ({ env: x.env, filename: x.filename, sha256: x.sha256, bytes: 1 })) };
+    assert.equal(classifyNodeFile(spec, recOk, check).status, S.PASS);
+    const noRec = classifyNodeFile(spec, { ...recOk, external_inputs: undefined }, check); assert.equal(noRec.status, S.FAIL); assert.ok(noRec.reasons.some(x => x.includes('GPR2_TD_PATH')));
+    const wrong = classifyNodeFile(spec, { ...recOk, external_inputs: recOk.external_inputs.map(x => ({ ...x, sha256: '1'.repeat(64) })) }, check); assert.equal(wrong.status, S.FAIL);
+    const skipped = classifyNodeFile(spec, { ...recOk, counts: { tests: 8, pass: 7, fail: 0, cancelled: 0, skipped: 1, todo: 0 } }, check);
+    assert.equal(skipped.status, S.FAIL); assert.ok(skipped.reasons.some(x => x.includes('unexpectedly skipped')), 'the old 7 pass + 1 skip outcome is a FAIL again');
+    const blocked = classifyNodeFile(spec, { path: NORM, state: 'INPUT_UNVERIFIED', reason: 'not supplied' }, check); assert.equal(blocked.status, S.BLOCKED);
   });
 });
 

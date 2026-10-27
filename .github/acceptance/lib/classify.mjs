@@ -35,8 +35,9 @@ export function parseTapSummary(text) {
 export function classifyNodeFile(spec, rec, check) {
   const reasons = [];
   if (!rec) return { path: spec.path, status: S.NOT_RUN, expected_tests: spec.expect_tests, reasons: ['no execution record'] };
-  const base = { path: spec.path, expected_tests: spec.expect_tests, ...(spec.expect_skipped ? { expected_skipped: spec.expect_skipped } : {}), exit_code: rec.exit_code ?? null, seconds: rec.seconds ?? null, counts: rec.counts ?? {}, log: rec.log ?? null, junit: rec.junit ?? null };
+  const base = { path: spec.path, expected_tests: spec.expect_tests, ...(spec.external_inputs ? { external_inputs: rec.external_inputs ?? [] } : {}), exit_code: rec.exit_code ?? null, seconds: rec.seconds ?? null, counts: rec.counts ?? {}, log: rec.log ?? null, junit: rec.junit ?? null };
   if (rec.state === 'MISSING') return { ...base, status: S.FAIL, reasons: ['required test file is missing or empty in the candidate'] };
+  if (rec.state === 'INPUT_UNVERIFIED') return { ...base, status: S.BLOCKED, reasons: [rec.reason || 'a pinned external input document was not supplied or did not match its SHA-256'] };
   if (rec.state === 'DB_RESET_FAILED') return { ...base, status: S.BLOCKED, reasons: ['the disposable test database could not be recreated'] };
   if (rec.state === 'BLOCKED') return { ...base, status: S.BLOCKED, reasons: [rec.reason || 'prerequisite unavailable'] };
   if (rec.state !== 'EXECUTED') return { ...base, status: S.NOT_RUN, reasons: ['file was not executed'] };
@@ -50,13 +51,16 @@ export function classifyNodeFile(spec, rec, check) {
     if (fail) reasons.push(`${fail} failed`);
     if (cancelled) reasons.push(`${cancelled} cancelled`);
     if (todo) reasons.push(`${todo} todo`);
-    // A file may carry a documented, exact skip expectation (profile files[].expect_skipped); anything else skipped is a FAIL, never absorbed.
-    const expectSkipped = spec.expect_skipped ?? 0;
-    if (!check.allow_skip && skipped !== expectSkipped) reasons.push(expectSkipped ? `${skipped} skipped, profile expects exactly ${expectSkipped}` : `${skipped} unexpectedly skipped`);
-    const required = check.allow_skip ? spec.expect_tests - skipped : spec.expect_tests - expectSkipped;
+    if (skipped && !check.allow_skip) reasons.push(`${skipped} unexpectedly skipped`);
+    const required = check.allow_skip ? spec.expect_tests - skipped : spec.expect_tests;
     if (pass !== required) reasons.push(`expected ${required} passing, runner reported ${pass}`);
   }
   if (rec.exit_code !== 0) reasons.push(`exit code ${rec.exit_code}`);
+  // The pinned external documents must be on record, byte for byte (SHA-256), as verified by the harness before the file ran.
+  for (const x of spec.external_inputs || []) {
+    const got = (rec.external_inputs || []).find(y => y && y.env === x.env);
+    if (!got || got.sha256 !== x.sha256 || got.filename !== x.filename) reasons.push(`external input ${x.env} (${x.filename}) is not recorded as verified against sha256 ${x.sha256}`);
+  }
   return { ...base, status: reasons.length ? S.FAIL : S.PASS, reasons };
 }
 
@@ -264,7 +268,6 @@ export function classifyFullRegression(profile, checks, identity) {
   const files = listed.flatMap(c => (c && c.files) || []);
   const reasons = [];
   const inventory = identity && Array.isArray(identity.test_inventory) ? identity.test_inventory : null;
-  const expectSkipped = fr.expect_skipped ?? 0;
   const covered = new Set(files.map(f => f.path));
   if (!inventory) reasons.push(identity && identity.ok === true ? 'candidate test inventory is missing from the identity record' : 'candidate test inventory was not established (identity not verified)');
   else {
@@ -276,16 +279,14 @@ export function classifyFullRegression(profile, checks, identity) {
   const notRun = listed.filter(c => c && (c.status === S.NOT_RUN || c.status === S.BLOCKED));
   const summarised = files.filter(f => n(f.counts?.tests) !== null);
   const totals = { files: files.length, files_with_summary: summarised.length, expected_files: fr.expect_files, expected_tests: fr.expect_tests,
-                   expected_skipped: expectSkipped, tests: summarised.reduce((a, f) => a + n(f.counts.tests), 0), pass: summarised.reduce((a, f) => a + (n(f.counts.pass) ?? 0), 0),
-                   skipped: summarised.reduce((a, f) => a + (n(f.counts.skipped) ?? 0), 0),
+                   tests: summarised.reduce((a, f) => a + n(f.counts.tests), 0), pass: summarised.reduce((a, f) => a + (n(f.counts.pass) ?? 0), 0),
                    inventory_files: inventory ? inventory.length : null };
   if (reasons.length) return { ...head, status: S.FAIL, totals, reasons };
   if (!inventory) return { ...head, status: S.NOT_RUN, totals, reasons };
   if (notRun.length) return { ...head, status: notRun.some(c => c.status === S.BLOCKED) ? S.BLOCKED : S.NOT_RUN, totals, reasons: notRun.map(c => `${c.id}: ${c.status}`) };
   if (summarised.length !== fr.expect_files) reasons.push(`${summarised.length} of ${fr.expect_files} files produced a complete runner summary`);
   if (totals.tests !== fr.expect_tests) reasons.push(`runner reported ${totals.tests} tests in total, profile expects exactly ${fr.expect_tests}`);
-  if (totals.pass !== fr.expect_tests - expectSkipped) reasons.push(`${totals.pass} tests passed, profile expects exactly ${fr.expect_tests - expectSkipped} (${fr.expect_tests} tests, ${expectSkipped} documented skipped)`);
-  if (totals.skipped !== expectSkipped) reasons.push(`${totals.skipped} tests skipped in total, profile expects exactly ${expectSkipped}`);
+  if (totals.pass !== fr.expect_tests) reasons.push(`${totals.pass} of ${fr.expect_tests} tests passed`);
   for (const c of listed) if (c && c.status !== S.PASS) reasons.push(`${c.id}: ${c.status}`);
   return { ...head, status: reasons.length ? S.FAIL : S.PASS, totals, reasons };
 }

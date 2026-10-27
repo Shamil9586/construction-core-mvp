@@ -455,8 +455,18 @@
         {
           "path": "tests/gpr2-r01-normative-expectations.test.ts",
           "expect_tests": 8,
-          "expect_skipped": 1,
-          "skip_reason": "Exactly 1 of 8 tests needs the external GPR-2 Technical Design / Roadmap documents (GPR2_TD_PATH, GPR2_ROADMAP_PATH), which a hosted runner cannot receive; the same file must be run 8/8 offline with checksum-verified documents."
+          "external_inputs": [
+            {
+              "env": "GPR2_TD_PATH",
+              "filename": "Construction_Core_GPR-2_Final_Technical_Design_2026-10-15.md",
+              "sha256": "b80ba7315509b9a011b87a45957f7e9a3eaf802624c1ca241f7072fab8879368"
+            },
+            {
+              "env": "GPR2_ROADMAP_PATH",
+              "filename": "Construction_Core_GPR-2_Implementation_Roadmap_2026-10-15.md",
+              "sha256": "a4c27d19a731b0d32a70c75a14af4f04c289ff93007d4ed78fe308a6ab434f76"
+            }
+          ]
         },
         {
           "path": "tests/gpr2-r01-openapi.test.ts",
@@ -714,12 +724,11 @@
       "full-regression-other"
     ],
     "expect_files": 145,
-    "expect_tests": 1258,
-    "expect_skipped": 1
+    "expect_tests": 1258
   },
   "notes": [
     "Inventory: 145 top-level tests/*.test.ts files of c18d426 (git ls-tree of the bundle-restored commit, 27.10.2026) = the 145 files of both historical author full runs; per-file expected counts are those runs' runner totals (identical in run 1 and run 2), 1258 tests in total. Native/other split = files referencing E2E_*/GPR2_ISOLATED_PG_URL directly or through tests/helpers (aosr-harness, gpr2-native-pg, registry-fixtures); a label only, both checks get the same disposable PostgreSQL environment.",
-    "Documented, exact, file-scoped expectation (not a waiver): tests/gpr2-r01-normative-expectations.test.ts runs 8 tests of which exactly 1 is skipped without the external GPR-2 TD/Roadmap documents (GPR2_TD_PATH / GPR2_ROADMAP_PATH). The profile expects that file to report 8 tests / 7 pass / exactly 1 skipped (files[].expect_skipped) and the full regression exactly 1258 tests / 1257 pass / 1 skipped (full_regression.expect_skipped); any other skip, a second skip in that file, or no skip at all classifies FAIL. The skipped test is reported, not hidden: it stays in the tests-skipped counts of the sealed result. The 8/8 execution with the checksum-verified TD/Roadmap is a separate offline evidence item and is NOT replaced by this hosted run.",
+    "tests/gpr2-r01-normative-expectations.test.ts must run 8/8 WITHOUT a skip. Its 8th test needs the approved GPR-2 Technical Design v1.0 and Implementation Roadmap v1.0 (15.10.2026), which are not in the repository: the profile pins them by SHA-256 (files[].external_inputs, identical to TD_SHA256 / ROADMAP_SHA256 of tests/helpers/gpr2-decision-index.ts and to exchange/gpr2/r05/normative/SHA256SUMS in the private evidence archive). The harness verifies both files byte for byte before that file runs and passes their paths only to that process; if they are not supplied the file is ENVIRONMENT BLOCKED (never skipped, never PASS). The transport of the documents to a hosted runner is NOT approved and is not implemented here; no skip, waiver or changed expectation exists.",
     "Known, NOT waived: tests/gpr2-r05-native-pg.test.ts has an intermittent teardown race (uncaughtException \"terminating connection due to administrator command\" after all scenarios passed) recorded in both author full runs. Any recurrence classifies FAIL and returns to the coordinator; no automatic waiver.",
     "tests/gpr2-r03d-migration-runner.test.ts needs commit 678e795f8802a76ac025f28b0d698351af8b7721 in the checkout (it is the head of integration/cr01-gpr2-r01 in this repository; a fetch-depth 0 checkout of the baseline includes it)."
   ]

@@ -10,6 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { loadProfile } from './profile.mjs';
 import { parseTapSummary, classifyRun } from './classify.mjs';
@@ -17,7 +18,7 @@ import { testInventory } from './identity.mjs';
 
 const PG_BASE = 'postgresql://postgres:x@127.0.0.1:54329';
 const CLUSTER_NAME = 'gpr2-p1-isolated';
-const SCRUB = /^(DATABASE_URL|PG[A-Z_]*|E2E_.*|POSTGRES_.*|GPR2_ISOLATED_PG_URL|GPR2_EVIDENCE_DIR|ACTIONS_.*|GITHUB_TOKEN|GH_TOKEN|NODE_OPTIONS|NPM_TOKEN|.*(TOKEN|SECRET|PASSWORD|CREDENTIAL|PRIVATE_KEY).*)$/i;
+const SCRUB = /^(DATABASE_URL|PG[A-Z_]*|E2E_.*|POSTGRES_.*|GPR2_ISOLATED_PG_URL|GPR2_EVIDENCE_DIR|ACTIONS_.*|GITHUB_TOKEN|GH_TOKEN|GPR2_EXTERNAL_INPUTS_DIR|NODE_OPTIONS|NPM_TOKEN|.*(TOKEN|SECRET|PASSWORD|CREDENTIAL|PRIVATE_KEY).*)$/i;
 
 function args() {
   const a = {}; const v = process.argv.slice(2);
@@ -71,6 +72,28 @@ function verifyCluster() {
   return judgeCluster({ name, dir, addr });
 }
 
+/**
+ * Pinned external documents of one test file (profile files[].external_inputs). They are never in the repository: the approved transport places them
+ * in $GPR2_EXTERNAL_INPUTS_DIR, outside the candidate tree. Each must be a regular file (no link) whose SHA-256 equals the pin; only then is its path
+ * handed to THAT file's process (the directory variable itself never reaches a candidate process). Anything else is a refusal, never a skipped test.
+ * Returns { env } for the child, { records } for the evidence, or { reason }.
+ */
+export function resolveExternalInputs(inputs, dir = process.env.GPR2_EXTERNAL_INPUTS_DIR) {
+  if (!inputs || inputs.length === 0) return { env: {}, records: [] };
+  if (!dir || !path.isAbsolute(dir)) return { reason: 'GPR2_EXTERNAL_INPUTS_DIR is not set to an absolute directory: the pinned external documents were not supplied' };
+  const env = {}, records = [];
+  for (const x of inputs) {
+    const f = path.join(dir, x.filename);
+    let st = null; try { st = fs.lstatSync(f); } catch { /* reported below */ }
+    if (!st || !st.isFile() || st.isSymbolicLink()) return { reason: `external input ${x.filename} is missing or is not a regular file` };
+    const buf = fs.readFileSync(f);
+    const sha = crypto.createHash('sha256').update(buf).digest('hex');
+    if (sha !== x.sha256) return { reason: `external input ${x.filename} has sha256 ${sha}, pinned ${x.sha256}` };
+    env[x.env] = f; records.push({ env: x.env, filename: x.filename, sha256: sha, bytes: buf.length });
+  }
+  return { env, records };
+}
+
 function nodeTestCheck(check, ctx) {
   const dir = path.join(ctx.out, 'checks', check.id);
   const needsPg = check.requires.includes('postgres');
@@ -81,6 +104,9 @@ function nodeTestCheck(check, ctx) {
     const rec = { path: f.path, expected_tests: f.expect_tests, log: `checks/${check.id}/logs/${slug}.log`, junit: `checks/${check.id}/junit/${slug}.xml` };
     if (!fs.existsSync(abs) || fs.statSync(abs).size === 0) { files.push({ ...rec, state: 'MISSING' }); continue; }
     let extra = {};
+    const inputs = resolveExternalInputs(f.external_inputs);
+    if (inputs.reason) { files.push({ ...rec, state: 'INPUT_UNVERIFIED', reason: inputs.reason }); continue; }
+    extra = { ...inputs.env };
     if (needsPg) {
       const bad = verifyCluster();
       if (bad) { files.push({ ...rec, state: 'BLOCKED', reason: bad }); continue; }
@@ -89,7 +115,7 @@ function nodeTestCheck(check, ctx) {
         const c = d.status === 0 ? psql(`${PG_BASE}/postgres`, 'CREATE DATABASE construction_test') : d;
         if (c.status !== 0) { files.push({ ...rec, state: 'DB_RESET_FAILED', reason: (c.stderr || '').slice(0, 500) }); continue; }
       }
-      extra = { GPR2_ISOLATED_PG_URL: `${PG_BASE}/postgres`, E2E_DATABASE_URL: `${PG_BASE}/construction_test`, E2E_ADMIN_DATABASE_URL: `${PG_BASE}/postgres`, E2E_POSTGRES_HOST_URL: `${PG_BASE}/`, GPR2_EVIDENCE_DIR: path.join(dir, 'evidence') };
+      extra = { ...extra, GPR2_ISOLATED_PG_URL: `${PG_BASE}/postgres`, E2E_DATABASE_URL: `${PG_BASE}/construction_test`, E2E_ADMIN_DATABASE_URL: `${PG_BASE}/postgres`, E2E_POSTGRES_HOST_URL: `${PG_BASE}/`, GPR2_EVIDENCE_DIR: path.join(dir, 'evidence') };
       fs.mkdirSync(extra.GPR2_EVIDENCE_DIR, { recursive: true });
     }
     fs.mkdirSync(path.join(dir, 'junit'), { recursive: true });
@@ -98,7 +124,7 @@ function nodeTestCheck(check, ctx) {
                   { cwd: ctx.core, env: baseEnv(extra), log: path.join(ctx.out, rec.log), timeoutSec: check.file_timeout_seconds });
     const counts = parseTapSummary(fs.readFileSync(path.join(ctx.out, rec.log), 'utf8'));
     if (r.timed_out) fs.appendFileSync(path.join(ctx.out, rec.log), `\n# HARNESS: TIMEOUT after ${check.file_timeout_seconds}s\n`);
-    files.push({ ...rec, state: 'EXECUTED', ...r, counts });
+    files.push({ ...rec, state: 'EXECUTED', ...r, counts, ...(inputs.records.length ? { external_inputs: inputs.records } : {}) });
     console.log(`  ${f.path}: exit=${r.exit_code} tests=${counts.tests ?? '?'} pass=${counts.pass ?? '?'} fail=${counts.fail ?? '?'} skipped=${counts.skipped ?? '?'} (${r.seconds}s)`);
   }
   return { id: check.id, kind: check.kind, class: check.class, state: 'EXECUTED', files };
