@@ -11,7 +11,7 @@ import crypto from 'node:crypto';
 import { loadProfile } from './profile.mjs';
 import { classifyRun, GATE } from './classify.mjs';
 import { listFiles, sourceBindingProblems } from './seal.mjs';
-import { isolatedFiles, isolatedProvenanceProblems } from './provenance.mjs';
+import { isolatedFiles, isolatedProvenanceProblems, normativeJobResultProblems } from './provenance.mjs';
 
 const argv = process.argv.slice(2);
 const dir = argv[0];
@@ -60,6 +60,7 @@ if (registered && registered.source) {
 if (registered && isolatedFiles(profile).length) {
   const rd = f => { try { return JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); } catch { return null; } };
   const ip = isolatedProvenanceProblems({ profile, cand: registered, profileSha256: sha256, stageOutputs: rd('stage-outputs.json'), stageRecord: rd('stage-record.json'), sealRecord: rd('inputs-seal.json'), normative: rd('normative/result.json') });
+  ip.push(...normativeJobResultProblems(profile, record.github?.normative_job_result));
   if (ip.length) ip.forEach(bad); else ok('isolated inputs: stage outputs, the seal job\'s own recomputation and the normative job result all equal the pinned inputs');
 }
 const authz = JSON.parse(fs.readFileSync(path.join(dir, 'authorization.json'), 'utf8'));

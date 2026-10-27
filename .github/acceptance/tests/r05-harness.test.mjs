@@ -20,7 +20,7 @@ import { restoreFromBundle, parseBundleHeader, gitBlobId, gitEnv, CANDIDATE_REF,
 import { sourceBindingProblems, writeManifest } from '../lib/seal.mjs';
 import { computeInputs } from '../lib/stage-inputs.mjs';
 import { prepareClosure, runIsolated, sandboxCommand, SANDBOX_UID } from '../lib/run-normative.mjs';
-import { isolatedProvenanceProblems, expectedCore, digestOf, mergeIsolatedResults, STAGE_SCHEMA, NORMATIVE_SCHEMA } from '../lib/provenance.mjs';
+import { normativeJobResultProblems, isolatedProvenanceProblems, expectedCore, digestOf, mergeIsolatedResults, STAGE_SCHEMA, NORMATIVE_SCHEMA } from '../lib/provenance.mjs';
 import { rehearse, parseMergeTree } from '../lib/merge-tree.mjs';
 import { baseEnv } from '../lib/run-profile.mjs';
 import { resolveExternalInputs } from '../lib/external-inputs.mjs';
@@ -388,7 +388,7 @@ describe('sealing an archived candidate: all three source records must bind, Pos
     port_before: { pg_isready_exit: 0, responder: 'owned', detail: '' }, port_after: { pg_isready_exit: 2, responder: 'none', detail: '' }, termination_evidence: 'stopped_by_cleanup',
     shutdown_proof: ['verified postmaster pid 551 exited after SIGINT'], foreign_instances_untouched: true, problems: [], notes: [] });
   /** Builds an all-PASS synthetic evidence set for the (activated) R05 profile and runs the real seal.mjs and verify-evidence.mjs CLIs. */
-  function sealR05({ dropSource = null, cleanupRecord = cleanup(), tamper = null, records = (_phase, rec) => rec, afterSeal = null, iso = (_kind, o) => o, omit = [] } = {}) {
+  function sealR05({ dropSource = null, cleanupRecord = cleanup(), tamper = null, records = (_phase, rec) => rec, afterSeal = null, iso = (_kind, o) => o, omit = [], normativeResult = 'success' } = {}) {
     const p = activated(); const d = tmp();
     const pf = path.join(d, 'profiles', 'r05-final-verification.json'); fs.mkdirSync(path.dirname(pf), { recursive: true }); fs.writeFileSync(pf, JSON.stringify(p, null, 2));
     const { sha256: profileSha } = loadProfile(pf);
@@ -431,7 +431,7 @@ describe('sealing an archived candidate: all three source records must bind, Pos
     fs.writeFileSync(path.join(d, 'identity-seal.json'), JSON.stringify({ ok: true, candidate: candId, test_inventory: inventory }));
     const out = path.join(d, 'sealed');
     const run = spawnSync('node', [path.join(LIB, 'seal.mjs'), '--profile', pf, '--raw', raw, '--authorization', path.join(authzDir, 'authorization.json'), '--identity', path.join(d, 'identity-seal.json'),
-      '--runtime-result', 'success', '--source', recs.seal, '--normative', path.join(isoDir, 'normative'), '--stage-outputs', path.join(isoDir, 'stage-outputs.json'),
+      '--runtime-result', 'success', '--source', recs.seal, ...(normativeResult === null ? [] : ['--normative-result', normativeResult]), '--normative', path.join(isoDir, 'normative'), '--stage-outputs', path.join(isoDir, 'stage-outputs.json'),
       '--stage-record', path.join(isoDir, 'stage-record.json'), '--inputs-seal', path.join(isoDir, 'inputs-seal.json'), '--out', out], { encoding: 'utf8' });
     const rec = JSON.parse(fs.readFileSync(path.join(out, 'acceptance-result.json'), 'utf8'));
     if (tamper === 'drop-file') fs.rmSync(path.join(out, 'raw', 'checks', 'browser-gpr1', 'report.json'));
@@ -555,6 +555,45 @@ describe('sealing an archived candidate: all three source records must bind, Pos
     fs.writeFileSync(path.join(cd, 'result.json'), JSON.stringify({ state: 'EXECUTED', files: [{ path: NORM, state: 'DEFERRED' }, { path: other, state: 'EXECUTED', counts: { tests: 1 } }] }));
     assert.deepEqual(mergeIsolatedResults(d, p, { files: [{ path: NORM, state: 'EXECUTED', counts: { tests: 8 }, log: 'logs/x.log' }, { path: other, state: 'HIJACK' }] }), [NORM]);
     const res = JSON.parse(fs.readFileSync(path.join(cd, 'result.json'), 'utf8')); assert.equal(res.files[0].state, 'EXECUTED'); assert.equal(res.files[0].executed_in, 'normative'); assert.equal(res.files[1].state, 'EXECUTED'); assert.equal(res.files[1].counts.tests, 1);
+  });
+  // F-01: the normative job's conclusion comes from the trusted GitHub context (needs.normative.result), passed on the command line by the seal job — never from an
+  // artifact. The normative ARTIFACT below is perfectly valid in every case, so only the conclusion can reject the run. (null = the flag is omitted.)
+  const jobResultCases = [['failure', /normative job concluded failure, not success/], ['cancelled', /normative job concluded cancelled, not success/], ['skipped', /normative job concluded skipped, not success/],
+    ['', /was not supplied: fail closed/], [null, /was not supplied: fail closed/], ['Success', /unrecognised/], ['SUCCESS', /unrecognised/], [' success', /unrecognised/], ['success ', /unrecognised/],
+    ['succeeded', /unrecognised/], ['neutral', /unrecognised/], ['true', /unrecognised/], ['unknown', /unrecognised/]];
+  for (const [value, expected] of jobResultCases) {
+    test(`F-01 sealing refuses a normative job conclusion of ${JSON.stringify(value)} although the normative artifact is valid`, () => {
+      const { run, rec } = sealR05({ normativeResult: value });
+      assert.equal(rec.result.gate, GATE.FAILED, rec.result.gate_reasons.join('\n')); assert.equal(run.status, 1);
+      assert.ok(rec.result.gate_reasons.some(x => expected.test(x)), rec.result.gate_reasons.join('\n'));
+    });
+    test(`F-01 verify-evidence refuses a sealed package whose recorded normative conclusion is ${JSON.stringify(value)} even when the manifest is rebuilt`, () => {
+      const { verify } = sealR05({ afterSeal: out => {
+        const f = path.join(out, 'acceptance-result.json'); const r = JSON.parse(fs.readFileSync(f, 'utf8'));
+        if (value === null) delete r.github.normative_job_result; else r.github.normative_job_result = value;
+        fs.writeFileSync(f, JSON.stringify(r, null, 2) + '\n');
+        const { files, file_count, schema, ...meta } = JSON.parse(fs.readFileSync(path.join(out, 'manifest.json'), 'utf8')); writeManifest(out, meta);
+      } });
+      assert.equal(verify.status, 2, verify.stdout); assert.doesNotMatch(verify.stdout, /checksum mismatch|not covered by SHA256SUMS|manifest entry differs/);
+      assert.ok(verify.stdout.split('\n').some(l => l.includes('FAIL') && expected.test(l)), verify.stdout);
+    });
+  }
+  test('F-01 the exact conclusion `success` is recorded in the sealed result and verifies; nothing else in the oracle changed (145 files / 1258 tests, all PASS)', () => {
+    const { run, rec, verify } = sealR05();
+    assert.equal(run.status, 0); assert.equal(rec.github.normative_job_result, 'success'); assert.equal(rec.result.gate, GATE.PASSED, rec.result.gate_reasons.join('\n'));
+    assert.equal(verify.status, 0, verify.stdout);
+    const inv = rec.result.checks.find(c => c.id === 'full-regression-inventory'); assert.equal(inv.status, S.PASS); assert.deepEqual([inv.totals.expected_files, inv.totals.expected_tests, inv.totals.tests, inv.totals.pass], [145, 1258, 1258, 1258]);
+  });
+  test('F-01 a conclusion hidden inside the normative artifact is ignored: a forged `job_result: success` there cannot rescue a failed job', () => {
+    const { rec } = sealR05({ normativeResult: 'failure', iso: (kind, o) => (kind === 'normative' ? { ...o, job_result: 'success', conclusion: 'success', result: 'success' } : o) });
+    assert.equal(rec.result.gate, GATE.FAILED);
+  });
+  test('F-01 normativeJobResultProblems: only the exact string `success` passes; non-strings are unrecognised; a profile without isolated files has no requirement', () => {
+    const p = activated();
+    assert.deepEqual(normativeJobResultProblems(p, 'success'), []);
+    for (const v of [null, undefined, '', 'failure', 'cancelled', 'skipped', 'Success', 0, true, {}, ['success']]) assert.equal(normativeJobResultProblems(p, v).length, 1, String(JSON.stringify(v)));
+    const r04 = JSON.parse(fs.readFileSync(path.join(PROFILES, 'r04-cp02.json'), 'utf8'));
+    for (const v of [undefined, 'failure', 'whatever']) assert.deepEqual(normativeJobResultProblems(r04, v), []);
   });
   test('a PostgreSQL teardown failure (or missing teardown evidence) is never a PASS', () => {
     const bad = sealR05({ cleanupRecord: { ...cleanup(), owned_processes_after: [{ pid: 551, role: 'postmaster' }] } });

@@ -6,7 +6,7 @@
 //
 // CLI: node seal.mjs --profile <profile.json> --raw <raw dir|missing> --authorization <authorization.json> --identity <seal identity.json>
 //                    --runtime-result <success|failure|cancelled|skipped> --out <sealed dir> [--source <seal-phase source-bundle record>]
-//                    [--normative <normative job result dir> --stage-outputs <json of the stage job outputs> --stage-record <stage job stage.json>
+//                    [--normative-result <needs.normative.result: exactly `success`> --normative <normative job result dir> --stage-outputs <json of the stage job outputs> --stage-record <stage job stage.json>
 //                     --inputs-seal <stage.json recomputed by THIS job>]     (profiles with isolated files: provenance + merge of the isolated result)
 // For a candidate restored from an archived bundle (profile candidate.source), the authorize-, runtime- and seal-phase source-bundle.mjs records
 // must all be present, OK and bound to the pinned bundle SHA-256 and the authorised candidate; otherwise the identity is treated as not verified.
@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { loadProfile, findCandidate } from './profile.mjs';
 import { classifyRun, GATE, S } from './classify.mjs';
 import { RECORD_SCHEMA, REQUIRED_STEPS, sourcePin } from './source-bundle.mjs';
-import { isolatedFiles, isolatedProvenanceProblems, mergeIsolatedResults } from './provenance.mjs';
+import { isolatedFiles, isolatedProvenanceProblems, mergeIsolatedResults, normativeJobResultProblems } from './provenance.mjs';
 
 export const EVIDENCE_SCHEMA = 'construction-core/gpr2-acceptance-evidence@1';
 const readJson = f => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return null; } };
@@ -132,6 +132,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
   // pins AND against this job's own recomputation from the private source (inputs-seal) and the stage job's outputs.
   const candForIso = findCandidate(profile, authz?.candidate?.sha ?? '');
   if (isolatedFiles(profile).length) {
+    problems.push(...normativeJobResultProblems(profile, a['normative-result']));
     const normDir = a.normative ? path.resolve(a.normative) : null;
     const normative = normDir ? readJson(path.join(normDir, 'result.json')) : null;
     if (normDir && fs.existsSync(normDir)) copyTree(normDir, path.join(out, 'normative'));
@@ -153,7 +154,8 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
            baseline_sha: profile.baseline.sha, baseline_tree: profile.baseline.tree, diff_check: identity?.diff_check ?? null, changed_files_from_baseline: identity?.changed_files_from_baseline ?? null },
     github: { workflow_sha: process.env.GITHUB_SHA || authz?.workflow?.sha || null, workflow_ref: process.env.GITHUB_WORKFLOW_REF || null, run_id: process.env.GITHUB_RUN_ID || authz?.workflow?.run_id || null,
               run_attempt: process.env.GITHUB_RUN_ATTEMPT || authz?.workflow?.run_attempt || null, run_url: repo && process.env.GITHUB_RUN_ID ? `${server}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID}/attempts/${process.env.GITHUB_RUN_ATTEMPT || 1}` : null,
-              actor: authz?.request?.actor ?? null, triggering_actor: authz?.request?.triggering_actor ?? null, runtime_job_result: runtimeResult },
+              actor: authz?.request?.actor ?? null, triggering_actor: authz?.request?.triggering_actor ?? null, runtime_job_result: runtimeResult,
+              normative_job_result: isolatedFiles(profile).length ? (a['normative-result'] ?? null) : undefined },
     environment: env, result, sealed_at: new Date().toISOString(),
     statement: 'Technical gates only. Not an acceptance, not an integration decision; authorises no merge, deployment, migration or LIVE access.',
   };

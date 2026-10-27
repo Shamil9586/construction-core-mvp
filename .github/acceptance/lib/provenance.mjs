@@ -7,6 +7,21 @@ import crypto from 'node:crypto';
 
 export const STAGE_SCHEMA = 'construction-core/gpr2-stage-inputs@1';
 export const NORMATIVE_SCHEMA = 'construction-core/gpr2-normative-result@1';
+/** Conclusions GitHub Actions can report for a job (needs.<job>.result). Only the exact string `success` is acceptable (F-01). */
+export const JOB_RESULTS = ['success', 'failure', 'cancelled', 'skipped'];
+
+/**
+ * The normative job's own conclusion, taken by the workflow from the trusted `needs.normative.result` context (never from an artifact or from anything the
+ * candidate controls). Fail closed: anything but the exact string `success` — failure, cancelled, skipped, missing, empty, differently cased, unknown — is a
+ * problem, whatever the (otherwise valid-looking) normative artifact says. No isolated file in the profile -> no requirement.
+ */
+export function normativeJobResultProblems(profile, value) {
+  if (!isolatedFiles(profile).length) return [];
+  if (value === 'success') return [];
+  if (value === undefined || value === null || value === '') return ['normative job conclusion (needs.normative.result) was not supplied: fail closed'];
+  if (typeof value !== 'string' || !JOB_RESULTS.includes(value)) return [`normative job conclusion is unrecognised (${JSON.stringify(value)}): fail closed`];
+  return [`normative job concluded ${value}, not success: its result cannot be accepted`];
+}
 
 /** The isolated files of a profile: [{ check, file }]. */
 export function isolatedFiles(profile) {
