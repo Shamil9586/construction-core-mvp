@@ -122,22 +122,37 @@ jobs:
           run_check negative-f02 node --import tsx ../harness/.github/acceptance/reviews/fin-sdo-1-sec01-f02-negative.mjs
           run_check unit-f01 node --import tsx --test tests/fin-sdo-1-protected-error-boundary.test.ts
 
-      - name: Capture synthetic PostgreSQL logs and teardown
+      - name: Capture PostgreSQL logs, attempt teardown and seal evidence even after errors
         if: always()
         shell: bash
         run: |
-          mkdir -p evidence-raw
-          echo "PostgreSQL service is isolated and auto-destroyed by the GitHub runner" > evidence-raw/teardown.txt
-          cid="$(docker ps --format '{{.ID}} {{.Image}}' | awk '$2 ~ /^postgres:16/ {print $1; exit}')"
-          if [[ -n "$cid" ]]; then
-            docker logs "$cid" > evidence-raw/postgres-container.log 2>&1
-            set +e
-            docker stop "$cid" > evidence-raw/postgres-stop.log 2>&1
-            rc=$?
-            set -e
-            printf 'docker_stop_exit=%s\n' "$rc" >> evidence-raw/teardown.txt
+          # Failures in discovery/log retrieval must never prevent teardown or SHA-256 sealing.
+          set +e
+          set -o pipefail
+          mkdir -p evidence-raw || exit 90
+          status=0
+          docker ps --format '{{.ID}} {{.Image}}' > evidence-raw/docker-ps.stdout.log 2> evidence-raw/docker-ps.stderr.log
+          discovery_rc=$?
+          printf 'docker_discovery_exit=%s\n' "$discovery_rc" > evidence-raw/teardown.txt
+          cid=''
+          if [[ "$discovery_rc" -eq 0 ]]; then
+            cid="$(awk '$2 ~ /^postgres:16/ {print $1; exit}' evidence-raw/docker-ps.stdout.log)"
           else
-            printf 'postgres_container=NOT_FOUND\n' >> evidence-raw/teardown.txt
+            status=1
+          fi
+          if [[ -n "$cid" ]]; then
+            docker logs "$cid" > evidence-raw/postgres-container.stdout.log 2> evidence-raw/postgres-container.stderr.log
+            logs_rc=$?
+            printf 'docker_logs_exit=%s\n' "$logs_rc" >> evidence-raw/teardown.txt
+            if [[ "$logs_rc" -ne 0 ]]; then status=1; fi
+            # Stop is unconditional with respect to log retrieval success.
+            docker stop "$cid" > evidence-raw/postgres-stop.stdout.log 2> evidence-raw/postgres-stop.stderr.log
+            stop_rc=$?
+            printf 'docker_stop_exit=%s\n' "$stop_rc" >> evidence-raw/teardown.txt
+            if [[ "$stop_rc" -ne 0 ]]; then status=1; fi
+          else
+            printf 'postgres_container=NOT_FOUND\ndocker_logs_exit=NOT_RUN\ndocker_stop_exit=NOT_RUN\n' >> evidence-raw/teardown.txt
+            status=1
           fi
           {
             printf 'runner_os=%s\n' "${{ runner.os }}"
@@ -146,8 +161,13 @@ jobs:
             printf 'candidate=%s\n' "1d89ecd342e77d1fe9f13bc9bacdc49b41526ead"
             printf 'workflow_sha=%s\n' "${{ github.sha }}"
           } > evidence-raw/run-identity.txt
+          identity_rc=$?
+          if [[ "$identity_rc" -ne 0 ]]; then status=1; fi
           find evidence-raw -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > evidence-raw/SHA256SUMS
-          if [[ -n "${cid}" && "${rc}" != "0" ]]; then exit "${rc}"; fi
+          manifest_rc=$?
+          if [[ "$manifest_rc" -ne 0 ]]; then status=1; fi
+          # Finish with nonzero after the evidence is sealed, never suppressing mandatory failures.
+          exit "$status"
 
       - name: Upload immutable-run-id raw logs and SHA-256 evidence, even on FAIL
         if: always()
