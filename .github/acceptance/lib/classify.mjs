@@ -248,6 +248,43 @@ export function classifyCleanup(profile, rawDir) {
   return { ...head, status: r.ok ? S.PASS : S.FAIL, cleanup_status: c.status, stop_mode: c.stop_mode, reasons: r.reasons };
 }
 
+/**
+ * full_regression (profile.mjs): the listed node-test checks must cover the candidate's complete test inventory, file for file, and their runner
+ * summaries must add up to exactly the expected file and test totals with every test passing. `identity.test_inventory` comes from the git-only
+ * identity verification (identity.mjs), never from the candidate's own scripts. An inventory mismatch is FAIL whatever else happened; a listed check
+ * that never ran keeps its own NOT RUN / ENVIRONMENT BLOCKED status (nothing is established either way); otherwise any shortfall is FAIL.
+ */
+export function classifyFullRegression(profile, checks, identity) {
+  const fr = profile.full_regression;
+  if (!fr) return null;
+  const head = { id: 'full-regression-inventory', title: `Complete regression: exactly ${fr.expect_files} files / ${fr.expect_tests} tests (${fr.inventory})`, class: 'REGRESSION_INVENTORY', mandatory: true };
+  const listed = fr.checks.map(id => checks.find(c => c.id === id));
+  const files = listed.flatMap(c => (c && c.files) || []);
+  const reasons = [];
+  const inventory = identity && Array.isArray(identity.test_inventory) ? identity.test_inventory : null;
+  const covered = new Set(files.map(f => f.path));
+  if (!inventory) reasons.push(identity && identity.ok === true ? 'candidate test inventory is missing from the identity record' : 'candidate test inventory was not established (identity not verified)');
+  else {
+    const unlisted = inventory.filter(f => !covered.has(f)), absent = [...covered].filter(f => !inventory.includes(f));
+    if (inventory.length !== fr.expect_files) reasons.push(`candidate has ${inventory.length} ${fr.inventory} files, profile expects ${fr.expect_files}`);
+    if (unlisted.length) reasons.push(`candidate test files not covered by the regression checks: ${unlisted.slice(0, 20).join(', ')}`);
+    if (absent.length) reasons.push(`regression files absent from the candidate inventory: ${absent.slice(0, 20).join(', ')}`);
+  }
+  const notRun = listed.filter(c => c && (c.status === S.NOT_RUN || c.status === S.BLOCKED));
+  const summarised = files.filter(f => n(f.counts?.tests) !== null);
+  const totals = { files: files.length, files_with_summary: summarised.length, expected_files: fr.expect_files, expected_tests: fr.expect_tests,
+                   tests: summarised.reduce((a, f) => a + n(f.counts.tests), 0), pass: summarised.reduce((a, f) => a + (n(f.counts.pass) ?? 0), 0),
+                   inventory_files: inventory ? inventory.length : null };
+  if (reasons.length) return { ...head, status: S.FAIL, totals, reasons };
+  if (!inventory) return { ...head, status: S.NOT_RUN, totals, reasons };
+  if (notRun.length) return { ...head, status: notRun.some(c => c.status === S.BLOCKED) ? S.BLOCKED : S.NOT_RUN, totals, reasons: notRun.map(c => `${c.id}: ${c.status}`) };
+  if (summarised.length !== fr.expect_files) reasons.push(`${summarised.length} of ${fr.expect_files} files produced a complete runner summary`);
+  if (totals.tests !== fr.expect_tests) reasons.push(`runner reported ${totals.tests} tests in total, profile expects exactly ${fr.expect_tests}`);
+  if (totals.pass !== fr.expect_tests) reasons.push(`${totals.pass} of ${fr.expect_tests} tests passed`);
+  for (const c of listed) if (c && c.status !== S.PASS) reasons.push(`${c.id}: ${c.status}`);
+  return { ...head, status: reasons.length ? S.FAIL : S.PASS, totals, reasons };
+}
+
 export const RUNTIME_RESULTS = ['success', 'failure', 'cancelled', 'skipped'];
 /**
  * The runtime job's own conclusion is evidence too: a run whose runtime job did not succeed can never be a technical PASS, whatever the
@@ -290,6 +327,8 @@ export function classifyRun({ profile, rawDir, identity, runtimeResult }) {
     if (check.kind === 'playwright') return { ...head, config: check.config, ...classifyPlaywright(check, rec, rawDir) };
     return { ...head, script: check.script, ...classifyScript(check, rec) };
   });
+  const regression = classifyFullRegression(profile, checks, identity);
+  if (regression) checks.push(regression);
   const cleanup = classifyCleanup(profile, rawDir);
   if (cleanup) checks.push(cleanup);
 

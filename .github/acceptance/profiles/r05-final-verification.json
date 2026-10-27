@@ -1,0 +1,723 @@
+{
+  "$comment": "R05 final technical verification (R05-DEC-05). TEMPLATE: not runnable. The exact candidate is in proposed_candidates, which authorize/identity never read; activation (move to candidates + status ACTIVE) needs the independent Security + CI review of this PR and a separate coordinator/owner decision. The candidate exists only as an archived bundle in the private evidence repository; its hosted transport is NOT approved (authorize.mjs refuses git-bundle sources).",
+  "schema": "construction-core/gpr2-acceptance-profile@1",
+  "profile_id": "r05-final-verification",
+  "stage": "R05",
+  "title": "GPR-2 R05 final technical verification — exact c18d426 full regression (TEMPLATE, not runnable)",
+  "status": "TEMPLATE",
+  "baseline": {
+    "sha": "0417083ae69842caf40349ccd042ff0401911283",
+    "tree": "f841eb030d792cadd392c6c47a9cec0cd2595b73",
+    "description": "public main at the start of R05 (Merge PR #12, CI Foundation); the only bundle prerequisite"
+  },
+  "candidates": [],
+  "proposed_candidates": [
+    {
+      "sha": "c18d42689dd442feda48546096fd42d6b16607a2",
+      "tree": "046ea45eb3882e0f1cd9a7325ec5af94bf008315",
+      "lineage": [
+        {
+          "rev": "HEAD^",
+          "sha": "5ceb54d80b35719216a2791ee683ade3754ba6d9",
+          "tree": "999969a7758efa02292db9e8b7e65f708a9ee1c6"
+        },
+        {
+          "rev": "HEAD~2",
+          "sha": "7c8b401d883efa4f0f72c8c6440f75b34ab2533f",
+          "tree": "c81cb62a184577157570b20c55efedf7cb458064"
+        },
+        {
+          "rev": "HEAD~3",
+          "sha": "7a838ca032f7d6cdce4d5ee4d92f8301587124f6",
+          "tree": "790f0a1cd83fc6ca81f2e0965f6484fdaafabdbe"
+        }
+      ],
+      "diff_check_from": "0417083ae69842caf40349ccd042ff0401911283",
+      "approval": "PROPOSED ONLY — not approved for execution. Basis: coordinator R05-DEC-05 (docs decisions/coordinator/GPR2_R05_Coordinator_Gates_2026-10-26.md, blob 3f15b0ea304105b314984cabf9a2b938641494c8) and owner task GPR2-R05-CI-ONLY-PR of 27.10.2026 (CI-only PR, no hosted run). Activation requires independent Security + CI review and a separate decision.",
+      "source": {
+        "kind": "git-bundle",
+        "repository": "Shamil9586/construction-core-acceptance-evidence",
+        "commit": "0665f9a3f16eaf32f78138d686809cf06d8a44a3",
+        "path": "exchange/gpr2/r05/preview-corrective/source/candidate.bundle",
+        "blob": "059f9889c7ff9ccf6b815787a0a46a5e29fea089",
+        "bytes": 166910,
+        "sha256": "46f0471ace6d6294399132a9e04342e70e7dc75e7ebf542e314e07326e373677",
+        "ref": "refs/heads/feature/gpr2-r05-worktype-finish-templates",
+        "prerequisites": [
+          "0417083ae69842caf40349ccd042ff0401911283"
+        ]
+      }
+    }
+  ],
+  "runtime": {
+    "runner": "ubuntu-24.04",
+    "node": "22.22.0",
+    "postgres_major": 16,
+    "job_timeout_minutes": 150,
+    "requires": [
+      "postgres",
+      "chromium"
+    ]
+  },
+  "checks": [
+    {
+      "id": "full-regression-native-pg",
+      "title": "Full regression, native PostgreSQL suites (54 files, per file, fresh disposable database)",
+      "class": "NATIVE_POSTGRESQL",
+      "kind": "node-test",
+      "mandatory": true,
+      "requires": [
+        "postgres"
+      ],
+      "allow_skip": false,
+      "fresh_database_per_file": true,
+      "file_timeout_seconds": 600,
+      "files": [
+        {
+          "path": "tests/acceptance.test.ts",
+          "expect_tests": 8
+        },
+        {
+          "path": "tests/bitrix-disk-1-http.test.ts",
+          "expect_tests": 13
+        },
+        {
+          "path": "tests/core-2.0-decisions.test.ts",
+          "expect_tests": 1
+        },
+        {
+          "path": "tests/core-2.1-contractors.test.ts",
+          "expect_tests": 1
+        },
+        {
+          "path": "tests/f12-deputy-director.test.ts",
+          "expect_tests": 2
+        },
+        {
+          "path": "tests/f12-file-01-object-boundary.test.ts",
+          "expect_tests": 1
+        },
+        {
+          "path": "tests/f12-final-corrective-postgres-concurrency.test.ts",
+          "expect_tests": 8
+        },
+        {
+          "path": "tests/f12-final-r06-auth-safe-idempotency.test.ts",
+          "expect_tests": 1
+        },
+        {
+          "path": "tests/f12-qty-06-retry-safety.test.ts",
+          "expect_tests": 1
+        },
+        {
+          "path": "tests/f12-sdo-03-retry-safety.test.ts",
+          "expect_tests": 1
+        },
+        {
+          "path": "tests/f8.1-accepted-aggregate.test.ts",
+          "expect_tests": 1
+        },
+        {
+          "path": "tests/f8.1-contractor-viewer-scope.test.ts",
+          "expect_tests": 1
+        },
+        {
+          "path": "tests/f8.1-corrective-patch2.test.ts",
+          "expect_tests": 8
+        },
+        {
+          "path": "tests/f8.1-corrective-review.test.ts",
+          "expect_tests": 5
+        },
+        {
+          "path": "tests/f8.1-final-corrective-patch.test.ts",
+          "expect_tests": 3
+        },
+        {
+          "path": "tests/f8.2-documentation-http.test.ts",
+          "expect_tests": 5
+        },
+        {
+          "path": "tests/f8.2.1-pto-operations-http.test.ts",
+          "expect_tests": 8
+        },
+        {
+          "path": "tests/f8.3-migration-011-upgrade.test.ts",
+          "expect_tests": 3
+        },
+        {
+          "path": "tests/f8.3-postgres-concurrency.test.ts",
+          "expect_tests": 8
+        },
+        {
+          "path": "tests/f8.3-sdo-closing-http.test.ts",
+          "expect_tests": 69
+        },
+        {
+          "path": "tests/gpr-1-schedule-postgres.test.ts",
+          "expect_tests": 10
+        },
+        {
+          "path": "tests/gpr2-p1-isolation-guard.test.ts",
+          "expect_tests": 5
+        },
+        {
+          "path": "tests/gpr2-r02-fact-resolver-pg.test.ts",
+          "expect_tests": 2
+        },
+        {
+          "path": "tests/gpr2-r03a-snapshot-pg.test.ts",
+          "expect_tests": 4
+        },
+        {
+          "path": "tests/gpr2-r03b-coordination-pg.test.ts",
+          "expect_tests": 8
+        },
+        {
+          "path": "tests/gpr2-r03c-ledger-pg.test.ts",
+          "expect_tests": 5
+        },
+        {
+          "path": "tests/gpr2-r03d-migration-pg.test.ts",
+          "expect_tests": 6
+        },
+        {
+          "path": "tests/gpr2-r04-cp02-native-pg.test.ts",
+          "expect_tests": 1
+        },
+        {
+          "path": "tests/gpr2-r04-early-work.test.ts",
+          "expect_tests": 8
+        },
+        {
+          "path": "tests/gpr2-r04-native-pg.test.ts",
+          "expect_tests": 1
+        },
+        {
+          "path": "tests/gpr2-r05-corrective-native-pg.test.ts",
+          "expect_tests": 1
+        },
+        {
+          "path": "tests/gpr2-r05-ind3-native-pg.test.ts",
+          "expect_tests": 1
+        },
+        {
+          "path": "tests/gpr2-r05-independent-native-pg.test.ts",
+          "expect_tests": 1
+        },
+        {
+          "path": "tests/gpr2-r05-native-pg.test.ts",
+          "expect_tests": 1
+        },
+        {
+          "path": "tests/gpr2-r05-r3-native-pg.test.ts",
+          "expect_tests": 1
+        },
+        {
+          "path": "tests/id-auto-1-aosr.test.ts",
+          "expect_tests": 10
+        },
+        {
+          "path": "tests/id-auto-1-flows.test.ts",
+          "expect_tests": 13
+        },
+        {
+          "path": "tests/id-auto-2-registry.test.ts",
+          "expect_tests": 17
+        },
+        {
+          "path": "tests/integration-disk-registry.test.ts",
+          "expect_tests": 1
+        },
+        {
+          "path": "tests/obj1-object-onboarding.test.ts",
+          "expect_tests": 3
+        },
+        {
+          "path": "tests/org1-company-structure-postgres.test.ts",
+          "expect_tests": 7
+        },
+        {
+          "path": "tests/pbx2-department-head-migration-postgres.test.ts",
+          "expect_tests": 3
+        },
+        {
+          "path": "tests/pbx2-last-admin-postgres-concurrency.test.ts",
+          "expect_tests": 6
+        },
+        {
+          "path": "tests/pbx3a-object-team-postgres.test.ts",
+          "expect_tests": 10
+        },
+        {
+          "path": "tests/pbx5a-bitrix-notifications-postgres.test.ts",
+          "expect_tests": 7
+        },
+        {
+          "path": "tests/pilot-data-work-category.test.ts",
+          "expect_tests": 1
+        },
+        {
+          "path": "tests/pilot-w01-pto-handoff-postgres.test.ts",
+          "expect_tests": 5
+        },
+        {
+          "path": "tests/pto-package-archive.test.ts",
+          "expect_tests": 14
+        },
+        {
+          "path": "tests/pto-package-scope.test.ts",
+          "expect_tests": 9
+        },
+        {
+          "path": "tests/regression-erp-parity.test.ts",
+          "expect_tests": 1
+        },
+        {
+          "path": "tests/role-cleanup-migration-postgres.test.ts",
+          "expect_tests": 4
+        },
+        {
+          "path": "tests/role-cleanup-risk-settings.test.ts",
+          "expect_tests": 2
+        },
+        {
+          "path": "tests/role-cleanup-session-http.test.ts",
+          "expect_tests": 1
+        },
+        {
+          "path": "tests/workflow.test.ts",
+          "expect_tests": 1
+        }
+      ]
+    },
+    {
+      "id": "full-regression-other",
+      "title": "Full regression, unit / PGlite / HTTP suites (91 files, per file, same disposable PostgreSQL environment as the historical regression)",
+      "class": "UNIT",
+      "kind": "node-test",
+      "mandatory": true,
+      "requires": [
+        "postgres"
+      ],
+      "allow_skip": false,
+      "fresh_database_per_file": true,
+      "file_timeout_seconds": 600,
+      "files": [
+        {
+          "path": "tests/admin-registry-viewmodel.test.ts",
+          "expect_tests": 6
+        },
+        {
+          "path": "tests/app-data-boundary.test.ts",
+          "expect_tests": 4
+        },
+        {
+          "path": "tests/bitrix-contract.test.ts",
+          "expect_tests": 18
+        },
+        {
+          "path": "tests/bitrix-disk-1-storage.test.ts",
+          "expect_tests": 19
+        },
+        {
+          "path": "tests/crypto.test.ts",
+          "expect_tests": 1
+        },
+        {
+          "path": "tests/documentation-foundation.test.ts",
+          "expect_tests": 1
+        },
+        {
+          "path": "tests/domain.test.ts",
+          "expect_tests": 10
+        },
+        {
+          "path": "tests/execution-units.test.ts",
+          "expect_tests": 1
+        },
+        {
+          "path": "tests/f12.1-customer-sc-zero-accept.test.ts",
+          "expect_tests": 1
+        },
+        {
+          "path": "tests/f12.1-fact-freeze-customer-sc.test.ts",
+          "expect_tests": 1
+        },
+        {
+          "path": "tests/f6-real-data-provider.test.ts",
+          "expect_tests": 43
+        },
+        {
+          "path": "tests/f7-core-runtime.test.ts",
+          "expect_tests": 39
+        },
+        {
+          "path": "tests/f8.1-compatibility.test.ts",
+          "expect_tests": 1
+        },
+        {
+          "path": "tests/f8.1-inspection-type.test.ts",
+          "expect_tests": 1
+        },
+        {
+          "path": "tests/f8.1-quantity-confirmation.test.ts",
+          "expect_tests": 1
+        },
+        {
+          "path": "tests/f8.1-validate-snapshot.test.ts",
+          "expect_tests": 19
+        },
+        {
+          "path": "tests/f8.1-w01-viewmodel.test.ts",
+          "expect_tests": 19
+        },
+        {
+          "path": "tests/f8.2-p01-viewmodel.test.ts",
+          "expect_tests": 7
+        },
+        {
+          "path": "tests/f8.2.1-domain.test.ts",
+          "expect_tests": 10
+        },
+        {
+          "path": "tests/f8.2.1-package-detail-viewmodel.test.ts",
+          "expect_tests": 10
+        },
+        {
+          "path": "tests/f8.3-domain.test.ts",
+          "expect_tests": 25
+        },
+        {
+          "path": "tests/f8.3-frontend-viewmodels.test.ts",
+          "expect_tests": 25
+        },
+        {
+          "path": "tests/gpr-1-schedule-domain.test.ts",
+          "expect_tests": 26
+        },
+        {
+          "path": "tests/gpr-1-schedule-http.test.ts",
+          "expect_tests": 19
+        },
+        {
+          "path": "tests/gpr-1-unprovisioned.test.ts",
+          "expect_tests": 1
+        },
+        {
+          "path": "tests/gpr-1-viewmodel.test.ts",
+          "expect_tests": 14
+        },
+        {
+          "path": "tests/gpr-ux-d01-viewmodel.test.ts",
+          "expect_tests": 10
+        },
+        {
+          "path": "tests/gpr2-r01-contracts.test.ts",
+          "expect_tests": 25
+        },
+        {
+          "path": "tests/gpr2-r01-corrective-domain.test.ts",
+          "expect_tests": 15
+        },
+        {
+          "path": "tests/gpr2-r01-corrective-http.test.ts",
+          "expect_tests": 15
+        },
+        {
+          "path": "tests/gpr2-r01-corrective-openapi.test.ts",
+          "expect_tests": 12
+        },
+        {
+          "path": "tests/gpr2-r01-corrective-projection.test.ts",
+          "expect_tests": 9
+        },
+        {
+          "path": "tests/gpr2-r01-decimal.test.ts",
+          "expect_tests": 11
+        },
+        {
+          "path": "tests/gpr2-r01-flag-off.test.ts",
+          "expect_tests": 6
+        },
+        {
+          "path": "tests/gpr2-r01-guard-order.test.ts",
+          "expect_tests": 9
+        },
+        {
+          "path": "tests/gpr2-r01-http.test.ts",
+          "expect_tests": 17
+        },
+        {
+          "path": "tests/gpr2-r01-lifecycle.test.ts",
+          "expect_tests": 24
+        },
+        {
+          "path": "tests/gpr2-r01-normative-expectations.test.ts",
+          "expect_tests": 8
+        },
+        {
+          "path": "tests/gpr2-r01-openapi.test.ts",
+          "expect_tests": 7
+        },
+        {
+          "path": "tests/gpr2-r01-permissions.test.ts",
+          "expect_tests": 8
+        },
+        {
+          "path": "tests/gpr2-r01-traceability.test.ts",
+          "expect_tests": 7
+        },
+        {
+          "path": "tests/gpr2-r01-versions-errors.test.ts",
+          "expect_tests": 8
+        },
+        {
+          "path": "tests/gpr2-r02-consumers.test.ts",
+          "expect_tests": 1
+        },
+        {
+          "path": "tests/gpr2-r02-fact-resolver.test.ts",
+          "expect_tests": 24
+        },
+        {
+          "path": "tests/gpr2-r02-r1-unknown-gpr1.test.ts",
+          "expect_tests": 14
+        },
+        {
+          "path": "tests/gpr2-r02-single-resolver.test.ts",
+          "expect_tests": 4
+        },
+        {
+          "path": "tests/gpr2-r02-unknown-fact.test.ts",
+          "expect_tests": 11
+        },
+        {
+          "path": "tests/gpr2-r03a-tx-context.test.ts",
+          "expect_tests": 6
+        },
+        {
+          "path": "tests/gpr2-r03b-writer-registry.test.ts",
+          "expect_tests": 10
+        },
+        {
+          "path": "tests/gpr2-r03c-command-ledger.test.ts",
+          "expect_tests": 11
+        },
+        {
+          "path": "tests/gpr2-r03d-migration-runner.test.ts",
+          "expect_tests": 16
+        },
+        {
+          "path": "tests/gpr2-r04-cp01-gantt.test.ts",
+          "expect_tests": 6
+        },
+        {
+          "path": "tests/gpr2-r04-cp02-dependency-guard.test.ts",
+          "expect_tests": 7
+        },
+        {
+          "path": "tests/gpr2-r04-cp02-object-aggregates.test.ts",
+          "expect_tests": 5
+        },
+        {
+          "path": "tests/gpr2-r05-corrective-preview.test.ts",
+          "expect_tests": 9
+        },
+        {
+          "path": "tests/gpr2-r05-ind3-preview.test.ts",
+          "expect_tests": 18
+        },
+        {
+          "path": "tests/gpr2-r05-independent-preview.test.ts",
+          "expect_tests": 7
+        },
+        {
+          "path": "tests/gpr2-r05-r3-preview.test.ts",
+          "expect_tests": 5
+        },
+        {
+          "path": "tests/gpr2-r05a-work-type.test.ts",
+          "expect_tests": 7
+        },
+        {
+          "path": "tests/gpr2-r05b-finish-area-legacy.test.ts",
+          "expect_tests": 7
+        },
+        {
+          "path": "tests/gpr2-r05c-templates.test.ts",
+          "expect_tests": 5
+        },
+        {
+          "path": "tests/gpr2-r05d-generation.test.ts",
+          "expect_tests": 11
+        },
+        {
+          "path": "tests/http-errors.test.ts",
+          "expect_tests": 9
+        },
+        {
+          "path": "tests/id-auto-1-aosr-renderer.test.ts",
+          "expect_tests": 5
+        },
+        {
+          "path": "tests/id-auto-2-registry-domain.test.ts",
+          "expect_tests": 12
+        },
+        {
+          "path": "tests/id-auto-2-registry-viewmodel.test.ts",
+          "expect_tests": 12
+        },
+        {
+          "path": "tests/import.test.ts",
+          "expect_tests": 1
+        },
+        {
+          "path": "tests/obj1-create-object-viewmodel.test.ts",
+          "expect_tests": 5
+        },
+        {
+          "path": "tests/org1-company-structure.test.ts",
+          "expect_tests": 12
+        },
+        {
+          "path": "tests/org1-viewmodel.test.ts",
+          "expect_tests": 7
+        },
+        {
+          "path": "tests/pbx1-bitrix-login.test.ts",
+          "expect_tests": 7
+        },
+        {
+          "path": "tests/pbx2-admin-users-viewmodel.test.ts",
+          "expect_tests": 4
+        },
+        {
+          "path": "tests/pbx2-department-head-roles.test.ts",
+          "expect_tests": 8
+        },
+        {
+          "path": "tests/pbx2-user-access-admin.test.ts",
+          "expect_tests": 14
+        },
+        {
+          "path": "tests/pbx3a-corrective.test.ts",
+          "expect_tests": 2
+        },
+        {
+          "path": "tests/pbx3a-object-team-http.test.ts",
+          "expect_tests": 9
+        },
+        {
+          "path": "tests/pbx3a-teams-viewmodel.test.ts",
+          "expect_tests": 9
+        },
+        {
+          "path": "tests/pbx5a-bitrix-notifications.test.ts",
+          "expect_tests": 17
+        },
+        {
+          "path": "tests/pilot-w01-b3-package-mutation.test.ts",
+          "expect_tests": 3
+        },
+        {
+          "path": "tests/pilot-w01-internal-sc-display.test.ts",
+          "expect_tests": 5
+        },
+        {
+          "path": "tests/pilot-w01-pto-handoff.test.ts",
+          "expect_tests": 7
+        },
+        {
+          "path": "tests/pilot-w01-work-scope.test.ts",
+          "expect_tests": 4
+        },
+        {
+          "path": "tests/production-execution.test.ts",
+          "expect_tests": 19
+        },
+        {
+          "path": "tests/pto-inspect-work-packages.test.ts",
+          "expect_tests": 3
+        },
+        {
+          "path": "tests/pto-package-archive-domain.test.ts",
+          "expect_tests": 5
+        },
+        {
+          "path": "tests/pto-package-archive-viewmodel.test.ts",
+          "expect_tests": 5
+        },
+        {
+          "path": "tests/pto-package-identity-viewmodel.test.ts",
+          "expect_tests": 4
+        },
+        {
+          "path": "tests/pto-package-scope-domain.test.ts",
+          "expect_tests": 4
+        },
+        {
+          "path": "tests/rate-limit.test.ts",
+          "expect_tests": 7
+        },
+        {
+          "path": "tests/startup-contract.test.ts",
+          "expect_tests": 8
+        },
+        {
+          "path": "tests/view-models.test.ts",
+          "expect_tests": 36
+        }
+      ]
+    },
+    {
+      "id": "browser-gpr1",
+      "title": "Chromium / Playwright GPR-1 regression (1440 px and 390 px)",
+      "class": "BROWSER_CHROMIUM",
+      "kind": "playwright",
+      "mandatory": true,
+      "requires": [
+        "chromium"
+      ],
+      "allow_skip": false,
+      "config": "playwright.gpr-1.config.ts",
+      "expect_passed": 22,
+      "timeout_seconds": 2400
+    },
+    {
+      "id": "typecheck-build",
+      "title": "TypeScript type-check and production build (npm run build)",
+      "class": "TYPECHECK_BUILD",
+      "kind": "npm-script",
+      "mandatory": true,
+      "requires": [],
+      "script": "build",
+      "timeout_seconds": 1200
+    },
+    {
+      "id": "typecheck-strict",
+      "title": "Strict frontend type-check (npm run typecheck:strict)",
+      "class": "TYPECHECK_BUILD",
+      "kind": "npm-script",
+      "mandatory": true,
+      "requires": [],
+      "script": "typecheck:strict",
+      "timeout_seconds": 600
+    }
+  ],
+  "full_regression": {
+    "inventory": "tests/*.test.ts",
+    "checks": [
+      "full-regression-native-pg",
+      "full-regression-other"
+    ],
+    "expect_files": 145,
+    "expect_tests": 1258
+  },
+  "notes": [
+    "Inventory: 145 top-level tests/*.test.ts files of c18d426 (git ls-tree of the bundle-restored commit, 27.10.2026) = the 145 files of both historical author full runs; per-file expected counts are those runs' runner totals (identical in run 1 and run 2), 1258 tests in total. Native/other split = files referencing E2E_*/GPR2_ISOLATED_PG_URL directly or through tests/helpers (aosr-harness, gpr2-native-pg, registry-fixtures); a label only, both checks get the same disposable PostgreSQL environment.",
+    "Known, NOT waived: tests/gpr2-r01-normative-expectations.test.ts skips 1 of 8 tests unless the external GPR-2 TD/Roadmap documents are supplied (GPR2_TD_PATH / GPR2_ROADMAP_PATH). They are not available to a hosted runner, so this file is expected to classify FAIL (unexpected skip) until an approved, private way to supply them exists.",
+    "Known, NOT waived: tests/gpr2-r05-native-pg.test.ts has an intermittent teardown race (uncaughtException \"terminating connection due to administrator command\" after all scenarios passed) recorded in both author full runs. Any recurrence classifies FAIL and returns to the coordinator; no automatic waiver.",
+    "tests/gpr2-r03d-migration-runner.test.ts needs commit 678e795f8802a76ac025f28b0d698351af8b7721 in the checkout (it is the head of integration/cr01-gpr2-r01 in this repository; a fetch-depth 0 checkout of the baseline includes it)."
+  ]
+}

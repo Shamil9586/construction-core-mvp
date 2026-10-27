@@ -13,6 +13,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { loadProfile } from './profile.mjs';
 import { parseTapSummary, classifyRun } from './classify.mjs';
+import { testInventory } from './identity.mjs';
 
 const PG_BASE = 'postgresql://postgres:x@127.0.0.1:54329';
 const CLUSTER_NAME = 'gpr2-p1-isolated';
@@ -24,7 +25,8 @@ function args() {
   for (const k of ['profile', 'core', 'out']) if (!a[k]) { console.error(`missing --${k}`); process.exit(64); }
   return a;
 }
-function baseEnv(extra = {}) {
+/** Environment for every candidate process: credential-, database- and runner-control variables are removed (SCRUB), then pinned. */
+export function baseEnv(extra = {}) {
   const env = {};
   for (const [k, v] of Object.entries(process.env)) if (!SCRUB.test(k)) env[k] = v;
   return { ...env, TZ: 'UTC', CI: 'true', AUTH_MODE: 'mock', DATABASE_URL: '', ...extra };
@@ -165,7 +167,7 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
     fs.writeFileSync(path.join(dir, 'result.json'), JSON.stringify(rec, null, 2) + '\n');
   }
   fs.writeFileSync(path.join(out, 'environment.json'), JSON.stringify(environment(ctx, profile), null, 2) + '\n');
-  const pre = classifyRun({ profile, rawDir: out, identity: { ok: true } });
+  const pre = classifyRun({ profile, rawDir: out, identity: { ok: true, test_inventory: testInventory(core) } });
   fs.writeFileSync(path.join(out, 'runtime-summary.json'), JSON.stringify({ profile_id: profile.profile_id, profile_sha256: sha256, started_at: started, finished_at: new Date().toISOString(),
     preliminary_gate_excluding_cleanup_and_seal: pre.gate, checks: pre.checks.map(c => ({ id: c.id, status: c.status })) }, null, 2) + '\n');
   for (const c of pre.checks.filter(x => x.id !== 'postgres-cleanup')) console.log(`${c.status.padEnd(19)} ${c.id}${c.reasons && c.reasons.length ? ' — ' + c.reasons.join(' | ') : ''}`);

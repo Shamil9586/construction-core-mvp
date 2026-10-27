@@ -13,6 +13,13 @@ import { loadProfile, findCandidate } from './profile.mjs';
 const git = (repo, ...args) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_NOSYSTEM: '1' } }).trim();
 const tryGit = (repo, ...args) => { try { return git(repo, ...args); } catch { return null; } };
 
+/** Top-level tests/*.test.ts files of the committed HEAD tree (what `npm test` globs), sorted; null when the tree cannot be listed. Git only. */
+export function testInventory(repo) {
+  const out = tryGit(repo, 'ls-tree', '--name-only', '-z', 'HEAD', 'tests/');
+  if (out === null) return null;
+  return out.split('\0').filter(f => /^tests\/[^/]+\.test\.ts$/.test(f)).sort();
+}
+
 export function verifyIdentity({ profile, candidateSha, repo }) {
   const refusals = [];
   const cand = findCandidate(profile, candidateSha);
@@ -47,6 +54,7 @@ export function verifyIdentity({ profile, candidateSha, repo }) {
                  subject: tryGit(repo, 'log', '-1', '--format=%s', 'HEAD'), committed_at: tryGit(repo, 'log', '-1', '--format=%cI', 'HEAD') },
     lineage, baseline: { sha: profile.baseline.sha, tree: baseTree, is_ancestor: baseOk },
     diff_check: diffCheck, changed_files_from_baseline: changed.length, changed_files: changed.slice(0, 2000),
+    test_inventory: head === cand.sha && tree === cand.tree ? testInventory(repo) : null,   // informational; consumed by full_regression (classify.mjs)
     git_version: tryGit(repo, 'version'),
   };
 }

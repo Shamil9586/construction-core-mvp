@@ -15,6 +15,7 @@ if [[ -n "$AL" ]]; then suite actionlint "$AL" ${SC:+-shellcheck "$SC"} "$TOP/.g
 if [[ -n "$SC" ]]; then suite shellcheck "$SC" "$ACC"/lib/*.sh "$ACC"/tests/*.sh "$ACC/archive-evidence.sh"; else rec 'NOT RUN' 'shellcheck (tool not installed)'; fi
 suite profiles node "$ACC/lib/profile.mjs" validate-all "$ACC/profiles"
 suite harness-unit node --test "$HERE/harness.test.mjs"
+suite r05-harness node --test "$HERE/r05-harness.test.mjs"
 
 as_user() {
   if [[ "$(id -u)" != 0 ]]; then "$@"; return; fi

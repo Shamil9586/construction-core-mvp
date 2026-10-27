@@ -5,6 +5,9 @@
 # input, a branch or an open PR never makes code trusted. The frozen R04 workflow (gpr2-independent-acceptance.yml) is kept unchanged.
 #
 # Jobs: authorize (no candidate code) -> runtime (candidate code, read-only token, no secrets) -> seal (no candidate code).
+# A candidate registered with an archived git-bundle source is restored in each job from the public baseline plus the pinned bundle
+# (source-bundle.mjs) and then re-verified by the unchanged identity.mjs. Obtaining that private bundle on a hosted runner is NOT approved:
+# authorize.mjs refuses such candidates and the acquisition steps below fail closed until a security-reviewed transport is decided.
 # Nothing here merges, deploys, migrates a LIVE database or uses production credentials. A green run is a TECHNICAL gate only.
 name: GPR-2 Acceptance (universal, isolated)
 
@@ -50,6 +53,8 @@ jobs:
       profile_sha256: ${{ steps.authz.outputs.profile_sha256 }}
       candidate_sha: ${{ steps.authz.outputs.candidate_sha }}
       candidate_tree: ${{ steps.authz.outputs.candidate_tree }}
+      source_kind: ${{ steps.authz.outputs.source_kind }}
+      checkout_ref: ${{ steps.authz.outputs.checkout_ref }}
       node_version: ${{ steps.authz.outputs.node_version }}
       postgres_major: ${{ steps.authz.outputs.postgres_major }}
       job_timeout_minutes: ${{ steps.authz.outputs.job_timeout_minutes }}
@@ -79,10 +84,24 @@ jobs:
       - name: Fetch the registered candidate by SHA (checkout only; nothing is executed)
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ steps.authz.outputs.candidate_sha }}
+          ref: ${{ steps.authz.outputs.checkout_ref }}
           path: core
           fetch-depth: 0
           persist-credentials: false
+      - name: Obtain the archived candidate bundle (transport not approved — fails closed)
+        if: steps.authz.outputs.source_kind == 'git-bundle'
+        run: |
+          echo "Hosted transport of the private archive bundle is not security-approved; refusing (authorize.mjs ARCHIVE_TRANSPORT_APPROVED)." >&2
+          exit 1
+      - name: Verify the pinned bundle and restore the exact candidate (git only; nothing is executed)
+        if: steps.authz.outputs.source_kind == 'git-bundle'
+        env:
+          PROFILE_ID: ${{ steps.authz.outputs.profile_id }}
+          CANDIDATE_SHA: ${{ steps.authz.outputs.candidate_sha }}
+        run: |
+          node harness/.github/acceptance/lib/source-bundle.mjs --phase authorize \
+            --profile "harness/.github/acceptance/profiles/${PROFILE_ID}.json" --candidate "$CANDIDATE_SHA" \
+            --bundle "$RUNNER_TEMP/gpr2-source/candidate.bundle" --repo core --out "$RUNNER_TEMP/authz/source-bundle-authorize.json"
       - name: Verify candidate SHA, tree, pinned lineage, baseline ancestry and clean checkout
         env:
           PROFILE_ID: ${{ steps.authz.outputs.profile_id }}
@@ -127,10 +146,21 @@ jobs:
       - name: Checkout registered candidate without persisting credentials
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ needs.authorize.outputs.candidate_sha }}
+          ref: ${{ needs.authorize.outputs.checkout_ref }}
           path: core
           fetch-depth: 0
           persist-credentials: false
+      - name: Obtain the archived candidate bundle (transport not approved — fails closed)
+        if: needs.authorize.outputs.source_kind == 'git-bundle'
+        run: |
+          echo "Hosted transport of the private archive bundle is not security-approved; refusing (authorize.mjs ARCHIVE_TRANSPORT_APPROVED)." >&2
+          exit 1
+      - name: Verify the pinned bundle and restore the exact candidate before any candidate code runs
+        if: needs.authorize.outputs.source_kind == 'git-bundle'
+        run: |
+          mkdir -p "$RAW"
+          node "$LIB/source-bundle.mjs" --phase runtime --profile "$PROFILE_FILE" --candidate "$CANDIDATE_SHA" \
+            --bundle "$RUNNER_TEMP/gpr2-source/candidate.bundle" --repo core --out "$RAW/source-bundle-runtime.json"
       - name: Set up Node.js ${{ needs.authorize.outputs.node_version }} (no dependency cache, to avoid cache poisoning)
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
@@ -213,10 +243,22 @@ jobs:
       - name: Checkout candidate for independent identity re-verification (nothing is executed)
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ needs.authorize.outputs.candidate_sha }}
+          ref: ${{ needs.authorize.outputs.checkout_ref }}
           path: core
           fetch-depth: 0
           persist-credentials: false
+      - name: Obtain the archived candidate bundle (transport not approved — fails closed)
+        if: needs.authorize.outputs.source_kind == 'git-bundle'
+        continue-on-error: true
+        run: |
+          echo "Hosted transport of the private archive bundle is not security-approved; refusing (authorize.mjs ARCHIVE_TRANSPORT_APPROVED)." >&2
+          exit 1
+      - name: Verify the pinned bundle and restore the exact candidate independently of the runtime job
+        if: needs.authorize.outputs.source_kind == 'git-bundle'
+        continue-on-error: true
+        run: |
+          node "$LIB/source-bundle.mjs" --phase seal --profile "$PROFILE_FILE" --candidate "$CANDIDATE_SHA" \
+            --bundle "$RUNNER_TEMP/gpr2-source/candidate.bundle" --repo core --out "$RUNNER_TEMP/source-bundle-seal.json"
       - name: Set up Node.js for the harness
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
@@ -242,7 +284,8 @@ jobs:
         run: |
           set +e
           node "$LIB/seal.mjs" --profile "$PROFILE_FILE" --raw "$RUNNER_TEMP/raw" --authorization "$RUNNER_TEMP/authz/authorization.json" \
-            --identity "$RUNNER_TEMP/identity-seal.json" --runtime-result "$RUNTIME_RESULT" --out "$GITHUB_WORKSPACE/sealed"
+            --identity "$RUNNER_TEMP/identity-seal.json" --runtime-result "$RUNTIME_RESULT" --source "$RUNNER_TEMP/source-bundle-seal.json" \
+            --out "$GITHUB_WORKSPACE/sealed"
           echo "gate_exit=$?" >> "$GITHUB_OUTPUT"
       - name: Upload sealed evidence package
         id: upload

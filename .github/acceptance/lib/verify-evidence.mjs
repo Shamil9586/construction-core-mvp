@@ -10,7 +10,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { loadProfile } from './profile.mjs';
 import { classifyRun, GATE } from './classify.mjs';
-import { listFiles } from './seal.mjs';
+import { listFiles, sourceBindingProblems } from './seal.mjs';
 
 const argv = process.argv.slice(2);
 const dir = argv[0];
@@ -50,6 +50,11 @@ if (opt['expect-run'] && String(record.github.run_id) !== String(opt['expect-run
 const registered = profile.candidates.find(c => c.sha === record.git.candidate_sha);
 if (!registered) bad(`candidate ${record.git.candidate_sha} is not registered in the profile`);
 else if (registered.tree !== record.git.candidate_tree) bad('candidate tree differs from the registered tree'); else ok(`candidate ${record.git.candidate_sha} / tree ${record.git.candidate_tree} registered`);
+if (registered && registered.source) {
+  const rd = f => { try { return JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')); } catch { return null; } };
+  const sp = sourceBindingProblems(registered, { authorize: rd('source-bundle-authorize.json'), runtime: rd('raw/source-bundle-runtime.json'), seal: rd('source-bundle-seal.json') });
+  if (sp.length) sp.forEach(bad); else ok(`archived source bound in all three phases (bundle sha256 ${registered.source.sha256})`);
+}
 const authz = JSON.parse(fs.readFileSync(path.join(dir, 'authorization.json'), 'utf8'));
 if (authz.candidate?.sha !== record.git.candidate_sha) bad('authorization record names a different candidate'); else ok(`authorised by ${authz.request.actor} (triggering ${authz.request.triggering_actor})`);
 

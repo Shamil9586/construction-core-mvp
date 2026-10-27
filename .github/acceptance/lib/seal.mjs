@@ -5,17 +5,31 @@
 // GitHub run, and writes a manifest with SHA-256 checksums of every file. The result is a TECHNICAL gate, never an acceptance verdict.
 //
 // CLI: node seal.mjs --profile <profile.json> --raw <raw dir|missing> --authorization <authorization.json> --identity <seal identity.json>
-//                    --runtime-result <success|failure|cancelled|skipped> --out <sealed dir>
+//                    --runtime-result <success|failure|cancelled|skipped> --out <sealed dir> [--source <seal-phase source-bundle record>]
+// For a candidate restored from an archived bundle (profile candidate.source), the authorize-, runtime- and seal-phase source-bundle.mjs records
+// must all be present, OK and bound to the pinned bundle SHA-256 and the authorised candidate; otherwise the identity is treated as not verified.
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { loadProfile } from './profile.mjs';
+import { loadProfile, findCandidate } from './profile.mjs';
 import { classifyRun, GATE, S } from './classify.mjs';
 
 export const EVIDENCE_SCHEMA = 'construction-core/gpr2-acceptance-evidence@1';
 const readJson = f => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return null; } };
 const sha256File = f => crypto.createHash('sha256').update(fs.readFileSync(f)).digest('hex');
+
+/** Problems binding the three archived-source records to the registered candidate's pinned bundle (empty when the candidate has no source). */
+export function sourceBindingProblems(cand, records) {
+  if (!cand || !cand.source) return [];
+  const problems = [];
+  for (const [phase, rec] of Object.entries(records)) {
+    if (!rec || rec.ok !== true) problems.push(`${phase}-phase archived-source record missing or not OK`);
+    else if (rec.candidate?.sha !== cand.sha || rec.candidate?.tree !== cand.tree || rec.observed?.sha256 !== cand.source.sha256 || rec.observed?.blob !== cand.source.blob)
+      problems.push(`${phase}-phase archived-source record is not bound to candidate ${cand.sha} / bundle ${cand.source.sha256}`);
+  }
+  return problems;
+}
 
 export function listFiles(root) {
   const out = [];
@@ -76,7 +90,9 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
   fs.mkdirSync(out, { recursive: true });
   const rawPresent = fs.existsSync(a.raw) && fs.statSync(a.raw).isDirectory();
   if (rawPresent) copyTree(a.raw, path.join(out, 'raw'));
-  for (const [f, name] of [[a.authorization, 'authorization.json'], [a.identity, 'identity-seal.json']]) if (fs.existsSync(f)) fs.copyFileSync(f, path.join(out, name));
+  const authzSource = path.join(path.dirname(a.authorization), 'source-bundle-authorize.json');
+  for (const [f, name] of [[a.authorization, 'authorization.json'], [a.identity, 'identity-seal.json'], [authzSource, 'source-bundle-authorize.json'], [a.source, 'source-bundle-seal.json']])
+    if (f && fs.existsSync(f)) fs.copyFileSync(f, path.join(out, name));
   const rawDir = path.join(out, 'raw');
   const problems = [];
   if (!authz || authz.ok !== true) problems.push('authorization record missing or not OK');
@@ -84,6 +100,8 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
   if (authz && authz.candidate && identity && identity.candidate && authz.candidate.sha !== identity.candidate.sha) problems.push('sealed identity is a different candidate than the authorised one');
   const runtimeIdentity = readJson(path.join(rawDir, 'identity-runtime.json'));
   if (!runtimeIdentity || runtimeIdentity.ok !== true || runtimeIdentity.candidate?.sha !== authz?.candidate?.sha) problems.push('runtime pre-execution identity record missing or does not match the authorised candidate');
+  problems.push(...sourceBindingProblems(findCandidate(profile, authz?.candidate?.sha ?? ''), { authorize: readJson(path.join(out, 'source-bundle-authorize.json')),
+    runtime: readJson(path.join(rawDir, 'source-bundle-runtime.json')), seal: readJson(path.join(out, 'source-bundle-seal.json')) }));
   const runtimeResult = a['runtime-result'] || 'unknown';   // always enforced; an absent or unrecognised value fails closed (classify.mjs applyRuntimeResult)
   const result = classifyRun({ profile, rawDir, identity: problems.length ? { ok: false, refusals: [...problems, ...(identity?.refusals || [])] } : identity, runtimeResult });
   if (!rawPresent) { result.gate = result.gate === GATE.FAILED ? GATE.FAILED : GATE.INCONCLUSIVE; result.gate_reasons.push('no raw runtime evidence was uploaded'); }
