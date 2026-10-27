@@ -466,7 +466,44 @@
               "filename": "Construction_Core_GPR-2_Implementation_Roadmap_2026-10-15.md",
               "sha256": "a4c27d19a731b0d32a70c75a14af4f04c289ff93007d4ed78fe308a6ab434f76"
             }
-          ]
+          ],
+          "isolated": {
+            "job": "normative",
+            "closure": [
+              {
+                "path": "tests/gpr2-r01-normative-expectations.test.ts",
+                "blob": "8c80bea773249b3eb81470d5273f2cee65542899"
+              },
+              {
+                "path": "tests/helpers/gpr2-decision-index.ts",
+                "blob": "bb55f09e73e27424264ee2ce4038c5e218461e37"
+              },
+              {
+                "path": "tests/helpers/gpr2-matrix.ts",
+                "blob": "e2cea99851f31cc24d13e16b04bb603763112d35"
+              },
+              {
+                "path": "scripts/gpr2-extract-normative.ts",
+                "blob": "b38234164712926c06a14a0fb9fa58c11b7e7785"
+              },
+              {
+                "path": "tests/fixtures/gpr2-normative-expectations.json",
+                "blob": "52516e84e73f0ea2e8ab88de8705289411715f66"
+              },
+              {
+                "path": "docs/gpr-2-r01-decision-test-matrix.md",
+                "blob": "0cf7c0ed4ede4bf8c2b021b38495d86e2f296f43"
+              },
+              {
+                "path": "package.json",
+                "blob": "a1f11b7f00724a125e6e2712db69aebe420fb5a5"
+              },
+              {
+                "path": "package-lock.json",
+                "blob": "6b2ad1f0d79399f6e40db6dae5b73b7838fc5951"
+              }
+            ]
+          }
         },
         {
           "path": "tests/gpr2-r01-openapi.test.ts",
@@ -728,7 +765,7 @@
   },
   "notes": [
     "Inventory: 145 top-level tests/*.test.ts files of c18d426 (git ls-tree of the bundle-restored commit, 27.10.2026) = the 145 files of both historical author full runs; per-file expected counts are those runs' runner totals (identical in run 1 and run 2), 1258 tests in total. Native/other split = files referencing E2E_*/GPR2_ISOLATED_PG_URL directly or through tests/helpers (aosr-harness, gpr2-native-pg, registry-fixtures); a label only, both checks get the same disposable PostgreSQL environment.",
-    "tests/gpr2-r01-normative-expectations.test.ts must run 8/8 WITHOUT a skip. Its 8th test needs the approved GPR-2 Technical Design v1.0 and Implementation Roadmap v1.0 (15.10.2026), which are not in the repository: the profile pins them by SHA-256 (files[].external_inputs, identical to TD_SHA256 / ROADMAP_SHA256 of tests/helpers/gpr2-decision-index.ts and to exchange/gpr2/r05/normative/SHA256SUMS in the private evidence archive). The harness verifies both files byte for byte before that file runs and passes their paths only to that process; if they are not supplied the file is ENVIRONMENT BLOCKED (never skipped, never PASS). The transport of the documents to a hosted runner is NOT approved and is not implemented here; no skip, waiver or changed expectation exists.",
+    "tests/gpr2-r01-normative-expectations.test.ts runs 8/8 WITHOUT a skip and is counted in the 145 files / 1258 tests, but it is executed ONLY in the isolated `normative` job (files[].isolated): no candidate code and no candidate dependencies, `npm ci --ignore-scripts` from the public baseline lockfile, empty network namespace, unprivileged uid, minimal environment. The private GPR-2 Technical Design v1.0 and Implementation Roadmap v1.0 (15.10.2026) are pinned by SHA-256 (files[].external_inputs; identical to TD_SHA256 / ROADMAP_SHA256 of tests/helpers/gpr2-decision-index.ts and to exchange/gpr2/r05/normative/SHA256SUMS in the private evidence archive) and reach only that job. The test, its helpers, the extractor, the fixture, the matrix document, package.json and package-lock.json must have exactly the pinned Git blob ids (files[].isolated.closure) in BOTH the candidate and the public baseline; any difference means the file is not run (ENVIRONMENT BLOCKED), never skipped. The runtime job defers the file; the seal job independently recomputes every input and merges the result. The profile is runnable only inside the private archive repository (authorize.mjs); the public workflow keeps refusing archived candidates.",
     "Known, NOT waived: tests/gpr2-r05-native-pg.test.ts has an intermittent teardown race (uncaughtException \"terminating connection due to administrator command\" after all scenarios passed) recorded in both author full runs. Any recurrence classifies FAIL and returns to the coordinator; no automatic waiver.",
     "tests/gpr2-r03d-migration-runner.test.ts needs commit 678e795f8802a76ac025f28b0d698351af8b7721 in the checkout (it is the head of integration/cr01-gpr2-r01 in this repository; a fetch-depth 0 checkout of the baseline includes it)."
   ]

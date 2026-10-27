@@ -13,13 +13,17 @@ import crypto from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { validateProfile, loadProfile } from '../lib/profile.mjs';
-import { authorize, stepOutputs, ARCHIVE_TRANSPORT_APPROVED } from '../lib/authorize.mjs';
+import { authorize, stepOutputs } from '../lib/authorize.mjs';
 import { verifyIdentity, testInventory } from '../lib/identity.mjs';
 import { classifyRun, classifyFullRegression, classifyNodeFile, S, GATE } from '../lib/classify.mjs';
 import { restoreFromBundle, parseBundleHeader, gitBlobId, gitEnv, CANDIDATE_REF, REQUIRED_STEPS, RECORD_SCHEMA, sourcePin } from '../lib/source-bundle.mjs';
 import { sourceBindingProblems, writeManifest } from '../lib/seal.mjs';
+import { computeInputs } from '../lib/stage-inputs.mjs';
+import { prepareClosure, runIsolated, sandboxCommand, SANDBOX_UID } from '../lib/run-normative.mjs';
+import { isolatedProvenanceProblems, expectedCore, digestOf, mergeIsolatedResults, STAGE_SCHEMA, NORMATIVE_SCHEMA } from '../lib/provenance.mjs';
 import { rehearse, parseMergeTree } from '../lib/merge-tree.mjs';
-import { baseEnv, resolveExternalInputs } from '../lib/run-profile.mjs';
+import { baseEnv } from '../lib/run-profile.mjs';
+import { resolveExternalInputs } from '../lib/external-inputs.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ACC = path.resolve(HERE, '..');
@@ -113,15 +117,16 @@ describe('R05 profile (TEMPLATE, not runnable)', () => {
     assert.ok(r.refusals.some(x => x.includes('TEMPLATE, not ACTIVE')), r.refusals.join('\n'));
     assert.ok(r.refusals.some(x => x.includes('not registered in profile r05-final-verification')), r.refusals.join('\n'));
   });
-  test('even after a hypothetical activation, a bundle-sourced candidate is refused while the archive transport is not approved', () => {
-    assert.equal(ARCHIVE_TRANSPORT_APPROVED, false);
-    const h = tmp(); fs.mkdirSync(path.join(h, 'profiles'));
-    fs.copyFileSync(path.join(ACC, 'approvers.txt'), path.join(h, 'approvers.txt'));
-    fs.writeFileSync(path.join(h, 'profiles', 'r05-final-verification.json'), JSON.stringify(activated(), null, 2));
-    const r = authorize({ env: okEnv(), harnessDir: h });
+  const ARCHIVE_REPO = 'Shamil9586/construction-core-acceptance-evidence';
+  const HSHA = 'a'.repeat(40);
+  const activatedHarness = () => { const h = tmp(); fs.mkdirSync(path.join(h, 'profiles')); fs.copyFileSync(path.join(ACC, 'approvers.txt'), path.join(h, 'approvers.txt'));
+    fs.writeFileSync(path.join(h, 'profiles', 'r05-final-verification.json'), JSON.stringify(activated(), null, 2)); return h; };
+  test('even after a hypothetical activation, a bundle-sourced candidate is refused in the PUBLIC product repository (it may run only inside the private archive)', () => {
+    const h = activatedHarness();
+    const r = authorize({ env: okEnv({ GPR2_HARNESS_SHA: HSHA }), harnessDir: h });
     assert.equal(r.ok, false);
     assert.deepEqual(r.refusals.length, 1, r.refusals.join('\n'));
-    assert.match(r.refusals[0], /archived git-bundle .*not approved/);
+    assert.match(r.refusals[0], /may run only inside that private repository/);
     for (const [name, env, needle] of [['unauthorised actor', { GITHUB_ACTOR: 'someone-else' }, 'actor someone-else'], ['re-run by another user', { GITHUB_TRIGGERING_ACTOR: 'x' }, 'triggering actor x'],
       ['wrong candidate', { INPUT_CANDIDATE_SHA: '5ceb54d80b35719216a2791ee683ade3754ba6d9', INPUT_CONFIRMATION: 'APPROVE-TEST-ONLY r05-final-verification 5ceb54d80b35719216a2791ee683ade3754ba6d9' }, 'not registered'],
       ['missing profile', { INPUT_PROFILE: 'r05-missing', INPUT_CONFIRMATION: `APPROVE-TEST-ONLY r05-missing ${R05}` }, 'not registered on the workflow commit'],
@@ -129,6 +134,22 @@ describe('R05 profile (TEMPLATE, not runnable)', () => {
       const x = authorize({ env: okEnv(env), harnessDir: h });
       assert.ok(x.refusals.some(m => m.includes(needle)), `${name}: ${x.refusals.join('\n')}`);
     }
+  });
+  test('inside the private archive repository the bundle-sourced candidate is authorised (with the pinned harness SHA); every other guard still applies; the product repo still refuses it', () => {
+    const h = activatedHarness();
+    const ok = authorize({ env: okEnv({ GITHUB_REPOSITORY: ARCHIVE_REPO, GPR2_HARNESS_SHA: HSHA }), harnessDir: h });
+    assert.equal(ok.ok, true, ok.refusals.join('\n')); assert.equal(ok.harness_sha, HSHA);
+    const out = stepOutputs(ok); assert.equal(out.source_commit, '0665f9a3f16eaf32f78138d686809cf06d8a44a3'); assert.equal(out.source_path, 'exchange/gpr2/r05/preview-corrective/source/candidate.bundle'); assert.equal(out.harness_sha, HSHA);
+    for (const [name, env, needle] of [['no harness sha', { GPR2_HARNESS_SHA: '' }, 'GPR2_HARNESS_SHA'], ['short harness sha', { GPR2_HARNESS_SHA: 'abc' }, 'GPR2_HARNESS_SHA'],
+      ['other repository', { GITHUB_REPOSITORY: 'Shamil9586/some-other-repo' }, 'not Shamil9586/construction-core-mvp or an approved private archive repository'],
+      ['not main', { GITHUB_REF: 'refs/heads/x' }, 'not refs/heads/main'], ['another actor', { GITHUB_ACTOR: 'someone-else' }, 'actor someone-else'], ['wrong confirmation', { INPUT_CONFIRMATION: 'yes' }, 'confirmation must be exactly']]) {
+      const x = authorize({ env: okEnv({ GITHUB_REPOSITORY: ARCHIVE_REPO, GPR2_HARNESS_SHA: HSHA, ...env }), harnessDir: h });
+      assert.equal(x.ok, false, name); assert.ok(x.refusals.some(m => m.includes(needle)), `${name}: ${x.refusals.join('\n')}`);
+    }
+    // an ordinary (no-source) candidate may not run in the archive repository
+    const R04 = 'b882fd0a35fe93d5f85d6be1ccd7dfdc6982f67d';
+    const plain = authorize({ env: okEnv({ GITHUB_REPOSITORY: ARCHIVE_REPO, INPUT_PROFILE: 'r04-cp02', INPUT_CANDIDATE_SHA: R04, INPUT_CONFIRMATION: `APPROVE-TEST-ONLY r04-cp02 ${R04}` }), harnessDir: ACC });
+    assert.equal(plain.ok, false); assert.ok(plain.refusals.some(x => x.includes('has no archived source and may run only in')), plain.refusals.join('\n'));
   });
   test('step outputs: an ordinary candidate is checked out by its own SHA; an archived one from the public baseline', () => {
     const base = { profile: { stage: 'R05', id: 'p', sha256: 'x' }, runtime: { node: '22.22.0', postgres_major: 16, job_timeout_minutes: 30, requires: ['postgres'] }, workflow: { run_id: '1', run_attempt: '1' }, baseline_sha: R05_BASE };
@@ -367,7 +388,7 @@ describe('sealing an archived candidate: all three source records must bind, Pos
     port_before: { pg_isready_exit: 0, responder: 'owned', detail: '' }, port_after: { pg_isready_exit: 2, responder: 'none', detail: '' }, termination_evidence: 'stopped_by_cleanup',
     shutdown_proof: ['verified postmaster pid 551 exited after SIGINT'], foreign_instances_untouched: true, problems: [], notes: [] });
   /** Builds an all-PASS synthetic evidence set for the (activated) R05 profile and runs the real seal.mjs and verify-evidence.mjs CLIs. */
-  function sealR05({ dropSource = null, cleanupRecord = cleanup(), tamper = null, records = (_phase, rec) => rec, afterSeal = null } = {}) {
+  function sealR05({ dropSource = null, cleanupRecord = cleanup(), tamper = null, records = (_phase, rec) => rec, afterSeal = null, iso = (_kind, o) => o, omit = [] } = {}) {
     const p = activated(); const d = tmp();
     const pf = path.join(d, 'profiles', 'r05-final-verification.json'); fs.mkdirSync(path.dirname(pf), { recursive: true }); fs.writeFileSync(pf, JSON.stringify(p, null, 2));
     const { sha256: profileSha } = loadProfile(pf);
@@ -375,8 +396,8 @@ describe('sealing an archived candidate: all three source records must bind, Pos
     const raw = path.join(d, 'raw'); fs.mkdirSync(path.join(raw, 'postgres'), { recursive: true });
     for (const c of p.checks) {
       const cd = path.join(raw, 'checks', c.id); fs.mkdirSync(cd, { recursive: true });
-      if (c.kind === 'node-test') fs.writeFileSync(path.join(cd, 'result.json'), JSON.stringify({ state: 'EXECUTED', files: c.files.map(f => ({ path: f.path, state: 'EXECUTED', exit_code: 0, counts: { tests: f.expect_tests, pass: f.expect_tests, fail: 0, cancelled: 0, skipped: 0, todo: 0 },
-        ...(f.external_inputs && tamper !== 'drop-input-record' ? { external_inputs: f.external_inputs.map(x => ({ env: x.env, filename: x.filename, sha256: tamper === 'wrong-input-sha' ? '0'.repeat(64) : x.sha256, bytes: 1 })) } : {}) })) }));
+      if (c.kind === 'node-test') fs.writeFileSync(path.join(cd, 'result.json'), JSON.stringify({ state: 'EXECUTED', files: c.files.map(f => f.isolated ? { path: f.path, state: 'DEFERRED', executed_in: f.isolated.job, reason: 'executed in the isolated job' }
+        : { path: f.path, state: 'EXECUTED', exit_code: 0, counts: { tests: f.expect_tests, pass: f.expect_tests, fail: 0, cancelled: 0, skipped: 0, todo: 0 } }) }));
       else if (c.kind === 'playwright') { fs.writeFileSync(path.join(cd, 'report.json'), JSON.stringify({ stats: { expected: c.expect_passed, unexpected: 0, flaky: 0, skipped: 0 }, errors: [], suites: [{ title: 's', specs: Array.from({ length: c.expect_passed }, (_, i) => ({ title: 't' + i, tests: [{ status: 'expected', results: [{ status: 'passed' }] }] })) }] }));
         fs.writeFileSync(path.join(cd, 'result.json'), JSON.stringify({ state: 'EXECUTED', exit_code: 0, report: `checks/${c.id}/report.json` })); }
       else fs.writeFileSync(path.join(cd, 'result.json'), JSON.stringify({ state: 'EXECUTED', exit_code: 0 }));
@@ -388,6 +409,20 @@ describe('sealing an archived candidate: all three source records must bind, Pos
     const src = phase => ({ schema: RECORD_SCHEMA, phase, profile_id: p.profile_id, profile_sha256: profileSha, candidate_sha: cand.sha, ok: true, refusals: [],
       steps: REQUIRED_STEPS.map(step => ({ step, ok: true, detail: 'x' })), pin: sourcePin(cand.source), observed: { bytes: cand.source.bytes, sha256: cand.source.sha256, blob: cand.source.blob },
       candidate: { sha: cand.sha, tree: cand.tree, ref: 'refs/gpr2-acceptance/candidate', checked_out: cand.sha }, verified_at: 'x' });
+    // The isolated job's artefacts: stage record, stage outputs (job outputs), the seal job's own recomputation, and the normative job's result.
+    const isoFiles = p.checks.flatMap(c => c.files || []).filter(f => f.isolated);
+    const want = expectedCore(p, cand, profileSha);
+    const stageRec = () => ({ schema: STAGE_SCHEMA, ok: true, refusals: [], ...want, harness_sha: 'a'.repeat(40), inputs_digest: digestOf(want),
+      isolated: want.isolated.map(f => ({ ...f, job: 'normative', closure: f.closure.map(x => ({ ...x, candidate_blob: x.blob, baseline_blob: x.blob })) })) });
+    const normative = () => ({ schema: NORMATIVE_SCHEMA, job: 'normative', profile_id: p.profile_id, profile_sha256: profileSha, candidate_sha: cand.sha, files: isoFiles.map(f => ({
+      path: f.path, state: 'EXECUTED', exit_code: 0, counts: { tests: f.expect_tests, pass: f.expect_tests, fail: 0, cancelled: 0, skipped: 0, todo: 0 }, log: null,
+      closure_verified: f.isolated.closure.map(x => ({ path: x.path, blob: x.blob })), sandbox: { network: 'none', uid: 65534, env: 'minimal', probe_ok: true },
+      ...(tamper === 'drop-input-record' ? {} : { external_inputs: f.external_inputs.map(x => ({ env: x.env, filename: x.filename, sha256: tamper === 'wrong-input-sha' ? '0'.repeat(64) : x.sha256, bytes: 1 })) }) })) });
+    const isoDir = path.join(d, 'iso'); fs.mkdirSync(path.join(isoDir, 'normative'), { recursive: true });
+    const wr = (name, obj) => { if (!omit.includes(name)) fs.writeFileSync(path.join(isoDir, name), JSON.stringify(iso(name, obj))); };
+    wr('stage-outputs.json', { inputs_digest: digestOf(want), candidate_sha: cand.sha, bundle_sha256: cand.source.sha256 });
+    wr('stage-record.json', stageRec()); wr('inputs-seal.json', stageRec());
+    if (!omit.includes('normative')) fs.writeFileSync(path.join(isoDir, 'normative', 'result.json'), JSON.stringify(iso('normative', normative())));
     const authzDir = path.join(d, 'authz'); fs.mkdirSync(authzDir);
     fs.writeFileSync(path.join(authzDir, 'authorization.json'), JSON.stringify({ ok: true, request: { actor: 'Shamil9586', triggering_actor: 'Shamil9586' }, candidate: { ...candId, source: cand.source }, profile: { sha256: profileSha } }));
     const recs = { authorize: path.join(authzDir, 'source-bundle-authorize.json'), runtime: path.join(raw, 'source-bundle-runtime.json'), seal: path.join(d, 'source-bundle-seal.json') };
@@ -396,7 +431,8 @@ describe('sealing an archived candidate: all three source records must bind, Pos
     fs.writeFileSync(path.join(d, 'identity-seal.json'), JSON.stringify({ ok: true, candidate: candId, test_inventory: inventory }));
     const out = path.join(d, 'sealed');
     const run = spawnSync('node', [path.join(LIB, 'seal.mjs'), '--profile', pf, '--raw', raw, '--authorization', path.join(authzDir, 'authorization.json'), '--identity', path.join(d, 'identity-seal.json'),
-      '--runtime-result', 'success', '--source', recs.seal, '--out', out], { encoding: 'utf8' });
+      '--runtime-result', 'success', '--source', recs.seal, '--normative', path.join(isoDir, 'normative'), '--stage-outputs', path.join(isoDir, 'stage-outputs.json'),
+      '--stage-record', path.join(isoDir, 'stage-record.json'), '--inputs-seal', path.join(isoDir, 'inputs-seal.json'), '--out', out], { encoding: 'utf8' });
     const rec = JSON.parse(fs.readFileSync(path.join(out, 'acceptance-result.json'), 'utf8'));
     if (tamper === 'drop-file') fs.rmSync(path.join(out, 'raw', 'checks', 'browser-gpr1', 'report.json'));
     if (tamper === 'extra-file') fs.writeFileSync(path.join(out, 'raw', 'injected.log'), 'x');
@@ -467,6 +503,58 @@ describe('sealing an archived candidate: all three source records must bind, Pos
       const { rec } = sealR05({ tamper });
       assert.equal(rec.result.gate, GATE.FAILED, tamper); assert.ok(JSON.stringify(rec.result.checks).includes('is not recorded as verified'), tamper);
     }
+  });
+  // D1-B: provenance of the isolated inputs. Each tamper is tried against seal.mjs, and against verify-evidence.mjs with a REBUILT manifest (so only the provenance can reject it).
+  const SEALED = { 'stage-outputs.json': 'stage-outputs.json', 'stage-record.json': 'stage-record.json', 'inputs-seal.json': 'inputs-seal.json', normative: 'normative/result.json' };
+  const isoCases = [
+    ['a stage output digest that is not the digest of the pinned inputs', 'stage-outputs.json', o => ({ ...o, inputs_digest: '0'.repeat(64) }), /stage job output inputs_digest differs/],
+    ['a stage output naming another candidate', 'stage-outputs.json', o => ({ ...o, candidate_sha: '9'.repeat(40) }), /stage job output names another candidate/],
+    ['a seal-job recomputation that differs in a document digest', 'inputs-seal.json', o => ({ ...o, isolated: o.isolated.map(f => ({ ...f, docs: f.docs.map(d => ({ ...d, sha256: '1'.repeat(64) })) })) }), /seal-job \(independent\) staging record does not equal/],
+    ['a seal-job recomputation that differs in a closure blob', 'inputs-seal.json', o => ({ ...o, isolated: o.isolated.map(f => ({ ...f, closure: f.closure.map((x, i) => (i ? x : { ...x, blob: '2'.repeat(40) })) })) }), /seal-job \(independent\) staging record does not equal/],
+    ['a seal-job recomputation that is not OK', 'inputs-seal.json', o => ({ ...o, ok: false }), /seal-job \(independent\) staging record missing or not OK/],
+    ['a seal-job recomputation for another bundle', 'inputs-seal.json', o => ({ ...o, bundle: { ...o.bundle, sha256: '3'.repeat(64) } }), /seal-job \(independent\) staging record does not equal/],
+    ['a stage-job record that differs from the pins', 'stage-record.json', o => ({ ...o, candidate_tree: '4'.repeat(40) }), /stage-job staging record does not equal/],
+    ['a normative result for another candidate', 'normative', o => ({ ...o, candidate_sha: '5'.repeat(40) }), /normative job result is for another profile, digest or candidate/],
+    ['a normative result made under another profile digest', 'normative', o => ({ ...o, profile_sha256: '6'.repeat(64) }), /normative job result is for another profile, digest or candidate/],
+    ['a normative result that used another document', 'normative', o => ({ ...o, files: o.files.map(f => ({ ...f, external_inputs: f.external_inputs.map((x, i) => (i ? x : { ...x, sha256: '7'.repeat(64) })) })) }), /documents used by the normative job differ/],
+    ['a normative result that executed other files than the pinned closure', 'normative', o => ({ ...o, files: o.files.map(f => ({ ...f, closure_verified: f.closure_verified.slice(1) })) }), /files executed by the normative job differ/],
+    ['a normative result without a network-isolated sandbox', 'normative', o => ({ ...o, files: o.files.map(f => ({ ...f, sandbox: { ...f.sandbox, network: 'host' } })) }), /did not record a verified network-isolated/],
+    ['a normative result run as root', 'normative', o => ({ ...o, files: o.files.map(f => ({ ...f, sandbox: { ...f.sandbox, uid: 0 } })) }), /did not record a verified network-isolated/],
+    ['a normative result whose sandbox probe failed', 'normative', o => ({ ...o, files: o.files.map(f => ({ ...f, sandbox: { ...f.sandbox, probe_ok: false } })) }), /did not record a verified network-isolated/],
+    ['a normative result that did not execute the file', 'normative', o => ({ ...o, files: o.files.map(f => ({ ...f, state: 'BLOCKED' })) }), /normative job state BLOCKED/],
+    ['a normative result without the file', 'normative', o => ({ ...o, files: [] }), /normative job result lacks/],
+  ];
+  for (const [name, which, mut, expected] of isoCases) {
+    test(`D1-B sealing refuses ${name}`, () => {
+      const { run, rec } = sealR05({ iso: (kind, o) => (kind === which ? mut(o) : o) });
+      assert.equal(rec.result.gate, GATE.FAILED, rec.result.gate_reasons.join('\n')); assert.equal(run.status, 1);
+      assert.ok(rec.result.gate_reasons.some(x => expected.test(x)), rec.result.gate_reasons.join('\n'));
+    });
+    test(`D1-B verify-evidence refuses ${name} even when the manifest is rebuilt`, () => {
+      const { verify } = sealR05({ afterSeal: out => {
+        const f = path.join(out, SEALED[which]); fs.writeFileSync(f, JSON.stringify(mut(JSON.parse(fs.readFileSync(f, 'utf8')))));
+        const { files, file_count, schema, ...meta } = JSON.parse(fs.readFileSync(path.join(out, 'manifest.json'), 'utf8')); writeManifest(out, meta);
+      } });
+      assert.equal(verify.status, 2, verify.stdout); assert.doesNotMatch(verify.stdout, /checksum mismatch|not covered by SHA256SUMS|manifest entry differs/);
+      assert.ok(verify.stdout.split('\n').some(l => l.includes('FAIL') && expected.test(l)), verify.stdout);
+    });
+  }
+  for (const name of ['stage-outputs.json', 'stage-record.json', 'inputs-seal.json', 'normative']) test(`D1-B a missing ${name} fails the gate (the seal job needs every isolated artefact)`, () => {
+    const { rec } = sealR05({ omit: [name] }); assert.equal(rec.result.gate, GATE.FAILED, rec.result.gate_reasons.join('\n'));
+  });
+  test('D1-B the sealed classification takes the isolated file from the normative job, not from the runtime job; the merged record is attributed to it', () => {
+    const { rec, out } = sealR05(); assert.equal(rec.result.gate, GATE.PASSED, rec.result.gate_reasons.join('\n'));
+    const merged = JSON.parse(fs.readFileSync(path.join(out, 'raw', 'checks', 'full-regression-other', 'result.json'), 'utf8')).files.find(f => f.path === 'tests/gpr2-r01-normative-expectations.test.ts');
+    assert.equal(merged.state, 'EXECUTED'); assert.equal(merged.executed_in, 'normative'); assert.deepEqual([merged.counts.tests, merged.counts.pass, merged.counts.skipped], [8, 8, 0]);
+    for (const f of ['normative/result.json', 'stage-outputs.json', 'stage-record.json', 'inputs-seal.json']) assert.ok(fs.existsSync(path.join(out, f)), f);
+    assert.equal(rec.result.checks.find(c => c.id === 'full-regression-inventory').status, S.PASS);
+  });
+  test('D1-B mergeIsolatedResults replaces only the DEFERRED entry of the isolated file', () => {
+    const p = activated(); const d = tmp(); const cd = path.join(d, 'checks', 'full-regression-other'); fs.mkdirSync(cd, { recursive: true });
+    const NORM = 'tests/gpr2-r01-normative-expectations.test.ts'; const other = p.checks.find(c => c.id === 'full-regression-other').files.find(f => f.path !== NORM).path;
+    fs.writeFileSync(path.join(cd, 'result.json'), JSON.stringify({ state: 'EXECUTED', files: [{ path: NORM, state: 'DEFERRED' }, { path: other, state: 'EXECUTED', counts: { tests: 1 } }] }));
+    assert.deepEqual(mergeIsolatedResults(d, p, { files: [{ path: NORM, state: 'EXECUTED', counts: { tests: 8 }, log: 'logs/x.log' }, { path: other, state: 'HIJACK' }] }), [NORM]);
+    const res = JSON.parse(fs.readFileSync(path.join(cd, 'result.json'), 'utf8')); assert.equal(res.files[0].state, 'EXECUTED'); assert.equal(res.files[0].executed_in, 'normative'); assert.equal(res.files[1].state, 'EXECUTED'); assert.equal(res.files[1].counts.tests, 1);
   });
   test('a PostgreSQL teardown failure (or missing teardown evidence) is never a PASS', () => {
     const bad = sealR05({ cleanupRecord: { ...cleanup(), owned_processes_after: [{ pid: 551, role: 'postmaster' }] } });
@@ -547,13 +635,180 @@ describe('D1-A/NORM: the normative documents are pinned external inputs — no s
   });
   test('classification: PASS only with 8/8 and the pinned documents on record; unsupplied documents are ENVIRONMENT BLOCKED, never a skip and never PASS', () => {
     const spec = normSpec(); const check = { file_timeout_seconds: 60 };
-    const recOk = { path: NORM, state: 'EXECUTED', exit_code: 0, counts: { tests: 8, pass: 8, fail: 0, cancelled: 0, skipped: 0, todo: 0 }, external_inputs: spec.external_inputs.map(x => ({ env: x.env, filename: x.filename, sha256: x.sha256, bytes: 1 })) };
+    const recOk = { path: NORM, state: 'EXECUTED', executed_in: 'normative', exit_code: 0, counts: { tests: 8, pass: 8, fail: 0, cancelled: 0, skipped: 0, todo: 0 }, external_inputs: spec.external_inputs.map(x => ({ env: x.env, filename: x.filename, sha256: x.sha256, bytes: 1 })) };
     assert.equal(classifyNodeFile(spec, recOk, check).status, S.PASS);
     const noRec = classifyNodeFile(spec, { ...recOk, external_inputs: undefined }, check); assert.equal(noRec.status, S.FAIL); assert.ok(noRec.reasons.some(x => x.includes('GPR2_TD_PATH')));
     const wrong = classifyNodeFile(spec, { ...recOk, external_inputs: recOk.external_inputs.map(x => ({ ...x, sha256: '1'.repeat(64) })) }, check); assert.equal(wrong.status, S.FAIL);
     const skipped = classifyNodeFile(spec, { ...recOk, counts: { tests: 8, pass: 7, fail: 0, cancelled: 0, skipped: 1, todo: 0 } }, check);
     assert.equal(skipped.status, S.FAIL); assert.ok(skipped.reasons.some(x => x.includes('unexpectedly skipped')), 'the old 7 pass + 1 skip outcome is a FAIL again');
     const blocked = classifyNodeFile(spec, { path: NORM, state: 'INPUT_UNVERIFIED', reason: 'not supplied' }, check); assert.equal(blocked.status, S.BLOCKED);
+    const viaRuntime = classifyNodeFile(spec, { ...recOk, executed_in: undefined }, check); assert.equal(viaRuntime.status, S.FAIL); assert.ok(viaRuntime.reasons.some(x => x.includes('not produced by the isolated normative job')));
+    const deferred = classifyNodeFile(spec, { path: NORM, state: 'DEFERRED', executed_in: 'normative' }, check); assert.equal(deferred.status, S.NOT_RUN); assert.equal(deferred.deferred, true);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------------------------
+// D1-B PRIVATE-RUN: the isolated `normative` job, stage/seal provenance
+// ---------------------------------------------------------------------------------------------------------------------------------------------------
+const TSX_OK = fs.existsSync(path.resolve(ACC, '..', '..', 'node_modules', 'tsx'));
+const NODE_MODULES = TSX_OK ? fs.realpathSync(path.resolve(ACC, '..', '..', 'node_modules')) : null;
+const open755 = dir => { for (let d = dir; d.startsWith(os.tmpdir()) && d !== os.tmpdir(); d = path.dirname(d)) fs.chmodSync(d, 0o755); };
+const N_TEST = `import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import net from 'node:net';
+test('private document visible; unprivileged; no network; minimal environment', async () => {
+  assert.equal(process.getuid(), 65534);
+  assert.match(fs.readFileSync(process.env.GPR2_TD_PATH!, 'utf8'), /PRIVATE-TD/);
+  assert.equal(process.env.GPR2_EXTERNAL_INPUTS_DIR, undefined); assert.equal(process.env.GITHUB_TOKEN, undefined); assert.equal(process.env.ACTIONS_RUNTIME_TOKEN, undefined);
+  const code = await new Promise(r => { const s = net.connect({ host: '1.1.1.1', port: 443 }); s.on('error', (e: any) => r(e.code)); s.on('connect', () => r('CONNECTED')); });
+  assert.notEqual(code, 'CONNECTED');
+});
+`;
+/** A synthetic repo: base (public baseline) holds the closure; the candidate adds one more test. Profile pins the closure and a private document. */
+function synthIso({ candidateChangesClosure = false } = {}) {
+  const d = tmp(); const origin = path.join(d, 'origin'); const recv = path.join(d, 'recv');
+  fs.mkdirSync(path.join(origin, 'tests'), { recursive: true }); git(origin, 'init', '-q');
+  const files = { 'package.json': '{"name":"x","private":true}\n', 'package-lock.json': '{}\n', 'tests/n.test.ts': N_TEST, 'tests/o.test.ts': 'o\n' };
+  for (const [f, t] of Object.entries(files)) fs.writeFileSync(path.join(origin, f), t);
+  git(origin, 'add', '-A'); git(origin, 'commit', '-q', '-m', 'base');
+  const base = git(origin, 'rev-parse', 'HEAD'); execFileSync('git', ['clone', '-q', '--no-local', origin, recv]);
+  git(origin, 'checkout', '-q', '-b', 'feature/stage');
+  fs.writeFileSync(path.join(origin, 'tests', 'p.test.ts'), 'p\n'); if (candidateChangesClosure) fs.writeFileSync(path.join(origin, 'tests', 'n.test.ts'), N_TEST + '// changed by the candidate\n');
+  git(origin, 'add', '-A'); git(origin, 'commit', '-q', '-m', 'cand');
+  const cand = git(origin, 'rev-parse', 'HEAD'), tree = git(origin, 'rev-parse', 'HEAD^{tree}');
+  const bundle = path.join(d, 'candidate.bundle'); git(origin, 'bundle', 'create', '-q', bundle, `${base}..feature/stage`); const buf = fs.readFileSync(bundle);
+  const docs = path.join(d, 'docs'); fs.mkdirSync(docs); fs.writeFileSync(path.join(docs, 'td.md'), 'PRIVATE-TD text'); const docSha = sha256(Buffer.from('PRIVATE-TD text'));
+  const profile = {
+    schema: 'construction-core/gpr2-acceptance-profile@1', profile_id: 'synthetic-iso', stage: 'R05', title: 'synthetic', status: 'ACTIVE', baseline: { sha: base, tree: git(origin, 'rev-parse', `${base}^{tree}`) },
+    candidates: [{ sha: cand, tree, lineage: [{ rev: 'HEAD^', sha: base, tree: git(origin, 'rev-parse', `${base}^{tree}`) }], diff_check_from: base, approval: 'synthetic test candidate', source: { kind: 'git-bundle', repository: 'Shamil9586/construction-core-acceptance-evidence', commit: 'a'.repeat(40), path: 'x/candidate.bundle',
+      blob: gitBlobId(buf), bytes: buf.length, sha256: sha256(buf), ref: 'refs/heads/feature/stage', prerequisites: [base] } }],
+    runtime: { runner: 'ubuntu-24.04', node: '22.22.0', postgres_major: 16, job_timeout_minutes: 30, requires: [] },
+    checks: [{ id: 'unit', title: 'u', class: 'UNIT', kind: 'node-test', mandatory: true, requires: [], allow_skip: false, fresh_database_per_file: false, file_timeout_seconds: 60, files: [
+      { path: 'tests/n.test.ts', expect_tests: 1, external_inputs: [{ env: 'GPR2_TD_PATH', filename: 'td.md', sha256: docSha }],
+        isolated: { job: 'normative', closure: ['package.json', 'package-lock.json', 'tests/n.test.ts'].map(f => ({ path: f, blob: gitBlobId(Buffer.from(files[f])) })) } },
+      { path: 'tests/o.test.ts', expect_tests: 1 }, { path: 'tests/p.test.ts', expect_tests: 1 }] }],
+    full_regression: { inventory: 'tests/*.test.ts', checks: ['unit'], expect_files: 3, expect_tests: 3 },
+  };
+  assert.deepEqual(validateProfile(profile), []);
+  return { d, origin, recv, base, cand, tree, bundle, docs, profile, docSha, files };
+}
+const profSha = p => sha256(Buffer.from(JSON.stringify(p)));
+
+describe('D1-B isolated files: profile schema', () => {
+  const mutate = f => { const p = r05(); const file = p.checks.flatMap(c => c.files || []).find(x => x.path === 'tests/gpr2-r01-normative-expectations.test.ts'); f(file, p); return validateProfile(p); };
+  test('the R05 TEMPLATE isolates exactly the normative file in the normative job, with the 8-file closure pinned by Git blob', () => {
+    const p = r05(); const iso = p.checks.flatMap(c => c.files || []).filter(f => f.isolated);
+    assert.deepEqual(iso.map(f => [f.path, f.isolated.job, f.isolated.closure.length]), [['tests/gpr2-r01-normative-expectations.test.ts', 'normative', 8]]);
+    assert.deepEqual(validateProfile(p), []);
+  });
+  for (const [name, f, needle] of [
+    ['external_inputs without isolated', file => { delete file.isolated; }, 'must be declared together'],
+    ['isolated without external_inputs', file => { delete file.external_inputs; }, 'must be declared together'],
+    ['an unknown job', file => { file.isolated.job = 'runtime'; }, 'job must be one of'],
+    ['an empty closure', file => { file.isolated.closure = []; }, 'closure must list'],
+    ['a closure without the test itself', file => { file.isolated.closure = file.isolated.closure.filter(x => x.path !== file.path); }, `closure must include ${'tests/gpr2-r01-normative-expectations.test.ts'}`],
+    ['a closure without package-lock.json', file => { file.isolated.closure = file.isolated.closure.filter(x => x.path !== 'package-lock.json'); }, 'closure must include package-lock.json'],
+    ['a traversing closure path', file => { file.isolated.closure[1].path = '../x'; }, 'plain repository path'],
+    ['a malformed blob', file => { file.isolated.closure[1].blob = 'zz'; }, 'blob must be a 40-hex'],
+    ['a duplicated closure path', file => { file.isolated.closure.push({ ...file.isolated.closure[0] }); }, 'listed twice'],
+    ['an unknown key', file => { file.isolated.network = true; }, 'network'],
+  ]) test(`rejects ${name}`, () => assert.ok(mutate(f).some(x => x.includes(needle)), needle));
+});
+
+describe('D1-B stage-inputs.mjs: private inputs verified from the private source (stage and seal jobs)', () => {
+  const inputs = (s, over = {}) => computeInputs({ profile: s.profile, profileSha256: profSha(s.profile), candidateSha: s.cand, bundle: s.bundle, docsDir: s.docs, repo: s.recv, harnessSha: 'a'.repeat(40), ...over });
+  test('verifies bundle, documents and the closure in both candidate and baseline; the digest equals the digest derived from the profile pins alone', () => {
+    const s = synthIso(); const r = inputs(s);
+    assert.equal(r.ok, true, r.refusals.join('\n'));
+    assert.equal(r.inputs_digest, digestOf(expectedCore(s.profile, s.profile.candidates[0], profSha(s.profile))));
+    assert.deepEqual(r.isolated[0].closure.map(x => [x.path, x.blob === x.candidate_blob && x.blob === x.baseline_blob]), [['package.json', true], ['package-lock.json', true], ['tests/n.test.ts', true]]);
+    assert.deepEqual(isolatedProvenanceProblems({ profile: s.profile, cand: s.profile.candidates[0], profileSha256: profSha(s.profile), stageOutputs: { inputs_digest: r.inputs_digest, candidate_sha: s.cand }, stageRecord: r, sealRecord: r,
+      normative: null }).filter(x => !x.includes('normative job result missing')), []);
+  });
+  test('refuses a wrong document (same size), a missing document, a missing bundle and a corrupted bundle', () => {
+    const s = synthIso(); fs.writeFileSync(path.join(s.docs, 'td.md'), 'PRIVATE-XX text');
+    assert.ok(inputs(s).refusals.some(x => x.includes('has sha256')));
+    fs.rmSync(path.join(s.docs, 'td.md')); assert.ok(inputs(s).refusals.some(x => x.includes('missing or is not a regular file')));
+    const t = synthIso(); assert.ok(inputs(t, { bundle: path.join(t.d, 'nope.bundle') }).refusals.some(x => x.startsWith('bundle:')));
+    const u = synthIso(); const bad = Buffer.from(u.profile.candidates[0] && fs.readFileSync(u.bundle)); bad[bad.length - 5] ^= 0xff; fs.writeFileSync(u.bundle, bad);
+    assert.equal(inputs(u).ok, false);
+  });
+  test('refuses a candidate whose closure differs from the pinned blobs (code that could read the documents), and a baseline that differs', () => {
+    const s = synthIso({ candidateChangesClosure: true }); const r = inputs(s);
+    assert.equal(r.ok, false); assert.ok(r.refusals.some(x => x.includes('tests/n.test.ts has blob') && x.includes('in the candidate')), r.refusals.join('\n'));
+    assert.ok(!r.refusals.some(x => x.includes('in the public baseline')), 'the baseline still equals the pin');
+    const t = synthIso(); t.profile.checks[0].files[0].isolated.closure[2].blob = '1'.repeat(40);
+    const q = inputs(t); assert.ok(q.refusals.some(x => x.includes('in the public baseline')) && q.refusals.some(x => x.includes('in the candidate')));
+  });
+});
+
+describe('D1-B run-normative.mjs: prepare (no documents) and run (sandbox)', () => {
+  const sandboxOk = TSX_OK && (() => { const r = spawnSync('bash', ['-c', process.getuid() === 0 ? 'unshare -n true && command -v setpriv' : 'sudo -n unshare -n true && command -v setpriv'], { encoding: 'utf8' }); return r.status === 0; })();
+  const opts = { skip: !sandboxOk && 'needs tsx in node_modules, unshare, setpriv and root or passwordless sudo' };
+  const work = s => { const w = path.join(s.d, 'work'); fs.mkdirSync(w); return w; };
+  const prepared = s => { const w = work(s); const base = path.join(s.d, 'base'); fs.mkdirSync(path.join(base, 'tests'), { recursive: true });
+    for (const [f, t] of Object.entries(s.files)) { fs.mkdirSync(path.dirname(path.join(base, f)), { recursive: true }); fs.writeFileSync(path.join(base, f), t); }
+    const r = prepareClosure({ profile: s.profile, base, work: w }); assert.equal(r.ok, true, r.refusals.join('\n'));
+    if (TSX_OK) fs.symlinkSync(NODE_MODULES, path.join(w, 'node_modules')); open755(s.d); spawnSync('chmod', ['-R', 'a+rX', s.d]); return { w, base }; };
+  test('prepareClosure copies only pinned files and refuses a changed, missing or linked file (the baseline checkout is not trusted)', () => {
+    const s = synthIso(); const { w, base } = (() => { const w2 = work(s); return { w: w2, base: path.join(s.d, 'base') }; })();
+    fs.mkdirSync(path.join(base, 'tests'), { recursive: true }); for (const [f, t] of Object.entries(s.files)) fs.writeFileSync(path.join(base, f), t);
+    assert.equal(prepareClosure({ profile: s.profile, base, work: w }).ok, true);
+    assert.deepEqual(fs.readdirSync(w).sort(), ['package-lock.json', 'package.json', 'tests'], 'only the closure, not o.test.ts or anything else');
+    assert.deepEqual(fs.readdirSync(path.join(w, 'tests')), ['n.test.ts']);
+    fs.writeFileSync(path.join(base, 'tests', 'n.test.ts'), N_TEST + '//x'); assert.ok(prepareClosure({ profile: s.profile, base, work: w }).refusals.some(x => x.includes('pinned')));
+    fs.rmSync(path.join(base, 'tests', 'n.test.ts')); assert.ok(prepareClosure({ profile: s.profile, base, work: w }).refusals.some(x => x.includes('missing or not a regular file')));
+    fs.symlinkSync(path.join(base, 'package.json'), path.join(base, 'tests', 'n.test.ts')); assert.ok(prepareClosure({ profile: s.profile, base, work: w }).refusals.some(x => x.includes('not a regular file')));
+  });
+  test('sandboxCommand: empty network namespace, dropped uid/gid, no new privileges, exactly the given environment; sudo only when not root', () => {
+    const c = sandboxCommand({ argv: ['node', 'x'], env: { A: '1' }, root: true });
+    assert.deepEqual(c, ['unshare', '-n', 'setpriv', `--reuid=${SANDBOX_UID}`, `--regid=${SANDBOX_UID}`, '--clear-groups', '--no-new-privs', 'env', '-i', 'A=1', 'node', 'x']);
+    assert.deepEqual(sandboxCommand({ argv: ['node'], env: {}, root: false }).slice(0, 3), ['sudo', '-n', 'unshare']);
+  });
+  test('the unchanged-style test runs 1/1 in the sandbox: private document readable, uid 65534, no network, no tokens or directory variable in its environment', opts, () => {
+    const s = synthIso(); const { w } = prepared(s);
+    const out = path.join(s.d, 'out'); const save = { ...process.env };
+    Object.assign(process.env, { GITHUB_TOKEN: 'secret', ACTIONS_RUNTIME_TOKEN: 'secret', GPR2_EXTERNAL_INPUTS_DIR: s.docs });
+    try {
+      const r = runIsolated({ profile: s.profile, profileSha256: profSha(s.profile), candidateSha: s.cand, work: w, docsDir: s.docs, out, timeoutSec: 120 });
+      const f = r.files[0];
+      assert.equal(f.state, 'EXECUTED', JSON.stringify(f).slice(0, 400)); assert.equal(f.exit_code, 0, fs.readFileSync(path.join(out, f.log), 'utf8'));
+      assert.deepEqual([f.counts.tests, f.counts.pass, f.counts.skipped], [1, 1, 0]);
+      assert.deepEqual(f.sandbox, { network: 'none', uid: SANDBOX_UID, env: 'minimal', probe_ok: true, probe: f.sandbox.probe }); assert.equal(f.sandbox.probe.connect.startsWith('E'), true);
+      assert.deepEqual(f.external_inputs.map(x => [x.env, x.sha256]), [['GPR2_TD_PATH', s.docSha]]);
+      assert.deepEqual(f.closure_verified.map(x => x.path), ['package.json', 'package-lock.json', 'tests/n.test.ts']);
+      assert.ok(!fs.readFileSync(path.join(out, f.log), 'utf8').includes('PRIVATE-TD'), 'document text is not printed into the log');
+    } finally { for (const k of ['GITHUB_TOKEN', 'ACTIONS_RUNTIME_TOKEN', 'GPR2_EXTERNAL_INPUTS_DIR']) if (save[k] === undefined) delete process.env[k]; else process.env[k] = save[k]; }
+  });
+  test('refusals are BLOCKED / INPUT_UNVERIFIED, never a skip: wrong document, missing document, closure file changed after prepare, sandbox unavailable', opts, () => {
+    const s = synthIso(); const { w } = prepared(s); const go = (o = {}) => runIsolated({ profile: s.profile, profileSha256: profSha(s.profile), candidateSha: s.cand, work: w, docsDir: s.docs, out: path.join(s.d, 'o' + Math.random()), timeoutSec: 60, ...o }).files[0];
+    fs.writeFileSync(path.join(s.docs, 'td.md'), 'PRIVATE-XX text'); assert.equal(go().state, 'INPUT_UNVERIFIED'); fs.writeFileSync(path.join(s.docs, 'td.md'), 'PRIVATE-TD text');
+    assert.equal(go({ docsDir: path.join(s.d, 'nodocs') }).state, 'INPUT_UNVERIFIED');
+    fs.writeFileSync(path.join(w, 'tests', 'n.test.ts'), N_TEST + '//tampered'); const t = go(); assert.equal(t.state, 'BLOCKED'); assert.match(t.reason, /differ from the pinned blobs/); fs.writeFileSync(path.join(w, 'tests', 'n.test.ts'), N_TEST);
+    const savePath = process.env.PATH; process.env.PATH = '/nonexistent'; try { const b = go(); assert.equal(b.state, 'BLOCKED'); assert.equal(b.sandbox.probe_ok, false); } finally { process.env.PATH = savePath; }
+  });
+  test('a failing test in the sandbox is reported as such (non-zero exit, counts), never hidden', opts, () => {
+    const s = synthIso(); s.files['tests/n.test.ts'] = N_TEST.replace('/PRIVATE-TD/', '/NOT-IN-THE-DOCUMENT/'); const blob = gitBlobId(Buffer.from(s.files['tests/n.test.ts']));
+    s.profile.checks[0].files[0].isolated.closure.find(x => x.path === 'tests/n.test.ts').blob = blob; const { w } = prepared(s);
+    const f = runIsolated({ profile: s.profile, profileSha256: profSha(s.profile), candidateSha: s.cand, work: w, docsDir: s.docs, out: path.join(s.d, 'out'), timeoutSec: 60 }).files[0];
+    assert.equal(f.state, 'EXECUTED'); assert.notEqual(f.exit_code, 0); assert.equal(f.counts.fail, 1);
+  });
+});
+
+describe('D1-B runtime job: the isolated file is never executed there', () => {
+  test('run-profile.mjs records DEFERRED for the isolated file, executes the others, and does not fail its preliminary gate for the deferral', { skip: !TSX_OK && 'needs tsx' }, () => {
+    const s = synthIso(); const core = path.join(s.d, 'core'); fs.mkdirSync(path.join(core, 'tests'), { recursive: true });
+    for (const f of ['n', 'o', 'p']) fs.writeFileSync(path.join(core, 'tests', `${f}.test.ts`), f === 'n' ? "throw new Error('the isolated file must never run in the runtime job');\n" : "import { test } from 'node:test'; test('t', () => {});\n");
+    fs.symlinkSync(NODE_MODULES, path.join(core, 'node_modules'));
+    git(core, 'init', '-q'); fs.writeFileSync(path.join(core, '.gitignore'), 'node_modules\n'); git(core, 'add', '-A'); git(core, 'commit', '-q', '-m', 'core');
+    const pf = path.join(s.d, 'synthetic-iso.json'); fs.writeFileSync(pf, JSON.stringify(s.profile)); const out = path.join(s.d, 'raw');
+    const r = spawnSync('node', [path.join(LIB, 'run-profile.mjs'), '--profile', pf, '--core', core, '--out', out], { encoding: 'utf8',
+      env: { ...Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('NODE_TEST'))), GPR2_ENV_DEPS: 'success', GPR2_ENV_POSTGRES: 'skipped', GPR2_ENV_CHROMIUM: 'skipped', GPR2_EXTERNAL_INPUTS_DIR: s.docs } });
+    const res = JSON.parse(fs.readFileSync(path.join(out, 'checks', 'unit', 'result.json'), 'utf8'));
+    assert.deepEqual(res.files.map(f => [f.path, f.state]), [['tests/n.test.ts', 'DEFERRED'], ['tests/o.test.ts', 'EXECUTED'], ['tests/p.test.ts', 'EXECUTED']]);
+    assert.equal(res.files[0].executed_in, 'normative'); assert.equal(res.files[0].counts, undefined);
+    assert.equal(r.status, 0, r.stdout + r.stderr);
   });
 });
 

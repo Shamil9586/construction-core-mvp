@@ -37,6 +37,8 @@ const PW_CONFIG = /^playwright\.[A-Za-z0-9._-]+\.config\.ts$/;
 const NPM_SCRIPT = /^[a-z0-9][a-z0-9:._-]{0,40}$/;
 const NODE_VERSION = /^[0-9]{2}\.[0-9]{1,2}\.[0-9]{1,2}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
+export const ISOLATED_JOBS = ['normative'];
+const REPO_FILE = /^(?!.*\.\.)(?!\/)[A-Za-z0-9._\/-]{1,200}$/;
 const EXTERNAL_ENV = /^GPR2_[A-Z0-9_]{2,40}$/;
 const EXTERNAL_FILENAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,150}$/;
 const BUNDLE_PATH = /^(?!\/)(?!.*\.\.)(?!.*\/\/)[A-Za-z0-9._\/-]{1,300}\.bundle$/;
@@ -147,11 +149,29 @@ export function validateProfile(p, { fileName } = {}) {
         if (!Array.isArray(c.files) || c.files.length === 0) e.push(`${w}.files must be a non-empty array`);
         else c.files.forEach((f, j) => {
           const fw = `${w}.files[${j}]`;
-          if (!keys(f, ['path', 'expect_tests', 'external_inputs'], fw, e)) return;
+          if (!keys(f, ['path', 'expect_tests', 'external_inputs', 'isolated'], fw, e)) return;
           if (!isStr(f.path, TEST_FILE)) e.push(`${fw}.path must be a tests/**/*.test.ts path without ".."`);
           if (allFiles.has(f.path)) e.push(`${fw}.path is listed twice in this profile`); allFiles.add(f.path);
           if (!isInt(f.expect_tests, 1, 5000)) e.push(`${fw}.expect_tests must be an exact positive test count`);
-          // Approved external documents this test file reads (never in the repository). Pinned by SHA-256; supplied only by the harness (run-profile.mjs).
+          // A file that needs private documents runs ONLY in an isolated job (no candidate code or dependencies, no network): `isolated` names that job and
+          // pins (Git blob ids) the complete set of repository files the test executes, which must be identical in the candidate and in the public baseline.
+          if ((f.isolated !== undefined) !== (f.external_inputs !== undefined)) e.push(`${fw}: external_inputs and isolated must be declared together (private documents are only ever given to an isolated job)`);
+          if (f.isolated !== undefined && keys(f.isolated, ['job', 'closure'], `${fw}.isolated`, e)) {
+            const iw = `${fw}.isolated`;
+            if (!ISOLATED_JOBS.includes(f.isolated.job)) e.push(`${iw}.job must be one of ${ISOLATED_JOBS.join('|')}`);
+            if (!Array.isArray(f.isolated.closure) || f.isolated.closure.length === 0) e.push(`${iw}.closure must list the files the test executes`);
+            else {
+              const paths = f.isolated.closure.map(x => x && x.path);
+              f.isolated.closure.forEach((x, k) => {
+                if (!keys(x, ['path', 'blob'], `${iw}.closure[${k}]`, e)) return;
+                if (!isStr(x.path, REPO_FILE)) e.push(`${iw}.closure[${k}].path must be a plain repository path`);
+                if (!isStr(x.blob, SHA)) e.push(`${iw}.closure[${k}].blob must be a 40-hex Git blob id`);
+                if (paths.indexOf(x.path) !== k) e.push(`${iw}.closure[${k}].path is listed twice`);
+              });
+              for (const need of [f.path, 'package.json', 'package-lock.json']) if (!paths.includes(need)) e.push(`${iw}.closure must include ${need}`);
+            }
+          }
+          // Approved external documents this test file reads (never in the repository). Pinned by SHA-256; supplied only to the isolated job (run-normative.mjs).
           if (f.external_inputs !== undefined) {
             if (!Array.isArray(f.external_inputs) || f.external_inputs.length === 0) e.push(`${fw}.external_inputs must be a non-empty array`);
             else f.external_inputs.forEach((x, k) => {

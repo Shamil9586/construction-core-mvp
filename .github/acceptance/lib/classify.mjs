@@ -35,8 +35,9 @@ export function parseTapSummary(text) {
 export function classifyNodeFile(spec, rec, check) {
   const reasons = [];
   if (!rec) return { path: spec.path, status: S.NOT_RUN, expected_tests: spec.expect_tests, reasons: ['no execution record'] };
-  const base = { path: spec.path, expected_tests: spec.expect_tests, ...(spec.external_inputs ? { external_inputs: rec.external_inputs ?? [] } : {}), exit_code: rec.exit_code ?? null, seconds: rec.seconds ?? null, counts: rec.counts ?? {}, log: rec.log ?? null, junit: rec.junit ?? null };
+  const base = { path: spec.path, expected_tests: spec.expect_tests, ...(spec.external_inputs ? { external_inputs: rec.external_inputs ?? [] } : {}), ...(spec.isolated ? { isolated_job: spec.isolated.job, executed_in: rec.executed_in ?? null } : {}), exit_code: rec.exit_code ?? null, seconds: rec.seconds ?? null, counts: rec.counts ?? {}, log: rec.log ?? null, junit: rec.junit ?? null };
   if (rec.state === 'MISSING') return { ...base, status: S.FAIL, reasons: ['required test file is missing or empty in the candidate'] };
+  if (rec.state === 'DEFERRED') return { ...base, status: S.NOT_RUN, deferred: true, reasons: [rec.reason || 'executed in an isolated job; no merged result'] };
   if (rec.state === 'INPUT_UNVERIFIED') return { ...base, status: S.BLOCKED, reasons: [rec.reason || 'a pinned external input document was not supplied or did not match its SHA-256'] };
   if (rec.state === 'DB_RESET_FAILED') return { ...base, status: S.BLOCKED, reasons: ['the disposable test database could not be recreated'] };
   if (rec.state === 'BLOCKED') return { ...base, status: S.BLOCKED, reasons: [rec.reason || 'prerequisite unavailable'] };
@@ -56,6 +57,8 @@ export function classifyNodeFile(spec, rec, check) {
     if (pass !== required) reasons.push(`expected ${required} passing, runner reported ${pass}`);
   }
   if (rec.exit_code !== 0) reasons.push(`exit code ${rec.exit_code}`);
+  // A file the profile isolates passes only with the result produced by that isolated job (merged by the seal job), never from the runtime job.
+  if (spec.isolated && rec.executed_in !== spec.isolated.job) reasons.push(`result was not produced by the isolated ${spec.isolated.job} job`);
   // The pinned external documents must be on record, byte for byte (SHA-256), as verified by the harness before the file ran.
   for (const x of spec.external_inputs || []) {
     const got = (rec.external_inputs || []).find(y => y && y.env === x.env);

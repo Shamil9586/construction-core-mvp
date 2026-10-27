@@ -6,8 +6,9 @@
 #
 # Jobs: authorize (no candidate code) -> runtime (candidate code, read-only token, no secrets) -> seal (no candidate code).
 # A candidate registered with an archived git-bundle source is restored in each job from the public baseline plus the pinned bundle
-# (source-bundle.mjs) and then re-verified by the unchanged identity.mjs. Obtaining that private bundle on a hosted runner is NOT approved:
-# authorize.mjs refuses such candidates and the acquisition steps below fail closed until a security-reviewed transport is decided.
+# (source-bundle.mjs) and then re-verified by the unchanged identity.mjs. Such a candidate runs ONLY in the private archive repository's own workflow
+# (stage / runtime / normative / seal jobs); here authorize.mjs refuses it and the acquisition steps below fail closed — this public workflow never
+# obtains the private bundle and never receives the private GPR-2 documents.
 # Nothing here merges, deploys, migrates a LIVE database or uses production credentials. A green run is a TECHNICAL gate only.
 name: GPR-2 Acceptance (universal, isolated)
 
@@ -91,7 +92,7 @@ jobs:
       - name: Obtain the archived candidate bundle (transport not approved — fails closed)
         if: steps.authz.outputs.source_kind == 'git-bundle'
         run: |
-          echo "Hosted transport of the private archive bundle is not security-approved; refusing (authorize.mjs ARCHIVE_TRANSPORT_APPROVED)." >&2
+          echo "An archived candidate may run only inside the private archive repository (authorize.mjs); this public workflow never obtains the private bundle." >&2
           exit 1
       - name: Verify the pinned bundle and restore the exact candidate (git only; nothing is executed)
         if: steps.authz.outputs.source_kind == 'git-bundle'
@@ -153,7 +154,7 @@ jobs:
       - name: Obtain the archived candidate bundle (transport not approved — fails closed)
         if: needs.authorize.outputs.source_kind == 'git-bundle'
         run: |
-          echo "Hosted transport of the private archive bundle is not security-approved; refusing (authorize.mjs ARCHIVE_TRANSPORT_APPROVED)." >&2
+          echo "An archived candidate may run only inside the private archive repository (authorize.mjs); this public workflow never obtains the private bundle." >&2
           exit 1
       - name: Verify the pinned bundle and restore the exact candidate before any candidate code runs
         if: needs.authorize.outputs.source_kind == 'git-bundle'
@@ -251,7 +252,7 @@ jobs:
         if: needs.authorize.outputs.source_kind == 'git-bundle'
         continue-on-error: true
         run: |
-          echo "Hosted transport of the private archive bundle is not security-approved; refusing (authorize.mjs ARCHIVE_TRANSPORT_APPROVED)." >&2
+          echo "An archived candidate may run only inside the private archive repository (authorize.mjs); this public workflow never obtains the private bundle." >&2
           exit 1
       - name: Verify the pinned bundle and restore the exact candidate independently of the runtime job
         if: needs.authorize.outputs.source_kind == 'git-bundle'

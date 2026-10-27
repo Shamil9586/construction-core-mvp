@@ -6,21 +6,18 @@
 //   * the profile must exist at the workflow commit, validate strictly and be ACTIVE;
 //   * the candidate SHA must be a full SHA registered in that profile (registration = a reviewed PR to main);
 //   * the confirmation must restate the exact profile and SHA: "APPROVE-TEST-ONLY <profile_id> <candidate_sha>";
-//   * a candidate restored from an archived Git bundle (candidate.source) is refused while ARCHIVE_TRANSPORT_APPROVED is false: obtaining the
-//     bundle on a hosted runner crosses the public/private repository boundary and has no security-approved credential/transport yet.
+//   * a candidate with no archived source runs only in the product repository; a candidate restored from an archived Git bundle (candidate.source)
+//     runs ONLY inside the private archive repository that holds that bundle (the workflow there reads it with its own repository token in a job that
+//     runs no candidate code), is refused in the public product repository, and requires the pinned harness commit (GPR2_HARNESS_SHA) to be recorded.
 // Writes <out>/authorization.json and, under GitHub Actions, step outputs for the later jobs.
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadProfile, findCandidate } from './profile.mjs';
+import { loadProfile, findCandidate, SOURCE_REPOSITORIES } from './profile.mjs';
 
 export const EXPECTED_REPOSITORY = 'Shamil9586/construction-core-mvp';
 const PROFILE_ID = /^[a-z0-9][a-z0-9-]{1,62}$/;
 const SHA = /^[0-9a-f]{40}$/;
-// Flipping this is an activation step: it needs an independently reviewed transport for the private archive (no credential in any job that
-// runs candidate code, no private bytes in public artifacts or logs) and a separate owner/coordinator decision. Until then: fail closed.
-export const ARCHIVE_TRANSPORT_APPROVED = false;
-
 export function authorize({ env, harnessDir }) {
   const refusals = [];
   const need = k => (env[k] ?? '').trim();
@@ -28,7 +25,8 @@ export function authorize({ env, harnessDir }) {
   const actor = need('GITHUB_ACTOR'), triggeringActor = need('GITHUB_TRIGGERING_ACTOR') || actor;
   const profileId = need('INPUT_PROFILE'), candidateSha = need('INPUT_CANDIDATE_SHA'), confirmation = need('INPUT_CONFIRMATION');
 
-  if (repository !== EXPECTED_REPOSITORY) refusals.push(`repository ${repository || '(none)'} is not ${EXPECTED_REPOSITORY}`);
+  const harnessSha = need('GPR2_HARNESS_SHA');
+  if (repository !== EXPECTED_REPOSITORY && !SOURCE_REPOSITORIES.includes(repository)) refusals.push(`repository ${repository || '(none)'} is not ${EXPECTED_REPOSITORY} or an approved private archive repository`);
   if (eventName !== 'workflow_dispatch') refusals.push(`event ${eventName || '(none)'} is not workflow_dispatch`);
   if (ref !== 'refs/heads/main') refusals.push(`workflow ref ${ref || '(none)'} is not refs/heads/main`);
 
@@ -51,7 +49,10 @@ export function authorize({ env, harnessDir }) {
   else if (profile) {
     candidate = findCandidate(profile, candidateSha);
     if (!candidate) refusals.push(`candidate ${candidateSha} is not registered in profile ${profileId}`);
-    else if (candidate.source && !ARCHIVE_TRANSPORT_APPROVED) refusals.push(`candidate ${candidateSha} is restored from an archived ${candidate.source.kind} (${candidate.source.repository}); hosted transport of the private archive is not approved`);
+    else if (candidate.source) {
+      if (repository !== candidate.source.repository) refusals.push(`candidate ${candidateSha} is restored from an archived ${candidate.source.kind} held by ${candidate.source.repository}; it may run only inside that private repository, not in ${repository || '(none)'}`);
+      else if (!SHA.test(harnessSha)) refusals.push('GPR2_HARNESS_SHA (the pinned public harness commit) must be a full 40-hex SHA in the archive context');
+    } else if (repository !== EXPECTED_REPOSITORY) refusals.push(`candidate ${candidateSha} has no archived source and may run only in ${EXPECTED_REPOSITORY}, not in ${repository || '(none)'}`);
   }
   const expectedConfirmation = `APPROVE-TEST-ONLY ${profileId} ${candidateSha}`;
   if (confirmation !== expectedConfirmation) refusals.push(`confirmation must be exactly "APPROVE-TEST-ONLY <profile> <candidate_sha>" for this dispatch`);
@@ -62,6 +63,7 @@ export function authorize({ env, harnessDir }) {
     workflow: { sha: need('GITHUB_SHA'), run_id: need('GITHUB_RUN_ID'), run_attempt: need('GITHUB_RUN_ATTEMPT'), workflow_ref: need('GITHUB_WORKFLOW_REF') },
     profile: profile && { id: profile.profile_id, stage: profile.stage, status: profile.status, sha256: profileSha256, title: profile.title },
     candidate: candidate && { sha: candidate.sha, tree: candidate.tree, approval: candidate.approval, source: candidate.source || null },
+    harness_sha: candidate && candidate.source ? harnessSha : null,
     runtime: profile && profile.runtime, baseline_sha: profile && profile.baseline.sha,
     decided_at: new Date().toISOString(),
   };
@@ -75,6 +77,7 @@ export function stepOutputs(r) {
   return {
     stage: r.profile.stage, profile_id: r.profile.id, profile_sha256: r.profile.sha256, candidate_sha: r.candidate.sha, candidate_tree: r.candidate.tree,
     source_kind: src ? src.kind : 'none', checkout_ref: src ? r.baseline_sha : r.candidate.sha,
+    source_commit: src ? src.commit : '', source_path: src ? src.path : '', harness_sha: r.harness_sha || '',
     node_version: r.runtime.node, postgres_major: String(r.runtime.postgres_major), job_timeout_minutes: String(r.runtime.job_timeout_minutes),
     needs_postgres: String(r.runtime.requires.includes('postgres')), needs_chromium: String(r.runtime.requires.includes('chromium')),
     evidence_name: `gpr2-acceptance-${r.profile.stage.toLowerCase()}-${r.profile.id}-${sha12}-run${r.workflow.run_id}-a${r.workflow.run_attempt}`,
