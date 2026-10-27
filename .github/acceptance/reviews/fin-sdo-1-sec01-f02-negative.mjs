@@ -1,5 +1,5 @@
-// FIN-SDO-1 SEC-01-F02 reviewer-owned negative probes, DRAFT / NOT EXECUTED.
-// Proposed CI-only harness path: .github/acceptance/reviews/fin-sdo-1-sec01-f02-negative.mjs
+// FIN-SDO-1 SEC-01-F02 independent negative probes; review required, NOT EXECUTED.
+// CI-only harness in reviewed PR, separate from the immutable product candidate.
 // MUST be reviewed and tested in isolated GitHub Actions. Never run against LIVE.
 import assert from 'node:assert/strict';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
