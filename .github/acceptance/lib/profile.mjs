@@ -21,6 +21,12 @@ export const CHECK_KINDS = ['node-test', 'playwright', 'npm-script'];
 export const CHECK_CLASSES = ['NATIVE_POSTGRESQL', 'PURE_PGLITE', 'UNIT', 'BROWSER_CHROMIUM', 'TYPECHECK_BUILD', 'MIGRATION'];
 export const REQUIREMENTS = ['postgres', 'chromium'];
 export const RUNNERS = ['ubuntu-24.04'];
+// A candidate that is not reachable in this repository may be restored from an archived Git bundle. Only these archive repositories may be named;
+// the bundle is pinned by archive commit, path, Git blob, byte size and SHA-256, and its single ref and prerequisites are pinned too (source-bundle.mjs).
+export const SOURCE_KINDS = ['git-bundle'];
+export const SOURCE_REPOSITORIES = ['Shamil9586/construction-core-acceptance-evidence'];
+// full_regression.inventory: the candidate test set the listed checks must cover exactly (the files `npm test` globs: tests/*.test.ts, top level only).
+export const INVENTORIES = ['tests/*.test.ts'];
 
 const SHA = /^[0-9a-f]{40}$/;
 const ID = /^[a-z0-9][a-z0-9-]{1,62}$/;
@@ -30,6 +36,14 @@ const TEST_FILE = /^tests\/(?!.*\.\.)[A-Za-z0-9._\/-]+\.test\.ts$/;
 const PW_CONFIG = /^playwright\.[A-Za-z0-9._-]+\.config\.ts$/;
 const NPM_SCRIPT = /^[a-z0-9][a-z0-9:._-]{0,40}$/;
 const NODE_VERSION = /^[0-9]{2}\.[0-9]{1,2}\.[0-9]{1,2}$/;
+const SHA256 = /^[0-9a-f]{64}$/;
+export const ISOLATED_JOBS = ['normative'];
+const REPO_FILE = /^(?!.*\.\.)(?!\/)[A-Za-z0-9._\/-]{1,200}$/;
+const EXTERNAL_ENV = /^GPR2_[A-Z0-9_]{2,40}$/;
+const EXTERNAL_FILENAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,150}$/;
+const BUNDLE_PATH = /^(?!\/)(?!.*\.\.)(?!.*\/\/)[A-Za-z0-9._\/-]{1,300}\.bundle$/;
+const BUNDLE_REF = /^refs\/heads\/(?!.*\.\.)(?!.*\/\/)(?!.*\/$)[A-Za-z0-9._\/-]{1,200}$/;
+const TOP_LEVEL_TEST = /^tests\/[A-Za-z0-9._-]+\.test\.ts$/;
 
 function keys(obj, allowed, where, errors) {
   if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) { errors.push(`${where}: must be an object`); return false; }
@@ -39,9 +53,45 @@ function keys(obj, allowed, where, errors) {
 const isStr = (v, re) => typeof v === 'string' && (!re || re.test(v));
 const isInt = (v, min = 0, max = 100000) => Number.isInteger(v) && v >= min && v <= max;
 
+function validateSource(s, w, e) {
+  if (!keys(s, ['kind', 'repository', 'commit', 'path', 'blob', 'bytes', 'sha256', 'ref', 'prerequisites'], w, e)) return;
+  if (!SOURCE_KINDS.includes(s.kind)) e.push(`${w}.kind must be one of ${SOURCE_KINDS.join('|')}`);
+  if (!SOURCE_REPOSITORIES.includes(s.repository)) e.push(`${w}.repository must be one of ${SOURCE_REPOSITORIES.join('|')}`);
+  if (!isStr(s.commit, SHA)) e.push(`${w}.commit must be the full 40-hex archive commit SHA`);
+  if (!isStr(s.path, BUNDLE_PATH)) e.push(`${w}.path must be a relative *.bundle path without ".." or "//"`);
+  if (!isStr(s.blob, SHA)) e.push(`${w}.blob must be the full 40-hex Git blob SHA of the bundle`);
+  if (!isInt(s.bytes, 1, 50 * 1024 * 1024)) e.push(`${w}.bytes must be the exact bundle size (1..50 MiB)`);
+  if (!isStr(s.sha256, SHA256)) e.push(`${w}.sha256 must be a lowercase 64-hex SHA-256`);
+  if (!isStr(s.ref, BUNDLE_REF)) e.push(`${w}.ref must be a refs/heads/<name> ref without ".."`);
+  if (!Array.isArray(s.prerequisites) || s.prerequisites.length < 1 || !s.prerequisites.every(x => isStr(x, SHA))) e.push(`${w}.prerequisites must list the full SHA of every bundle prerequisite`);
+  else if (new Set(s.prerequisites).size !== s.prerequisites.length) e.push(`${w}.prerequisites are duplicated`);
+}
+
+function validateCandidates(list, label, e) {
+  const seen = new Set();
+  list.forEach((c, i) => {
+    const w = `${label}[${i}]`;
+    if (!keys(c, ['sha', 'tree', 'lineage', 'diff_check_from', 'approval', 'source'], w, e)) return;
+    if (!isStr(c.sha, SHA)) e.push(`${w}.sha must be a full 40-hex SHA`);
+    if (!isStr(c.tree, SHA)) e.push(`${w}.tree must be a full 40-hex SHA`);
+    if (seen.has(c.sha)) e.push(`${w}.sha is duplicated`); seen.add(c.sha);
+    if (!isStr(c.approval) || c.approval.length < 10) e.push(`${w}.approval must reference the owner decision that registered it`);
+    if (c.diff_check_from !== undefined && !isStr(c.diff_check_from, SHA)) e.push(`${w}.diff_check_from must be a full SHA`);
+    if (c.source !== undefined) validateSource(c.source, `${w}.source`, e);
+    if (!Array.isArray(c.lineage) || c.lineage.length < 1) e.push(`${w}.lineage must pin at least the first parent`);
+    else c.lineage.forEach((l, j) => {
+      const lw = `${w}.lineage[${j}]`;
+      if (!keys(l, ['rev', 'sha', 'tree'], lw, e)) return;
+      if (!isStr(l.rev, REV) || l.rev === 'HEAD') e.push(`${lw}.rev must be a HEAD-relative ancestor expression (e.g. HEAD^, HEAD~2, HEAD^2)`);
+      if (!isStr(l.sha, SHA)) e.push(`${lw}.sha must be a full SHA`);
+      if (!isStr(l.tree, SHA)) e.push(`${lw}.tree must be a full SHA`);
+    });
+  });
+}
+
 export function validateProfile(p, { fileName } = {}) {
   const e = [];
-  if (!keys(p, ['$comment', 'schema', 'profile_id', 'stage', 'title', 'status', 'baseline', 'candidates', 'runtime', 'checks', 'notes'], 'profile', e)) return e;
+  if (!keys(p, ['$comment', 'schema', 'profile_id', 'stage', 'title', 'status', 'baseline', 'candidates', 'proposed_candidates', 'runtime', 'checks', 'full_regression', 'notes'], 'profile', e)) return e;
   if (p.schema !== SCHEMA_ID) e.push(`schema must be "${SCHEMA_ID}"`);
   if (!isStr(p.profile_id, ID)) e.push('profile_id must match ' + ID);
   if (fileName && path.basename(fileName) !== `${p.profile_id}.json`) e.push(`file name must be ${p.profile_id}.json`);
@@ -59,24 +109,14 @@ export function validateProfile(p, { fileName } = {}) {
   else {
     if (p.status === 'ACTIVE' && p.candidates.length === 0) e.push('an ACTIVE profile needs at least one approved candidate');
     if (p.status === 'TEMPLATE' && p.candidates.length !== 0) e.push('a TEMPLATE profile must not list candidates');
-    const seen = new Set();
-    p.candidates.forEach((c, i) => {
-      const w = `candidates[${i}]`;
-      if (!keys(c, ['sha', 'tree', 'lineage', 'diff_check_from', 'approval'], w, e)) return;
-      if (!isStr(c.sha, SHA)) e.push(`${w}.sha must be a full 40-hex SHA`);
-      if (!isStr(c.tree, SHA)) e.push(`${w}.tree must be a full 40-hex SHA`);
-      if (seen.has(c.sha)) e.push(`${w}.sha is duplicated`); seen.add(c.sha);
-      if (!isStr(c.approval) || c.approval.length < 10) e.push(`${w}.approval must reference the owner decision that registered it`);
-      if (c.diff_check_from !== undefined && !isStr(c.diff_check_from, SHA)) e.push(`${w}.diff_check_from must be a full SHA`);
-      if (!Array.isArray(c.lineage) || c.lineage.length < 1) e.push(`${w}.lineage must pin at least the first parent`);
-      else c.lineage.forEach((l, j) => {
-        const lw = `${w}.lineage[${j}]`;
-        if (!keys(l, ['rev', 'sha', 'tree'], lw, e)) return;
-        if (!isStr(l.rev, REV) || l.rev === 'HEAD') e.push(`${lw}.rev must be a HEAD-relative ancestor expression (e.g. HEAD^, HEAD~2, HEAD^2)`);
-        if (!isStr(l.sha, SHA)) e.push(`${lw}.sha must be a full SHA`);
-        if (!isStr(l.tree, SHA)) e.push(`${lw}.tree must be a full SHA`);
-      });
-    });
+    validateCandidates(p.candidates, 'candidates', e);
+  }
+  // proposed_candidates: the exact identity a TEMPLATE profile is being reviewed for. Never read by authorize/identity (findCandidate looks at
+  // `candidates` only), so a proposal cannot run; activation moves it to `candidates` and sets ACTIVE in a separately approved, reviewed PR.
+  if (p.proposed_candidates !== undefined) {
+    if (p.status !== 'TEMPLATE') e.push('proposed_candidates are allowed only in a TEMPLATE profile');
+    if (!Array.isArray(p.proposed_candidates) || p.proposed_candidates.length === 0) e.push('proposed_candidates must be a non-empty array when present');
+    else validateCandidates(p.proposed_candidates, 'proposed_candidates', e);
   }
 
   if (keys(p.runtime, ['runner', 'node', 'postgres_major', 'job_timeout_minutes', 'requires'], 'runtime', e)) {
@@ -109,10 +149,40 @@ export function validateProfile(p, { fileName } = {}) {
         if (!Array.isArray(c.files) || c.files.length === 0) e.push(`${w}.files must be a non-empty array`);
         else c.files.forEach((f, j) => {
           const fw = `${w}.files[${j}]`;
-          if (!keys(f, ['path', 'expect_tests'], fw, e)) return;
+          if (!keys(f, ['path', 'expect_tests', 'external_inputs', 'isolated'], fw, e)) return;
           if (!isStr(f.path, TEST_FILE)) e.push(`${fw}.path must be a tests/**/*.test.ts path without ".."`);
           if (allFiles.has(f.path)) e.push(`${fw}.path is listed twice in this profile`); allFiles.add(f.path);
           if (!isInt(f.expect_tests, 1, 5000)) e.push(`${fw}.expect_tests must be an exact positive test count`);
+          // A file that needs private documents runs ONLY in an isolated job (no candidate code or dependencies, no network): `isolated` names that job and
+          // pins (Git blob ids) the complete set of repository files the test executes, which must be identical in the candidate and in the public baseline.
+          if ((f.isolated !== undefined) !== (f.external_inputs !== undefined)) e.push(`${fw}: external_inputs and isolated must be declared together (private documents are only ever given to an isolated job)`);
+          if (f.isolated !== undefined && keys(f.isolated, ['job', 'closure'], `${fw}.isolated`, e)) {
+            const iw = `${fw}.isolated`;
+            if (!ISOLATED_JOBS.includes(f.isolated.job)) e.push(`${iw}.job must be one of ${ISOLATED_JOBS.join('|')}`);
+            if (!Array.isArray(f.isolated.closure) || f.isolated.closure.length === 0) e.push(`${iw}.closure must list the files the test executes`);
+            else {
+              const paths = f.isolated.closure.map(x => x && x.path);
+              f.isolated.closure.forEach((x, k) => {
+                if (!keys(x, ['path', 'blob'], `${iw}.closure[${k}]`, e)) return;
+                if (!isStr(x.path, REPO_FILE)) e.push(`${iw}.closure[${k}].path must be a plain repository path`);
+                if (!isStr(x.blob, SHA)) e.push(`${iw}.closure[${k}].blob must be a 40-hex Git blob id`);
+                if (paths.indexOf(x.path) !== k) e.push(`${iw}.closure[${k}].path is listed twice`);
+              });
+              for (const need of [f.path, 'package.json', 'package-lock.json']) if (!paths.includes(need)) e.push(`${iw}.closure must include ${need}`);
+            }
+          }
+          // Approved external documents this test file reads (never in the repository). Pinned by SHA-256; supplied only to the isolated job (run-normative.mjs).
+          if (f.external_inputs !== undefined) {
+            if (!Array.isArray(f.external_inputs) || f.external_inputs.length === 0) e.push(`${fw}.external_inputs must be a non-empty array`);
+            else f.external_inputs.forEach((x, k) => {
+              const xw = `${fw}.external_inputs[${k}]`;
+              if (!keys(x, ['env', 'filename', 'sha256'], xw, e)) return;
+              if (!isStr(x.env, EXTERNAL_ENV)) e.push(`${xw}.env must match ${EXTERNAL_ENV}`);
+              if (!isStr(x.filename, EXTERNAL_FILENAME)) e.push(`${xw}.filename must be a plain file name`);
+              if (!isStr(x.sha256, SHA256)) e.push(`${xw}.sha256 must be 64 lowercase hex digits`);
+              if (f.external_inputs.findIndex(y => y && y.env === x.env) !== k) e.push(`${xw}.env is listed twice`);
+            });
+          }
         });
         if (!isInt(c.file_timeout_seconds, 30, 3600)) e.push(`${w}.file_timeout_seconds must be 30..3600`);
         if (typeof c.fresh_database_per_file !== 'boolean') e.push(`${w}.fresh_database_per_file must be boolean`);
@@ -136,6 +206,31 @@ export function validateProfile(p, { fileName } = {}) {
     });
     if (p.runtime && Array.isArray(p.runtime.requires)) for (const x of p.runtime.requires)
       if (!p.checks.some(c => Array.isArray(c.requires) && c.requires.includes(x))) e.push(`runtime.requires "${x}" is provisioned but no check uses it`);
+  }
+
+  // full_regression: the listed node-test checks together ARE the complete regression — statically exact here (file and test totals), and at
+  // run time the candidate's own inventory must equal their file union (classify.mjs, check "full-regression-inventory").
+  if (p.full_regression !== undefined && keys(p.full_regression, ['inventory', 'checks', 'expect_files', 'expect_tests'], 'full_regression', e)) {
+    const fr = p.full_regression;
+    if (!INVENTORIES.includes(fr.inventory)) e.push(`full_regression.inventory must be one of ${INVENTORIES.join('|')}`);
+    if (!isInt(fr.expect_files, 1, 5000)) e.push('full_regression.expect_files must be the exact number of test files');
+    if (!isInt(fr.expect_tests, 1, 100000)) e.push('full_regression.expect_tests must be the exact number of tests');
+    if (!Array.isArray(fr.checks) || fr.checks.length === 0 || !fr.checks.every(x => isStr(x, ID))) e.push('full_regression.checks must list check ids');
+    else if (new Set(fr.checks).size !== fr.checks.length) e.push('full_regression.checks are duplicated');
+    else if (Array.isArray(p.checks)) {
+      const listed = fr.checks.map(id => p.checks.find(c => c && c.id === id));
+      fr.checks.forEach((id, i) => {
+        const c = listed[i];
+        if (!c) e.push(`full_regression.checks: "${id}" is not a check of this profile`);
+        else if (c.kind !== 'node-test') e.push(`full_regression.checks: "${id}" must be a node-test check`);
+        else if (c.mandatory !== true || c.allow_skip === true) e.push(`full_regression.checks: "${id}" must be mandatory and may not allow skips`);
+      });
+      const files = listed.filter(c => c && c.kind === 'node-test' && Array.isArray(c.files)).flatMap(c => c.files);
+      if (fr.inventory === 'tests/*.test.ts') for (const f of files) if (!isStr(f.path, TOP_LEVEL_TEST)) e.push(`full_regression: ${f.path} is not a top-level tests/*.test.ts file`);
+      if (isInt(fr.expect_files, 1, 5000) && files.length !== fr.expect_files) e.push(`full_regression.expect_files is ${fr.expect_files} but the listed checks have ${files.length} files`);
+      const total = files.reduce((a, f) => a + (Number.isInteger(f.expect_tests) ? f.expect_tests : 0), 0);
+      if (isInt(fr.expect_tests, 1, 100000) && total !== fr.expect_tests) e.push(`full_regression.expect_tests is ${fr.expect_tests} but the listed files expect ${total}`);
+    }
   }
   return e;
 }
