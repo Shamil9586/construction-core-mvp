@@ -22,6 +22,8 @@ import { isolatedFiles, NORMATIVE_SCHEMA } from './provenance.mjs';
 
 export const SANDBOX_UID = 65534;
 const BASE_PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin';
+// The sandbox runs the SAME node binary as the harness (absolute path: a hosted runner's setup-node toolcache is not on a minimal PATH).
+const NODE = process.execPath;
 
 /** argv that runs `argv` as an unprivileged uid inside an EMPTY network namespace with exactly `env` (pure; sudo only when not already root). */
 export function sandboxCommand({ argv, env, uid = SANDBOX_UID, root = process.getuid() === 0 }) {
@@ -36,7 +38,7 @@ export function sandboxProbe(work, env) {
   const code = "const os=require('os');const net=require('net');const ifs=Object.keys(os.networkInterfaces()).filter(n=>n!=='lo');" +
     "const s=net.connect({host:'1.1.1.1',port:443});let done=false;const out=(c)=>{if(done)return;done=true;console.log(JSON.stringify({uid:process.getuid(),ifaces:ifs,connect:c}));process.exit(0)};" +
     "s.on('connect',()=>out('CONNECTED'));s.on('error',e=>out(e.code||'ERROR'));setTimeout(()=>out('TIMEOUT'),3000);";
-  const r = run(sandboxCommand({ argv: ['node', '-e', code], env }), { cwd: work, timeout: 20000 });
+  const r = run(sandboxCommand({ argv: [NODE, '-e', code], env }), { cwd: work, timeout: 20000 });
   if (r.status !== 0) return { ok: false, reason: `sandbox could not be started (exit ${r.status}): ${(r.stderr || r.error || '').toString().slice(0, 300)}` };
   try {
     const j = JSON.parse(r.stdout.trim().split('\n').pop());
@@ -59,7 +61,7 @@ export function prepareClosure({ profile, base, work }) {
   return { ok: refusals.length === 0, refusals };
 }
 
-function minimalEnv(home, extra = {}) { return { PATH: BASE_PATH, HOME: home, TZ: 'UTC', CI: 'true', LANG: 'C.UTF-8', ...extra }; }
+function minimalEnv(home, extra = {}) { return { PATH: `${path.dirname(NODE)}:${BASE_PATH}`, HOME: home, TZ: 'UTC', CI: 'true', LANG: 'C.UTF-8', ...extra }; }
 
 /** Run every isolated file. Returns the result record (also used by the tests). `timeoutSec` bounds each file. */
 export function runIsolated({ profile, profileSha256, candidateSha, work, docsDir, out, timeoutSec = 600 }) {
@@ -83,7 +85,7 @@ export function runIsolated({ profile, profileSha256, candidateSha, work, docsDi
     for (const d of docs.records) { const dst = path.join(stage, d.filename); fs.copyFileSync(path.join(docsDir, d.filename), dst); fs.chmodSync(dst, 0o444); env[file.external_inputs.find(x => x.env && x.filename === d.filename).env] = dst; }
     const logRel = `logs/${file.path.replace(/\//g, '_')}.log`; fs.mkdirSync(path.join(out, 'logs'), { recursive: true });
     const fd = fs.openSync(path.join(out, logRel), 'w'); const t0 = Date.now();
-    const argv = ['timeout', '--kill-after=15', String(timeoutSec), 'node', '--import', 'tsx', '--test', '--test-concurrency=1', '--test-reporter=tap', file.path];
+    const argv = ['timeout', '--kill-after=15', String(timeoutSec), NODE, '--import', 'tsx', '--test', '--test-concurrency=1', '--test-reporter=tap', file.path];
     const r = run(sandboxCommand({ argv, env }), { cwd: work, stdio: ['ignore', fd, fd] });
     fs.closeSync(fd);
     const exit = r.status ?? (r.signal ? 128 : -1);
