@@ -106,7 +106,7 @@ test('every command that performs a lifecycle transition says so in the document
     { lifecycle: 'QUANTITY_CHANGE_REQUEST', command: 'revise', from: 'RETURNED', to: 'DRAFT', effect: 'OPEN_NEW_SUBMISSION_VERSION' }
   ]);
   const proposed = ops().filter(o => o.op['x-route-proposed']).map(o => o.op.operationId);
-  assert.deepEqual([...proposed].sort(), ['area-scope.create', 'finish-template.draft', 'finish-template.publish'], 'the routes the design does not name are flagged as proposals (R05)');
+  assert.deepEqual([...proposed].sort(), ['area-scope.create', 'area-scopes.list', 'finish-template.draft', 'finish-template.publish', 'finish-templates.list', 'work-type-publication-requests.list', 'work-types.list'], 'the routes the design does not name are flagged as proposals (R05)');
   assert.deepEqual(ops().filter(o => o.op['x-authorization'].type === 'CAPABILITY').map(o => o.op.operationId), ['imports.estimate-labor.mapping-reviews'], 'N01: one capability-only operation');
 });
 

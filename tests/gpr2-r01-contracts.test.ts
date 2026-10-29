@@ -224,7 +224,7 @@ test('the guarded surface: every mounted route is a command with a GPR-2 permiss
     assert.equal(e.scope === 'OBJECT', e.path.startsWith('/objects/{objectId}/'), e.id + ': scope matches the path');
   }
   for (const e of GPR2_ENDPOINTS.filter(x => !x.mounted)) assert.ok(e.kind === 'QUERY' || e.authorization.type === 'EXISTING_RULES' || e.routeFixedByTd === false, e.id + ' is unmounted for a stated reason');
-  assert.deepEqual(GPR2_ENDPOINTS.filter(e => !e.routeFixedByTd).map(e => e.id), ['finish-template.draft', 'finish-template.publish', 'area-scope.create'], 'the operations the design names without a route (R05: proposed paths)');
+  assert.deepEqual(GPR2_ENDPOINTS.filter(e => !e.routeFixedByTd).map(e => e.id), ['work-types.list', 'area-scopes.list', 'finish-templates.list', 'work-type-publication-requests.list', 'finish-template.draft', 'finish-template.publish', 'area-scope.create'], 'the operations the design names without a route (R05: proposed paths)');
 });
 
 test('D1: exactly the five R05 reads are mounted as queries — read-only, GET, no version token, opened by a named set of GPR-2 permissions (ADMIN gets none by default)', () => {

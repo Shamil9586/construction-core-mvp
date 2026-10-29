@@ -79,13 +79,15 @@ const query = (id: string, path: string, stage: string, res?: Gpr2ResourceKind):
 /**
  * D1 (owner-authorised 29.10.2026): the five R05 reads are the ONLY queries that are mounted. A mounted query is read-only (pure), carries no
  * Idempotency-Key and no version token, and names the GPR-2 permissions that may open it. `scope` follows the path like a command's.
+ * Only `finish-systems.list` has a route the design names; the other four come from the D1 assignment and are flagged as proposals (`routeFixedByTd:false`,
+ * `x-route-proposed`), like the three R05 POST proposals.
  */
 const READ_PAGE: readonly Gpr2QueryParam[] = [
     { name: 'limit', description: 'Page size.', integer: { min: 1, max: 200, default: 100 } },
     { name: 'cursor', description: 'Opaque cursor returned as `nextCursor` by the previous page; it is bound to the route and to the other query parameters.' }
 ];
-const mountedQuery = (id: string, path: string, permissions: readonly Gpr2Permission[], queryParams: readonly Gpr2QueryParam[] = READ_PAGE, scope: EndpointScope = 'OBJECT'): Gpr2Endpoint => ({
-    ...query(id, path, 'R05'), scope, authorization: { type: 'ANY_PERMISSION', permissions: Object.freeze([...permissions]) }, mounted: true, queryParams
+const mountedQuery = (id: string, path: string, permissions: readonly Gpr2Permission[], queryParams: readonly Gpr2QueryParam[] = READ_PAGE, scope: EndpointScope = 'OBJECT', fixed = false): Gpr2Endpoint => ({
+    ...query(id, path, 'R05'), scope, routeFixedByTd: fixed, authorization: { type: 'ANY_PERMISSION', permissions: Object.freeze([...permissions]) }, mounted: true, queryParams
 });
 /** `res` is declared exactly where the path has an `{id}` — a register that breaks that rule does not load. */
 const resourceOf = (path: string, kind?: Gpr2ResourceKind): Gpr2Endpoint['resource'] => {
@@ -115,7 +117,7 @@ export const GPR2_ENDPOINTS: readonly Gpr2Endpoint[] = Object.freeze([
     // --- R05 reads (D1) ------------------------------------------------------------------------------------------------------------
     mountedQuery('work-types.list', O + '/work-types', [P.OBJECT_CATALOG_MANAGE]),
     mountedQuery('area-scopes.list', O + '/area-scopes', [P.OBJECT_CATALOG_MANAGE]),
-    mountedQuery('finish-systems.list', O + '/finish-systems', [P.OBJECT_CATALOG_MANAGE]),
+    mountedQuery('finish-systems.list', O + '/finish-systems', [P.OBJECT_CATALOG_MANAGE], READ_PAGE, 'OBJECT', true), // the one read whose route the Technical Design §11.2 names
     mountedQuery('finish-templates.list', '/finish-templates', [P.OBJECT_CATALOG_MANAGE, P.CORPORATE_PUBLICATION], READ_PAGE, 'TENANT'),
     mountedQuery('work-type-publication-requests.list', O + '/work-type-publication-requests', [P.OBJECT_CATALOG_MANAGE, P.CORPORATE_PUBLICATION],
         [{ name: 'state', description: 'Only requests in this state.', enum: ['PENDING', 'APPROVED', 'REJECTED'] }, ...READ_PAGE]),
