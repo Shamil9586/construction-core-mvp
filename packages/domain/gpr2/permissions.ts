@@ -105,7 +105,11 @@ export type EndpointAuthorization =
     // "PM / designated specialist by N01" (§11.2 mapping-proposals): either the import grant or the object capability.
     | { type: 'PERMISSION_OR_CAPABILITY'; permission: Gpr2Permission; capability: EstimateMappingReviewCapability }
     // "Only an N01-approved scoped specialist capability" (§11.2 mapping-reviews): no role path exists.
-    | { type: 'CAPABILITY'; capability: EstimateMappingReviewCapability };
+    | { type: 'CAPABILITY'; capability: EstimateMappingReviewCapability }
+    // D1 read API: a query that several roles read in different shapes (R05 reads). It names every permission that may OPEN it; WHICH shape a caller gets
+    // is decided by the read service from the permission the caller actually holds. It is a different type on purpose: it is not a command grant, so the
+    // per-permission command rows of the register (A19) are unaffected.
+    | { type: 'ANY_PERMISSION'; permissions: readonly Gpr2Permission[] };
 
 export interface AuthorizationSubject { tenantId: string; userId: string; role: string }
 export function isAuthorized(subject: AuthorizationSubject, authorization: EndpointAuthorization, objectId: string | null,
@@ -115,6 +119,7 @@ export function isAuthorized(subject: AuthorizationSubject, authorization: Endpo
         case 'PERMISSION': return hasGpr2Permission(subject.role, authorization.permission);
         case 'PERMISSION_OR_CAPABILITY': return hasGpr2Permission(subject.role, authorization.permission) || capability();
         case 'CAPABILITY': return capability();
+        case 'ANY_PERMISSION': return authorization.permissions.some(p => hasGpr2Permission(subject.role, p));
         default: return false;
     }
 }

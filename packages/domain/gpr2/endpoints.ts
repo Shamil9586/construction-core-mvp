@@ -8,7 +8,9 @@
  *
  *   mounted   R01 mounts a guarded, feature-gated route (authenticate → permission → validate → scope → 501). Every mounted route is a COMMAND
  *             whose authorization the design fixes. Queries and commands authorised by "existing rules" are catalogued, not mounted: R01 adds
- *             no read path and widens no existing right.
+ *             no read path and widens no existing right. EXCEPTION (D1, owner-authorised 29.10.2026): exactly five R05 reads are mounted queries
+ *             (work-types, area-scopes, finish-systems, finish-templates, work-type-publication-requests); `mountedEndpoints()` stays the commands,
+ *             `mountedQueries()` the reads, `mountedRoutes()` both.
  *   stage     the roadmap stage that gives the command its behaviour; until then it answers COMMAND_NOT_ENABLED.
  *
  * Paths are relative to /api/v2. `{objectId}` is the object prefix of §11.1; the corporate publication commands are tenant-level and carry none.
@@ -53,7 +55,10 @@ export interface Gpr2Endpoint {
     resource?: { param: 'id'; kind: Gpr2ResourceKind };
     /** false when the design names the operation but not its route, so the path below is a proposal. */
     routeFixedByTd: boolean;
+    /** QUERY only: the query-string parameters the route accepts (anything else is refused). Documented in the OpenAPI operation. */
+    queryParams?: readonly Gpr2QueryParam[];
 }
+export interface Gpr2QueryParam { name: string; description: string; enum?: readonly string[]; integer?: { min: number; max: number; default: number } }
 
 const P = Gpr2Permission;
 const perm = (permission: Gpr2Permission): EndpointAuthorization => ({ type: 'PERMISSION', permission });
@@ -70,6 +75,17 @@ const command = (s: Spec): Gpr2Endpoint => ({
 const query = (id: string, path: string, stage: string, res?: Gpr2ResourceKind): Gpr2Endpoint => ({
     id, method: 'GET', path, kind: 'QUERY', scope: 'OBJECT', authorization: EXISTING, idempotent: false, aggregateVersion: false, scopeFence: false,
     pure: true, stage, mounted: false, resource: resourceOf(path, res), routeFixedByTd: true
+});
+/**
+ * D1 (owner-authorised 29.10.2026): the five R05 reads are the ONLY queries that are mounted. A mounted query is read-only (pure), carries no
+ * Idempotency-Key and no version token, and names the GPR-2 permissions that may open it. `scope` follows the path like a command's.
+ */
+const READ_PAGE: readonly Gpr2QueryParam[] = [
+    { name: 'limit', description: 'Page size.', integer: { min: 1, max: 200, default: 100 } },
+    { name: 'cursor', description: 'Opaque cursor returned as `nextCursor` by the previous page; it is bound to the route and to the other query parameters.' }
+];
+const mountedQuery = (id: string, path: string, permissions: readonly Gpr2Permission[], queryParams: readonly Gpr2QueryParam[] = READ_PAGE, scope: EndpointScope = 'OBJECT'): Gpr2Endpoint => ({
+    ...query(id, path, 'R05'), scope, authorization: { type: 'ANY_PERMISSION', permissions: Object.freeze([...permissions]) }, mounted: true, queryParams
 });
 /** `res` is declared exactly where the path has an `{id}` — a register that breaks that rule does not load. */
 const resourceOf = (path: string, kind?: Gpr2ResourceKind): Gpr2Endpoint['resource'] => {
@@ -96,7 +112,13 @@ export const GPR2_ENDPOINTS: readonly Gpr2Endpoint[] = Object.freeze([
               transitions: [{ lifecycle: R.wt, command: 'reject' }], res: 'WORK_TYPE_PUBLICATION_REQUEST' }),
 
     // --- Finish systems and templates (D06, R05c–d) ------------------------------------------------------------------------------------
-    query('finish-systems.list', O + '/finish-systems', 'R05'),
+    // --- R05 reads (D1) ------------------------------------------------------------------------------------------------------------
+    mountedQuery('work-types.list', O + '/work-types', [P.OBJECT_CATALOG_MANAGE]),
+    mountedQuery('area-scopes.list', O + '/area-scopes', [P.OBJECT_CATALOG_MANAGE]),
+    mountedQuery('finish-systems.list', O + '/finish-systems', [P.OBJECT_CATALOG_MANAGE]),
+    mountedQuery('finish-templates.list', '/finish-templates', [P.OBJECT_CATALOG_MANAGE, P.CORPORATE_PUBLICATION], READ_PAGE, 'TENANT'),
+    mountedQuery('work-type-publication-requests.list', O + '/work-type-publication-requests', [P.OBJECT_CATALOG_MANAGE, P.CORPORATE_PUBLICATION],
+        [{ name: 'state', description: 'Only requests in this state.', enum: ['PENDING', 'APPROVED', 'REJECTED'] }, ...READ_PAGE]),
     command({ id: 'finish-system.upsert', method: 'POST', path: O + '/finish-systems', auth: perm(P.OBJECT_CATALOG_MANAGE), stage: 'R05' }),
     command({ id: 'finish-system.preview', method: 'POST', path: O + '/finish-systems/{id}/preview', auth: perm(P.OBJECT_CATALOG_MANAGE), stage: 'R05', pure: true, version: true, res: 'FINISH_SYSTEM' }),
     command({ id: 'finish-system.confirm', method: 'POST', path: O + '/finish-systems/{id}/confirm', auth: perm(P.OBJECT_CATALOG_MANAGE), stage: 'R05', version: true, fence: true, res: 'FINISH_SYSTEM' }),
@@ -175,7 +197,10 @@ export const GPR2_ENDPOINTS: readonly Gpr2Endpoint[] = Object.freeze([
 
 export const API_V2_PREFIX = '/api/v2';
 export const endpointById = (id: string) => GPR2_ENDPOINTS.find(e => e.id === id);
-export const mountedEndpoints = () => GPR2_ENDPOINTS.filter(e => e.mounted);
+/** The mounted COMMANDS (the guarded write surface). The mounted reads are `mountedQueries()`; `mountedRoutes()` is both. */
+export const mountedEndpoints = () => GPR2_ENDPOINTS.filter(e => e.mounted && e.kind === 'COMMAND');
+export const mountedQueries = () => GPR2_ENDPOINTS.filter(e => e.mounted && e.kind === 'QUERY');
+export const mountedRoutes = () => GPR2_ENDPOINTS.filter(e => e.mounted);
 /** `/objects/{objectId}/x/{id}` → the `objects/:objectId/x/:id` form a route table uses, without the leading slash. */
 export const routeOf = (e: Gpr2Endpoint) => e.path.replace(/^\//, '').replace(/\{(\w+)\}/g, ':$1');
 export const pathParamsOf = (e: Gpr2Endpoint) => Array.from(e.path.matchAll(/\{(\w+)\}/g), m => m[1]);

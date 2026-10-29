@@ -2,7 +2,7 @@ import './helpers/gpr2-isolation'; // FIRST: no backend module may load before t
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { RequestMethod } from '@nestjs/common';
-import { buildGpr2OpenApi, mountedEndpoints, routeOf, endpointById, Gpr2Error, GPR2_ENDPOINTS, parseCommand, type Gpr2Endpoint } from '../packages/domain/gpr2';
+import { buildGpr2OpenApi, mountedEndpoints, mountedQueries, mountedRoutes, routeOf, endpointById, Gpr2Error, GPR2_ENDPOINTS, parseCommand, type Gpr2Endpoint } from '../packages/domain/gpr2';
 import { gpr2Harness, validRequest, pilotScenario, KEY, uuid, type Gpr2Harness } from './helpers/gpr2-fixtures';
 import { TrustedResources, ownedParams, installHooks, recordingHooks, type Owner } from './helpers/gpr2-resources';
 import { assertInMemoryPool } from './helpers/gpr2-isolation';
@@ -56,6 +56,8 @@ test('R01-B05: the LIVE /api-docs-json carries every mounted /v2 operation exact
   let operations = 0;
   for (const e of mountedEndpoints()) { assert.deepEqual(servedOp(e), derived.paths['/v2' + e.path][e.method.toLowerCase()], e.id); operations++; }
   assert.equal(operations, 35); // R05: +finish-template.draft, +finish-template.publish (now mounted), +area-scope.create
+  for (const e of mountedQueries()) { assert.deepEqual(servedOp(e), derived.paths['/v2' + e.path][e.method.toLowerCase()], e.id); operations++; }
+  assert.equal(operations, 40, 'D1: + the five R05 reads');
   // nothing that is not mounted leaks into the served document
   for (const e of GPR2_ENDPOINTS.filter(x => !x.mounted)) assert.equal(served.paths['/v2' + e.path]?.[e.method.toLowerCase()], undefined, e.id + ' is catalogued, not mounted');
   for (const [name, schema] of Object.entries(derived.components.schemas)) assert.deepEqual(served.components.schemas[name], schema, 'schema ' + name);
@@ -67,7 +69,7 @@ test('R01-B05: the LIVE /api-docs-json carries every mounted /v2 operation exact
 test('R01-B05: the served operations are the controller\'s real routes — method, path and a unique operationId from the register for each of the 32', () => {
   const methodName: Record<number, string> = { [RequestMethod.GET]: 'get', [RequestMethod.POST]: 'post', [RequestMethod.PATCH]: 'patch', [RequestMethod.PUT]: 'put' };
   return import('../apps/backend/src/modules/gpr2/gpr2.controller').then(({ Gpr2ContractController }) => {
-    const routes = Object.getOwnPropertyNames(Gpr2ContractController.prototype).filter(n => n !== 'constructor' && n !== 'run').map(n => {
+    const routes = Object.getOwnPropertyNames(Gpr2ContractController.prototype).filter(n => n !== 'constructor' && n !== 'run' && n !== 'read').map(n => {
       const fn = (Gpr2ContractController.prototype as any)[n];
       return `${methodName[Reflect.getMetadata('method', fn)]} /${Reflect.getMetadata('path', fn).replace(/:(\w+)/g, '{$1}')}`;
     }).sort();
@@ -75,7 +77,7 @@ test('R01-B05: the served operations are the controller\'s real routes — metho
     assert.deepEqual(doc, routes, 'what is documented is what is routed');
     const ids = Object.values(served.paths).flatMap((item: any) => Object.values(item).map((op: any) => op.operationId));
     assert.equal(new Set(ids).size, ids.length, 'operationIds are unique across the whole served document');
-    assert.deepEqual(mountedEndpoints().map(e => e.id).sort(), Object.entries(served.paths).filter(([p]) => p.startsWith('/v2/')).flatMap(([, item]: [string, any]) => Object.values(item).map((op: any) => op.operationId)).sort());
+    assert.deepEqual(mountedRoutes().map(e => e.id).sort(), Object.entries(served.paths).filter(([p]) => p.startsWith('/v2/')).flatMap(([, item]: [string, any]) => Object.values(item).map((op: any) => op.operationId)).sort());
   });
 });
 

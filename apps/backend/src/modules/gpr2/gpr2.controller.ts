@@ -1,14 +1,15 @@
-import { Controller, Post, Patch, Put, Param, Body, Req, Inject, HttpCode } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Put, Param, Body, Query, Req, Inject, HttpCode, Header } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { authenticate } from '../../security';
 import { Gpr2Error, CapabilityAssignment, endpointById } from '../../../../../packages/domain/gpr2';
 import { Gpr2Hooks, Gpr2HttpException, runGpr2Command } from '../../gpr2-command-guard';
+import { runR05Read } from '../../gpr2-r05-read';
 import { GPR2_ASSIGNMENTS, GPR2_HOOKS } from './gpr2.tokens';
 
 /**
  * GPR-2 R01 — the guarded /v2 command surface (Technical Design §11.2; acceptance A19 at HTTP level).
  *
- * One method per mounted command of the endpoint register (packages/domain/gpr2/endpoints.ts) and nothing else: the route, the permission, the
+ * One method per mounted command of the endpoint register (and, since D1, one GET per mounted R05 read) (packages/domain/gpr2/endpoints.ts) and nothing else: the route, the permission, the
  * Idempotency-Key / expectedVersion / expectedScopeVersion it carries and the lifecycle row it performs are all read from the register, not
  * repeated here — a test holds this class and the register to each other. Every method does the same thing: authenticate, then hand the call to
  * runGpr2Command(), whose fixed order (permission → object scope → nested resource preflight → envelope → replay → execute) is the contract.
@@ -32,6 +33,37 @@ export class Gpr2ContractController {
             throw e instanceof Gpr2Error ? new Gpr2HttpException(e) : e;
         }
     }
+
+    /**
+     * D1 reads: authenticate, then the read service (permission → object scope → query string → one READ ONLY snapshot). Not a command: no Idempotency-Key, no ledger,
+     * no write. `no-store` because the answer depends on the caller's CURRENT role and scope and must never be served from a shared or browser cache to anyone else.
+     */
+    private async read(id: string, r: any, params: Record<string, string>, query: unknown) {
+        const actor = await authenticate(r);
+        try {
+            return await runR05Read(endpointById(id)!, { actor, params, query });
+        }
+        catch (e) {
+            throw e instanceof Gpr2Error ? new Gpr2HttpException(e) : e;
+        }
+    }
+
+    // R05 reads (D1)
+    @Get('v2/objects/:objectId/work-types')
+    @Header('Cache-Control', 'no-store')
+    workTypesList(@Req() r: any, @Param() p: any, @Query() q: any) { return this.read('work-types.list', r, p, q); }
+    @Get('v2/objects/:objectId/area-scopes')
+    @Header('Cache-Control', 'no-store')
+    areaScopesList(@Req() r: any, @Param() p: any, @Query() q: any) { return this.read('area-scopes.list', r, p, q); }
+    @Get('v2/objects/:objectId/finish-systems')
+    @Header('Cache-Control', 'no-store')
+    finishSystemsList(@Req() r: any, @Param() p: any, @Query() q: any) { return this.read('finish-systems.list', r, p, q); }
+    @Get('v2/finish-templates')
+    @Header('Cache-Control', 'no-store')
+    finishTemplatesList(@Req() r: any, @Param() p: any, @Query() q: any) { return this.read('finish-templates.list', r, p, q); }
+    @Get('v2/objects/:objectId/work-type-publication-requests')
+    @Header('Cache-Control', 'no-store')
+    workTypePublicationRequestsList(@Req() r: any, @Param() p: any, @Query() q: any) { return this.read('work-type-publication-requests.list', r, p, q); }
 
     // work-type
     @Post('v2/objects/:objectId/work-types')

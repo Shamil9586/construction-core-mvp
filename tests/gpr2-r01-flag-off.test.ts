@@ -26,6 +26,7 @@ for (const value of OFF)
     const p = probe(value);
     assert.equal(p.v2Command.status, 404, 'POST /v2/objects/:id/schedule/revisions is not a route');
     assert.equal(p.v2Corporate.status, 404, 'nor is the tenant-level publication route');
+    assert.deepEqual(p.v2Reads.map((r: any) => r.status), [404, 404, 404, 404, 404], 'D1: the five R05 reads fail closed — they are not routes without the flag');
     assert.equal(p.swaggerHasV2, false, 'and the API document does not list it');
     assert.equal(p.legacyGpr1.status, 401, 'the legacy GPR-1 route is still there (and still authenticates first)');
     assert.deepEqual(p.legacyGpr1.keys, ['message', 'requestId', 'statusCode'], 'an ordinary error body has no `code` / `details` — the filter is unchanged for it');
@@ -36,6 +37,7 @@ test('flag "enabled": the /v2 routes exist and authenticate first; the legacy ro
   const p = probe('enabled');
   assert.equal(p.v2Command.status, 401);
   assert.equal(p.v2Corporate.status, 401);
+  assert.deepEqual(p.v2Reads.map((r: any) => r.status), [401, 401, 401, 401, 401], 'D1: the five R05 reads exist and authenticate first');
   assert.equal(p.swaggerHasV2, true);
   assert.equal(p.legacyGpr1.status, 401);
   assert.deepEqual(p.legacyGpr1.keys, ['message', 'requestId', 'statusCode']);
@@ -45,7 +47,7 @@ test('flag "enabled": the /v2 routes exist and authenticate first; the legacy ro
 test('R01-B05: the served API document outside the GPR-2 contract is byte-for-byte the same with the flag on and off — the contract is added, nothing else changes', () => {
   const off = probe('<unset>'), on = probe('enabled');
   assert.equal(off.v2PathCount, 0);
-  assert.equal(on.v2PathCount, 35, 'exactly the 35 mounted routes (R05: +3)');
+  assert.equal(on.v2PathCount, 36, 'exactly the paths of the 35 mounted commands and the 5 D1 reads (R05: +3; D1: +1 — four of the five reads share a path with a command)');
   assert.ok(off.legacyPathCount > 50, 'a real document: ' + off.legacyPathCount + ' legacy paths');
   assert.equal(on.legacyPathCount, off.legacyPathCount);
   assert.equal(on.legacyDigest, off.legacyDigest, 'no legacy path, schema, tag or security scheme differs');

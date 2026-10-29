@@ -233,7 +233,7 @@ test('R01-B04: every {id} in the register names the kind of aggregate behind it 
       assert.equal(TENANT_LEVEL_RESOURCE_KINDS.includes(e.resource.kind), e.scope === 'TENANT', `${e.id}: a tenant-level kind is addressed by a tenant-level route and vice versa`);
     }
   }
-  assert.deepEqual(GPR2_ENDPOINTS.filter(e => e.scope === 'TENANT').map(e => e.id).sort(), ['finish-template.draft', 'finish-template.publish', 'work-type.publication.approve', 'work-type.publication.reject']);
+  assert.deepEqual(GPR2_ENDPOINTS.filter(e => e.scope === 'TENANT').map(e => e.id).sort(), ['finish-template.draft', 'finish-template.publish', 'finish-templates.list', 'work-type.publication.approve', 'work-type.publication.reject']);
   assert.deepEqual(mountedEndpoints().filter(e => e.resource).length, 25, 'the mounted commands that address an existing aggregate (R05: finish-template.publish is mounted)');
   assert.equal(new Set(GPR2_ENDPOINTS.filter(e => e.resource).map(e => e.resource!.kind)).size, GPR2_RESOURCE_KINDS.length, 'no unused kind');
   assert.deepEqual(resourceRefsOf(ep('quantity.request.approve'), { objectId: U(1), id: U(2).toUpperCase() }), [{ kind: 'QUANTITY_CHANGE_REQUEST', id: U(2) }]);
