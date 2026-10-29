@@ -28,6 +28,7 @@ import './gpr2-isolation'; // FIRST: pins in-memory PGlite before any backend mo
   const out = {
     v2Command: await send('POST', `/v2/objects/${id}/schedule/revisions`),
     v2Corporate: await send('POST', `/v2/work-type-publication-requests/${id}/approve`),
+    v2Reads: await Promise.all([`/v2/objects/${id}/work-types`, `/v2/objects/${id}/area-scopes`, `/v2/objects/${id}/finish-systems`, '/v2/finish-templates', `/v2/objects/${id}/work-type-publication-requests?state=PENDING`].map(p => send('GET', p))),
     legacyGpr1: await send('POST', `/objects/${id}/schedule/draft`),
     health: await send('GET', '/health'),
     swaggerHasV2: Object.keys(served.paths).some(p => p.startsWith('/v2/')),

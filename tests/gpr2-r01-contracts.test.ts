@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   QUANTITY, NORMATIVE, decimalOf, classifyPhysical, remainingQuantityOf, validateQuantityProjection, validateScheduleProjection, validateLaborCoverage,
-  SCHEDULE_STATES, SCHEDULE_VERDICTS, COVERAGE_STATES, PHYSICAL_STATES, ORIGINAL_PROVENANCE, GPR2_ENDPOINTS, endpointById, mountedEndpoints, routeOf, pathParamsOf,
+  SCHEDULE_STATES, SCHEDULE_VERDICTS, COVERAGE_STATES, PHYSICAL_STATES, ORIGINAL_PROVENANCE, GPR2_ENDPOINTS, endpointById, mountedEndpoints, mountedQueries, mountedRoutes, routeOf, pathParamsOf,
   parseCommand, parseIdempotencyKey, zodViolations, gprChangeSet, gprChangeApply, gprEntryInput, commandResultSchema, Gpr2Error, Gpr2Permission,
   type QuantityProjection, type ScheduleProjection, type LaborCoverageProjection, type DecimalString
 } from '../packages/domain/gpr2';
@@ -160,12 +160,15 @@ test('K01/§7.6: the general physical percent exists only for COMPLETE coverage 
 // The endpoint register (§11.2)
 // ---------------------------------------------------------------------------------------------------------------------------------
 
+/** D1: the only queries that are mounted. Every other query is catalogued, not mounted. */
+const D1_READS = ['work-types.list', 'area-scopes.list', 'finish-systems.list', 'finish-templates.list', 'work-type-publication-requests.list'];
 const REGISTER_IDS = [
   'works.list', 'works.get', 'works.create', 'works.assignments.patch',
   'work-type.create', 'work-type.publication.request', 'work-type.publication.approve', 'work-type.publication.reject',
   // R05 (GPR-2 R05c / R05b): the two operations §11.2–11.3 and §5.2 name without a route — the corporate template draft and the object AreaScope — got
   // proposed rows next to finish-template.publish (routeFixedByTd: false). Nothing else in the register changed.
-  'finish-systems.list', 'finish-system.upsert', 'finish-system.preview', 'finish-system.confirm', 'finish-template.draft', 'finish-template.publish', 'area-scope.create',
+  // D1 (owner-authorised 29.10.2026): the five R05 reads — the only mounted queries. finish-systems.list was already catalogued.
+  'work-types.list', 'area-scopes.list', 'finish-systems.list', 'finish-templates.list', 'work-type-publication-requests.list', 'finish-system.upsert', 'finish-system.preview', 'finish-system.confirm', 'finish-template.draft', 'finish-template.publish', 'area-scope.create',
   'quantity.request.create', 'quantity.request.patch', 'quantity.request.submit', 'quantity.request.review-note', 'quantity.request.approve', 'quantity.request.return', 'quantities.history',
   'calendars.list', 'calendar.version.create', 'calendar.version.patch',
   'schedule.current', 'schedule.revision.get', 'schedule.evaluation', 'schedule.revision.create', 'schedule.changes.preview', 'schedule.changes.apply', 'schedule.backplan.preview',
@@ -181,7 +184,7 @@ test('§11.2: the register is the design\'s complete business API surface (snaps
   assert.equal(new Set(GPR2_ENDPOINTS.map(e => e.id)).size, GPR2_ENDPOINTS.length);
   assert.equal(new Set(GPR2_ENDPOINTS.map(e => e.method + ' ' + e.path)).size, GPR2_ENDPOINTS.length);
   assert.equal(GPR2_ENDPOINTS.filter(e => e.kind === 'COMMAND').length, 37); // R05: +finish-template.draft, +area-scope.create
-  assert.equal(GPR2_ENDPOINTS.filter(e => e.kind === 'QUERY').length, 15);
+  assert.equal(GPR2_ENDPOINTS.filter(e => e.kind === 'QUERY').length, 19); // D1: +work-types.list, +area-scopes.list, +finish-templates.list, +work-type-publication-requests.list
   assert.ok(Object.isFrozen(GPR2_ENDPOINTS));
   assert.equal(routeOf(endpointById('schedule.revision.approve')!), 'objects/:objectId/schedule/revisions/:id/approve');
   assert.deepEqual(pathParamsOf(endpointById('schedule.revision.approve')!), ['objectId', 'id']);
@@ -199,7 +202,7 @@ test('§11.2 closing note: there is no generic PATCH of a Work\'s current quanti
 
 test('every command states how it is guarded: idempotent unless it is a pure preview; aggregate token exactly when it acts on an existing aggregate', () => {
   for (const e of GPR2_ENDPOINTS) {
-    if (e.kind === 'QUERY') { assert.deepEqual([e.idempotent, e.aggregateVersion, e.scopeFence, e.pure, e.mounted], [false, false, false, true, false], e.id); continue; }
+    if (e.kind === 'QUERY') { assert.deepEqual([e.idempotent, e.aggregateVersion, e.scopeFence, e.pure, e.mounted], [false, false, false, true, D1_READS.includes(e.id)], e.id); continue; }
     assert.equal(e.pure, /preview/.test(e.id), e.id + ': exactly the previews are pure');
     assert.equal(e.idempotent, !e.pure, e.id + ': Idempotency-Key everywhere except a pure preview');
     assert.equal(e.aggregateVersion, pathParamsOf(e).includes('id'), e.id + ': expectedVersion ⇔ the command addresses an existing aggregate');
@@ -221,7 +224,24 @@ test('the guarded surface: every mounted route is a command with a GPR-2 permiss
     assert.equal(e.scope === 'OBJECT', e.path.startsWith('/objects/{objectId}/'), e.id + ': scope matches the path');
   }
   for (const e of GPR2_ENDPOINTS.filter(x => !x.mounted)) assert.ok(e.kind === 'QUERY' || e.authorization.type === 'EXISTING_RULES' || e.routeFixedByTd === false, e.id + ' is unmounted for a stated reason');
-  assert.deepEqual(GPR2_ENDPOINTS.filter(e => !e.routeFixedByTd).map(e => e.id), ['finish-template.draft', 'finish-template.publish', 'area-scope.create'], 'the operations the design names without a route (R05: proposed paths)');
+  assert.deepEqual(GPR2_ENDPOINTS.filter(e => !e.routeFixedByTd).map(e => e.id), ['work-types.list', 'area-scopes.list', 'finish-templates.list', 'work-type-publication-requests.list', 'finish-template.draft', 'finish-template.publish', 'area-scope.create'], 'the operations the design names without a route (R05: proposed paths)');
+});
+
+test('D1: exactly the five R05 reads are mounted as queries — read-only, GET, no version token, opened by a named set of GPR-2 permissions (ADMIN gets none by default)', () => {
+  assert.deepEqual(mountedQueries().map(e => e.id), D1_READS);
+  assert.equal(mountedRoutes().length, mountedEndpoints().length + 5);
+  for (const e of mountedQueries()) {
+    assert.equal(e.method, 'GET', e.id); assert.equal(e.pure, true, e.id); assert.equal(e.stage, 'R05', e.id); assert.equal(e.authorization.type, 'ANY_PERMISSION', e.id);
+    assert.equal(e.scope === 'OBJECT', e.path.startsWith('/objects/{objectId}/'), e.id + ': scope matches the path');
+    assert.ok(!pathParamsOf(e).includes('id'), e.id + ': a list addresses no single aggregate');
+  }
+  const perms = (id: string) => (endpointById(id)!.authorization as any).permissions;
+  for (const id of ['work-types.list', 'area-scopes.list', 'finish-systems.list']) assert.deepEqual(perms(id), [Gpr2Permission.OBJECT_CATALOG_MANAGE], id + ': the РП only');
+  assert.deepEqual(perms('finish-templates.list'), [Gpr2Permission.OBJECT_CATALOG_MANAGE, Gpr2Permission.CORPORATE_PUBLICATION]);
+  assert.deepEqual(perms('work-type-publication-requests.list'), [Gpr2Permission.OBJECT_CATALOG_MANAGE, Gpr2Permission.CORPORATE_PUBLICATION]);
+  assert.equal(endpointById('finish-templates.list')!.path, '/finish-templates', 'corporate templates: no object in the route');
+  assert.equal(endpointById('work-type-publication-requests.list')!.path, '/objects/{objectId}/work-type-publication-requests', 'one screen — one object: no tenant-wide request list');
+  assert.ok(!GPR2_ENDPOINTS.some(e => e.path === '/work-type-publication-requests' && e.method === 'GET'));
 });
 
 test('A19 (register): each permission guards exactly the commands of its §11.3 row; the corporate grant guards nothing but publication; N01 has no role path', () => {

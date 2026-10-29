@@ -15,6 +15,7 @@ import { DecimalProfile, NORMATIVE, QUANTITY, SIGNED_QUANTITY } from './decimal'
 import { GPR2_ERROR_CODES, GPR2_ERROR_STATUS, GPR2_VALIDATION_RULES } from './errors';
 import { EDGE_TYPES, LAG_KINDS, REASON_LIMIT, SOURCE_NAME } from './schemas';
 import { MAX_OPEN_DEPTH } from './open-value';
+import { R05_READ_RESPONSE, R05_READ_SCHEMAS } from './r05-read';
 
 /**
  * The grammar parseDecimal() accepts, exactly. A signed profile starts with a lookahead that refuses `-0`, `-0.0` … : a negative zero is well formed
@@ -40,6 +41,7 @@ export const REASON_PATTERN = `^\\s*\\S(?:[\\s\\S]{0,${REASON_LIMIT - 2}}\\S)?\\
 const reason: Json = { type: 'string', pattern: REASON_PATTERN, description: 'Real text; trimmed; blank is REASON_REQUIRED.' };
 
 export const SCHEMAS: Record<string, Json> = {
+  ...R05_READ_SCHEMAS,
   VersionToken: { type: 'string', pattern: VERSION_TOKEN_PATTERN, description: 'A canonical decimal-integer string (never a JSON number): an optimistic version or a scope version.' },
   InputFingerprint: { type: 'string', pattern: FINGERPRINT_PATTERN },
   DecimalQuantity: { type: 'string', pattern: decimalPattern(QUANTITY), description: 'numeric(24,4) as a string; input is never rounded.' },
@@ -145,6 +147,9 @@ function operation(e: Gpr2Endpoint): Json {
   else if (e.kind === 'COMMAND')
     parameters.push({ name: 'Idempotency-Key', in: 'header', required: false, schema: uuid, description: 'A pure preview needs none (absent is fine); one that is sent must still be a well formed uuid — an empty value is IDEMPOTENCY_KEY_MALFORMED (422).' });
   const authorization = e.authorization.type === 'EXISTING_RULES' ? { type: 'EXISTING_RULES' } : e.authorization;
+  for (const q of e.queryParams ?? [])
+    parameters.push({ name: q.name, in: 'query', required: false, description: q.description,
+      schema: q.enum ? { type: 'string', enum: [...q.enum] } : q.integer ? { type: 'integer', minimum: q.integer.min, maximum: q.integer.max, default: q.integer.default } : { type: 'string', pattern: '^[A-Za-z0-9_-]{1,1024}$' } });
   const op: Json = {
     operationId: e.id, tags: [e.stage], security: [{ bearerAuth: [] }], parameters,
     'x-stage': e.stage, 'x-mounted': e.mounted, 'x-scope': e.scope, 'x-authorization': authorization, 'x-pure': e.pure,
@@ -161,10 +166,13 @@ function operation(e: Gpr2Endpoint): Json {
       : { allOf: [ref('OpenObject')], description: 'Open object: its fields belong to the stage that implements the command; R01 only requires plain JSON (OpenValue).', 'x-owner-stage': e.stage };
     op.requestBody = { required: true, content: { 'application/json': { schema: obj(properties, required) } } };
     responses['200'] = { description: 'Applied (or the stored result of a repeat).', content: { 'application/json': { schema: ref('CommandResult') } } };
-  } else responses['200'] = { description: 'The projection; its shape is owned by the stage that implements it.', content: { 'application/json': { schema: { type: 'object', 'x-owner-stage': e.stage } } } };
+  } else responses['200'] = R05_READ_RESPONSE[e.id]
+    ? { description: 'One page of the read model (D1): stable order, `nextCursor` null on the last page. A read writes nothing.', content: { 'application/json': { schema: ref(R05_READ_RESPONSE[e.id]) } } }
+    : { description: 'The projection; its shape is owned by the stage that implements it.', content: { 'application/json': { schema: { type: 'object', 'x-owner-stage': e.stage } } } };
   responses['401'] = { description: 'Not authenticated (the authentication layer\'s own body).' };
   responses['403'] = errorResponse('The caller\'s current role does not hold the permission (decided before scope).');
   // A route with neither an object nor an aggregate in its path (R05 finish-template.draft) addresses nothing that could be missing: it never answers 404.
+  if (e.kind === 'QUERY' && e.queryParams?.length) responses['422'] = errorResponse('VALIDATION_FAILED — an unknown or repeated query parameter, a limit out of range, an unknown state, or a cursor that does not belong to this request.');
   if (pathParamsOf(e).length)
     responses['404'] = errorResponse('The resource is missing, malformed, another tenant\'s or out of the caller\'s scope — one and the same answer.');
   if (e.kind === 'COMMAND') {

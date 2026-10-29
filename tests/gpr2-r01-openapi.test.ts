@@ -48,7 +48,7 @@ test('responses: 403 and 404 everywhere, 409 only where there is something to co
     const codes = Object.keys(doc.paths['/v2' + e.path][e.method.toLowerCase()].responses).sort();
     // R05: a route with neither {objectId} nor {id} (finish-template.draft) addresses nothing that could be missing, so it documents no 404
     const notFound = pathParamsOf(e).length ? ['404'] : [];
-    const expected = e.kind === 'QUERY' ? ['200', '401', '403', ...notFound]
+    const expected = e.kind === 'QUERY' ? ['200', '401', '403', ...notFound, ...(e.queryParams?.length ? ['422'] : [])]
       : ['200', '401', '403', ...notFound, '422', ...(e.aggregateVersion || e.scopeFence || e.idempotent ? ['409'] : []), ...(e.mounted ? ['501'] : [])];
     assert.deepEqual(codes, expected.sort(), e.id);
   }
@@ -106,7 +106,7 @@ test('every command that performs a lifecycle transition says so in the document
     { lifecycle: 'QUANTITY_CHANGE_REQUEST', command: 'revise', from: 'RETURNED', to: 'DRAFT', effect: 'OPEN_NEW_SUBMISSION_VERSION' }
   ]);
   const proposed = ops().filter(o => o.op['x-route-proposed']).map(o => o.op.operationId);
-  assert.deepEqual(proposed, ['finish-template.draft', 'finish-template.publish', 'area-scope.create'], 'the routes the design does not name are flagged as proposals (R05)');
+  assert.deepEqual([...proposed].sort(), ['area-scope.create', 'area-scopes.list', 'finish-template.draft', 'finish-template.publish', 'finish-templates.list', 'work-type-publication-requests.list', 'work-types.list'], 'the routes the design does not name are flagged as proposals (R05)');
   assert.deepEqual(ops().filter(o => o.op['x-authorization'].type === 'CAPABILITY').map(o => o.op.operationId), ['imports.estimate-labor.mapping-reviews'], 'N01: one capability-only operation');
 });
 

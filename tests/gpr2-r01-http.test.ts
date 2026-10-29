@@ -3,7 +3,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { RequestMethod } from '@nestjs/common';
 import { roles } from '../packages/domain';
-import { GPR2_ENDPOINTS, mountedEndpoints, routeOf, endpointById, NO_CAPABILITY_ASSIGNMENTS, type Gpr2Endpoint, type CapabilityAssignment } from '../packages/domain/gpr2';
+import { GPR2_ENDPOINTS, mountedEndpoints, mountedRoutes, routeOf, endpointById, NO_CAPABILITY_ASSIGNMENTS, type Gpr2Endpoint, type CapabilityAssignment } from '../packages/domain/gpr2';
 import { gpr2Harness, validRequest, foreignTenantObject, pilotScenario, KEY, uuid, type Gpr2Harness } from './helpers/gpr2-fixtures';
 import type { Pilot } from './helpers/gpr-fixtures';
 import { assertInMemoryPool } from './helpers/gpr2-isolation';
@@ -64,9 +64,9 @@ test('the table covers exactly the mounted commands, and the register mounts 35 
   assert.equal(mountedEndpoints().length, 35); // R05: +finish-template.draft, +finish-template.publish, +area-scope.create
   const { Gpr2ContractController } = await import('../apps/backend/src/modules/gpr2/gpr2.controller');
   const methodName: Record<number, string> = { [RequestMethod.GET]: 'GET', [RequestMethod.POST]: 'POST', [RequestMethod.PATCH]: 'PATCH', [RequestMethod.PUT]: 'PUT' };
-  const mounted = Object.getOwnPropertyNames(Gpr2ContractController.prototype).filter(n => n !== 'constructor' && n !== 'run')
+  const mounted = Object.getOwnPropertyNames(Gpr2ContractController.prototype).filter(n => n !== 'constructor' && n !== 'run' && n !== 'read')
     .map(n => { const fn = (Gpr2ContractController.prototype as any)[n]; return `${methodName[Reflect.getMetadata('method', fn)]} ${Reflect.getMetadata('path', fn)}`; }).sort();
-  assert.deepEqual(mounted, mountedEndpoints().map(e => `${e.method} v2/${routeOf(e)}`).sort(), 'no route without a register row, no mounted row without a route');
+  assert.deepEqual(mounted, mountedRoutes().map(e => `${e.method} v2/${routeOf(e)}`).sort(), 'no route without a register row, no mounted row without a route');
 });
 
 test('A19 (HTTP): the whole role matrix — 35 commands × 11 roles — allowed roles reach the gate (501), every other role is refused with 403', async () => {
