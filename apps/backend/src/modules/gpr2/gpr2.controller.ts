@@ -47,6 +47,19 @@ export class Gpr2ContractController {
     @HttpCode(200)
     workTypePublicationReject(@Req() r: any, @Param() p: any, @Body() b: any) { return this.run('work-type.publication.reject', r, p, b); }
 
+    // finish-template (corporate, R05c; proposed routes)
+    @Post('v2/finish-templates')
+    @HttpCode(200)
+    finishTemplateDraft(@Req() r: any, @Param() p: any, @Body() b: any) { return this.run('finish-template.draft', r, p, b); }
+    @Post('v2/finish-templates/:id/publish')
+    @HttpCode(200)
+    finishTemplatePublish(@Req() r: any, @Param() p: any, @Body() b: any) { return this.run('finish-template.publish', r, p, b); }
+
+    // area-scope (R05b; proposed route)
+    @Post('v2/objects/:objectId/area-scopes')
+    @HttpCode(200)
+    areaScopeCreate(@Req() r: any, @Param() p: any, @Body() b: any) { return this.run('area-scope.create', r, p, b); }
+
     // finish-system
     @Post('v2/objects/:objectId/finish-systems')
     @HttpCode(200)

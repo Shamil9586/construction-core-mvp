@@ -163,7 +163,9 @@ test('K01/§7.6: the general physical percent exists only for COMPLETE coverage 
 const REGISTER_IDS = [
   'works.list', 'works.get', 'works.create', 'works.assignments.patch',
   'work-type.create', 'work-type.publication.request', 'work-type.publication.approve', 'work-type.publication.reject',
-  'finish-systems.list', 'finish-system.upsert', 'finish-system.preview', 'finish-system.confirm', 'finish-template.publish',
+  // R05 (GPR-2 R05c / R05b): the two operations §11.2–11.3 and §5.2 name without a route — the corporate template draft and the object AreaScope — got
+  // proposed rows next to finish-template.publish (routeFixedByTd: false). Nothing else in the register changed.
+  'finish-systems.list', 'finish-system.upsert', 'finish-system.preview', 'finish-system.confirm', 'finish-template.draft', 'finish-template.publish', 'area-scope.create',
   'quantity.request.create', 'quantity.request.patch', 'quantity.request.submit', 'quantity.request.review-note', 'quantity.request.approve', 'quantity.request.return', 'quantities.history',
   'calendars.list', 'calendar.version.create', 'calendar.version.patch',
   'schedule.current', 'schedule.revision.get', 'schedule.evaluation', 'schedule.revision.create', 'schedule.changes.preview', 'schedule.changes.apply', 'schedule.backplan.preview',
@@ -178,7 +180,7 @@ test('§11.2: the register is the design\'s complete business API surface (snaps
   assert.deepEqual(GPR2_ENDPOINTS.map(e => e.id), REGISTER_IDS);
   assert.equal(new Set(GPR2_ENDPOINTS.map(e => e.id)).size, GPR2_ENDPOINTS.length);
   assert.equal(new Set(GPR2_ENDPOINTS.map(e => e.method + ' ' + e.path)).size, GPR2_ENDPOINTS.length);
-  assert.equal(GPR2_ENDPOINTS.filter(e => e.kind === 'COMMAND').length, 35);
+  assert.equal(GPR2_ENDPOINTS.filter(e => e.kind === 'COMMAND').length, 37); // R05: +finish-template.draft, +area-scope.create
   assert.equal(GPR2_ENDPOINTS.filter(e => e.kind === 'QUERY').length, 15);
   assert.ok(Object.isFrozen(GPR2_ENDPOINTS));
   assert.equal(routeOf(endpointById('schedule.revision.approve')!), 'objects/:objectId/schedule/revisions/:id/approve');
@@ -212,19 +214,19 @@ test('D16/C11/C16: exactly the scope-sensitive commands carry expectedScopeVersi
 
 test('the guarded surface: every mounted route is a command with a GPR-2 permission or the N01 capability; reads and "existing rules" commands are catalogued, not mounted', () => {
   const mounted = mountedEndpoints();
-  assert.equal(mounted.length, 32);
+  assert.equal(mounted.length, 35); // R05: +finish-template.draft, +area-scope.create, and finish-template.publish is mounted (R05c implements it)
   for (const e of mounted) {
     assert.equal(e.kind, 'COMMAND', e.id);
     assert.notEqual(e.authorization.type, 'EXISTING_RULES', e.id);
     assert.equal(e.scope === 'OBJECT', e.path.startsWith('/objects/{objectId}/'), e.id + ': scope matches the path');
   }
   for (const e of GPR2_ENDPOINTS.filter(x => !x.mounted)) assert.ok(e.kind === 'QUERY' || e.authorization.type === 'EXISTING_RULES' || e.routeFixedByTd === false, e.id + ' is unmounted for a stated reason');
-  assert.deepEqual(GPR2_ENDPOINTS.filter(e => !e.routeFixedByTd).map(e => e.id), ['finish-template.publish'], 'the one operation the design names without a route');
+  assert.deepEqual(GPR2_ENDPOINTS.filter(e => !e.routeFixedByTd).map(e => e.id), ['finish-template.draft', 'finish-template.publish', 'area-scope.create'], 'the operations the design names without a route (R05: proposed paths)');
 });
 
 test('A19 (register): each permission guards exactly the commands of its §11.3 row; the corporate grant guards nothing but publication; N01 has no role path', () => {
   const guarded = (p: Gpr2Permission) => GPR2_ENDPOINTS.filter(e => e.authorization.type !== 'EXISTING_RULES' && 'permission' in e.authorization && e.authorization.permission === p).map(e => e.id).sort();
-  assert.deepEqual(guarded(Gpr2Permission.CORPORATE_PUBLICATION), ['finish-template.publish', 'work-type.publication.approve', 'work-type.publication.reject']);
+  assert.deepEqual(guarded(Gpr2Permission.CORPORATE_PUBLICATION), ['finish-template.draft', 'finish-template.publish', 'work-type.publication.approve', 'work-type.publication.reject']);
   assert.deepEqual(guarded(Gpr2Permission.SCHEDULE_REVIEW), ['schedule.revision.approve', 'schedule.revision.return']);
   assert.deepEqual(guarded(Gpr2Permission.QUANTITY_REVIEW), ['quantity.request.approve', 'quantity.request.return']);
   assert.deepEqual(guarded(Gpr2Permission.QUANTITY_REVIEW_NOTE), ['quantity.request.review-note']);

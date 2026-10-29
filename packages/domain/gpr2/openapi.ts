@@ -164,7 +164,9 @@ function operation(e: Gpr2Endpoint): Json {
   } else responses['200'] = { description: 'The projection; its shape is owned by the stage that implements it.', content: { 'application/json': { schema: { type: 'object', 'x-owner-stage': e.stage } } } };
   responses['401'] = { description: 'Not authenticated (the authentication layer\'s own body).' };
   responses['403'] = errorResponse('The caller\'s current role does not hold the permission (decided before scope).');
-  responses['404'] = errorResponse('The resource is missing, malformed, another tenant\'s or out of the caller\'s scope — one and the same answer.');
+  // A route with neither an object nor an aggregate in its path (R05 finish-template.draft) addresses nothing that could be missing: it never answers 404.
+  if (pathParamsOf(e).length)
+    responses['404'] = errorResponse('The resource is missing, malformed, another tenant\'s or out of the caller\'s scope — one and the same answer.');
   if (e.kind === 'COMMAND') {
     if (e.aggregateVersion || e.scopeFence || e.idempotent) responses['409'] = errorResponse('STALE_VERSION, SCOPE_VERSION_CHANGED or IDEMPOTENCY_PAYLOAD_MISMATCH.');
     responses['422'] = errorResponse('VALIDATION_FAILED and the rule codes of the lifecycle / the stage.');

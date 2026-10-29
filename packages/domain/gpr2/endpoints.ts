@@ -100,9 +100,13 @@ export const GPR2_ENDPOINTS: readonly Gpr2Endpoint[] = Object.freeze([
     command({ id: 'finish-system.upsert', method: 'POST', path: O + '/finish-systems', auth: perm(P.OBJECT_CATALOG_MANAGE), stage: 'R05' }),
     command({ id: 'finish-system.preview', method: 'POST', path: O + '/finish-systems/{id}/preview', auth: perm(P.OBJECT_CATALOG_MANAGE), stage: 'R05', pure: true, version: true, res: 'FINISH_SYSTEM' }),
     command({ id: 'finish-system.confirm', method: 'POST', path: O + '/finish-systems/{id}/confirm', auth: perm(P.OBJECT_CATALOG_MANAGE), stage: 'R05', version: true, fence: true, res: 'FINISH_SYSTEM' }),
-    // §11.2 / §11.3 name "corporate template publication — Admin dictionary grant" but give it no route: the path is a proposal, not mounted.
+    // §11.2 / §11.3 name "corporate template publication — Admin dictionary grant" but give it no route. R05c implements it on these PROPOSED paths
+    // (routeFixedByTd: false — x-route-proposed in the OpenAPI document): a draft version with its stages, then its publication (immutable from then on).
+    command({ id: 'finish-template.draft', method: 'POST', path: '/finish-templates', scope: 'TENANT', auth: perm(P.CORPORATE_PUBLICATION), stage: 'R05', fixed: false }),
     command({ id: 'finish-template.publish', method: 'POST', path: '/finish-templates/{id}/publish', scope: 'TENANT', auth: perm(P.CORPORATE_PUBLICATION), stage: 'R05', version: true,
-              fixed: false, mounted: false, res: 'FINISH_TEMPLATE' }),
+              fixed: false, res: 'FINISH_TEMPLATE' }),
+    // §5.2 object_area_scopes / §4.1 AreaScope: the spatial identity Work generation is computed over. Object catalogue adaptation (§11.3: РП). Proposed path.
+    command({ id: 'area-scope.create', method: 'POST', path: O + '/area-scopes', auth: perm(P.OBJECT_CATALOG_MANAGE), stage: 'R05', fixed: false }),
 
     // --- Quantity (D17, D18, D19, R07) -------------------------------------------------------------------------------------------------
     command({ id: 'quantity.request.create', method: 'POST', path: O + '/quantity-change-requests', auth: perm(P.QUANTITY_AUTHOR), stage: 'R07', fence: true }),

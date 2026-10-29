@@ -234,16 +234,18 @@ test('R01-B03 (HTTP): 300 seeded random JSON payloads never produce a 500 — ea
 // R01-B04
 // ---------------------------------------------------------------------------------------------------------------------------------
 
-// the 22 mounted, id-bearing commands some ROLE can issue (the other two, review-note and mapping-reviews, are N01 default-deny: no role reaches the preflight)
+// the 23 mounted, id-bearing commands some ROLE can issue (the other two, review-note and mapping-reviews, are N01 default-deny: no role reaches the preflight)
+// R05: + finish-template.publish (Admin, tenant level); the R05 commands without an {id} are listed in NO_ID_ROLE.
 const WHO: Record<string, string> = {
-  'work-type.publication.request': PM, 'work-type.publication.approve': ADMIN, 'work-type.publication.reject': ADMIN, 'finish-system.preview': PM, 'finish-system.confirm': PM,
+  'work-type.publication.request': PM, 'work-type.publication.approve': ADMIN, 'work-type.publication.reject': ADMIN, 'finish-template.publish': ADMIN, 'finish-system.preview': PM, 'finish-system.confirm': PM,
   'quantity.request.patch': PM, 'quantity.request.submit': PM, 'quantity.request.approve': DEPUTY, 'quantity.request.return': DEPUTY, 'calendar.version.patch': PM,
   'schedule.changes.preview': PM, 'schedule.changes.apply': PM, 'schedule.backplan.preview': PM, 'schedule.revision.submit': PM, 'schedule.revision.discard': PM,
   'schedule.revision.approve': DEPUTY, 'schedule.revision.return': DEPUTY, 'finish-change.record-correction': PM, 'imports.boq.allocations': PM, 'imports.boq.commit': PM,
   'imports.estimate-labor.mapping-proposals': PM, 'imports.estimate-labor.commit': PM
 };
 
-test('R01-B04: the id-bearing mounted commands are exactly the 22 this suite drives by role (+ the two N01 default-deny ones)', () => {
+const NO_ID_ROLE: Record<string, string> = { 'finish-template.draft': ADMIN };
+test('R01-B04: the id-bearing mounted commands are exactly the 23 this suite drives by role (+ the two N01 default-deny ones)', () => {
   const ids = mountedEndpoints().filter(e => e.resource).map(e => e.id).sort();
   assert.deepEqual(ids, [...Object.keys(WHO), 'quantity.request.review-note', 'imports.estimate-labor.mapping-reviews'].sort());
 });
@@ -286,11 +288,11 @@ test('R01-B04: a well-formed id that is MISSING, another object\'s, another tena
       assert.deepEqual(rec.calls.slice(before), ['replay', 'execute'], id);
       assert.equal(rec.seen[rec.seen.length - 1].params.id, okId);
     }
-    assert.equal(negatives, 20 * 5 + 2 * 3, 'every negative case ran: 20 object-scope commands × 5, 2 tenant-level × 3');
-    assert.equal(rec.calls.filter(c => c === 'replay').length, 22, 'replay ran only for the 22 positive controls');
-    assert.equal(rec.calls.filter(c => c === 'execute').length, 22);
+    assert.equal(negatives, 20 * 5 + 3 * 3, 'every negative case ran: 20 object-scope commands × 5, 3 tenant-level × 3');
+    assert.equal(rec.calls.filter(c => c === 'replay').length, 23, 'replay ran only for the 23 positive controls');
+    assert.equal(rec.calls.filter(c => c === 'execute').length, 23);
   });
-  assert.deepEqual([...kinds].sort(), ['BOQ_IMPORT', 'CALENDAR_VERSION', 'ESTIMATE_LABOR_IMPORT', 'FINISH_CHANGE_RECORD', 'FINISH_SYSTEM', 'QUANTITY_CHANGE_REQUEST', 'SCHEDULE_REVISION', 'WORK_TYPE', 'WORK_TYPE_PUBLICATION_REQUEST']);
+  assert.deepEqual([...kinds].sort(), ['BOQ_IMPORT', 'CALENDAR_VERSION', 'ESTIMATE_LABOR_IMPORT', 'FINISH_CHANGE_RECORD', 'FINISH_SYSTEM', 'FINISH_TEMPLATE', 'QUANTITY_CHANGE_REQUEST', 'SCHEDULE_REVISION', 'WORK_TYPE', 'WORK_TYPE_PUBLICATION_REQUEST']);
 });
 
 test('R01-B04: tenant-level corporate publication — another tenant\'s request, and an Admin of another tenant, are 404 with no object prefix to lean on', async () => {
@@ -368,13 +370,13 @@ test('R01-B04: with the PRODUCTION default hooks (DISABLED_HOOKS) every id-beari
     let withId = 0, without = 0;
     for (const e of mountedEndpoints()) {
       if (e.id === 'quantity.request.review-note' || e.id === 'imports.estimate-labor.mapping-reviews') continue; // N01 default-deny: no role reaches the gate at all
-      const role = WHO[e.id] ?? PM;
+      const role = WHO[e.id] ?? NO_ID_ROLE[e.id] ?? PM;
       const params = e.scope === 'OBJECT' ? { objectId: owner.objectId, id: uuid() } : { id: uuid() };
       const r = await send(role, e, params);
       if (e.resource) { assert.deepEqual([r.status, strip(r.body)], [404, NOT_FOUND], e.id); withId++; }
       else { assert.deepEqual([r.status, r.body.code], [501, 'COMMAND_NOT_ENABLED'], e.id); without++; }
     }
-    assert.deepEqual([withId, without], [22, 8]);
+    assert.deepEqual([withId, without], [23, 10]); // R05: +finish-template.publish (id), +finish-template.draft, +area-scope.create
     assert.equal(await count(), before, 'no ledger, audit or event row was written');
   } finally { undo(); }
 });

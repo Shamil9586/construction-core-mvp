@@ -124,7 +124,11 @@ export type ObjectRef =
     | { aosrDocument: string }
     | { scheduleRevision: string }
     | { delayReason: string }
-    | { ptoAssignmentWork: string };
+    | { ptoAssignmentWork: string }
+    // R05: the object of an object-scoped WorkType, of a publication request (a tenant-level route whose aggregate still belongs to one object), of a finish system.
+    | { workType: string }
+    | { workTypePublicationRequest: string }
+    | { finishSystem: string };
 
 const RESOLVERS: Record<string, string> = {
     work: 'SELECT object_id FROM works WHERE tenant_id=$1 AND id=$2',
@@ -142,7 +146,10 @@ const RESOLVERS: Record<string, string> = {
     aosrDocument: 'SELECT object_id FROM aosr_documents WHERE tenant_id=$1 AND id=$2',
     scheduleRevision: 'SELECT object_id FROM schedule_revisions WHERE tenant_id=$1 AND id=$2',
     delayReason: 'SELECT object_id FROM schedule_delay_reasons WHERE tenant_id=$1 AND id=$2',
-    ptoAssignmentWork: 'SELECT object_id FROM works WHERE tenant_id=$1 AND id=$2'
+    ptoAssignmentWork: 'SELECT object_id FROM works WHERE tenant_id=$1 AND id=$2',
+    workType: 'SELECT object_id FROM work_types WHERE tenant_id=$1 AND id=$2',
+    workTypePublicationRequest: 'SELECT object_id FROM work_type_publication_requests WHERE tenant_id=$1 AND id=$2',
+    finishSystem: 'SELECT object_id FROM object_finish_types WHERE tenant_id=$1 AND id=$2'
 };
 
 export async function resolveObjectId(c: any, tenantId: string, ref: ObjectRef): Promise<string | null> {

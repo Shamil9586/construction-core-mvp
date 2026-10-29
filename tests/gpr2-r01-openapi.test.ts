@@ -46,8 +46,10 @@ test('Idempotency-Key and the version tokens appear exactly where the register s
 test('responses: 403 and 404 everywhere, 409 only where there is something to conflict with, 422 for every command, 501 exactly for the mounted gate — with one error body', () => {
   for (const e of GPR2_ENDPOINTS) {
     const codes = Object.keys(doc.paths['/v2' + e.path][e.method.toLowerCase()].responses).sort();
-    const expected = e.kind === 'QUERY' ? ['200', '401', '403', '404']
-      : ['200', '401', '403', '404', '422', ...(e.aggregateVersion || e.scopeFence || e.idempotent ? ['409'] : []), ...(e.mounted ? ['501'] : [])];
+    // R05: a route with neither {objectId} nor {id} (finish-template.draft) addresses nothing that could be missing, so it documents no 404
+    const notFound = pathParamsOf(e).length ? ['404'] : [];
+    const expected = e.kind === 'QUERY' ? ['200', '401', '403', ...notFound]
+      : ['200', '401', '403', ...notFound, '422', ...(e.aggregateVersion || e.scopeFence || e.idempotent ? ['409'] : []), ...(e.mounted ? ['501'] : [])];
     assert.deepEqual(codes, expected.sort(), e.id);
   }
   assert.deepEqual(doc.components.schemas.ErrorCode.enum, [...GPR2_ERROR_CODES], 'the error body can only name a code of the catalogue');
@@ -104,7 +106,7 @@ test('every command that performs a lifecycle transition says so in the document
     { lifecycle: 'QUANTITY_CHANGE_REQUEST', command: 'revise', from: 'RETURNED', to: 'DRAFT', effect: 'OPEN_NEW_SUBMISSION_VERSION' }
   ]);
   const proposed = ops().filter(o => o.op['x-route-proposed']).map(o => o.op.operationId);
-  assert.deepEqual(proposed, ['finish-template.publish'], 'the one route the design does not name is flagged as a proposal');
+  assert.deepEqual(proposed, ['finish-template.draft', 'finish-template.publish', 'area-scope.create'], 'the routes the design does not name are flagged as proposals (R05)');
   assert.deepEqual(ops().filter(o => o.op['x-authorization'].type === 'CAPABILITY').map(o => o.op.operationId), ['imports.estimate-labor.mapping-reviews'], 'N01: one capability-only operation');
 });
 
