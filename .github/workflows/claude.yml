@@ -32,4 +32,4 @@ jobs:
           # Every Bash rule is an exact command match; no wildcard or arbitrary suffix arguments.
           # npm ci must suppress dependency lifecycle scripts.
           claude_args: >-
-            ${{ github.event.issue.number == 17 && github.actor == 'Shamil9586' && '--allowedTools "Bash(npm ci --ignore-scripts)" "Bash(npm run build)" "Bash(npm run typecheck:strict)" "Bash(node --import tsx --test tests/areaScopeTree.test.ts)" "Bash(npx --no-install playwright install chromium)" "Bash(npx --no-install playwright test --config playwright.gpr2-r05-area-scope.config.ts)"' || '' }}
+            ${{ (github.event.issue.number == 17 || github.event.pull_request.number == 17) && github.actor == 'Shamil9586' && '--allowedTools "Bash(npm ci --ignore-scripts)" "Bash(npm run build)" "Bash(npm run typecheck:strict)" "Bash(node --import tsx --test tests/areaScopeTree.test.ts)" "Bash(npx --no-install playwright install chromium)" "Bash(npx --no-install playwright test --config playwright.gpr2-r05-area-scope.config.ts)"' || '' }}
