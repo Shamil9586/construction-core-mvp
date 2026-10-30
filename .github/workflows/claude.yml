@@ -28,3 +28,7 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Additional shell grants are restricted to the owner-triggered S2 task on PR #17.
+          # npm ci must use --ignore-scripts; no arbitrary dependency lifecycle scripts.
+          claude_args: >-
+            ${{ github.event.issue.number == 17 && github.actor == 'Shamil9586' && '--allowedTools "Bash(npm ci --ignore-scripts:*)" "Bash(npm run build:*)" "Bash(npm run typecheck:strict:*)" "Bash(node --import tsx --test tests/*area*scope*.test.ts:*)" "Bash(npx --no-install playwright install chromium:*)" "Bash(npx --no-install playwright test --config playwright.gpr2-r05-area-scope.config.ts:*)"' || '' }}
