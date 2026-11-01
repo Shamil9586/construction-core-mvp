@@ -197,4 +197,6 @@ export const canViewCompanyStructure = (role: string): boolean =>
  * deliberately not included — no implicit privilege expansion.
  */
 export const canViewAreaScopes = (role: string): boolean => role === 'PROJECT_MANAGER';
+/** GPR-2 R05 S3 — presentation gate only; backend object permission remains authoritative. */
+export const canViewFinishSystems = (role: string): boolean => role === 'PROJECT_MANAGER';
 export const canManageCompanyStructure =(role: string): boolean => role === 'DEPUTY_DIRECTOR' || role === 'ADMIN';

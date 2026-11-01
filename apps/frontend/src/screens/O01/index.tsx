@@ -49,6 +49,8 @@ export interface O01Props {
   onOpenRegistry?: () => void;
   /** GPR-2 R05 S2 — navigation only: a link to this object's «Зоны объекта». Omitted for every role but the project manager. */
   onOpenAreas?: () => void;
+  /** GPR-2 R05 S3 — navigation only, project manager presentation gate. */
+  onOpenFinishSystems?: () => void;
   onNavigateHome: () => void;
   onSelectWork: (workId: string) => void;
   className?: string;
@@ -68,6 +70,7 @@ export function ObjectOverview({
   onOpenSchedule,
   onOpenRegistry,
   onOpenAreas,
+  onOpenFinishSystems,
   onNavigateHome,
   onSelectWork,
   className,
@@ -165,6 +168,13 @@ export function ObjectOverview({
           <span className={[styles.cardNote, typeClass('label')].join(' ')}>
             Дерево корпусов, этажей и помещений объекта для отделочных работ.
           </span>
+        </section>
+      ) : null}
+
+      {onOpenFinishSystems ? (
+        <section className={styles.section} aria-label="Системы отделки">
+          <button type="button" className={styles.registryLink} onClick={onOpenFinishSystems}>Системы отделки</button>
+          <span className={[styles.cardNote, typeClass('label')].join(' ')}>Состав отделочных систем и этапов выбранного объекта.</span>
         </section>
       ) : null}
 

@@ -1,0 +1,12 @@
+import { readSessionToken } from '../auth/sessionToken';
+import type { FinishSystemPage, FinishSystemRead } from '../types/finishSystem';
+import { AreaScopeApiError, AreaScopePaginationError } from './areaScopeApi';
+const base=(objectId:string)=>`/api/v2/objects/${encodeURIComponent(objectId)}/finish-systems`;
+const rec=(v:unknown): v is Record<string,unknown>=>typeof v==='object'&&v!==null&&!Array.isArray(v);
+const strOrNull=(v:unknown):v is string|null=>v===null||typeof v==='string';
+async function json(response:Response):Promise<unknown>{const text=await response.text();if(!(response.headers.get('content-type')??'').toLowerCase().includes('json'))return undefined;try{return JSON.parse(text)}catch{return undefined}}
+async function error(response:Response){const body=await json(response);const r=rec(body)?body:{};return new AreaScopeApiError(response.status,typeof r.message==='string'?r.message:`HTTP ${response.status}`,typeof r.code==='string'?r.code:undefined,r.details,typeof r.requestId==='string'?r.requestId:undefined)}
+function headers(): Record<string,string>{const token=readSessionToken();return token?{Authorization:`Bearer ${token}`}:{}};
+function page(body:unknown):FinishSystemPage{if(!rec(body)||!Array.isArray(body.items)||!Object.prototype.hasOwnProperty.call(body,'nextCursor')||!strOrNull(body.nextCursor))throw new AreaScopePaginationError('Неверный ответ сервера: искажённая страница систем отделки.');return {items:body.items as FinishSystemRead[],nextCursor:body.nextCursor};}
+export async function getFinishSystemPage(objectId:string,cursor:string|null,signal?:AbortSignal):Promise<FinishSystemPage>{const p=new URLSearchParams({limit:'200'});if(cursor)p.set('cursor',cursor);const r=await fetch(`${base(objectId)}?${p}`,{headers:headers(),signal});if(!r.ok)throw await error(r);const body=await json(r);if(body===undefined)throw new AreaScopePaginationError('Неверный ответ сервера: ожидался JSON.');return page(body)}
+export async function listFinishSystems(objectId:string,signal?:AbortSignal):Promise<FinishSystemRead[]>{const all:FinishSystemRead[]=[];const seen=new Set<string>();let cursor:string|null=null;for(let i=0;i<200;i++){const p=await getFinishSystemPage(objectId,cursor,signal);all.push(...p.items);if(p.nextCursor===null)return all;if(seen.has(p.nextCursor))throw new AreaScopePaginationError('Сервер повторил курсор: список систем неполный.');seen.add(p.nextCursor);cursor=p.nextCursor;}throw new AreaScopePaginationError('Список систем отделки превысил лимит страниц.')}
