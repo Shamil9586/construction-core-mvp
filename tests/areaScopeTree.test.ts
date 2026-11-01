@@ -163,6 +163,27 @@ test('a malformed page or item is rejected, not rendered', async () => {
   try { await assert.rejects(() => listAllAreaScopes('o'), AreaScopePaginationError); } finally { stub2.restore(); }
 });
 
+test('a page without a valid nextCursor fails closed and no partial list is returned', async () => {
+  const bad: Array<[string, Record<string, unknown>]> = [
+    ['missing', { items: [] }],
+    ['undefined-equivalent (omitted with items)', { items: [node({ id: 'a' })] }],
+    ['object', { items: [], nextCursor: {} }],
+    ['number', { items: [], nextCursor: 1 }],
+    ['boolean', { items: [], nextCursor: false }],
+    ['array', { items: [], nextCursor: [] }],
+  ];
+  for (const [label, body] of bad) {
+    const stub = stubFetch([page(['first'], 'c1'), { body }]);
+    try {
+      await assert.rejects(() => listAllAreaScopes('o'), AreaScopePaginationError, label);
+      assert.equal(stub.calls.length, 2, label);
+    } finally { stub.restore(); }
+  }
+  // a single page lacking nextCursor must not be taken as a complete tree
+  const single = stubFetch([{ body: { items: [node({ id: 'a' })] } }]);
+  try { await assert.rejects(() => listAllAreaScopes('o'), AreaScopePaginationError); } finally { single.restore(); }
+});
+
 test('403/404 become typed errors (never an empty list); code, details and requestId are kept', async () => {
   for (const status of [403, 404]) {
     const stub = stubFetch([{ status, body: { statusCode: status, message: 'Недостаточно прав', code: 'PERMISSION_DENIED', requestId: 'req-1' } }]);

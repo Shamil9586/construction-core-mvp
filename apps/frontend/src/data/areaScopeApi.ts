@@ -68,10 +68,17 @@ function toItem(value: unknown): AreaScopeRead {
 }
 
 function toPage(body: unknown): AreaScopePage {
-  if (!isRecord(body) || !Array.isArray(body.items) || !isStringOrNull(body.nextCursor ?? null)) {
+  // nextCursor must be present and be a string or an explicit null; a missing
+  // field could hide a truncated page, so it fails closed.
+  if (
+    !isRecord(body) ||
+    !Array.isArray(body.items) ||
+    !Object.prototype.hasOwnProperty.call(body, 'nextCursor') ||
+    !isStringOrNull(body.nextCursor)
+  ) {
     throw new AreaScopePaginationError('Неверный ответ сервера: искажённая страница списка зон.');
   }
-  return { items: body.items.map(toItem), nextCursor: (body.nextCursor as string | null | undefined) ?? null };
+  return { items: body.items.map(toItem), nextCursor: body.nextCursor };
 }
 
 function authHeaders(extra: Record<string, string> = {}): Record<string, string> {
