@@ -1,0 +1,140 @@
+/*
+ * GPR-2 R05 S2 — «Зоны объекта». Tokens only; no new colours or radii. Rows wrap below ~640px so 390px needs no horizontal scroll.
+ */
+
+.panel {
+  box-sizing: border-box;
+  margin: 0 0 var(--cc-p-space-20);
+  padding: var(--cc-p-space-16);
+  background: var(--cc-background-surface);
+  border: var(--cc-border-width) solid var(--cc-border-default);
+  border-radius: var(--cc-radius-card);
+}
+
+.secondary {
+  color: var(--cc-text-secondary);
+}
+
+.plainList {
+  margin: var(--cc-p-space-4) 0 0;
+  padding-left: var(--cc-p-space-20);
+}
+
+.alert {
+  box-sizing: border-box;
+  margin: 0 0 var(--cc-p-space-16);
+  padding: var(--cc-p-space-12) var(--cc-p-space-16);
+  border: var(--cc-border-width) solid var(--cc-border-default);
+  border-radius: var(--cc-radius-card);
+  background: var(--cc-status-blocked-fill);
+  color: var(--cc-status-blocked-text);
+}
+
+.success {
+  margin: var(--cc-p-space-12) 0 0;
+  color: var(--cc-status-on-track-text);
+}
+
+.flag {
+  color: var(--cc-status-attention-text);
+}
+
+/* ---- tree ---- */
+
+.tree {
+  list-style: none;
+  margin: var(--cc-p-space-8) 0 0;
+  padding: 0;
+}
+
+.tree .tree {
+  margin-left: var(--cc-p-space-16);
+  padding-left: var(--cc-p-space-12);
+  border-left: var(--cc-border-width) solid var(--cc-border-default);
+}
+
+.node {
+  margin: 0;
+}
+
+.nodeRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--cc-p-space-8) var(--cc-p-space-16);
+  padding: var(--cc-p-space-8) 0;
+  border-top: var(--cc-border-width) solid var(--cc-border-default);
+}
+
+.nodeMain {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--cc-p-space-4) var(--cc-p-space-12);
+  flex: 1 1 240px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--cc-p-space-4) var(--cc-p-space-16);
+  margin: 0;
+}
+
+.facts dd {
+  margin: 0;
+}
+
+.linkButton {
+  padding: var(--cc-p-space-4) 0;
+  border: 0;
+  background: none;
+  color: var(--cc-text-link);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.linkButton:focus-visible,
+.control:focus-visible {
+  outline: var(--cc-focus-ring-width) solid var(--cc-focus-ring);
+  outline-offset: var(--cc-focus-ring-offset);
+}
+
+/* ---- form ---- */
+
+.form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--cc-p-space-12) var(--cc-p-space-16);
+  margin-top: var(--cc-p-space-12);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cc-p-space-4);
+  min-width: 0;
+}
+
+.fieldLabel {
+  color: var(--cc-text-secondary);
+}
+
+.control {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  padding: var(--cc-p-space-8) var(--cc-p-space-12);
+  border: var(--cc-border-width) solid var(--cc-border-interactive);
+  border-radius: var(--cc-p-radius-6);
+  background: var(--cc-background-surface);
+  color: var(--cc-text-primary);
+  font: inherit;
+}
+
+.actions {
+  grid-column: 1 / -1;
+}

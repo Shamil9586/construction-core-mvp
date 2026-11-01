@@ -191,4 +191,10 @@ export const canCreateObject = (role: string): boolean => role === 'DEPUTY_DIREC
  */
 export const canViewCompanyStructure = (role: string): boolean =>
   role === 'GENERAL_DIRECTOR' || role === 'DEPUTY_DIRECTOR' || role === 'ADMIN' || role === 'PTO_HEAD' || role === 'CONSTRUCTION_CONTROL_HEAD' || role === 'SDO_HEAD';
-export const canManageCompanyStructure = (role: string): boolean => role === 'DEPUTY_DIRECTOR' || role === 'ADMIN';
+/**
+ * GPR-2 R05 S2 — «Зоны объекта». Presentation gate ONLY (owner decision D2): the entry and the screen are offered to PROJECT_MANAGER alone.
+ * It grants nothing; the backend's current-role and object-ownership checks stay authoritative for every read and write. ADMIN is
+ * deliberately not included — no implicit privilege expansion.
+ */
+export const canViewAreaScopes = (role: string): boolean => role === 'PROJECT_MANAGER';
+export const canManageCompanyStructure =(role: string): boolean => role === 'DEPUTY_DIRECTOR' || role === 'ADMIN';

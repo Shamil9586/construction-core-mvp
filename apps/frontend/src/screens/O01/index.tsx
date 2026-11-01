@@ -47,6 +47,8 @@ export interface O01Props {
    * without documentation access.
    */
   onOpenRegistry?: () => void;
+  /** GPR-2 R05 S2 — navigation only: a link to this object's «Зоны объекта». Omitted for every role but the project manager. */
+  onOpenAreas?: () => void;
   onNavigateHome: () => void;
   onSelectWork: (workId: string) => void;
   className?: string;
@@ -65,6 +67,7 @@ export function ObjectOverview({
   schedule,
   onOpenSchedule,
   onOpenRegistry,
+  onOpenAreas,
   onNavigateHome,
   onSelectWork,
   className,
@@ -150,6 +153,17 @@ export function ObjectOverview({
           </button>
           <span className={[styles.cardNote, typeClass('label')].join(' ')}>
             Документальная готовность по всем пакетам исполнительной документации объекта.
+          </span>
+        </section>
+      ) : null}
+
+      {onOpenAreas ? (
+        <section className={styles.section} aria-label="Зоны объекта">
+          <button type="button" className={styles.registryLink} onClick={onOpenAreas}>
+            Зоны объекта
+          </button>
+          <span className={[styles.cardNote, typeClass('label')].join(' ')}>
+            Дерево корпусов, этажей и помещений объекта для отделочных работ.
           </span>
         </section>
       ) : null}

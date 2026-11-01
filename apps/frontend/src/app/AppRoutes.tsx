@@ -6,6 +6,7 @@ import { ObjectRoute } from './routes/ObjectRoute';
 import { WorkRoute } from './routes/WorkRoute';
 import { ScheduleRoute } from './routes/ScheduleRoute';
 import { DocumentationRegistryRoute } from './routes/DocumentationRegistryRoute';
+import { AreaScopeRoute } from './routes/AreaScopeRoute';
 import { PtoRoute } from './routes/PtoRoute';
 import { PackageDetailRoute } from './routes/PackageDetailRoute';
 import { SdoRoute } from './routes/SdoRoute';
@@ -62,6 +63,7 @@ export function AppRoutes() {
       <Route path={ROUTE_PATHS.work} element={<WorkRoute />} />
       <Route path={ROUTE_PATHS.schedule} element={<ScheduleRoute />} />
       <Route path={ROUTE_PATHS.documentationRegistry} element={<DocumentationRegistryRoute />} />
+      <Route path={ROUTE_PATHS.areaScopes} element={<AreaScopeRoute />} />
       <Route path={ROUTE_PATHS.pto} element={<PtoRoute />} />
       <Route path={ROUTE_PATHS.package} element={<PackageDetailRoute />} />
       <Route path={ROUTE_PATHS.sdo} element={<SdoRoute />} />
