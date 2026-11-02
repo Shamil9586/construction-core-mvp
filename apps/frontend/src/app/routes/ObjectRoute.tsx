@@ -3,14 +3,14 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { ObjectOverview } from '../../screens/O01';
 import type { PtoTeamLoad } from '../../screens/O01/PtoTeamSection';
 import { useCoreRuntime } from '../CoreRuntimeContext';
-import { canManageDocumentation, canViewAreaScopes, canViewObjectPtoTeam } from '../../auth/internalRoles';
+import { canManageDocumentation, canViewAreaScopes, canViewFinishSystems, canViewObjectPtoTeam } from '../../auth/internalRoles';
 import { getObjectPtoTeam } from '../../data/functionTeamsApi';
 import { buildO01ViewModel } from '../../view-models/o01';
 import { buildO01ScheduleView } from '../../view-models/schedule';
 import { useSnapshot } from '../../data/SnapshotContext';
 import { useObjectSchedule } from '../useSchedule';
 import { AppSidebar } from '../AppSidebar';
-import { ROUTE_PATHS, areaScopesPath, documentationRegistryPath, schedulePath, workPath } from '../routePaths';
+import { ROUTE_PATHS, areaScopesPath, documentationRegistryPath, finishSystemsPath, schedulePath, workPath } from '../routePaths';
 import { RouteError, RouteLoading, RouteNotFound } from '../RouteStatus';
 
 /**
@@ -59,6 +59,7 @@ export function ObjectRoute() {
       onOpenSchedule={() => navigate(schedulePath(object.id))}
       onOpenRegistry={role !== undefined && canManageDocumentation(role) ? () => navigate(documentationRegistryPath(object.id)) : undefined}
       onOpenAreas={role !== undefined && canViewAreaScopes(role) ? () => navigate(areaScopesPath(object.id)) : undefined}
+      onOpenFinishSystems={role !== undefined && canViewFinishSystems(role) ? () => navigate(finishSystemsPath(object.id)) : undefined}
       onNavigateHome={() => navigate(ROUTE_PATHS.company)}
       onSelectWork={(workId) => navigate(workPath(object.id, workId))}
     />

@@ -19,6 +19,7 @@ export const ROUTE_PATHS = {
   documentationRegistry: '/object/:objectId/documentation',
   /** GPR-2 R05 S2 — «Зоны объекта»: the AreaScope tree of ONE object (project manager only; presentation gate). */
   areaScopes: '/object/:objectId/finish/areas',
+  finishSystems: '/object/:objectId/finish/systems',
   /** F8.2 — P01, PTO Workspace: a separate top-level destination, not part of the object drill-down chain. */
   pto: '/pto',
   /** F8.2.1 — Documentation Package detail: reachable from both P01 and W01 (Decision 1, one shared destination). */
@@ -67,6 +68,10 @@ export function documentationRegistryPath(objectId: string): string {
 
 export function areaScopesPath(objectId: string): string {
   return `/object/${encodeURIComponent(objectId)}/finish/areas`;
+}
+
+export function finishSystemsPath(objectId: string): string {
+  return `/object/${encodeURIComponent(objectId)}/finish/systems`;
 }
 
 export function sdoPath(): string {
