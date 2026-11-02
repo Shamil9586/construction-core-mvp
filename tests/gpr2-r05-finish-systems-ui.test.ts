@@ -2,8 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { listFinishSystems } from '../apps/frontend/src/data/finishSystemApi';
+import { listFinishSystems, listFinishWorkTypes, upsertFinishSystem } from '../apps/frontend/src/data/finishSystemApi';
 import { StageProvenance, VersionExclusions } from '../apps/frontend/src/screens/FinishSystems/Provenance';
+import { localSystemPayload } from '../apps/frontend/src/screens/FinishSystems/createSystemPayload';
 import type { FinishSystemStage } from '../apps/frontend/src/types/finishSystem';
 
 const page = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
@@ -55,4 +56,34 @@ test('finish systems error preserves unavailable status', async () => {
   globalThis.fetch = (async () => page({ message: 'forbidden' }, 403)) as typeof fetch;
   try { await assert.rejects(() => listFinishSystems('object-1'), (error: any) => error.status === 403); }
   finally { globalThis.fetch = original; }
+});
+
+test('selected-object WorkTypes follow every page and fail closed for an incomplete catalogue', async () => {
+  const original=globalThis.fetch;const calls:string[]=[];
+  globalThis.fetch=(async(input:RequestInfo|URL)=>{calls.push(String(input));return page(calls.length===1?
+    {items:[{id:'wt-1',name:'Штукатурка',unit:'м²',scope:'CORPORATE',isActive:true}],nextCursor:'second'}:
+    {items:[{id:'wt-2',name:'Покраска',unit:'м²',scope:'OBJECT',isActive:true}],nextCursor:null})}) as typeof fetch;
+  try{
+    assert.deepEqual((await listFinishWorkTypes('object /1')).map(x=>x.id),['wt-1','wt-2']);
+    assert.ok(calls.every(x=>x.includes('/objects/object%20%2F1/work-types?')));
+    assert.match(calls[1]!,/cursor=second/);
+  }finally{globalThis.fetch=original}
+  globalThis.fetch=(async()=>page({items:[]})) as typeof fetch;
+  try{await assert.rejects(()=>listFinishWorkTypes('object-1'))}finally{globalThis.fetch=original}
+});
+
+test('local S3 form builds contract payload with WorkType unit and publishes with one idempotency key',async()=>{
+  const type={id:'wt-1',name:'Штукатурка',scope:'CORPORATE' as const,unit:'м²',isActive:true};
+  const draft=[{key:'row-1',occurrenceKey:'FINISH-1',workTypeId:type.id,required:true,measureScope:'LOCAL' as const,proposedHoldHours:'2,5'}];
+  const payload=localSystemPayload('','TYPE-1','Отделка',draft,[type]);
+  assert.deepEqual(payload,{finishType:{code:'TYPE-1',name:'Отделка'},stages:[{occurrenceKey:'FINISH-1',position:1,workTypeId:'wt-1',required:true,measureScope:'LOCAL',measureUnit:'м²',proposedHoldHours:'2.5'}]});
+  assert.deepEqual(localSystemPayload('system-1','','',draft,[type]),{finishTypeId:'system-1',stages:payload.stages});
+  assert.throws(()=>localSystemPayload('','TYPE-1','Отделка',[{...draft[0]!,workTypeId:'other'}],[type]),/Выберите вид работы/);
+  const original=globalThis.fetch;let request:RequestInit|undefined;let url='';
+  globalThis.fetch=(async(input:RequestInfo|URL,init?:RequestInit)=>{url=String(input);request=init;return page({affectedIds:['system-1'],version:'1'})}) as typeof fetch;
+  try{await upsertFinishSystem('object /1',payload,'fixed-key')}
+  finally{globalThis.fetch=original}
+  assert.equal(url,'/api/v2/objects/object%20%2F1/finish-systems');assert.equal(request?.method,'POST');
+  assert.equal((request?.headers as Record<string,string>)['Idempotency-Key'],'fixed-key');
+  assert.deepEqual(JSON.parse(String(request?.body)),payload);
 });
