@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { confirmFinishGeneration, previewFinishGeneration } from '../apps/frontend/src/data/finishGenerationApi';
 import { generationSelection } from '../apps/frontend/src/screens/FinishSystems/generationSelection';
+import { GeneratedWorks, PreviewObligations } from '../apps/frontend/src/screens/FinishSystems/GenerationEvidence';
 import type { FinishSystemRead } from '../apps/frontend/src/types/finishSystem';
 import type { AreaScopeRead } from '../apps/frontend/src/types/areaScope';
 import type { GenerationPreviewResponse } from '../apps/frontend/src/types/finishGeneration';
@@ -64,4 +67,22 @@ test('S4 rejects incomplete preview instead of enabling confirm', async () => {
     await assert.rejects(() => previewFinishGeneration('object-1', system.id, system.version,
       generationSelection(system, ['area-1'], [], {}, 'PER_OCCURRENCE', areas)), /Неверный ответ сервера/);
   } finally { globalThis.fetch = original; }
+});
+
+test('S4 review exposes each obligation state and created Work navigation', () => {
+  const items = [
+    { occurrenceKey: 'A', areaScopeId: 'zone-1', status: 'PROPOSED' as const, quantity: '2', unit: 'м²' },
+    { occurrenceKey: 'B', areaScopeId: 'zone-2', status: 'EXISTING' as const, quantity: '3', unit: 'м²' },
+    { occurrenceKey: 'C', areaScopeId: 'zone-3', status: 'BLOCKED' as const, quantity: null, unit: 'м²' },
+  ];
+  const html = renderToStaticMarkup(React.createElement(PreviewObligations, { items }));
+  for (const label of ['Будет создана', 'Уже существует', 'Заблокирована', 'zone-1', 'zone-2', 'zone-3'])
+    assert.ok(html.includes(label), label);
+  const works = renderToStaticMarkup(React.createElement(GeneratedWorks, {
+    result: { resultIds: ['work-1', 'work-2'], appliedVersions: { aggregate: '7', scope: '13' }, warnings: [] },
+    onOpenWork: () => {},
+  }));
+  assert.match(works, /Создано работ: 2/);
+  assert.match(works, /Открыть работу work-1/);
+  assert.match(works, /Открыть работу work-2/);
 });

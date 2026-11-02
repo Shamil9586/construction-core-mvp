@@ -7,6 +7,7 @@ import type { FinishSystemRead } from '../../types/finishSystem';
 import type { GenerationConfirmResult, GenerationPreviewResponse, GenerationSelection } from '../../types/finishGeneration';
 import { describeApiError } from '../../view-models/areaScope';
 import { generationSelection } from './generationSelection';
+import { GeneratedWorks, PreviewObligations } from './GenerationEvidence';
 import styles from './FinishSystems.module.css';
 
 type Areas={status:'Loading'}|{status:'Ready';items:AreaScopeRead[]}|{status:'Error';message:string};
@@ -23,7 +24,7 @@ function errorText(e:unknown):string{
 }
 const qkey=(stage:string,area:string)=>`${stage}|${area}`;
 
-export function GenerationPanel({objectId,system,areas,onGenerated}:{objectId:string;system:FinishSystemRead;areas:Areas;onGenerated:()=>void}){
+export function GenerationPanel({objectId,system,areas,onGenerated,onOpenWork,recentResult}:{objectId:string;system:FinishSystemRead;areas:Areas;onGenerated:(result:GenerationConfirmResult)=>void;onOpenWork:(workId:string)=>void;recentResult:GenerationConfirmResult|null}){
   const id=useId();const [selected,setSelected]=useState<string[]>([]);const [optional,setOptional]=useState<string[]>([]);
   const [quantities,setQuantities]=useState<Record<string,string>>({});const [grouping,setGrouping]=useState<'PER_OCCURRENCE'|'PER_AREA'>('PER_OCCURRENCE');
   const [review,setReview]=useState<Review>({status:'Idle'});const [commit,setCommit]=useState<Commit>({status:'Idle'});
@@ -56,7 +57,7 @@ export function GenerationPanel({objectId,system,areas,onGenerated}:{objectId:st
     if(!retry.current||retry.current.fingerprint!==fingerprint)retry.current={fingerprint,key:newIdempotencyKey()};
     const current=generation.current;inFlight.current=true;setCommit({status:'Loading'});
     try{const result=await confirmFinishGeneration(objectId,system.id,system.version,selection,data,retry.current.key);
-      if(current===generation.current){retry.current=null;setCommit({status:'Saved',result});onGenerated()}}
+      if(current===generation.current){retry.current=null;setCommit({status:'Saved',result});onGenerated(result)}}
     catch(error){
       if(current===generation.current){
         if(error instanceof AreaScopeApiError&&[409,422].includes(error.status)){retry.current=null;setReview({status:'Error',message:`${errorText(error)} Обновите предварительный расчёт.`});setCommit({status:'Idle'})}
@@ -70,6 +71,7 @@ export function GenerationPanel({objectId,system,areas,onGenerated}:{objectId:st
     {areas.status==='Loading'?<p aria-live="polite">Загрузка зон объекта…</p>:null}
     {areas.status==='Error'?<p role="alert" className={styles.alert}>Зоны объекта недоступны: {areas.message}</p>:null}
     {areas.status==='Ready'&&active.length===0?<p role="status">Нет действующих зон для генерации.</p>:null}
+    {recentResult?<GeneratedWorks result={recentResult} onOpenWork={onOpenWork}/>:null}
     <form onSubmit={preview} className={styles.generationForm}>
       <fieldset disabled={busy||areas.status!=='Ready'}><legend>Зоны объекта</legend>
         <div className={styles.choiceList}>{active.map(a=><label key={a.id}><input type="checkbox" checked={selected.includes(a.id)} onChange={()=>toggle(a.id,selected,setSelected)}/> {a.code} · {a.name} ({a.measureQuantity&&a.measureUnit?`${a.measureQuantity} ${a.measureUnit}`:'объём не задан'})</label>)}</div>
@@ -93,6 +95,7 @@ export function GenerationPanel({objectId,system,areas,onGenerated}:{objectId:st
     {review.status==='Ready'?<div className={styles.preview} aria-live="polite">
       <h4>Предварительный расчёт</h4>
       <p>Новых работ: {review.data.preview.proposedWorks.length}; существующих связей: {review.data.preview.existingWorks.length}; препятствий: {review.data.preview.blockers.length}.</p>
+      <PreviewObligations items={review.data.preview.items}/>
       {review.data.preview.proposedWorks.length>0?<ul>{review.data.preview.proposedWorks.map((w,i)=><li key={w.key||i}>{w.name} — {w.quantity} {w.unit}</li>)}</ul>:null}
       {review.data.preview.existingWorks.length>0?<details><summary>Существующие работы</summary><ul>{review.data.preview.existingWorks.map((w,i)=><li key={w.workId+'-'+w.areaScopeId+'-'+i}>{w.name} · зона {w.areaScopeId}: {w.quantity} {w.unit} (вся работа {w.workPlannedQuantity} {w.unit})</li>)}</ul></details>:null}
       {review.data.preview.missingInputs.length>0?<div role="status"><strong>Недостающие данные</strong><ul>{review.data.preview.missingInputs.map((x,i)=><li key={i}>{x.kind} · {x.occurrenceKey} · {x.areaScopeId??'—'}{x.quantity?` · ${x.quantity} ${x.unit??''}`:''}</li>)}</ul></div>:null}
@@ -100,7 +103,7 @@ export function GenerationPanel({objectId,system,areas,onGenerated}:{objectId:st
       {review.data.preview.warnings.length>0?<div role="status"><strong>Предупреждения</strong><ul>{review.data.preview.warnings.map((x,i)=><li key={i}>{x.code}{x.path?` · ${x.path}`:''}</li>)}</ul></div>:null}
       {review.data.preview.canConfirm&&commit.status!=='Saved'?<Button type="button" loading={commit.status==='Loading'} disabled={busy} onClick={confirm}>Создать работы по этому расчёту</Button>:null}
       {commit.status==='Error'?<p role="alert" className={styles.alert}>{commit.message} Повторная отправка сохраняет тот же ключ.</p>:null}
-      {commit.status==='Saved'?<p role="status">Создано работ: {commit.result.resultIds.length}. Идентификаторы: {commit.result.resultIds.join(', ')||'новых работ нет'}.</p>:null}
+      {commit.status==='Saved'&&!recentResult?<GeneratedWorks result={commit.result} onOpenWork={onOpenWork}/>:null}
     </div>:null}
   </section>;
 }
