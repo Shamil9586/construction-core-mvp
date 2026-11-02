@@ -1,0 +1,164 @@
+{
+  "$comment": "R05 D5 pilot registration only. The candidate is PR #21's exact test-only head; this profile does not authorize dispatch, merge, deployment or LIVE.",
+  "schema": "construction-core/gpr2-acceptance-profile@1",
+  "profile_id": "r05-s2-s3-s4-pilot",
+  "stage": "R05",
+  "title": "GPR-2 R05 S2→S3→S4 real-backend pilot and bounded regressions",
+  "status": "ACTIVE",
+  "baseline": {
+    "sha": "e054234c360c04bf9553c60e5fd21b528b7d4d46",
+    "tree": "5668ad96c9fe5f6f57a7fea0e74929cb2d7b65cc",
+    "description": "Product main after PR #20 S4 source integration, before test-only PR #21"
+  },
+  "candidates": [
+    {
+      "sha": "8642cc3a8c9fea3173e6978b33654bb335997a6c",
+      "tree": "20edb153317a211ee509fd0395e3ad7e5c998003",
+      "lineage": [
+        {
+          "rev": "HEAD^",
+          "sha": "402bb745b92776b524d49867f0d1b79db738bfa8",
+          "tree": "a79eb12766798693ca574ca0f8ecc386dec45057"
+        },
+        {
+          "rev": "HEAD~2",
+          "sha": "e054234c360c04bf9553c60e5fd21b528b7d4d46",
+          "tree": "5668ad96c9fe5f6f57a7fea0e74929cb2d7b65cc"
+        }
+      ],
+      "diff_check_from": "e054234c360c04bf9553c60e5fd21b528b7d4d46",
+      "approval": "Owner 2026-11-02 authorized separate CI-only profile PR for independently source-reviewed test-only PR #21 head 8642cc3a; no merge or dispatch approval"
+    }
+  ],
+  "runtime": {
+    "runner": "ubuntu-24.04",
+    "node": "22.22.0",
+    "postgres_major": 16,
+    "job_timeout_minutes": 75,
+    "requires": ["postgres", "chromium"]
+  },
+  "checks": [
+    {
+      "id": "r05-real-backend-pilot",
+      "title": "S2→S3→S4 real Chromium, Nest, Vite and isolated native PostgreSQL pilot",
+      "class": "NATIVE_POSTGRESQL",
+      "kind": "node-test",
+      "mandatory": true,
+      "requires": ["postgres", "chromium"],
+      "allow_skip": false,
+      "fresh_database_per_file": true,
+      "file_timeout_seconds": 480,
+      "files": [
+        { "path": "tests/gpr2-r05-s2-s3-s4-pilot-pg.test.ts", "expect_tests": 1 }
+      ]
+    },
+    {
+      "id": "r05-native-pg",
+      "title": "R05 generation, independent corrective and read API on native PostgreSQL",
+      "class": "NATIVE_POSTGRESQL",
+      "kind": "node-test",
+      "mandatory": true,
+      "requires": ["postgres"],
+      "allow_skip": false,
+      "fresh_database_per_file": true,
+      "file_timeout_seconds": 480,
+      "files": [
+        { "path": "tests/gpr2-r05-native-pg.test.ts", "expect_tests": 1 },
+        { "path": "tests/gpr2-r05-ind3-native-pg.test.ts", "expect_tests": 1 },
+        { "path": "tests/gpr2-r05-read-native-pg.test.ts", "expect_tests": 1 }
+      ]
+    },
+    {
+      "id": "r02-r04-native-pg",
+      "title": "R02, R03a-d, R04 and CP-02 native PostgreSQL compatibility",
+      "class": "NATIVE_POSTGRESQL",
+      "kind": "node-test",
+      "mandatory": true,
+      "requires": ["postgres"],
+      "allow_skip": false,
+      "fresh_database_per_file": true,
+      "file_timeout_seconds": 480,
+      "files": [
+        { "path": "tests/gpr2-r02-fact-resolver-pg.test.ts", "expect_tests": 2 },
+        { "path": "tests/gpr2-r03a-snapshot-pg.test.ts", "expect_tests": 4 },
+        { "path": "tests/gpr2-r03b-coordination-pg.test.ts", "expect_tests": 8 },
+        { "path": "tests/gpr2-r03c-ledger-pg.test.ts", "expect_tests": 5 },
+        { "path": "tests/gpr2-r03d-migration-pg.test.ts", "expect_tests": 6 },
+        { "path": "tests/gpr2-r04-native-pg.test.ts", "expect_tests": 1 },
+        { "path": "tests/gpr2-r04-cp02-native-pg.test.ts", "expect_tests": 1 }
+      ]
+    },
+    {
+      "id": "r05-pglite-contract",
+      "title": "R05 generation and five read routes on real backend with in-memory PGlite",
+      "class": "PURE_PGLITE",
+      "kind": "node-test",
+      "mandatory": true,
+      "requires": [],
+      "allow_skip": false,
+      "fresh_database_per_file": false,
+      "file_timeout_seconds": 480,
+      "files": [
+        { "path": "tests/gpr2-r05d-generation.test.ts", "expect_tests": 11 },
+        { "path": "tests/gpr2-r05-read-api.test.ts", "expect_tests": 13 }
+      ]
+    },
+    {
+      "id": "r05-ui-source",
+      "title": "S3 and S4 frontend contract, pagination and preview mapping",
+      "class": "UNIT",
+      "kind": "node-test",
+      "mandatory": true,
+      "requires": [],
+      "allow_skip": false,
+      "fresh_database_per_file": false,
+      "file_timeout_seconds": 480,
+      "files": [
+        { "path": "tests/gpr2-r05-finish-systems-ui.test.ts", "expect_tests": 6 },
+        { "path": "tests/gpr2-r05-generation-ui.test.ts", "expect_tests": 4 }
+      ]
+    },
+    {
+      "id": "r03d-pglite-migration",
+      "title": "R03d pure PGlite migration-runner compatibility",
+      "class": "PURE_PGLITE",
+      "kind": "node-test",
+      "mandatory": true,
+      "requires": [],
+      "allow_skip": false,
+      "fresh_database_per_file": false,
+      "file_timeout_seconds": 480,
+      "files": [
+        { "path": "tests/gpr2-r03d-migration-runner.test.ts", "expect_tests": 16 }
+      ]
+    },
+    {
+      "id": "gpr1-browser-regression",
+      "title": "GPR-1 and R04 W01 Chromium regression at 1440 and 390 px",
+      "class": "BROWSER_CHROMIUM",
+      "kind": "playwright",
+      "mandatory": true,
+      "requires": ["chromium"],
+      "allow_skip": false,
+      "config": "playwright.gpr-1.config.ts",
+      "expect_passed": 22,
+      "timeout_seconds": 2400
+    },
+    {
+      "id": "typecheck-build",
+      "title": "TypeScript type-check and production build",
+      "class": "TYPECHECK_BUILD",
+      "kind": "npm-script",
+      "mandatory": true,
+      "requires": [],
+      "script": "build",
+      "timeout_seconds": 1200
+    }
+  ],
+  "notes": [
+    "This registration is a technical test-only gate, not independent acceptance; the owner must separately authorize the exact hosted workflow_dispatch.",
+    "Pilot is one node-test requiring both PostgreSQL and Chromium because the existing playwright check runner scrubs database connection variables.",
+    "S2/S3 create and reload run at 1440 px; S4 positive preview/confirm/Work navigation run at 390 px. Full S2/S3 mobile creation remains NOT VERIFIED.",
+    "Corporate templates, S1/S5 management UI, LIVE, deployment and production PostgreSQL are outside D5 pilot scope."
+  ]
+}
