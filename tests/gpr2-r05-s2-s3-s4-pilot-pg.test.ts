@@ -108,12 +108,24 @@ test('S2 → S3 → S4 real-backend pilot and authorization/version/idempotency 
     await page.getByLabel('Единица (необязательно)').selectOption('м²');
     await page.getByRole('button', { name: 'Создать зону' }).click();
     await expect(page.getByRole('list', { name: 'Вложенные зоны: PILOT-ROOT' })).toContainText('Пилотная зона');
+    // A second unmeasured root provides a real BLOCKED obligation later.
+    await page.getByLabel('Родительская зона').selectOption('');
+    await page.getByLabel('Код', { exact: true }).fill('PILOT-EMPTY');
+    await page.getByLabel('Название', { exact: true }).fill('Пилот без объёма');
+    await page.getByLabel('Количество (необязательно)').fill('');
+    await page.getByLabel('Единица (необязательно)').selectOption('');
+    await page.getByRole('button', { name: 'Создать зону' }).click();
+    await expect(page.getByRole('list', { name: 'Зоны объекта' })).toContainText('Пилот без объёма');
     const areas = await as(pmToken, areaPath);
     assert.equal(areas.status, 200);
     const child = areas.data.items.find((a: any) => a.code === 'PILOT-CHILD');
     const root = areas.data.items.find((a: any) => a.code === 'PILOT-ROOT');
     assert.equal(child.parentId, root.id);
     assert.equal(child.measureQuantity, '10.0000');
+    await page.reload();
+    await expect(page.getByRole('list', { name: 'Зоны объекта' })).toContainText('Пилотный корпус');
+    await expect(page.getByRole('list', { name: 'Вложенные зоны: PILOT-ROOT' })).toContainText('Пилотная зона');
+    await expect(page.getByRole('list', { name: 'Зоны объекта' })).toContainText('Пилот без объёма');
 
     // S3: publish one object-local system with a required MAIN stage, no template.
     await page.goto(`${origin}app.html/object/${o}/finish/systems`);
@@ -135,12 +147,26 @@ test('S2 → S3 → S4 real-backend pilot and authorization/version/idempotency 
     assert.ok(system?.currentVersion?.id);
     assert.equal(system.currentVersion.stages[0].occurrenceKey, 'PLASTER');
     assert.equal(system.currentVersion.sourceTemplateVersionId ?? null, null);
+    await page.reload();
+    await expect(card).toContainText('Версия 1');
+    await expect(card.getByRole('heading', { name: 'Генерация работ · версия 1' })).toBeVisible();
+
+    // Continue the real positive pilot on the mobile viewport as well.
+    await page.setViewportSize({ width: 390, height: 844 });
 
     // S4: preview is no-write; confirm persists a Work and links to W01.
     const panel = card.getByRole('heading', { name: 'Генерация работ · версия 1' }).locator('..');
+    await panel.getByLabel(/PILOT-EMPTY/).check();
+    await panel.getByRole('button', { name: 'Предварительный расчёт' }).click();
+    await expect(panel.getByText(/Заблокирована/)).toBeVisible();
+    await expect(panel.getByRole('alert')).toContainText('Подтверждение заблокировано');
+    await expect(panel.getByRole('button', { name: 'Создать работы по этому расчёту' })).toHaveCount(0);
+    assert.equal(Number((await pool.query('SELECT count(*)::int AS n FROM works WHERE object_id=$1', [o])).rows[0].n), worksBefore);
+    await panel.getByLabel(/PILOT-EMPTY/).uncheck();
     await panel.getByLabel(/PILOT-CHILD/).check();
     await panel.getByRole('button', { name: 'Предварительный расчёт' }).click();
     await expect(panel.getByText(/Будет создана/)).toBeVisible();
+    await expect(panel.getByText('EARLY_WORK_UNASSIGNED')).toBeVisible();
     const previewRequest = requested.filter(r => r.path.endsWith('/preview')).at(-1);
     assert.ok(previewRequest?.body);
     const previewResponse = await as(pmToken, `${systemPath}/${system.id}/preview`, JSON.parse(previewRequest.body));
@@ -150,14 +176,38 @@ test('S2 → S3 → S4 real-backend pilot and authorization/version/idempotency 
     assert.equal(previewResponse.data.preview.items[0].status, 'PROPOSED');
     assert.equal(Number((await pool.query('SELECT count(*)::int AS n FROM works WHERE object_id=$1', [o])).rows[0].n), worksBefore);
 
-    // Invalid fingerprint is rejected before any write; no hidden retry or new Work.
+    // Three independent version/scope/fingerprint fences, each with no Work or
+    // producer binding write. A distinct key prevents a replay from masking one.
     const selection = JSON.parse(previewRequest.body).payload;
-    const stale = await as(pmToken, `${systemPath}/${system.id}/confirm`, {
+    const bindingCount = async () => Number((await pool.query('SELECT count(*)::int AS n FROM work_scope_bindings WHERE object_id=$1', [o])).rows[0].n);
+    const bindingsBefore = await bindingCount();
+    const noWrite = async (label: string) => {
+      assert.equal(Number((await pool.query('SELECT count(*)::int AS n FROM works WHERE object_id=$1', [o])).rows[0].n), worksBefore, `${label}: Works unchanged`);
+      assert.equal(await bindingCount(), bindingsBefore, `${label}: producer bindings unchanged`);
+    };
+    const validConfirm = {
       expectedVersion: system.version, expectedScopeVersion: previewResponse.data.preview.scopeVersion,
-      payload: { ...selection, previewFingerprint: '0'.repeat(64), expectedSourceVersions: { systemVersion: selection.systemVersionId } },
+      payload: { ...selection, previewFingerprint: previewResponse.data.preview.previewFingerprint,
+        expectedSourceVersions: { systemVersion: selection.systemVersionId } },
+    };
+    const staleVersion = await as(pmToken, `${systemPath}/${system.id}/confirm`, {
+      ...validConfirm, expectedVersion: String(BigInt(system.version) + 1n),
     }, randomUUID());
-    assert.ok([409, 422].includes(stale.status), `bad fingerprint must fail closed: ${stale.status}`);
-    assert.equal(Number((await pool.query('SELECT count(*)::int AS n FROM works WHERE object_id=$1', [o])).rows[0].n), worksBefore);
+    assert.equal(staleVersion.status, 409);
+    assert.equal(staleVersion.data.code, 'STALE_VERSION');
+    await noWrite('stale expectedVersion');
+    const staleScope = await as(pmToken, `${systemPath}/${system.id}/confirm`, {
+      ...validConfirm, expectedScopeVersion: String(BigInt(validConfirm.expectedScopeVersion) + 1n),
+    }, randomUUID());
+    assert.equal(staleScope.status, 409);
+    assert.equal(staleScope.data.code, 'SCOPE_VERSION_CHANGED');
+    await noWrite('stale expectedScopeVersion');
+    const stale = await as(pmToken, `${systemPath}/${system.id}/confirm`, {
+      ...validConfirm, payload: { ...validConfirm.payload, previewFingerprint: '0'.repeat(64) },
+    }, randomUUID());
+    assert.equal(stale.status, 409);
+    assert.equal(stale.data.code, 'STALE_PREVIEW');
+    await noWrite('invalid preview fingerprint');
 
     await panel.getByRole('button', { name: 'Создать работы по этому расчёту' }).click();
     await expect(panel.getByText('Создано работ: 1')).toBeVisible();
@@ -211,6 +261,7 @@ test('S2 → S3 → S4 real-backend pilot and authorization/version/idempotency 
       database: db.name, cluster: db.evidence, source: 'real Chromium → Vite → Nest → native PostgreSQL',
       objectId: o, otherObjectId: other.id, areaScopeIds: [root.id, child.id], finishSystemId: system.id,
       systemVersionId: system.currentVersion.id, workId, workCountBefore: worksBefore, workCountAfter: worksBefore + 1,
+      staleVersionStatus: staleVersion.status, staleScopeStatus: staleScope.status,
       staleFingerprintStatus: stale.status, deniedRoleStatus: deniedRole.status, deniedObjectStatus: deniedObject.status,
       requests: trace, productionCredentialsUsed: false,
     });
