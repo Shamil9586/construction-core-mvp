@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { createIsolatedDatabase, scrubConnectionEnvironment, Session, until, waitUntilBlocked, recordEvidence, settle, advisoryHolders } from './helpers/gpr2-native-pg';
+import { createIsolatedDatabase, isolatedAdminUrl, scrubConnectionEnvironment, Session, until, waitUntilBlocked, recordEvidence, settle, advisoryHolders } from './helpers/gpr2-native-pg';
 
 /**
  * GPR-2 R05 — the claims PGlite cannot carry, on NATIVE PostgreSQL (the isolated cluster `gpr2-p1-isolated`, a fresh `gpr2_p1_*` database; never LIVE,
@@ -211,9 +211,22 @@ test('R05 native PostgreSQL: upgrade, concurrent confirm, one-producer races, si
       evidence.rollback = { abortedLeftNothing: true, retryCleanFirstExecution: true };
     }
     assert.deepEqual(await advisoryHolders(observer.client, key), [], 'no coordination lock left held');
-    evidence.result = 'PASS';
+    evidence.result = 'ASSERTIONS_PASS_CLEANUP_PENDING';
   } finally {
-    recordEvidence('r05-native-summary', evidence);
-    await observer.close(); await pool.end(); await db.drop();
+    try {
+      await observer.close(); await pool.end();
+      // DROP ... FORCE concealed a surviving connection by terminating it,
+      // causing an uncaught pg error after all assertions. Prove teardown is
+      // quiet before dropping this helper-created database without FORCE.
+      assert.match(db.name, /^gpr2_p1_[a-z0-9_]+$/);
+      const admin = await Session.open(isolatedAdminUrl(), 'r05-cleanup');
+      try {
+        const connections = () => admin.query('SELECT pid, application_name FROM pg_stat_activity WHERE datname=$1 ORDER BY pid', [db.name]);
+        await until(async () => (await connections()).rows.length === 0, 'all R05 native test connections closed', 5000);
+        await admin.query(`DROP DATABASE ${db.name}`);
+        evidence.cleanup = { zeroSessionsBeforeDrop: true, dropWithoutForce: true };
+        if (evidence.result === 'ASSERTIONS_PASS_CLEANUP_PENDING') evidence.result = 'PASS';
+      } finally { await admin.close(); }
+    } finally { recordEvidence('r05-native-summary', evidence); }
   }
 });

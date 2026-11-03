@@ -91,6 +91,14 @@ test('S2 → S3 → S4 real-backend pilot and authorization/version/idempotency 
       const path = new URL(r.url()).pathname;
       if (path.startsWith('/api/v2/')) trace.push({ method: r.request().method(), path, status: r.status() });
     });
+    const expectCommandPost = async (path: string, label: string, click: () => Promise<void>) => {
+      const response = page!.waitForResponse(r => new URL(r.url()).pathname === path && r.request().method() === 'POST');
+      await click();
+      const result = await response;
+      // Keep the browser request unmodified. A contract mismatch is a pilot
+      // failure, with the backend's structured response visible in the log.
+      assert.equal(result.status(), 200, `${label} POST ${path}: ${JSON.stringify(await result.json())}`);
+    };
 
     // S2: create a measured root and a child through the actual object route.
     await page.goto(`${origin}app.html/object/${o}/finish/areas`);
@@ -99,14 +107,14 @@ test('S2 → S3 → S4 real-backend pilot and authorization/version/idempotency 
     await page.getByLabel('Название', { exact: true }).fill('Пилотный корпус');
     await page.getByLabel('Количество (необязательно)').fill('20');
     await page.getByLabel('Единица (необязательно)').selectOption('м²');
-    await page.getByRole('button', { name: 'Создать зону' }).click();
+    await expectCommandPost(areaPath, 'S2 root', () => page!.getByRole('button', { name: 'Создать зону' }).click());
     await expect(page.getByRole('list', { name: 'Зоны объекта' })).toContainText('Пилотный корпус');
     await page.getByRole('button', { name: 'Добавить зону внутрь: PILOT-ROOT Пилотный корпус' }).click();
     await page.getByLabel('Код', { exact: true }).fill('PILOT-CHILD');
     await page.getByLabel('Название', { exact: true }).fill('Пилотная зона');
     await page.getByLabel('Количество (необязательно)').fill('10');
     await page.getByLabel('Единица (необязательно)').selectOption('м²');
-    await page.getByRole('button', { name: 'Создать зону' }).click();
+    await expectCommandPost(areaPath, 'S2 child', () => page!.getByRole('button', { name: 'Создать зону' }).click());
     await expect(page.getByRole('list', { name: 'Вложенные зоны: PILOT-ROOT' })).toContainText('Пилотная зона');
     // A second unmeasured root provides a real BLOCKED obligation later.
     await page.getByLabel('Родительская зона').selectOption('');
@@ -114,7 +122,7 @@ test('S2 → S3 → S4 real-backend pilot and authorization/version/idempotency 
     await page.getByLabel('Название', { exact: true }).fill('Пилот без объёма');
     await page.getByLabel('Количество (необязательно)').fill('');
     await page.getByLabel('Единица (необязательно)').selectOption('');
-    await page.getByRole('button', { name: 'Создать зону' }).click();
+    await expectCommandPost(areaPath, 'S2 unmeasured root', () => page!.getByRole('button', { name: 'Создать зону' }).click());
     await expect(page.getByRole('list', { name: 'Зоны объекта' })).toContainText('Пилот без объёма');
     const areas = await as(pmToken, areaPath);
     assert.equal(areas.status, 200);
@@ -138,7 +146,7 @@ test('S2 → S3 → S4 real-backend pilot and authorization/version/idempotency 
     await page.getByLabel('Название', { exact: true }).fill('Пилотная отделка');
     await page.getByLabel('Ключ этапа').fill('PLASTER');
     await workType.selectOption(typeId);
-    await page.getByRole('button', { name: 'Опубликовать версию' }).click();
+    await expectCommandPost(systemPath, 'S3 publish', () => page!.getByRole('button', { name: 'Опубликовать версию' }).click());
     const card = page.locator('article').filter({ has: page.getByRole('heading', { name: 'Пилотная отделка' }) });
     await expect(card.getByRole('heading', { name: 'Генерация работ · версия 1' })).toBeVisible();
     const systems = await as(pmToken, systemPath);
