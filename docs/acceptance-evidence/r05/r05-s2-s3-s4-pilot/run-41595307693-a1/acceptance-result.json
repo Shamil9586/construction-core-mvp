@@ -1,0 +1,844 @@
+{
+  "schema": "construction-core/gpr2-acceptance-evidence@1",
+  "verdict_kind": "TECHNICAL_GATE_ONLY",
+  "stage": "R05",
+  "profile": {
+    "id": "r05-s2-s3-s4-pilot",
+    "sha256": "e5b99300ca89241a068bcace4a05201cacfd71b46da1c730150a7cec70c95e01",
+    "title": "GPR-2 R05 S2→S3→S4 real-backend pilot and bounded regressions",
+    "path": ".github/acceptance/profiles/r05-s2-s3-s4-pilot.json"
+  },
+  "git": {
+    "repository": "Shamil9586/construction-core-mvp",
+    "candidate_sha": "4e1f533eb924c229726e7110be5787141522fd88",
+    "candidate_tree": "db8578cfe35e90fe275e6ab6492631cc36d369c2",
+    "lineage": [
+      {
+        "rev": "HEAD^",
+        "sha": "f33d2b4ddbef7ce2e22e0bc447e85a58ceba0294",
+        "tree": "18dc64489b331aaaba010bb0611c18c2f64ecb16"
+      },
+      {
+        "rev": "HEAD~2",
+        "sha": "8642cc3a8c9fea3173e6978b33654bb335997a6c",
+        "tree": "20edb153317a211ee509fd0395e3ad7e5c998003"
+      }
+    ],
+    "baseline_sha": "e054234c360c04bf9553c60e5fd21b528b7d4d46",
+    "baseline_tree": "5668ad96c9fe5f6f57a7fea0e74929cb2d7b65cc",
+    "diff_check": "CLEAN",
+    "changed_files_from_baseline": 7
+  },
+  "github": {
+    "workflow_sha": "768543f51f8555fcf4d81a1da29eb7757e04d60b",
+    "workflow_ref": "Shamil9586/construction-core-mvp/.github/workflows/gpr2-acceptance.yml@refs/heads/main",
+    "run_id": "41595307693",
+    "run_attempt": "1",
+    "run_url": "https://github.com/Shamil9586/construction-core-mvp/actions/runs/41595307693/attempts/1",
+    "actor": "Shamil9586",
+    "triggering_actor": "Shamil9586",
+    "runtime_job_result": "success"
+  },
+  "environment": {
+    "os": {
+      "pretty_name": "Ubuntu 24.04.5 LTS",
+      "version_id": "24.04",
+      "kernel": "Linux 7.0.0-1017-azure x86_64",
+      "image_os": "ubuntu24",
+      "image_version": "20261026.354.1",
+      "runner_name": "GitHub Actions 1000000217",
+      "runner_environment": "github-hosted"
+    },
+    "node": "v22.22.0",
+    "npm": "10.9.4",
+    "git": "git version 2.56.0",
+    "psql_client": "psql (PostgreSQL) 16.15 (Ubuntu 16.15-1.pgdg24.04+2)",
+    "postgres_server": {
+      "status": "RUNNING_VERIFIED",
+      "cluster_name": "gpr2-p1-isolated",
+      "address": "127.0.0.1/32",
+      "port": 54329,
+      "database": "postgres",
+      "data_directory": "/var/tmp/gpr2-accept-41595307693-1/data",
+      "server_version": "16.15 (Ubuntu 16.15-1.pgdg24.04+2)",
+      "server_version_full": "PostgreSQL 16.15 (Ubuntu 16.15-1.pgdg24.04+2) on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit",
+      "major": 16,
+      "root": "/var/tmp/gpr2-accept-41595307693-1",
+      "loopback_only": true,
+      "postmaster_pid": 2992,
+      "postmaster_start_ticks": "4388",
+      "boot_id": "bf48a56e-0b1f-457a-a916-9d0b14f43b5b",
+      "postmaster_exe": "/usr/lib/postgresql/16/bin/postgres",
+      "postmaster_cwd": "/var/tmp/gpr2-accept-41595307693-1/data",
+      "postmaster_argv": [
+        "/usr/lib/postgresql/16/bin/postgres",
+        "-D",
+        "/var/tmp/gpr2-accept-41595307693-1/data",
+        "-c",
+        "cluster_name=gpr2-p1-isolated",
+        "-c",
+        "port=54329",
+        "-c",
+        "listen_addresses=127.0.0.1",
+        "-c",
+        "unix_socket_directories=/var/tmp/gpr2-accept-41595307693-1/socket",
+        "-c",
+        "timezone=UTC",
+        "-c",
+        "fsync=on"
+      ]
+    },
+    "playwright": "Version 1.63.0",
+    "chromium": {
+      "executable": "/home/runner/.cache/ms-playwright/chromium-1243/chrome-linux64/chrome",
+      "version": "Google Chrome for Testing 153.0.8010.12"
+    },
+    "package_lock_sha256": "fa6e1b6a8e25439976ee2217ea9df6d3cf98cee9f11274c1e42bfe989135784a",
+    "timezone": "UTC",
+    "test_import_loader": "tsx",
+    "provisioning": {
+      "dependencies": "success",
+      "postgres": "success",
+      "chromium": "success"
+    }
+  },
+  "result": {
+    "gate": "TECHNICAL_GATES_PASSED",
+    "gate_reasons": [],
+    "checks": [
+      {
+        "id": "r05-real-backend-pilot",
+        "title": "S2→S3→S4 real Chromium, Nest, Vite and isolated native PostgreSQL pilot",
+        "class": "NATIVE_POSTGRESQL",
+        "kind": "node-test",
+        "mandatory": true,
+        "status": "PASS",
+        "files": [
+          {
+            "path": "tests/gpr2-r05-s2-s3-s4-pilot-pg.test.ts",
+            "expected_tests": 1,
+            "exit_code": 0,
+            "seconds": 12,
+            "counts": {
+              "tests": 1,
+              "suites": 0,
+              "pass": 1,
+              "fail": 0,
+              "cancelled": 0,
+              "skipped": 0,
+              "todo": 0,
+              "duration_ms": 11904.698988
+            },
+            "log": "checks/r05-real-backend-pilot/logs/tests_gpr2-r05-s2-s3-s4-pilot-pg.test.ts.log",
+            "junit": "checks/r05-real-backend-pilot/junit/tests_gpr2-r05-s2-s3-s4-pilot-pg.test.ts.xml",
+            "status": "PASS",
+            "reasons": []
+          }
+        ],
+        "totals": {
+          "files": 1,
+          "expected_tests": 1,
+          "tests": 1,
+          "pass": 1,
+          "fail": 0,
+          "skipped": 0,
+          "cancelled": 0,
+          "todo": 0
+        },
+        "reasons": []
+      },
+      {
+        "id": "r05-native-pg",
+        "title": "R05 generation, independent corrective and read API on native PostgreSQL",
+        "class": "NATIVE_POSTGRESQL",
+        "kind": "node-test",
+        "mandatory": true,
+        "status": "PASS",
+        "files": [
+          {
+            "path": "tests/gpr2-r05-native-pg.test.ts",
+            "expected_tests": 1,
+            "exit_code": 0,
+            "seconds": 2,
+            "counts": {
+              "tests": 1,
+              "suites": 0,
+              "pass": 1,
+              "fail": 0,
+              "cancelled": 0,
+              "skipped": 0,
+              "todo": 0,
+              "duration_ms": 2199.815914
+            },
+            "log": "checks/r05-native-pg/logs/tests_gpr2-r05-native-pg.test.ts.log",
+            "junit": "checks/r05-native-pg/junit/tests_gpr2-r05-native-pg.test.ts.xml",
+            "status": "PASS",
+            "reasons": []
+          },
+          {
+            "path": "tests/gpr2-r05-ind3-native-pg.test.ts",
+            "expected_tests": 1,
+            "exit_code": 0,
+            "seconds": 2,
+            "counts": {
+              "tests": 1,
+              "suites": 0,
+              "pass": 1,
+              "fail": 0,
+              "cancelled": 0,
+              "skipped": 0,
+              "todo": 0,
+              "duration_ms": 1929.11857
+            },
+            "log": "checks/r05-native-pg/logs/tests_gpr2-r05-ind3-native-pg.test.ts.log",
+            "junit": "checks/r05-native-pg/junit/tests_gpr2-r05-ind3-native-pg.test.ts.xml",
+            "status": "PASS",
+            "reasons": []
+          },
+          {
+            "path": "tests/gpr2-r05-read-native-pg.test.ts",
+            "expected_tests": 1,
+            "exit_code": 0,
+            "seconds": 2,
+            "counts": {
+              "tests": 1,
+              "suites": 0,
+              "pass": 1,
+              "fail": 0,
+              "cancelled": 0,
+              "skipped": 0,
+              "todo": 0,
+              "duration_ms": 2086.229251
+            },
+            "log": "checks/r05-native-pg/logs/tests_gpr2-r05-read-native-pg.test.ts.log",
+            "junit": "checks/r05-native-pg/junit/tests_gpr2-r05-read-native-pg.test.ts.xml",
+            "status": "PASS",
+            "reasons": []
+          }
+        ],
+        "totals": {
+          "files": 3,
+          "expected_tests": 3,
+          "tests": 3,
+          "pass": 3,
+          "fail": 0,
+          "skipped": 0,
+          "cancelled": 0,
+          "todo": 0
+        },
+        "reasons": []
+      },
+      {
+        "id": "r02-r04-native-pg",
+        "title": "R02, R03a-d, R04 and CP-02 native PostgreSQL compatibility",
+        "class": "NATIVE_POSTGRESQL",
+        "kind": "node-test",
+        "mandatory": true,
+        "status": "PASS",
+        "files": [
+          {
+            "path": "tests/gpr2-r02-fact-resolver-pg.test.ts",
+            "expected_tests": 2,
+            "exit_code": 0,
+            "seconds": 2,
+            "counts": {
+              "tests": 2,
+              "suites": 0,
+              "pass": 2,
+              "fail": 0,
+              "cancelled": 0,
+              "skipped": 0,
+              "todo": 0,
+              "duration_ms": 1608.224115
+            },
+            "log": "checks/r02-r04-native-pg/logs/tests_gpr2-r02-fact-resolver-pg.test.ts.log",
+            "junit": "checks/r02-r04-native-pg/junit/tests_gpr2-r02-fact-resolver-pg.test.ts.xml",
+            "status": "PASS",
+            "reasons": []
+          },
+          {
+            "path": "tests/gpr2-r03a-snapshot-pg.test.ts",
+            "expected_tests": 4,
+            "exit_code": 0,
+            "seconds": 1,
+            "counts": {
+              "tests": 4,
+              "suites": 0,
+              "pass": 4,
+              "fail": 0,
+              "cancelled": 0,
+              "skipped": 0,
+              "todo": 0,
+              "duration_ms": 498.179715
+            },
+            "log": "checks/r02-r04-native-pg/logs/tests_gpr2-r03a-snapshot-pg.test.ts.log",
+            "junit": "checks/r02-r04-native-pg/junit/tests_gpr2-r03a-snapshot-pg.test.ts.xml",
+            "status": "PASS",
+            "reasons": []
+          },
+          {
+            "path": "tests/gpr2-r03b-coordination-pg.test.ts",
+            "expected_tests": 8,
+            "exit_code": 0,
+            "seconds": 5,
+            "counts": {
+              "tests": 8,
+              "suites": 0,
+              "pass": 8,
+              "fail": 0,
+              "cancelled": 0,
+              "skipped": 0,
+              "todo": 0,
+              "duration_ms": 4499.38981
+            },
+            "log": "checks/r02-r04-native-pg/logs/tests_gpr2-r03b-coordination-pg.test.ts.log",
+            "junit": "checks/r02-r04-native-pg/junit/tests_gpr2-r03b-coordination-pg.test.ts.xml",
+            "status": "PASS",
+            "reasons": []
+          },
+          {
+            "path": "tests/gpr2-r03c-ledger-pg.test.ts",
+            "expected_tests": 5,
+            "exit_code": 0,
+            "seconds": 4,
+            "counts": {
+              "tests": 5,
+              "suites": 0,
+              "pass": 5,
+              "fail": 0,
+              "cancelled": 0,
+              "skipped": 0,
+              "todo": 0,
+              "duration_ms": 4398.617686
+            },
+            "log": "checks/r02-r04-native-pg/logs/tests_gpr2-r03c-ledger-pg.test.ts.log",
+            "junit": "checks/r02-r04-native-pg/junit/tests_gpr2-r03c-ledger-pg.test.ts.xml",
+            "status": "PASS",
+            "reasons": []
+          },
+          {
+            "path": "tests/gpr2-r03d-migration-pg.test.ts",
+            "expected_tests": 6,
+            "exit_code": 0,
+            "seconds": 3,
+            "counts": {
+              "tests": 6,
+              "suites": 0,
+              "pass": 6,
+              "fail": 0,
+              "cancelled": 0,
+              "skipped": 0,
+              "todo": 0,
+              "duration_ms": 3137.690595
+            },
+            "log": "checks/r02-r04-native-pg/logs/tests_gpr2-r03d-migration-pg.test.ts.log",
+            "junit": "checks/r02-r04-native-pg/junit/tests_gpr2-r03d-migration-pg.test.ts.xml",
+            "status": "PASS",
+            "reasons": []
+          },
+          {
+            "path": "tests/gpr2-r04-native-pg.test.ts",
+            "expected_tests": 1,
+            "exit_code": 0,
+            "seconds": 2,
+            "counts": {
+              "tests": 1,
+              "suites": 0,
+              "pass": 1,
+              "fail": 0,
+              "cancelled": 0,
+              "skipped": 0,
+              "todo": 0,
+              "duration_ms": 1567.55415
+            },
+            "log": "checks/r02-r04-native-pg/logs/tests_gpr2-r04-native-pg.test.ts.log",
+            "junit": "checks/r02-r04-native-pg/junit/tests_gpr2-r04-native-pg.test.ts.xml",
+            "status": "PASS",
+            "reasons": []
+          },
+          {
+            "path": "tests/gpr2-r04-cp02-native-pg.test.ts",
+            "expected_tests": 1,
+            "exit_code": 0,
+            "seconds": 2,
+            "counts": {
+              "tests": 1,
+              "suites": 0,
+              "pass": 1,
+              "fail": 0,
+              "cancelled": 0,
+              "skipped": 0,
+              "todo": 0,
+              "duration_ms": 1971.521619
+            },
+            "log": "checks/r02-r04-native-pg/logs/tests_gpr2-r04-cp02-native-pg.test.ts.log",
+            "junit": "checks/r02-r04-native-pg/junit/tests_gpr2-r04-cp02-native-pg.test.ts.xml",
+            "status": "PASS",
+            "reasons": []
+          }
+        ],
+        "totals": {
+          "files": 7,
+          "expected_tests": 27,
+          "tests": 27,
+          "pass": 27,
+          "fail": 0,
+          "skipped": 0,
+          "cancelled": 0,
+          "todo": 0
+        },
+        "reasons": []
+      },
+      {
+        "id": "r05-pglite-contract",
+        "title": "R05 generation and five read routes on real backend with in-memory PGlite",
+        "class": "PURE_PGLITE",
+        "kind": "node-test",
+        "mandatory": true,
+        "status": "PASS",
+        "files": [
+          {
+            "path": "tests/gpr2-r05d-generation.test.ts",
+            "expected_tests": 11,
+            "exit_code": 0,
+            "seconds": 17,
+            "counts": {
+              "tests": 11,
+              "suites": 0,
+              "pass": 11,
+              "fail": 0,
+              "cancelled": 0,
+              "skipped": 0,
+              "todo": 0,
+              "duration_ms": 16764.335717
+            },
+            "log": "checks/r05-pglite-contract/logs/tests_gpr2-r05d-generation.test.ts.log",
+            "junit": "checks/r05-pglite-contract/junit/tests_gpr2-r05d-generation.test.ts.xml",
+            "status": "PASS",
+            "reasons": []
+          },
+          {
+            "path": "tests/gpr2-r05-read-api.test.ts",
+            "expected_tests": 13,
+            "exit_code": 0,
+            "seconds": 16,
+            "counts": {
+              "tests": 13,
+              "suites": 0,
+              "pass": 13,
+              "fail": 0,
+              "cancelled": 0,
+              "skipped": 0,
+              "todo": 0,
+              "duration_ms": 15638.901805
+            },
+            "log": "checks/r05-pglite-contract/logs/tests_gpr2-r05-read-api.test.ts.log",
+            "junit": "checks/r05-pglite-contract/junit/tests_gpr2-r05-read-api.test.ts.xml",
+            "status": "PASS",
+            "reasons": []
+          }
+        ],
+        "totals": {
+          "files": 2,
+          "expected_tests": 24,
+          "tests": 24,
+          "pass": 24,
+          "fail": 0,
+          "skipped": 0,
+          "cancelled": 0,
+          "todo": 0
+        },
+        "reasons": []
+      },
+      {
+        "id": "r05-ui-source",
+        "title": "S3 and S4 frontend contract, pagination and preview mapping",
+        "class": "UNIT",
+        "kind": "node-test",
+        "mandatory": true,
+        "status": "PASS",
+        "files": [
+          {
+            "path": "tests/gpr2-r05-finish-systems-ui.test.ts",
+            "expected_tests": 6,
+            "exit_code": 0,
+            "seconds": 0,
+            "counts": {
+              "tests": 6,
+              "suites": 0,
+              "pass": 6,
+              "fail": 0,
+              "cancelled": 0,
+              "skipped": 0,
+              "todo": 0,
+              "duration_ms": 370.469488
+            },
+            "log": "checks/r05-ui-source/logs/tests_gpr2-r05-finish-systems-ui.test.ts.log",
+            "junit": "checks/r05-ui-source/junit/tests_gpr2-r05-finish-systems-ui.test.ts.xml",
+            "status": "PASS",
+            "reasons": []
+          },
+          {
+            "path": "tests/gpr2-r05-generation-ui.test.ts",
+            "expected_tests": 4,
+            "exit_code": 0,
+            "seconds": 0,
+            "counts": {
+              "tests": 4,
+              "suites": 0,
+              "pass": 4,
+              "fail": 0,
+              "cancelled": 0,
+              "skipped": 0,
+              "todo": 0,
+              "duration_ms": 359.403928
+            },
+            "log": "checks/r05-ui-source/logs/tests_gpr2-r05-generation-ui.test.ts.log",
+            "junit": "checks/r05-ui-source/junit/tests_gpr2-r05-generation-ui.test.ts.xml",
+            "status": "PASS",
+            "reasons": []
+          }
+        ],
+        "totals": {
+          "files": 2,
+          "expected_tests": 10,
+          "tests": 10,
+          "pass": 10,
+          "fail": 0,
+          "skipped": 0,
+          "cancelled": 0,
+          "todo": 0
+        },
+        "reasons": []
+      },
+      {
+        "id": "r03d-pglite-migration",
+        "title": "R03d pure PGlite migration-runner compatibility",
+        "class": "PURE_PGLITE",
+        "kind": "node-test",
+        "mandatory": true,
+        "status": "PASS",
+        "files": [
+          {
+            "path": "tests/gpr2-r03d-migration-runner.test.ts",
+            "expected_tests": 16,
+            "exit_code": 0,
+            "seconds": 14,
+            "counts": {
+              "tests": 16,
+              "suites": 0,
+              "pass": 16,
+              "fail": 0,
+              "cancelled": 0,
+              "skipped": 0,
+              "todo": 0,
+              "duration_ms": 14005.991131
+            },
+            "log": "checks/r03d-pglite-migration/logs/tests_gpr2-r03d-migration-runner.test.ts.log",
+            "junit": "checks/r03d-pglite-migration/junit/tests_gpr2-r03d-migration-runner.test.ts.xml",
+            "status": "PASS",
+            "reasons": []
+          }
+        ],
+        "totals": {
+          "files": 1,
+          "expected_tests": 16,
+          "tests": 16,
+          "pass": 16,
+          "fail": 0,
+          "skipped": 0,
+          "cancelled": 0,
+          "todo": 0
+        },
+        "reasons": []
+      },
+      {
+        "id": "gpr1-browser-regression",
+        "title": "GPR-1 and R04 W01 Chromium regression at 1440 and 390 px",
+        "class": "BROWSER_CHROMIUM",
+        "kind": "playwright",
+        "mandatory": true,
+        "config": "playwright.gpr-1.config.ts",
+        "exit_code": 0,
+        "expected_passed": 22,
+        "counts": {
+          "expected": 22,
+          "unexpected": 0,
+          "flaky": 0,
+          "skipped": 0,
+          "total": 22
+        },
+        "tests": [
+          {
+            "title": "d01-work-status.spec.ts › O01: the GPR decides compliance against contradicting legacy statuses; physical state, blocker and GPR verdict are separate cells",
+            "project": "",
+            "status": "expected",
+            "outcome": [
+              "passed"
+            ]
+          },
+          {
+            "title": "d01-work-status.spec.ts › O01: no approved GPR → «График не утверждён» for every work, never «По графику» (legacy RED / GREEN ignored)",
+            "project": "",
+            "status": "expected",
+            "outcome": [
+              "passed"
+            ]
+          },
+          {
+            "title": "d01-work-status.spec.ts › O01: a schedule that is not offered (unavailable) makes no compliance claim and does not fall back to the legacy status",
+            "project": "",
+            "status": "expected",
+            "outcome": [
+              "passed"
+            ]
+          },
+          {
+            "title": "d01-work-status.spec.ts › W01: the header states only the physical state (and the blocker); the one schedule verdict is the GPR section's",
+            "project": "",
+            "status": "expected",
+            "outcome": [
+              "passed"
+            ]
+          },
+          {
+            "title": "d01-work-status.spec.ts › switching from one object straight to another never paints the first object's schedule verdicts on the second",
+            "project": "",
+            "status": "expected",
+            "outcome": [
+              "passed"
+            ]
+          },
+          {
+            "title": "integration-navigation.spec.ts › O01 and W01 show the schedule and the registry entry points side by side; both lead to their own screens",
+            "project": "",
+            "status": "expected",
+            "outcome": [
+              "passed"
+            ]
+          },
+          {
+            "title": "r04-cp01-legacy-gantt.spec.ts › R04 CP01 legacy Gantt lists Early Works without dates and keeps dated bars (1440px)",
+            "project": "",
+            "status": "expected",
+            "outcome": [
+              "passed"
+            ]
+          },
+          {
+            "title": "r04-cp01-legacy-gantt.spec.ts › R04 CP01 legacy Gantt lists Early Works without dates and keeps dated bars (390px)",
+            "project": "",
+            "status": "expected",
+            "outcome": [
+              "passed"
+            ]
+          },
+          {
+            "title": "r04-early-work.spec.ts › R04 Early Work W01 keeps unknown planning values and identity — object with an approved GPR (1440px)",
+            "project": "",
+            "status": "expected",
+            "outcome": [
+              "passed"
+            ]
+          },
+          {
+            "title": "r04-early-work.spec.ts › R04 Early Work W01 on an object without an approved GPR states «График не утверждён» (1440px)",
+            "project": "",
+            "status": "expected",
+            "outcome": [
+              "passed"
+            ]
+          },
+          {
+            "title": "r04-early-work.spec.ts › R04 Early Work W01 keeps unknown planning values and identity — object with an approved GPR (390px)",
+            "project": "",
+            "status": "expected",
+            "outcome": [
+              "passed"
+            ]
+          },
+          {
+            "title": "r04-early-work.spec.ts › R04 Early Work W01 on an object without an approved GPR states «График не утверждён» (390px)",
+            "project": "",
+            "status": "expected",
+            "outcome": [
+              "passed"
+            ]
+          },
+          {
+            "title": "schedule.spec.ts › O01 states the object's production conclusion from the schedule, names what is late and leads into the schedule",
+            "project": "",
+            "status": "expected",
+            "outcome": [
+              "passed"
+            ]
+          },
+          {
+            "title": "schedule.spec.ts › the schedule table: work, zone, executor, planned quantity, dates, actual progress, state, delay — read from the production model",
+            "project": "",
+            "status": "expected",
+            "outcome": [
+              "passed"
+            ]
+          },
+          {
+            "title": "schedule.spec.ts › W01: the work shows its own schedule summary and a clear path to the object's schedule — without duplicating the table",
+            "project": "",
+            "status": "expected",
+            "outcome": [
+              "passed"
+            ]
+          },
+          {
+            "title": "schedule.spec.ts › read-only roles see the schedule and nothing to change; a РП of another object does not even see this object",
+            "project": "",
+            "status": "expected",
+            "outcome": [
+              "passed"
+            ]
+          },
+          {
+            "title": "schedule.spec.ts › narrow screens: the schedule stays readable as labelled cards, no sideways page scroll",
+            "project": "",
+            "status": "expected",
+            "outcome": [
+              "passed"
+            ]
+          },
+          {
+            "title": "schedule.spec.ts › the РП records WHY the zone is late: category, comment, the contractor concerned — with who and when; O01 then names the cause",
+            "project": "",
+            "status": "expected",
+            "outcome": [
+              "passed"
+            ]
+          },
+          {
+            "title": "schedule.spec.ts › a correction: the РП prepares a draft, the approved dates keep measuring until the deputy approves with a reason; history keeps both versions",
+            "project": "",
+            "status": "expected",
+            "outcome": [
+              "passed"
+            ]
+          },
+          {
+            "title": "schedule.spec.ts › an explanation of a delay that has since been overcome can still be closed: the zone caught up, and the open reason is not stuck for good",
+            "project": "",
+            "status": "expected",
+            "outcome": [
+              "passed"
+            ]
+          },
+          {
+            "title": "schedule.spec.ts › W01 for a PTO engineer who holds only this work's handoff: the work's schedule summary, and no door into an object plan that is shut to them",
+            "project": "",
+            "status": "expected",
+            "outcome": [
+              "passed"
+            ]
+          },
+          {
+            "title": "schedule.spec.ts › stepping from one object straight to another never paints the first object's plan under the second: loading until the new schedule arrives",
+            "project": "",
+            "status": "expected",
+            "outcome": [
+              "passed"
+            ]
+          }
+        ],
+        "status": "PASS",
+        "reasons": []
+      },
+      {
+        "id": "typecheck-build",
+        "title": "TypeScript type-check and production build",
+        "class": "TYPECHECK_BUILD",
+        "kind": "npm-script",
+        "mandatory": true,
+        "script": "build",
+        "status": "PASS",
+        "reasons": [],
+        "exit_code": 0,
+        "seconds": 20,
+        "log": "checks/typecheck-build/npm-script.log"
+      },
+      {
+        "id": "postgres-cleanup",
+        "title": "Disposable PostgreSQL cluster stopped and removed (verified)",
+        "class": "INFRASTRUCTURE",
+        "mandatory": true,
+        "status": "PASS",
+        "cleanup_status": "STOPPED_VERIFIED",
+        "stop_mode": "fast",
+        "reasons": [
+          "verified postmaster pid 2992 was signalled directly (SIGINT) after its cwd, -D argument, binary and recorded start time matched /var/tmp/gpr2-accept-41595307693-1/data"
+        ]
+      }
+    ],
+    "by_class": {
+      "NATIVE_POSTGRESQL": {
+        "checks": 3,
+        "pass": 3,
+        "fail": 0,
+        "skip": 0,
+        "tests_pass": 31,
+        "tests_fail": 0,
+        "tests_skip": 0
+      },
+      "PURE_PGLITE": {
+        "checks": 2,
+        "pass": 2,
+        "fail": 0,
+        "skip": 0,
+        "tests_pass": 40,
+        "tests_fail": 0,
+        "tests_skip": 0
+      },
+      "UNIT": {
+        "checks": 1,
+        "pass": 1,
+        "fail": 0,
+        "skip": 0,
+        "tests_pass": 10,
+        "tests_fail": 0,
+        "tests_skip": 0
+      },
+      "BROWSER_CHROMIUM": {
+        "checks": 1,
+        "pass": 1,
+        "fail": 0,
+        "skip": 0,
+        "tests_pass": 22,
+        "tests_fail": 0,
+        "tests_skip": 0
+      },
+      "TYPECHECK_BUILD": {
+        "checks": 1,
+        "pass": 1,
+        "fail": 0,
+        "skip": 0,
+        "tests_pass": 0,
+        "tests_fail": 0,
+        "tests_skip": 0
+      },
+      "INFRASTRUCTURE": {
+        "checks": 1,
+        "pass": 1,
+        "fail": 0,
+        "skip": 0,
+        "tests_pass": 0,
+        "tests_fail": 0,
+        "tests_skip": 0
+      }
+    },
+    "check_status_counts": {
+      "PASS": 9,
+      "FAIL": 0,
+      "SKIP": 0,
+      "NOT RUN": 0,
+      "ENVIRONMENT BLOCKED": 0
+    }
+  },
+  "sealed_at": "2026-11-03T07:21:18.845Z",
+  "statement": "Technical gates only. Not an acceptance, not an integration decision; authorises no merge, deployment, migration or LIVE access."
+}
