@@ -23,7 +23,7 @@ async function setup(page:Page,role='PROJECT_MANAGER'){
     else if(u.pathname===`/api/v2/objects/${objectId}/finish-systems`&&request.method()==='GET')body={items:systems,nextCursor:null};
     else if(u.pathname===`/api/v2/objects/${objectId}/finish-systems`&&request.method()==='POST'){
       status=postStatus;
-      if(status===200){const p=JSON.parse(request.postData()??'{}');systems=[{id:'system-1',code:p.finishType?.code??'TYPE-1',name:p.finishType?.name??'Отделка',lifecycle:'ACTIVE',version:'1',versions:[],currentVersion:null}];body={resultIds:['system-1'],appliedVersions:{},warnings:[]}}
+      if(status===200){const p=JSON.parse(request.postData()??'{}').payload;systems=[{id:'system-1',code:p.finishType?.code??'TYPE-1',name:p.finishType?.name??'Отделка',lifecycle:'ACTIVE',version:'1',versions:[],currentVersion:null}];body={resultIds:['system-1'],appliedVersions:{},warnings:[]}}
       else body={code:'VALIDATION_FAILED',message:'Проверьте данные',requestId:'req-1'};
     }else if(/^\/api\/objects\/[^/]+\/schedule$/.test(u.pathname)){status=403;body={message:'forbidden'}}
     else{status=599;body={message:`unexpected ${request.method()} ${u.pathname}`}}
@@ -52,7 +52,7 @@ test('РП creates an object-local system with a stage, retries with the same ke
   await expect(page.getByRole('heading',{name:'Отделка'})).toBeVisible();
   expect(posts()).toHaveLength(2);
   expect(posts()[0]!.headers['idempotency-key']).toBe(posts()[1]!.headers['idempotency-key']);
-  expect(JSON.parse(posts()[1]!.body!)).toEqual({finishType:{code:'TYPE-1',name:'Отделка'},stages:[{occurrenceKey:'STAGE-1',position:1,workTypeId:workType.id,required:true,measureScope:'LOCAL',measureUnit:'м²'}]});
+  expect(JSON.parse(posts()[1]!.body!)).toEqual({payload:{finishType:{code:'TYPE-1',name:'Отделка'},stages:[{occurrenceKey:'STAGE-1',position:1,workTypeId:workType.id,required:true,measureScope:'LOCAL',measureUnit:'м²'}]}});
   expect(api.calls.filter(c=>c.path.startsWith('/api/v2/')).every(c=>c.path.startsWith(`/api/v2/objects/${objectId}/`))).toBe(true);
 });
 

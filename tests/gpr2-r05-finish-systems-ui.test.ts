@@ -85,5 +85,5 @@ test('local S3 form builds contract payload with WorkType unit and publishes wit
   finally{globalThis.fetch=original}
   assert.equal(url,'/api/v2/objects/object%20%2F1/finish-systems');assert.equal(request?.method,'POST');
   assert.equal((request?.headers as Record<string,string>)['Idempotency-Key'],'fixed-key');
-  assert.deepEqual(JSON.parse(String(request?.body)),payload);
+  assert.deepEqual(JSON.parse(String(request?.body)),{payload});
 });

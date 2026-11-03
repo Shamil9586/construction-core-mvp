@@ -149,7 +149,7 @@ test.describe('create', () => {
     const store = [area('seed', { code: 'К1', name: 'Корпус 1' })] as Array<Record<string, unknown>>;
     api.list = () => ({ status: 200, body: { items: store, nextCursor: null } });
     api.create = (call) => {
-      const payload = JSON.parse(call.body ?? '{}');
+      const payload = JSON.parse(call.body ?? '{}').payload;
       store.push(area(`n${store.length}`, { ...payload, parentId: payload.parentId ?? null, measureQuantity: payload.measureQuantity ?? null, measureUnit: payload.measureUnit ?? null }));
       return { status: 200, body: { resultIds: [`n${store.length}`], appliedVersions: {}, warnings: [] } };
     };
@@ -167,7 +167,7 @@ test.describe('create', () => {
     expect(posts).toHaveLength(1);
     expect(posts[0]!.path).toBe(`/api/v2/objects/${OBJECT_ID}/area-scopes`);
     expect(posts[0]!.headers['idempotency-key']).toMatch(/\S{8,}/);
-    expect(JSON.parse(posts[0]!.body!)).toEqual({ kind: 'BUILDING', code: 'К2', name: 'Корпус 2' });
+    expect(JSON.parse(posts[0]!.body!)).toEqual({ payload: { kind: 'BUILDING', code: 'К2', name: 'Корпус 2' } });
 
     // child, via the row action; quantity decimal comma is sent as a decimal string
     await page.getByRole('button', { name: 'Добавить зону внутрь: К1 Корпус 1' }).click();
@@ -183,7 +183,7 @@ test.describe('create', () => {
     await expect(page.getByRole('list', { name: 'Вложенные зоны: К1' })).toContainText('Этаж 1');
     posts = api.v2().filter((c) => c.method === 'POST');
     expect(posts).toHaveLength(2);
-    expect(JSON.parse(posts[1]!.body!)).toEqual({ parentId: 'seed', kind: 'FLOOR', code: 'Э1', name: 'Этаж 1', measureQuantity: '10.5', measureUnit: 'м²' });
+    expect(JSON.parse(posts[1]!.body!)).toEqual({ payload: { parentId: 'seed', kind: 'FLOOR', code: 'Э1', name: 'Этаж 1', measureQuantity: '10.5', measureUnit: 'м²' } });
     expect(posts[1]!.headers['idempotency-key']).not.toBe(posts[0]!.headers['idempotency-key']);
     // every create was followed by a full reload of the tree
     expect(api.v2().filter((c) => c.method === 'GET')).toHaveLength(3);

@@ -33,7 +33,7 @@ export async function listFinishWorkTypes(objectId:string,signal?:AbortSignal):P
 
 /** The caller retains one Idempotency-Key for an uncertain retry of the identical payload. */
 export async function upsertFinishSystem(objectId:string,payload:FinishSystemUpsertPayload,idempotencyKey:string):Promise<void>{
-  const r=await fetch(base(objectId),{method:'POST',headers:{...headers(),'Content-Type':'application/json','Idempotency-Key':idempotencyKey},body:JSON.stringify(payload)});
+  const r=await fetch(base(objectId),{method:'POST',headers:{...headers(),'Content-Type':'application/json','Idempotency-Key':idempotencyKey},body:JSON.stringify({payload})});
   if(!r.ok)throw await error(r);
   if(!rec(await json(r)))throw new AreaScopePaginationError('Неверный ответ сервера: результат публикации не подтверждён.');
 }

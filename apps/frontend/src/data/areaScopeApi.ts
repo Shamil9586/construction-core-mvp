@@ -152,7 +152,7 @@ export async function createAreaScope(objectId: string, payload: AreaScopeCreate
   const response = await fetch(base(objectId), {
     method: 'POST',
     headers: authHeaders({ 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey }),
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ payload }),
   });
   if (!response.ok) throw await failFrom(response);
   const body = await readJson(response);
