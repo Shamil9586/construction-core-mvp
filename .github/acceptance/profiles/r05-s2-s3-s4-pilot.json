@@ -1,5 +1,5 @@
 {
-  "$comment": "R05 D5 pilot registration only. The candidate is PR #21's exact test-only head; this profile does not authorize dispatch, merge, deployment or LIVE.",
+  "$comment": "R05 D5 pilot registration. The original PR #21 test-only head remains registered. The owner authorized a separate CI-only profile PR for the corrected candidate, profile merge after independent GitHub review, and one gated workflow_dispatch of its exact SHA. Product merge, deployment and LIVE are outside this authorization.",
   "schema": "construction-core/gpr2-acceptance-profile@1",
   "profile_id": "r05-s2-s3-s4-pilot",
   "stage": "R05",
@@ -28,6 +28,24 @@
       ],
       "diff_check_from": "e054234c360c04bf9553c60e5fd21b528b7d4d46",
       "approval": "Owner 2026-11-02 authorized separate CI-only profile PR for independently source-reviewed test-only PR #21 head 8642cc3a; no merge or dispatch approval"
+    },
+    {
+      "sha": "4e1f533eb924c229726e7110be5787141522fd88",
+      "tree": "db8578cfe35e90fe275e6ab6492631cc36d369c2",
+      "lineage": [
+        {
+          "rev": "HEAD^",
+          "sha": "f33d2b4ddbef7ce2e22e0bc447e85a58ceba0294",
+          "tree": "18dc64489b331aaaba010bb0611c18c2f64ecb16"
+        },
+        {
+          "rev": "HEAD~2",
+          "sha": "8642cc3a8c9fea3173e6978b33654bb335997a6c",
+          "tree": "20edb153317a211ee509fd0395e3ad7e5c998003"
+        }
+      ],
+      "diff_check_from": "e054234c360c04bf9553c60e5fd21b528b7d4d46",
+      "approval": "Owner 2026-11-03 authorized CI-only profile PR for corrected Draft PR #21 head 4e1f533, profile merge after independent GitHub review, and one gated exact-SHA workflow_dispatch; no product merge or LIVE"
     }
   ],
   "runtime": {
@@ -156,7 +174,8 @@
     }
   ],
   "notes": [
-    "This registration is a technical test-only gate, not independent acceptance; the owner must separately authorize the exact hosted workflow_dispatch.",
+    "The corrected candidate's profile PR may merge only after independent GitHub review; one exact-SHA workflow_dispatch is authorized after its gate. Registration and a green CI run are not independent acceptance.",
+    "The corrected candidate adds frontend S2/S3 payload envelopes, aligned source tests, pilot response diagnostics and native PostgreSQL teardown changes. Its real PostgreSQL/Chromium runtime is NOT VERIFIED; the prior pilot run failed on the old candidate.",
     "Pilot is one node-test requiring both PostgreSQL and Chromium because the existing playwright check runner scrubs database connection variables.",
     "S2/S3 create and reload run at 1440 px; S4 positive preview/confirm/Work navigation run at 390 px. Full S2/S3 mobile creation remains NOT VERIFIED.",
     "Corporate templates, S1/S5 management UI, LIVE, deployment and production PostgreSQL are outside D5 pilot scope."
