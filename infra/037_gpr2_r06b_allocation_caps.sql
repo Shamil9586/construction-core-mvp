@@ -103,6 +103,19 @@ BEGIN
        v.sequence<>(SELECT sequence+1 FROM work_allocation_versions WHERE id=OLD.version_id))) THEN
        RAISE EXCEPTION 'R06B: pointer must advance by one version' USING ERRCODE='23514';
     END IF;
+    -- Conservative R06b floor: after any fact/SC/customer evidence, freeze the
+    -- snapshot. R07 will coordinate scoped adjustments with fact writers; a
+    -- partial R02 interpretation inside a SQL trigger would invent provenance.
+    IF EXISTS (SELECT 1 FROM works w WHERE w.tenant_id=NEW.tenant_id AND w.object_id=NEW.object_id AND w.id=NEW.work_id AND
+       (w.actual_quantity>0 OR EXISTS(SELECT 1 FROM work_progress p WHERE p.tenant_id=w.tenant_id AND p.object_work_id=w.id)
+        OR EXISTS(SELECT 1 FROM work_execution_units u JOIN quantity_portions p ON p.tenant_id=u.tenant_id AND p.execution_unit_id=u.id
+          JOIN portion_quantity_confirmations f ON f.tenant_id=p.tenant_id AND f.portion_id=p.id
+          WHERE u.tenant_id=w.tenant_id AND u.object_work_id=w.id)
+        OR EXISTS(SELECT 1 FROM work_execution_units u JOIN quantity_portions p ON p.tenant_id=u.tenant_id AND p.execution_unit_id=u.id
+          JOIN documentation_customer_accepted_quantities f ON f.tenant_id=p.tenant_id AND f.quantity_portion_id=p.id
+          WHERE u.tenant_id=w.tenant_id AND u.object_work_id=w.id))) THEN
+       RAISE EXCEPTION 'R06B: allocation is frozen after confirmed evidence' USING ERRCODE='23514';
+    END IF;
     PERFORM r06b_allocation_validate(NEW.tenant_id,NEW.object_id,NEW.work_id,NEW.version_id);
     RETURN NEW;
 END $$;
