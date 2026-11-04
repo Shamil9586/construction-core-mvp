@@ -127,6 +127,9 @@ BEGIN
             SELECT coalesce(sum(planned_quantity),0) INTO total FROM work_execution_units WHERE tenant_id=NEW.tenant_id AND object_work_id=NEW.object_work_id;
             IF total>limit_q THEN RAISE EXCEPTION 'R06B: Work planned WEU cap exceeded' USING ERRCODE='23514'; END IF;
         END IF;
+        SELECT coalesce(sum(planned_quantity),0) INTO total FROM quantity_portions
+          WHERE tenant_id=NEW.tenant_id AND execution_unit_id=NEW.id;
+        IF total>NEW.planned_quantity THEN RAISE EXCEPTION 'R06B: WEU plan below planned portion sum' USING ERRCODE='23514'; END IF;
         IF EXISTS (SELECT 1 FROM work_current_allocation a JOIN work_allocation_lines l
           ON l.tenant_id=a.tenant_id AND l.object_id=a.object_id AND l.version_id=a.version_id
           WHERE a.tenant_id=NEW.tenant_id AND a.work_id=NEW.object_work_id AND l.execution_unit_id=NEW.id
