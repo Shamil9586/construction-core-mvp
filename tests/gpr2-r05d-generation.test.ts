@@ -126,6 +126,12 @@ test('R05d-13/14 confirm: atomic Works + producer bindings in one transaction; r
   assert.ok(BigInt(r.body.appliedVersions.scope) > BigInt(p.scopeVersion), 'the object scope version moved');
   const works = await q('SELECT * FROM works WHERE id = ANY($1::uuid[])', [r.body.resultIds]);
   assert.equal(works.length, 6);
+  const origins = await q('SELECT work_id,source_kind,source_ref,original_quantity,unit FROM work_quantity_origins WHERE work_id=ANY($1::uuid[])', [r.body.resultIds]);
+  assert.equal(origins.length, 6);
+  assert.ok(origins.every((o: any) => o.source_kind === 'FINISH_GENERATION' && o.source_ref === r.body.commandId && o.unit === 'м²'));
+  const current = await q('SELECT p.work_id,v.quantity,v.sequence FROM work_current_quantity p JOIN work_quantity_versions v ON v.id=p.approved_version_id WHERE p.work_id=ANY($1::uuid[])', [r.body.resultIds]);
+  assert.equal(current.length, 6);
+  assert.ok(current.every((v: any) => v.sequence === 1));
   for (const w of works) {
     assert.equal(w.object_id, pilot.object.id); assert.equal(w.unit, 'м²'); assert.equal(w.status, 'PLANNED');
     assert.deepEqual([w.contractor_id, w.responsible_user_id, w.estimated_cost, w.planned_start_date, w.planned_finish_date, w.fact_source_mode], [null, null, null, null, null, null], 'R04: nothing invented');
@@ -143,6 +149,7 @@ test('R05d-13/14 confirm: atomic Works + producer bindings in one transaction; r
   const snapshot = await digestAll();
   const again = await confirm(p, mainPayload, { key: mainKey });
   assert.equal(again.status, 200); assert.deepEqual(again.body, r.body);
+  assert.equal((await q('SELECT count(*)::int AS n FROM work_quantity_versions WHERE work_id=ANY($1::uuid[])', [r.body.resultIds]))[0].n, 6);
   assert.deepEqual(await digestAll(), snapshot, 'a replay writes nothing');
   // the preview now shows them as EXISTING, and a new confirm of the same obligations is refused
   const p2 = await okPreview(mainPayload);

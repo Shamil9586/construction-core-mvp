@@ -1,6 +1,7 @@
 import { one, rows } from './db';
 import { audit } from './security';
 import { runCommandTx, runSnapshotRead } from './tx-context';
+import { recordInitialWorkQuantity } from './gpr2-r06a-quantity';
 import { coordinate } from './coordination-lock';
 import { ledgered, mapR05DbError, reauthorize } from './gpr2-r05-support';
 import type { Gpr2CommandContext } from './gpr2-command-guard';
@@ -121,6 +122,7 @@ export async function confirmGeneration(ctx: Gpr2CommandContext): Promise<Comman
                 // A real Work (R04 Early Work): known WorkType, unit and quantity; contractor, responsible, cost and provisional dates NULL — never invented.
                 const work = await one(c, `INSERT INTO works(tenant_id,object_id,work_type_id,name,unit,planned_quantity,contractor_id,responsible_user_id,estimated_cost,planned_start_date,planned_finish_date)
                     VALUES($1,$2,$3,$4,$5,$6,NULL,NULL,NULL,NULL,NULL) RETURNING *`, [a.tenantId, ctx.objectId, w.workTypeId, w.name, w.unit, w.quantity]);
+                await recordInitialWorkQuantity(c, work, a.id, { kind: 'FINISH_GENERATION', ref: commandId, version: w.sourceSystemVersionId });
                 for (const q of w.areaQuantities)
                     await c.query(`INSERT INTO work_scope_bindings(tenant_id,object_id,work_id,finish_type_id,system_version_id,occurrence_id,occurrence_key,area_scope_id,measure_scope,basis_quantity,command_id,created_by)
                         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`, [a.tenantId, ctx.objectId, work.id, ft.id, w.sourceSystemVersionId, w.occurrenceId, w.occurrenceKey, q.areaScopeId, w.measureScope, q.quantity, commandId, a.id]);
