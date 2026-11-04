@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { createIsolatedDatabase, recordEvidence, scrubConnectionEnvironment, Session, waitUntilBlocked, until } from './helpers/gpr2-native-pg';
 
 scrubConnectionEnvironment();
@@ -22,7 +23,9 @@ test('R06b 037 native upgrade, direct SQL caps and two-session Work cap serializ
         const object = await one(pool,'SELECT * FROM objects WHERE project_manager_id=$1 LIMIT 1',[pm.id]);
         const type = await one(pool,'SELECT * FROM work_types WHERE tenant_id=$1 LIMIT 1',[pm.tenantId]);
         const contractor = await one(pool,'SELECT * FROM object_contractors_active WHERE tenant_id=$1 AND object_id=$2 LIMIT 1',[pm.tenantId,object.id]);
-        const work = await new ProductionService().createWork(pm,{objectId:object.id,workTypeId:type.id,name:'R06b cap',unit:type.unit,plannedQuantity:'10'});
+        const work = await new ProductionService().createWork(pm,{objectId:object.id,workTypeId:type.id,
+            contractorId:contractor.contractorId,responsibleUserId:pm.id,name:'R06b cap',unit:type.unit,plannedQuantity:'10',
+            plannedStartDate:'2026-03-01',plannedFinishDate:'2026-04-30',estimatedCost:'1000.00',idempotencyKey:randomUUID()});
         a = await Session.open(db.url,'r06b-first'); b = await Session.open(db.url,'r06b-second');
         const insertUnit = (s: Session, quantity: string) => s.query(`INSERT INTO work_execution_units(tenant_id,object_work_id,work_type_id,contractor_id,unit,planned_quantity)
             VALUES($1,$2,$3,$4,$5,$6) RETURNING id`,[pm.tenantId,work.id,type.id,contractor.contractorId,type.unit,quantity]);
