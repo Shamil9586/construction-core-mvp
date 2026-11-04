@@ -7,6 +7,7 @@ import { Actor, requirePermission, scoped, objectAccess, ensure, checkVersion, a
 import { Permission as P } from '../../../packages/domain';
 import { commandFingerprint } from '../../../packages/domain/gpr2';
 import { runLedgered } from './command-ledger';
+import { recordInitialWorkQuantity } from './gpr2-r06a-quantity';
 
 export const PLANNING_FIELDS = ['contractorId', 'responsibleUserId', 'estimatedCost', 'plannedStartDate', 'plannedFinishDate'] as const;
 
@@ -60,6 +61,7 @@ export async function writeEarlyWork(c: any, a: Actor, input: any, workId?: stri
                 if (type.scope === 'OBJECT' && type.objectId !== objectId) throw new NotFoundException('Запись не найдена');
                 await validatePlanning(c, a, objectId, data);
                 work = await insert(c, 'works', a.tenantId, data);
+                await recordInitialWorkQuantity(c, work, a.id, { kind: 'MANUAL_CREATE', ref: work.id });
                 await audit(c, a, 'Work', work.id, 'CREATE', null, work);
             }
             return { resultIds: [work.id], appliedVersions: { aggregate: String(work.version), scope: null }, warnings: [] };
