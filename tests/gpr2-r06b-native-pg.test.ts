@@ -1,0 +1,53 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { createIsolatedDatabase, recordEvidence, scrubConnectionEnvironment, Session, waitUntilBlocked } from './helpers/gpr2-native-pg';
+
+scrubConnectionEnvironment();
+test('R06b 037 native upgrade, direct SQL caps and two-session Work cap serialization', async () => {
+    const db = await createIsolatedDatabase('r06b');
+    process.env.DATABASE_URL = db.url;
+    const { pool, one } = await import('../apps/backend/src/db');
+    const { migrate } = await import('../scripts/migrate');
+    const { seed } = await import('../scripts/seed');
+    const { ProductionService } = await import('../apps/backend/src/service');
+    const observer = await Session.open(db.url,'r06b-observer');
+    let a: Session | undefined, b: Session | undefined;
+    try {
+        await migrate({ through: 36 }); await seed();
+        const before = (await pool.query("SELECT md5(coalesce(string_agg(row_to_json(w)::text,'|' ORDER BY id),'')) AS d FROM works w")).rows[0].d;
+        await migrate();
+        assert.equal((await pool.query("SELECT md5(coalesce(string_agg(row_to_json(w)::text,'|' ORDER BY id),'')) AS d FROM works w")).rows[0].d,before);
+        assert.equal((await migrate()).applied.length,0);
+        const pm = await one(pool,"SELECT * FROM users WHERE role='PROJECT_MANAGER' AND is_active=true LIMIT 1");
+        const object = await one(pool,'SELECT * FROM objects WHERE project_manager_id=$1 LIMIT 1',[pm.id]);
+        const type = await one(pool,'SELECT * FROM work_types WHERE tenant_id=$1 LIMIT 1',[pm.tenantId]);
+        const contractor = await one(pool,'SELECT * FROM object_contractors_active WHERE tenant_id=$1 AND object_id=$2 LIMIT 1',[pm.tenantId,object.id]);
+        const work = await new ProductionService().createWork(pm,{objectId:object.id,workTypeId:type.id,name:'R06b cap',unit:type.unit,plannedQuantity:'10'});
+        a = await Session.open(db.url,'r06b-first'); b = await Session.open(db.url,'r06b-second');
+        const insertUnit = (s: Session, quantity: string) => s.query(`INSERT INTO work_execution_units(tenant_id,object_work_id,work_type_id,contractor_id,unit,planned_quantity)
+            VALUES($1,$2,$3,$4,$5,$6) RETURNING id`,[pm.tenantId,work.id,type.id,contractor.contractorId,type.unit,quantity]);
+        await a.begin(); const first = (await insertUnit(a,'6')).rows[0].id;
+        await b.begin(); const contender = insertUnit(b,'6');
+        await waitUntilBlocked(observer.client,b.pid,'second WEU insertion against same Work cap');
+        await a.commit();
+        await assert.rejects(contender,/Work planned WEU cap exceeded/);
+        await b.rollback();
+        assert.equal((await pool.query('SELECT count(*)::int AS n FROM work_execution_units WHERE object_work_id=$1',[work.id])).rows[0].n,1);
+        const portion = (await pool.query(`INSERT INTO quantity_portions(tenant_id,execution_unit_id,label,planned_quantity)
+            VALUES($1,$2,'part',4) RETURNING id`,[pm.tenantId,first])).rows[0].id;
+        await assert.rejects(pool.query(`INSERT INTO quantity_portions(tenant_id,execution_unit_id,label,planned_quantity)
+            VALUES($1,$2,'invalid',3)`,[pm.tenantId,first]),/WEU planned portion cap exceeded/);
+        const { replaceWorkAllocation } = await import('../apps/backend/src/gpr2-r06b-allocation');
+        const good = await replaceWorkAllocation(pm,object.id,work.id,{expectedVersionId:null,units:[
+            {executionUnitId:first,quantity:'6',portions:[{portionId:portion,quantity:'4'}]}]});
+        assert.equal(good.unallocatedQuantity,'4.0000');
+        const pointer = (await pool.query('SELECT version_id FROM work_current_allocation WHERE work_id=$1',[work.id])).rows[0].version_id;
+        await assert.rejects(pool.query(`INSERT INTO work_allocation_lines(tenant_id,object_id,work_id,version_id,execution_unit_id,quantity,unit)
+            VALUES($1,$2,$3,$4,$5,99,$6)`,[pm.tenantId,object.id,work.id,pointer,first,type.unit]),/duplicate key|allocation cap/);
+        recordEvidence('r06b-native-summary',{cluster:db.evidence,upgradePreservedWorks:true,restartNoOp:true,concurrentSecondBlocked:true,
+            concurrentSecondRolledBack:true,workUnits:1,explicitAllocated:good.allocatedQuantity});
+    } finally {
+        await a?.rollback().catch(() => undefined); await b?.rollback().catch(() => undefined);
+        await a?.close(); await b?.close(); await observer.close(); await pool.end(); await db.drop();
+    }
+});
