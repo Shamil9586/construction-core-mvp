@@ -30,6 +30,14 @@ export const closeDto = z.object({ sdoCaseId: uuid, amount: money.refine(v => Nu
 export const executionUnitDto = z.object({ objectWorkId: uuid, workTypeId: uuid, finishTypeId: uuid.optional(), executionConditions: text.optional(), location: text.optional(), contractorId: uuid, unit: text, plannedQuantity: qty.refine(v => Number(v) > 0), idempotencyKey: uuid.optional() }).strict();
 export const executionUnitLayerDto = z.object({ sortOrder: z.number().int().nonnegative(), name: text }).strict();
 export const quantityPortionDto = z.object({ label: text, plannedQuantity: qty.refine(v => Number(v) > 0), idempotencyKey: uuid.optional() }).strict();
+// Complete explicit allocation snapshot. Empty array is a deliberate zero allocation.
+export const workAllocationDto = z.object({
+    expectedVersionId: uuid.nullable(),
+    units: z.array(z.object({
+        executionUnitId: uuid, quantity: z.string().regex(/^\d{1,14}(\.\d{1,4})?$/),
+        portions: z.array(z.object({ portionId: uuid, quantity: z.string().regex(/^\d{1,14}(\.\d{1,4})?$/) }).strict()).max(500)
+    }).strict()).max(500)
+}).strict();
 // F12.3 FINAL-R02: idempotencyKey optional, same as executionUnitDto/
 // quantityPortionDto above — a caller that omits it keeps the exact
 // pre-existing (version-gated only) behaviour.
