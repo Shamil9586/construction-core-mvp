@@ -1,0 +1,107 @@
+{
+  "$comment": "Owner-authorized CI-only registration for exact R06b candidate; one run remains gated by owner-only exact confirmation.",
+  "schema": "construction-core/gpr2-acceptance-profile@1",
+  "profile_id": "r06b-allocation-caps-native",
+  "stage": "R06b",
+  "title": "GPR-2 R06b explicit allocations, native caps and conservative fact freeze",
+  "status": "ACTIVE",
+  "baseline": {
+    "sha": "0ef1588701135e156419c1bbeee83b316649f8f1",
+    "tree": "f24dfdcfe5f88470e3313335dddb47db8aed7ecb",
+    "description": "Product main after R06a merge, before R06b Draft PR #28"
+  },
+  "candidates": [
+    {
+      "sha": "f73ff2cf6160803620e3c9cacf7c908e04946fd4",
+      "tree": "e2d12bfddbfa298bddb8ab65c6c97c04bc5534b9",
+      "lineage": [
+        {
+          "rev": "HEAD^",
+          "sha": "5bc49c87e55ffe3bc4b28cc353f7988bf9b503ae",
+          "tree": "3a2f580f38ff86ae5aad033178c7c79bc69a85a5"
+        },
+        {
+          "rev": "HEAD~16",
+          "sha": "0ef1588701135e156419c1bbeee83b316649f8f1",
+          "tree": "f24dfdcfe5f88470e3313335dddb47db8aed7ecb"
+        }
+      ],
+      "diff_check_from": "0ef1588701135e156419c1bbeee83b316649f8f1",
+      "approval": "Owner authorized CI-only profile registration, independent review, merge and one exact-SHA test-only dispatch in chat on 2026-11-04; product PR #28 remains Draft."
+    }
+  ],
+  "runtime": {
+    "runner": "ubuntu-24.04",
+    "node": "22.22.0",
+    "postgres_major": 16,
+    "job_timeout_minutes": 35,
+    "requires": [
+      "postgres"
+    ]
+  },
+  "checks": [
+    {
+      "id": "r06b-native-pg",
+      "title": "037 upgrade, direct SQL caps, two-session race, revocation and protected-fact pointer refusal",
+      "class": "NATIVE_POSTGRESQL",
+      "kind": "node-test",
+      "mandatory": true,
+      "requires": [
+        "postgres"
+      ],
+      "allow_skip": false,
+      "fresh_database_per_file": true,
+      "file_timeout_seconds": 480,
+      "files": [
+        {
+          "path": "tests/gpr2-r06b-native-pg.test.ts",
+          "expect_tests": 1
+        }
+      ]
+    },
+    {
+      "id": "r06b-focused-compat",
+      "title": "Explicit API/read, direct SQL negative, coordination registry and R04/R06a compatibility",
+      "class": "PURE_PGLITE",
+      "kind": "node-test",
+      "mandatory": true,
+      "requires": [],
+      "allow_skip": false,
+      "fresh_database_per_file": false,
+      "file_timeout_seconds": 480,
+      "files": [
+        {
+          "path": "tests/gpr2-r06b-allocation.test.ts",
+          "expect_tests": 5
+        },
+        {
+          "path": "tests/gpr2-r03b-writer-registry.test.ts",
+          "expect_tests": 10
+        },
+        {
+          "path": "tests/gpr2-r04-early-work.test.ts",
+          "expect_tests": 8
+        },
+        {
+          "path": "tests/gpr2-r06a-quantity.test.ts",
+          "expect_tests": 3
+        }
+      ]
+    },
+    {
+      "id": "typecheck-build",
+      "title": "TypeScript and production build",
+      "class": "TYPECHECK_BUILD",
+      "kind": "npm-script",
+      "mandatory": true,
+      "requires": [],
+      "script": "build",
+      "timeout_seconds": 1200
+    }
+  ],
+  "notes": [
+    "R06b conservatively freezes allocation replacement after confirmed evidence. Native race proof does not establish R07 reduction versus fact/SC acceptance.",
+    "No LIVE, production database, deployment, FIN migration, merge or complete GPR-2 acceptance is authorized by this profile proposal.",
+    "Register through independently reviewed CI-only profile PR on main; dispatch once for this exact SHA under owner authorization."
+  ]
+}
