@@ -12,14 +12,25 @@ const dec = (value: string | number) => new Decimal(value);
 const fixed = (value: Decimal) => value.toFixed(4);
 
 /** Explicit complete snapshot; all reads and writes share one Work lock and transaction. */
-export async function replaceWorkAllocation(a: Actor, objectId: string, workId: string, d: Input) {
+export async function replaceWorkAllocation(a: Actor, objectId: string, workId: string, d: Input, tokenHash: string) {
     requirePermission(a, Permission.EXECUTION_UNIT_MANAGE);
     return transaction(async c => {
         await coordinate(c, 'gpr2-r06b-allocation.ts#replaceWorkAllocation', a.tenantId, { work: workId });
         const work = await one(c, 'SELECT * FROM works WHERE tenant_id=$1 AND object_id=$2 AND id=$3 FOR UPDATE', [a.tenantId, objectId, workId]);
         if (!work) throw new NotFoundException('Работа не найдена');
-        await objectAccess(c, a, objectId, true);
-        await workAccess(c, a, work);
+        // The actor captured by authenticate() is not a durable authorization decision.
+        // Lock both session and user after Work coordination so a concurrent revocation
+        // either commits first (this fails) or waits until this transaction ends.
+        const currentActor = await one(c, `SELECT u.* FROM sessions s JOIN users u ON u.tenant_id=s.tenant_id AND u.id=s.user_id
+            WHERE s.token_hash=$1 AND s.tenant_id=$2 AND s.user_id=$3 AND s.expires_at>now()
+              AND u.is_active=true FOR SHARE OF s,u`, [tokenHash,a.tenantId,a.id]);
+        if (!currentActor) throw new ConflictException('Сессия или роль изменена');
+        requirePermission(currentActor, Permission.EXECUTION_UNIT_MANAGE);
+        const lockedObject = await one(c,'SELECT id FROM objects WHERE tenant_id=$1 AND id=$2 FOR SHARE',
+            [a.tenantId,objectId]);
+        if (!lockedObject) throw new NotFoundException('Объект не найден');
+        await objectAccess(c, currentActor, objectId, true);
+        await workAccess(c, currentActor, work, true);
         const current = await one(c, `SELECT p.approved_version_id,v.quantity::text AS quantity,v.unit FROM work_current_quantity p
             JOIN work_quantity_versions v ON v.tenant_id=p.tenant_id AND v.object_id=p.object_id AND v.work_id=p.work_id AND v.id=p.approved_version_id
             WHERE p.tenant_id=$1 AND p.object_id=$2 AND p.work_id=$3 FOR UPDATE OF p`, [a.tenantId, objectId, workId]);
@@ -28,6 +39,18 @@ export async function replaceWorkAllocation(a: Actor, objectId: string, workId: 
             ON v.tenant_id=p.tenant_id AND v.object_id=p.object_id AND v.work_id=p.work_id AND v.id=p.version_id
             WHERE p.tenant_id=$1 AND p.object_id=$2 AND p.work_id=$3 FOR UPDATE OF p`, [a.tenantId, objectId, workId]);
         if ((previous?.versionId ?? null) !== d.expectedVersionId) throw new ConflictException('Версия распределения изменилась');
+        // R06b does not implement the R07 fact/reduction race. An allocation
+        // snapshot is frozen once any protected evidence exists; direct SQL has
+        // the same rule in the pointer trigger. Later scoped adjustments are R07.
+        const evidence = await one(c, `SELECT 1 AS present FROM works w WHERE w.tenant_id=$1 AND w.object_id=$2 AND w.id=$3 AND (
+            w.actual_quantity>0 OR EXISTS(SELECT 1 FROM work_progress p WHERE p.tenant_id=w.tenant_id AND p.object_work_id=w.id)
+            OR EXISTS(SELECT 1 FROM work_execution_units u JOIN quantity_portions p ON p.tenant_id=u.tenant_id AND p.execution_unit_id=u.id
+                JOIN portion_quantity_confirmations f ON f.tenant_id=p.tenant_id AND f.portion_id=p.id
+                WHERE u.tenant_id=w.tenant_id AND u.object_work_id=w.id)
+            OR EXISTS(SELECT 1 FROM work_execution_units u JOIN quantity_portions p ON p.tenant_id=u.tenant_id AND p.execution_unit_id=u.id
+                JOIN documentation_customer_accepted_quantities f ON f.tenant_id=p.tenant_id AND f.quantity_portion_id=p.id
+                WHERE u.tenant_id=w.tenant_id AND u.object_work_id=w.id))`, [a.tenantId,objectId,workId]);
+        if (evidence) throw new ConflictException('Распределение защищено подтверждённым фактом; корректировка относится к R07');
         if (new Set(d.units.map(x => x.executionUnitId)).size !== d.units.length) throw new BadRequestException('Единица исполнения повторяется');
         const fact = (await loadWorkFacts(c, a.tenantId, [workId])).get(workId);
         if (!fact || (fact.state !== 'KNOWN' && fact.state !== 'NONE_REPORTED') ||
@@ -100,7 +123,7 @@ export async function replaceWorkAllocation(a: Actor, objectId: string, workId: 
             WHERE tenant_id=$1 AND object_id=$2 AND work_id=$3`, [a.tenantId,objectId,workId,version.id]);
         else await c.query(`INSERT INTO work_current_allocation(tenant_id,object_id,work_id,version_id) VALUES($1,$2,$3,$4)`,
             [a.tenantId,objectId,workId,version.id]);
-        await audit(c,a,'WorkAllocation',version.id,'REPLACE',previous ?? null,
+        await audit(c,currentActor,'WorkAllocation',version.id,'REPLACE',previous ?? null,
             { workId,objectId,versionId:version.id,sequence:version.sequence,allocatedQuantity:fixed(workTotal) });
         return { versionId: version.id, sequence: Number(version.sequence), allocatedQuantity: fixed(workTotal),
             unallocatedQuantity: fixed(dec(current.quantity).minus(workTotal)), unit: current.unit };
