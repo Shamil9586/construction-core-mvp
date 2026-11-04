@@ -47,6 +47,7 @@ test('direct SQL cannot exceed Work, WEU, portion or cross-object identity; roll
     const w = p.plasterWork.work;
     await assert.rejects(pool.query(`INSERT INTO work_execution_units(tenant_id,object_work_id,work_type_id,contractor_id,unit,planned_quantity)
         VALUES($1,$2,$3,$4,$5,1)`, [p.pm.tenantId,w.id,p.plaster.id,p.contractors[0].id,w.unit]), /Work planned WEU cap/);
+    await assert.rejects(pool.query('UPDATE work_execution_units SET planned_quantity=1 WHERE id=$1', [p.floor1.unit.id]), /WEU plan below planned portion sum/);
     const version = (await pool.query('SELECT approved_version_id FROM work_current_quantity WHERE work_id=$1', [w.id])).rows[0].approved_version_id;
     await assert.rejects(pool.query(`INSERT INTO work_allocation_lines(tenant_id,object_id,work_id,version_id,execution_unit_id,quantity,unit)
         VALUES($1,$2,$3,$4,$5,1,$6)`, [p.pm.tenantId,p.object.id,w.id,current.allocationVersionId,p.neighbourUnit.unit.id,w.unit]), /foreign key/);
