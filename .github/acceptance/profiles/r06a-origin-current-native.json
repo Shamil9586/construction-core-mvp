@@ -1,0 +1,102 @@
+{
+  "$comment": "Owner-authorized CI-only registration for exact R06a candidate; run remains gated by owner-only dispatch and exact confirmation.",
+  "schema": "construction-core/gpr2-acceptance-profile@1",
+  "profile_id": "r06a-origin-current-native",
+  "stage": "R06a",
+  "title": "GPR-2 R06a quantity origin/current native PostgreSQL and bounded compatibility",
+  "status": "ACTIVE",
+  "baseline": {
+    "sha": "c32aa7c4382a0da208509bcd7816271b919eabb6",
+    "tree": "38511141315198cc7a1f95cb1e6ed780f55a8b32",
+    "description": "Product main before Draft PR #26"
+  },
+  "candidates": [
+    {
+      "sha": "d771776e147657022d8c6497777c390bb4a7f2c0",
+      "tree": "800feb129a539f47e40eda32f9d40aa46ffc6c81",
+      "lineage": [
+        {
+          "rev": "HEAD^",
+          "sha": "fb1175177b8a764daf5c4c1fbc90d7b84a670c6b",
+          "tree": "558476fac577d8ef89b6421354d4cadbfa2525f9"
+        },
+        {
+          "rev": "HEAD~9",
+          "sha": "c32aa7c4382a0da208509bcd7816271b919eabb6",
+          "tree": "38511141315198cc7a1f95cb1e6ed780f55a8b32"
+        }
+      ],
+      "diff_check_from": "c32aa7c4382a0da208509bcd7816271b919eabb6",
+      "approval": "Owner authorized CI-only profile PR, independent review, merge and one exact-SHA acceptance dispatch in chat on 2026-11-04; product PR #26 stays Draft."
+    }
+  ],
+  "runtime": {
+    "runner": "ubuntu-24.04",
+    "node": "22.22.0",
+    "postgres_major": 16,
+    "job_timeout_minutes": 35,
+    "requires": [
+      "postgres"
+    ]
+  },
+  "checks": [
+    {
+      "id": "r06a-native-pg",
+      "title": "036 upgrade, origin/current integrity and honest read on disposable native PostgreSQL",
+      "class": "NATIVE_POSTGRESQL",
+      "kind": "node-test",
+      "mandatory": true,
+      "requires": [
+        "postgres"
+      ],
+      "allow_skip": false,
+      "fresh_database_per_file": true,
+      "file_timeout_seconds": 480,
+      "files": [
+        {
+          "path": "tests/gpr2-r06a-native-pg.test.ts",
+          "expect_tests": 1
+        }
+      ]
+    },
+    {
+      "id": "r06a-pglite-compat",
+      "title": "R06a read and both creation paths plus R04 Work compatibility",
+      "class": "PURE_PGLITE",
+      "kind": "node-test",
+      "mandatory": true,
+      "requires": [],
+      "allow_skip": false,
+      "fresh_database_per_file": false,
+      "file_timeout_seconds": 480,
+      "files": [
+        {
+          "path": "tests/gpr2-r06a-quantity.test.ts",
+          "expect_tests": 3
+        },
+        {
+          "path": "tests/gpr2-r04-early-work.test.ts",
+          "expect_tests": 8
+        },
+        {
+          "path": "tests/gpr2-r05d-generation.test.ts",
+          "expect_tests": 11
+        }
+      ]
+    },
+    {
+      "id": "typecheck-build",
+      "title": "TypeScript and production build",
+      "class": "TYPECHECK_BUILD",
+      "kind": "npm-script",
+      "mandatory": true,
+      "requires": [],
+      "script": "build",
+      "timeout_seconds": 1200
+    }
+  ],
+  "notes": [
+    "Registration and one exact-SHA dispatch are owner-authorized; independently review this profile before merge and runtime evidence after dispatch.",
+    "R06b allocation caps, R07 quantity approval, production data, FIN SQL and LIVE are outside R06a technical scope."
+  ]
+}
