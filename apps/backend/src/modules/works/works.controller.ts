@@ -8,6 +8,7 @@ import { authenticate, scoped, objectAccess, workAccess, requirePermission, ensu
 import { Permission as P } from '../../../../../packages/domain';
 import * as V from '../../validation';
 import { readWorkQuantity } from '../../gpr2-r06a-quantity';
+import { replaceWorkAllocation } from '../../gpr2-r06b-allocation';
 @Controller()
 @ApiTags('Works')
 @ApiBearerAuth()
@@ -17,6 +18,10 @@ export class WorksController {
     @Header('Cache-Control', 'no-store')
     async quantity(@Req() r: any, @Param('objectId') objectId: string, @Param('workId') workId: string) {
         return readWorkQuantity(await authenticate(r), objectId, workId);
+    }
+    @Post('objects/:objectId/works/:workId/allocations')
+    async allocate(@Req() r: any, @Param('objectId') objectId: string, @Param('workId') workId: string, @Body() b: any) {
+        return replaceWorkAllocation(await authenticate(r), V.uuid.parse(objectId), V.uuid.parse(workId), V.workAllocationDto.parse(b) as any);
     }
     @Post('works')
     async createWork(
