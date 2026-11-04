@@ -84,4 +84,30 @@ test('a complete snapshot cannot omit a distinct confirmed portion scope', async
     const refusal = await h.raw(route(), { expectedVersionId: before.allocationVersionId, units: [] });
     assert.equal(refusal.status,409);
     assert.equal((await h.req(quantity())).allocationVersionId,before.allocationVersionId);
+    const prior = (await pool.query('SELECT sequence FROM work_allocation_versions WHERE id=$1',[before.allocationVersionId])).rows[0].sequence;
+    const approved = (await pool.query('SELECT approved_version_id FROM work_current_quantity WHERE work_id=$1',[p.plasterWork.work.id])).rows[0].approved_version_id;
+    const c = await pool.connect();
+    try {
+        await c.query('BEGIN');
+        const next = (await c.query(`INSERT INTO work_allocation_versions(tenant_id,object_id,work_id,sequence,previous_id,quantity_version_id,unit,created_by)
+            VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+            [p.pm.tenantId,p.object.id,p.plasterWork.work.id,prior+1,before.allocationVersionId,approved,p.plaster.unit,p.pm.id])).rows[0].id;
+        await c.query('UPDATE work_current_allocation SET version_id=$1 WHERE tenant_id=$2 AND object_id=$3 AND work_id=$4',
+            [next,p.pm.tenantId,p.object.id,p.plasterWork.work.id]);
+        await assert.rejects(c.query('COMMIT'),/allocation is frozen after confirmed evidence/);
+    } finally { await c.query('ROLLBACK').catch(() => undefined); c.release(); }
+    assert.equal((await h.req(quantity())).allocationVersionId,before.allocationVersionId);
+});
+
+test('stale actor role captured before transaction is rechecked under the Work lock', async () => {
+    const { session, hash } = await import('../apps/backend/src/security');
+    const { replaceWorkAllocation } = await import('../apps/backend/src/gpr2-r06b-allocation');
+    const token = await session(p.pm);
+    const before = (await pool.query('SELECT version_id FROM work_current_allocation WHERE work_id=$1',[p.plasterWork.work.id])).rows[0].version_id;
+    try {
+        await pool.query("UPDATE users SET role='GENERAL_DIRECTOR' WHERE tenant_id=$1 AND id=$2",[p.pm.tenantId,p.pm.id]);
+        await assert.rejects(replaceWorkAllocation(p.pm,p.object.id,p.plasterWork.work.id,
+            {expectedVersionId:before,units:[]},hash(token.token)),/Недостаточно прав/);
+        assert.equal((await pool.query('SELECT version_id FROM work_current_allocation WHERE work_id=$1',[p.plasterWork.work.id])).rows[0].version_id,before);
+    } finally { await pool.query("UPDATE users SET role='PROJECT_MANAGER' WHERE tenant_id=$1 AND id=$2",[p.pm.tenantId,p.pm.id]); }
 });
