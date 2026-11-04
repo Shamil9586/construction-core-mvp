@@ -1,4 +1,4 @@
-import { Controller, Post, Get, Param, Body, Req, Inject } from '@nestjs/common';
+import { Controller, Post, Get, Param, Body, Req, Inject, Header } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { z } from 'zod';
 import { pool, rows } from '../../db';
@@ -7,11 +7,17 @@ import { ReadService } from '../../read-service';
 import { authenticate, scoped, objectAccess, workAccess, requirePermission, ensure } from '../../security';
 import { Permission as P } from '../../../../../packages/domain';
 import * as V from '../../validation';
+import { readWorkQuantity } from '../../gpr2-r06a-quantity';
 @Controller()
 @ApiTags('Works')
 @ApiBearerAuth()
 export class WorksController {
     constructor(@Inject(ProductionService) private service: ProductionService, @Inject(ReadService) private read: ReadService) {}
+    @Get('objects/:objectId/works/:workId/quantity')
+    @Header('Cache-Control', 'no-store')
+    async quantity(@Req() r: any, @Param('objectId') objectId: string, @Param('workId') workId: string) {
+        return readWorkQuantity(await authenticate(r), objectId, workId);
+    }
     @Post('works')
     async createWork(
     @Req()
