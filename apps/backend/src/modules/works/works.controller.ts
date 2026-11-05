@@ -27,7 +27,7 @@ export class WorksController {
         const body=z.object({workId:V.uuid,executionUnitId:V.uuid,areaScopeId:V.uuid,
             basis:z.string().trim().min(1).max(1000),policy:z.enum(['REQUIRED','NOT_REQUIRED']),
             requirements:z.array(z.object({sourceWorkId:V.uuid,sourceExecutionUnitId:V.uuid,
-                sourceAreaScopeId:V.uuid,requiresInternalSc:z.boolean(),cureDays:z.number().int().min(0).max(3650)}).strict()).max(100)}).strict().parse(b);
+                sourceAreaScopeId:V.uuid,requiresInternalSc:z.boolean(),cureSeconds:z.number().int().min(0).max(315360000)}).strict()).max(100)}).strict().parse(b);
         return configureZonalRelease(await authenticate(r),V.uuid.parse(objectId),body,
             hash(String(r.headers.authorization).replace(/^Bearer /,'')));
     }
