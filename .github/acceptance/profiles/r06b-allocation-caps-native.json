@@ -1,5 +1,5 @@
 {
-  "$comment": "Owner-authorized CI-only registration for exact R06b candidate; one run remains gated by owner-only exact confirmation.",
+  "$comment": "Owner-authorized correction after verified failed run 41897787126/1; register corrected exact R06b candidate for one test-only dispatch.",
   "schema": "construction-core/gpr2-acceptance-profile@1",
   "profile_id": "r06b-allocation-caps-native",
   "stage": "R06b",
@@ -12,22 +12,22 @@
   },
   "candidates": [
     {
-      "sha": "f73ff2cf6160803620e3c9cacf7c908e04946fd4",
-      "tree": "e2d12bfddbfa298bddb8ab65c6c97c04bc5534b9",
+      "sha": "7cf902f3305ed8fb00aebef077984de3d7b96b9c",
+      "tree": "e2ccfd40d48f701b51bf80dcfe7eb604927c764d",
       "lineage": [
         {
           "rev": "HEAD^",
-          "sha": "5bc49c87e55ffe3bc4b28cc353f7988bf9b503ae",
-          "tree": "3a2f580f38ff86ae5aad033178c7c79bc69a85a5"
+          "sha": "f73ff2cf6160803620e3c9cacf7c908e04946fd4",
+          "tree": "e2d12bfddbfa298bddb8ab65c6c97c04bc5534b9"
         },
         {
-          "rev": "HEAD~16",
+          "rev": "HEAD~17",
           "sha": "0ef1588701135e156419c1bbeee83b316649f8f1",
           "tree": "f24dfdcfe5f88470e3313335dddb47db8aed7ecb"
         }
       ],
       "diff_check_from": "0ef1588701135e156419c1bbeee83b316649f8f1",
-      "approval": "Owner authorized CI-only profile registration, independent review, merge and one exact-SHA test-only dispatch in chat on 2026-11-04; product PR #28 remains Draft."
+      "approval": "Owner authorized corrected exact-SHA CI-only profile PR, independent review/merge and one R06b test-only dispatch in chat on 2026-11-05 after failed run 41897787126/1; product PR #28 remains Draft."
     }
   ],
   "runtime": {
@@ -100,8 +100,8 @@
     }
   ],
   "notes": [
-    "R06b conservatively freezes allocation replacement after confirmed evidence. Native race proof does not establish R07 reduction versus fact/SC acceptance.",
-    "No LIVE, production database, deployment, FIN migration, merge or complete GPR-2 acceptance is authorized by this profile proposal.",
-    "Register through independently reviewed CI-only profile PR on main; dispatch once for this exact SHA under owner authorization."
+    "Run 41897787126/1 at prior candidate f73 failed from fixture before caps/concurrency/revocation/fact-freeze assertions; evidence integrity passed. Corrected candidate 7cf native runtime is NOT VERIFIED until this exact run.",
+    "R06b freezes allocation replacement after confirmed evidence. Native race proof does not establish R07 reduction versus fact/SC acceptance.",
+    "No LIVE, production database, deployment, FIN migration, product merge or complete GPR-2 acceptance is authorized by this profile."
   ]
 }
