@@ -1,3 +1,6 @@
+Warning: truncated output (original token count: 27216)
+Total output lines: 721
+
 import { writeEarlyWork } from './early-work';
 import { earlyWorkEligibility } from '../../../packages/domain/early-work';
 import { Injectable, BadRequestException, ForbiddenException, NotFoundException, ConflictException } from '@nestjs/common';
@@ -15,6 +18,7 @@ import { loadPortionFigures, loadWorkFacts, loadWorkEvidence, guardQuantity } fr
 import { dependencyAdditionVerdict } from '../../../packages/domain/dependency-guard';
 import { coordinate } from './coordination-lock';
 import { evaluatePortionFactModeTransition } from '../../../packages/domain/gpr2/fact-resolver';
+import { readZonalRelease } from './gpr2-r08-release';
 @Injectable()
 export class ProductionService {
     async createObject(a: Actor, d: any) {
@@ -113,7 +117,8 @@ export class ProductionService {
     async progress(a: Actor, id: string, d: any) { requirePermission(a, P.WORK_UPDATE_PROGRESS); return transaction(async (c) => { await coordinate(c, 'service.ts#progress', a.tenantId, { work: id }); const w = await scoped(c, 'works', id, a, true); await objectAccess(c, a, w.objectId, true); checkVersion(w, d.version); ensure(w.factSourceMode !== 'PORTION', 'Для работ с единицами исполнения используйте предъявление факта по участкам'); ensure(!await one(c, 'SELECT id FROM work_execution_units WHERE tenant_id=$1 AND object_work_id=$2', [a.tenantId, id]), 'Для работ с единицами исполнения используйте предъявление факта по участкам'); const allowed = await this.transition(c, a, id); ensure(allowed.allowed, allowed.reasons.join('; ')); ensure(!await one(c, "SELECT id FROM inspections WHERE tenant_id=$1 AND object_work_id=$2 AND status NOT IN ('REJECTED','NOT_SUBMITTED')", [a.tenantId, id]), 'После предъявления СК факт заблокирован. Требуется отдельная корректировка'); const percent = new ProgressCalculationService().calculate(d.totalQuantity, w.plannedQuantity); const status = percent === 100 ? 'COMPLETED' : 'ACTIVE'; if (status !== 'COMPLETED' && !await one(c, 'SELECT id FROM object_contractors_active WHERE tenant_id=$1 AND object_id=$2 AND contractor_id=$3 FOR UPDATE', [a.tenantId, w.objectId, w.contractorId]))
         throw new ConflictException('Подрядчик больше не назначен на объект'); const n = await one(c, "UPDATE works SET actual_quantity=$3,status=$4,actual_start_date=coalesce(actual_start_date,CURRENT_DATE),actual_finish_date=CASE WHEN $4='COMPLETED' THEN CURRENT_DATE ELSE NULL END,version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2 RETURNING *", [a.tenantId, id, d.totalQuantity, status]); await insert(c, 'work_progress', a.tenantId, { objectWorkId: id, quantityDelta: new Decimal(d.totalQuantity).minus(w.actualQuantity).toString(), totalQuantity: d.totalQuantity, progressPercent: percent, reportedBy: a.id, comment: d.comment }); await audit(c, a, 'Work', id, 'PROGRESS', w, n, 'WorkProgressUpdated'); return { ...n, progressPercent: percent, isOverperformed: new ProgressCalculationService().isOverperformed(d.totalQuantity, w.plannedQuantity), ...new ScheduleStatusService().calculate(n.plannedStartDate, n.plannedFinishDate, percent) }; }); }
     async requestInspection(a: Actor, id: string, v: number) { requirePermission(a, P.INSPECTION_REQUEST); return transaction(async (c) => { await coordinate(c, 'service.ts#requestInspection', a.tenantId, { work: id }); const w = await scoped(c, 'works', id, a, true); await objectAccess(c, a, w.objectId, true); checkVersion(w, v); ensure(new Decimal(w.actualQuantity).gte(w.plannedQuantity), 'Для MVP предъявляется полный объём работы'); ensure(!await one(c, "SELECT id FROM inspections WHERE tenant_id=$1 AND object_work_id=$2 AND status='ACCEPTED'", [a.tenantId, id]), 'Работа уже принята'); const i = await insert(c, 'inspections', a.tenantId, { objectId: w.objectId, objectWorkId: id, requestedBy: a.id }); await c.query('UPDATE works SET version=version+1 WHERE tenant_id=$1 AND id=$2', [a.tenantId, id]); await audit(c, a, 'Inspection', i.id, 'REQUEST', null, i, 'InspectionRequested'); return i; }); }
-    async addIssue(a: Actor, id: string, d: any) { requirePermission(a, P.ISSUE_CREATE); return transaction(async (c) => { await coordinate(c, 'service.ts#addIssue', a.tenantId, { inspection: id }); const i = await scoped(c, 'inspections', id, a, true); await objectAccess(c, a, i.objectId); checkVersion(i, d.version); ensure(['WAITING', 'IN_REVIEW', 'REINSPECTION', 'ISSUES_FOUND'].includes(i.status), 'Проверка завершена'); await scoped(c, 'users', d.responsibleUserId, a); const { version, ...data } = d; const issue = await insert(c, 'issues', a.tenantId, { inspectionId: id, ...data }); await c.query("UPDATE inspections SET status='ISSUES_FOUND',inspector_id=$3,version=version+1 WHERE tenant_id=$1 AND id=$2", [a.tenantId, id, a.id]); await audit(c, a, 'Issue', issue.id, 'CREATE', null, issue, 'IssueCreated'); return issue; }); }
+    async addIssue(a: Actor, id: string, d: any) { requirePermission(a, P.ISSUE_CREATE); return transaction(async (c) => { await coordinate(c, 'service.ts#addIssue', a.tenantId, { inspection: id }); const i = await scoped(c, 'inspections', id, a, true); await objectAccess(c, a, i.objectId); checkVersion(i, d.version); ensure(['WAITING', 'IN_REVIEW', 'REINSPECTION', 'ISSUES_FOUND'].includes(i.status), 'Проверка завершена'); await scoped(c, 'users', d.responsibleUserId, a); const { version, areaScopeId, executionUnitId, ...data } = d; const issue = await insert(c, 'issues', a.tenantId, { inspectionId: id, ...data }); if(areaScopeId && executionUnitId) await c.query(`INSERT INTO gpr2_critical_issue_scopes(tenant_id,object_id,issue_id,area_scope_id,execution_unit_id,recorded_by)
+        VALUES($1,$2,$3,$4,$5,$6)`,[a.tenantId,i.objectId,issue.id,areaScopeId,executionUnitId,a.id]); await c.query("UPDATE inspections SET status='ISSUES_FOUND',inspector_id=$3,version=version+1 WHERE tenant_id=$1 AND id=$2", [a.tenantId, id, a.id]); await audit(c, a, 'Issue', issue.id, 'CREATE', null, issue, 'IssueCreated'); return issue; }); }
     async issueAction(a: Actor, id: string, v: number, action: string) { requirePermission(a, action === 'resolve' ? P.ISSUE_RESOLVE : P.ISSUE_VERIFY); return transaction(async (c) => { await coordinate(c, 'service.ts#issueAction', a.tenantId, { issue: id }); const first = await scoped(c, 'issues', id, a); const i = await scoped(c, 'inspections', first.inspectionId, a, true); const issue = await scoped(c, 'issues', id, a, true); await objectAccess(c, a, i.objectId, true); checkVersion(issue, v); if (action === 'resolve')
         ensure(['OPEN', 'IN_PROGRESS', 'REJECTED'].includes(issue.status), 'Замечание не ожидает устранения');
     else
@@ -278,136 +283,7 @@ export class ProductionService {
     async createQuantityPortion(a: Actor, unitId: string, d: any) { requirePermission(a, P.EXECUTION_UNIT_MANAGE); return transaction(async (c) => { await coordinate(c, 'service.ts#createQuantityPortion', a.tenantId, { unit: unitId });
         const matches = (existing: any) => existing.executionUnitId === unitId && existing.label === d.label && new Decimal(existing.plannedQuantity).eq(d.plannedQuantity);
         const checkExisting = async () => { if (!d.idempotencyKey) return null; const existing = await one(c, 'SELECT * FROM quantity_portions WHERE tenant_id=$1 AND idempotency_key=$2', [a.tenantId, d.idempotencyKey]); if (!existing) return null; ensure(matches(existing), 'Idempotency key уже использован с другими данными'); return existing; };
-        const unit = await scoped(c, 'work_execution_units', unitId, a, true); const w = await scoped(c, 'works', unit.objectWorkId, a); await objectAccess(c, a, w.objectId, true);
-        const existing = await checkExisting(); if (existing) return existing;
-        const sum = await one(c, 'SELECT coalesce(sum(planned_quantity),0) AS total FROM quantity_portions WHERE tenant_id=$1 AND execution_unit_id=$2', [a.tenantId, unitId]); ensure(new QuantityPortionPolicy().fits(unit.plannedQuantity, sum.total, d.plannedQuantity), 'Сумма объёма участков превышает плановый объём единицы исполнения'); const portion = await insertIdempotent(c, 'quantity_portions', a.tenantId, { executionUnitId: unitId, ...d }); if (portion) {
-            await audit(c, a, 'QuantityPortion', portion.id, 'CREATE', null, portion);
-            return portion;
-        } const raced = await checkExisting(); ensure(!!raced, 'Idempotency key conflict'); return raced; }); }
-    // "RP enters fact" (F8.1 decision 7) — the portion-scoped analogue of
-    // progress(), on portion_quantity_confirmations (source RP_FACT) rather than
-    // work_progress/works.actual_quantity, which this leaves untouched. The
-    // freeze-after-submission rule from business rule 6 is preserved at the new
-    // granularity: once the portion has a non-rejected inspection of EITHER
-    // applicable SC control contour (F12-QTY-04: Internal SC or Customer SC —
-    // a route without Internal SC must still freeze once presented to
-    // Customer SC alone), its own fact is locked, exactly as a whole work's is
-    // today — but a sibling portion, or the work's own whole-work tracking, is
-    // never affected.
-    // FINAL-R02 corrective: recordPortionFact() already locked and
-    // version-checked the exact row it mutates, which prevented a duplicate
-    // confirmation but resolved a retry to 409 — proving the first call
-    // probably committed, never returning what it actually produced
-    // (LOCKED DECISION 2, Option A). A genuinely new command (no key, or a
-    // fresh key) is completely unaffected and keeps the exact version-gated
-    // behaviour below.
-    // FINAL-R06-D: objectAccess() (and the portion/unit/work reads it needs)
-    // now runs before claimIdempotentCommand(), not after — a replay must
-    // not bypass the same object-level authorization a fresh mutation
-    // requires. portionId is the caller's own path parameter, so this
-    // applies identically whether this call turns out to be a replay or a
-    // fresh mutation. (claimIdempotentCommand() also independently rejects a
-    // different actor reusing this actor's key at all — see FINAL-R06-C,
-    // security.ts — this additionally re-checks the actor's own current
-    // object access on every call, replay included.)
-    async recordPortionFact(a: Actor, portionId: string, d: any) { requirePermission(a, P.WORK_UPDATE_PROGRESS); return transaction(async (c) => { await coordinate(c, 'service.ts#recordPortionFact', a.tenantId, { portion: portionId });
-        const portion = await scoped(c, 'quantity_portions', portionId, a, true); const unit = await scoped(c, 'work_execution_units', portion.executionUnitId, a); const w = await scoped(c, 'works', unit.objectWorkId, a); await objectAccess(c, a, w.objectId, true);
-        const claim = await claimIdempotentCommand(c, a, 'PORTION_FACT', d.idempotencyKey, portionId, { quantity: new Decimal(d.quantity).toFixed(4), version: d.version, comment: d.comment ?? null }); if (claim.replay)
-        return claim.response; checkVersion(portion, d.version);
-    // F8.1-03 corrective, second pass (Independent Re-Review, Patch 2): the
-    // portion-level freeze guard below only ever knew about *this* portion's
-    // own inspection history — it had nothing to say about the work's own
-    // production dependencies, so a portion could still take fact while the
-    // work itself was blocked on an unaccepted predecessor, silently
-    // bypassing the exact gate progress() already enforces for a
-    // non-portioned work. Calling the same transition() (as progress() does)
-    // makes recordPortionFact() subject to the identical rule, not a
-    // separately-maintained approximation of it. A work with no
-    // dependencies is unaffected — canStartWork([]) is vacuously allowed.
-    const allowed = await this.transition(c, a, w.id); ensure(allowed.allowed, allowed.reasons.join('; ')); ensure(!await one(c, "SELECT id FROM inspections WHERE tenant_id=$1 AND portion_id=$2 AND inspection_type IN ('INTERNAL_SC','CUSTOMER_SC') AND status NOT IN ('REJECTED','NOT_SUBMITTED')", [a.tenantId, portionId]), 'После предъявления СК факт участка заблокирован. Требуется отдельная корректировка'); // GPR-2 R02b (C13): the source of the Work's actual quantity is a PERSISTED mode. A portion fact is refused while the Work carries a legacy fact
-    // (it would create the overlap the mode exists to prevent); the first portion fact of a Work with none takes it from LEGACY_WORK to PORTION, once,
-    // and the trigger records that in work_fact_source_mode_history. Creating an execution unit is not a transition and never reaches this point.
-    const legacyProgress = await one(c, 'SELECT 1 AS x FROM work_progress WHERE tenant_id=$1 AND object_work_id=$2 LIMIT 1', [a.tenantId, w.id]); const modeVerdict = evaluatePortionFactModeTransition({ persistedMode: w.factSourceMode ?? null, legacyActualQuantity: w.actualQuantity, hasLegacyProgress: !!legacyProgress }); ensure(modeVerdict.allowed, 'У работы есть факт, внесённый по работе в целом. Переход к факту по участкам возможен только после отдельной сверки данных'); if (modeVerdict.allowed && modeVerdict.action === 'PERSIST_PORTION') { await c.query("SELECT set_config('gpr2.actor',$1,true), set_config('gpr2.basis',$2,true)", [a.id, modeVerdict.basis]); await c.query("UPDATE works SET fact_source_mode='PORTION' WHERE tenant_id=$1 AND id=$2 AND fact_source_mode='LEGACY_WORK'", [a.tenantId, w.id]); }
-    const confirmation = await insert(c, 'portion_quantity_confirmations', a.tenantId, { portionId, source: 'RP_FACT', quantity: d.quantity, recordedBy: a.id, comment: d.comment ?? null }); await c.query('UPDATE quantity_portions SET version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2', [a.tenantId, portionId]); await audit(c, a, 'QuantityPortion', portionId, 'RP_FACT', null, confirmation, 'WorkProgressUpdated'); await completeIdempotentCommand(c, a, 'PORTION_FACT', d.idempotencyKey, confirmation); return confirmation; }); }
-    // Internal SC and Customer SC both request through this one method (F8.1
-    // decision 5 — one workflow, not two): only inspectionType differs. "Для
-    // MVP предъявляется полный объём" (business rule 6) is preserved at the
-    // portion granularity, read from this portion's own latest RP_FACT
-    // confirmation — a sibling portion's fact never satisfies it. A previously
-    // REJECTED inspection of the same type does not block a fresh request; any
-    // other existing status does.
-    // FINAL-R02 corrective: same fix as recordPortionFact() above — the
-    // version-gated 409 a retry hit before this pass proved duplication was
-    // prevented, not that the client got back the inspection it already
-    // created. idempotencyKey is a new, optional 5th parameter (threaded
-    // from portionInspectionRequestDto via the controller) precisely because
-    // this method's signature already takes v/inspectionType destructured
-    // rather than the raw DTO object.
-    // FINAL-R06-D: same reordering as recordPortionFact() above —
-    // objectAccess() (and the portion/unit/work reads it needs) now runs
-    // before claimIdempotentCommand(), so a replay cannot bypass the same
-    // object-level authorization a fresh request requires.
-    async requestPortionInspection(a: Actor, portionId: string, v: number, inspectionType: 'INTERNAL_SC' | 'CUSTOMER_SC', idempotencyKey?: string) { requirePermission(a, P.INSPECTION_REQUEST); return transaction(async (c) => { await coordinate(c, 'service.ts#requestPortionInspection', a.tenantId, { portion: portionId });
-        const portion = await scoped(c, 'quantity_portions', portionId, a, true); const unit = await scoped(c, 'work_execution_units', portion.executionUnitId, a); const w = await scoped(c, 'works', unit.objectWorkId, a); await objectAccess(c, a, w.objectId, true);
-        const claim = await claimIdempotentCommand(c, a, 'PORTION_INSPECTION_REQUEST', idempotencyKey, portionId, { version: v, inspectionType }); if (claim.replay)
-        return claim.response; checkVersion(portion, v); const rpFigure = (await loadPortionFigures(c, a.tenantId, [portionId])).get(portionId)?.rpFact ?? null; ensure(rpFigure !== null && new Decimal(rpFigure).gte(portion.plannedQuantity), 'Для MVP предъявляется полный объём участка'); ensure(!await one(c, "SELECT id FROM inspections WHERE tenant_id=$1 AND portion_id=$2 AND inspection_type=$3 AND status<>'REJECTED'", [a.tenantId, portionId, inspectionType]), 'Проверка уже предъявлена или принята'); const i = await insert(c, 'inspections', a.tenantId, { objectId: w.objectId, objectWorkId: w.id, portionId, inspectionType, requestedBy: a.id }); await c.query('UPDATE quantity_portions SET version=version+1 WHERE tenant_id=$1 AND id=$2', [a.tenantId, portionId]); await audit(c, a, 'Inspection', i.id, 'REQUEST', null, i, 'InspectionRequested'); await completeIdempotentCommand(c, a, 'PORTION_INSPECTION_REQUEST', idempotencyKey, i); return i; }); }
-    // ---------------------------------------------------------------------
-    // F8.2 PTO / Executive Documentation Foundation. A Documentation Package
-    // hangs off an existing work, exactly like an execution unit does — it
-    // never reads works.actual_quantity/planned_quantity, never touches
-    // portion_quantity_confirmations, and never feeds
-    // ProgressCalculationService/ScheduleStatusService/ObjectHealthService
-    // (BR-01/BR-02/BR-03: a package may exist before completion, and neither
-    // physical readiness nor quantity confirmation is this model's concern).
-    // No eventType is passed to audit() below for any F8.2 method — that
-    // fan-out notifies PTO/DEPUTY_DIRECTOR/GENERAL_DIRECTOR/
-    // CONSTRUCTION_CONTROL/SDO/PROJECT_MANAGER indiscriminately
-    // (security.ts's audit()), and SDO must not be notified about
-    // documentation it has no access to at all.
-    // PILOT-W01 UI03: package creation is the EFFECTIVELY assigned PTO engineer's action. "Effective" is revalidated here, at
-    // action time (effectivePtoWorkAssignment: exact work, active PTO of the tenant, still on the CURRENT object head's
-    // team) — a stale row, or object membership, never authorizes it. The responsible is derived from actor + that
-    // assignment; a client-sent responsibleUserId is only ever checked against it. PTO_HEAD hands the work off and
-    // does not create. ADMIN may create only for a currently valid assignee and cannot name anyone else. The works row lock
-    // serialises this with reassignment.
-    async createDocumentationPackage(a: Actor, d: any) { requirePermission(a, P.DOCUMENTATION_MANAGE); return transaction(async (c) => { await coordinate(c, 'service.ts#createDocumentationPackage', a.tenantId, { work: d.objectWorkId }); const w = await scoped(c, 'works', d.objectWorkId, a, true); await workAccess(c, a, w, true); if (!['PTO', 'ADMIN'].includes(a.role)) throw new ForbiddenException('Пакет ИД создаёт сотрудник ПТО, назначенный на работу; начальник ПТО передаёт работу в ПТО'); const assignment = await effectivePtoWorkAssignment(c, a.tenantId, w.id); if (!assignment) throw new ForbiddenException('Нет действующей передачи работы в ПТО: пакет ИД создаёт назначенный сотрудник ПТО'); if (a.role === 'PTO' && assignment.assigneeUserId !== a.id) throw new ForbiddenException('Пакет ИД может создать только сотрудник ПТО, назначенный на эту работу'); if (d.responsibleUserId !== undefined && d.responsibleUserId !== assignment.assigneeUserId) throw new ForbiddenException('Ответственным за пакет является назначенный сотрудник ПТО'); const responsibleId = assignment.assigneeUserId;
-        // Explicit production scope (business validation, after authorization): a NEW package is created together with its Quantity
-        // Portions of THIS work — never as an empty shell. The works row is locked FOR UPDATE above, so concurrent creations/links
-        // for one work are serialised here; the trigger of migration 022 is the database backstop.
-        const portionIds: string[] = [...new Set<string>(d.quantityPortionIds ?? [])]; ensure(portionIds.length > 0, SCOPE_REQUIRED_MESSAGE);
-        const claim = await claimIdempotentCommand(c, a, 'DOC_PACKAGE_CREATE', d.idempotencyKey, d.objectWorkId, { portions: [...portionIds].sort() }); if (claim.replay) return claim.response;
-        for (const portionId of portionIds) { const portion = await scoped(c, 'quantity_portions', portionId, a); const unit = await scoped(c, 'work_execution_units', portion.executionUnitId, a); ensure(unit.objectWorkId === w.id, 'Участок относится к другой работе'); }
-        ensure(!(await overlappingClaims(c, a.tenantId, w.id, portionIds)).length, PORTION_ALREADY_COVERED_MESSAGE);
-        const pkg = await insert(c, 'documentation_packages', a.tenantId, { objectId: w.objectId, objectWorkId: d.objectWorkId, responsibleUserId: responsibleId, createdBy: a.id });
-        for (const portionId of portionIds) { const link = await insert(c, 'documentation_package_portions', a.tenantId, { documentationPackageId: pkg.id, quantityPortionId: portionId }); await audit(c, a, 'DocumentationPackagePortion', link.id, 'CREATE', null, link); }
-        await audit(c, a, 'DocumentationPackage', pkg.id, 'CREATE', null, pkg); await completeIdempotentCommand(c, a, 'DOC_PACKAGE_CREATE', d.idempotencyKey, pkg); return pkg; }); }
-    // PILOT-W01 UI03: the package's responsible is fixed at creation (derived from the PTO work assignment) and there is no
-    // post-package reassignment in this contract. The contract still carries responsibleUserId for compatibility, so it is
-    // only accepted when it equals the current responsible; any other id (another engineer, an unrelated or cross-tenant user)
-    // is rejected before anything is read or written. An unchanged edit still versions the package as before.
-    async editDocumentationPackage(a: Actor, id: string, d: any) { requirePermission(a, P.DOCUMENTATION_MANAGE); return transaction(async (c) => { await coordinate(c, 'service.ts#editDocumentationPackage', a.tenantId, { documentationPackage: id }); const pkg = await scoped(c, 'documentation_packages', id, a, true); const w = await scoped(c, 'works', pkg.objectWorkId, a); await packageMutationAccess(c, a, w); ensurePackageNotArchived(pkg); checkVersion(pkg, d.version); ensure(d.responsibleUserId === pkg.responsibleUserId, 'Ответственного ПТО за пакет изменить нельзя: он определяется передачей работы в ПТО'); const n = await one(c, 'UPDATE documentation_packages SET version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2 RETURNING *', [a.tenantId, id]); await audit(c, a, 'DocumentationPackage', id, 'EDIT', pkg, n); return n; }); }
-    // Soft archive (migration 023) — NOT a lifecycle status. Takes an obsolete / test package out of the working set while keeping the row,
-    // its documents, versions, method, scope and history. Authority = the package-mutation gate every package action goes through
-    // (PTO engineer: the effective assignee; PTO_HEAD: the object's lead; ADMIN) — and an ordinary PTO engineer may archive only a package
-    // they are responsible for / created, never another engineer's. The business rule (packages/domain/package-archive.ts) fails closed
-    // on anything that already entered the customer / SDO route or consumed an AOSR number. There is deliberately no delete.
-    async archiveDocumentationPackage(a: Actor, id: string, d: any) { requirePermission(a, P.DOCUMENTATION_MANAGE); return transaction(async (c) => { await coordinate(c, 'service.ts#archiveDocumentationPackage', a.tenantId, { documentationPackage: id }); const pkg = await scoped(c, 'documentation_packages', id, a, true); const w = await scoped(c, 'works', pkg.objectWorkId, a); await packageMutationAccess(c, a, w); if (a.role === 'PTO' && pkg.responsibleUserId !== a.id && pkg.createdBy !== a.id) throw new ForbiddenException('Архивировать пакет может его ответственный сотрудник ПТО, начальник ПТО объекта или администратор'); ensure(!pkg.archivedAt, PACKAGE_ALREADY_ARCHIVED_MESSAGE); checkVersion(pkg, d.version); const reason = String(d.reason ?? '').trim(); ensure(reason.length > 0, ARCHIVE_REASON_REQUIRED_MESSAGE); const blocker = await packageArchiveBlocker(c, a.tenantId, pkg); ensure(!blocker, blocker!); const n = await one(c, 'UPDATE documentation_packages SET archived_at=clock_timestamp(),archived_by=$3,archive_reason=$4,version=version+1,updated_at=now() WHERE tenant_id=$1 AND id=$2 RETURNING *', [a.tenantId, id, a.id, reason]); await audit(c, a, 'DocumentationPackage', id, 'ARCHIVE', pkg, n); return n; }); }
-    // A portion may only be linked into a package that covers its own work —
-    // the same "does this cross-entity reference actually belong together"
-    // discipline createExecutionUnit() applies to unit/workType, checked here
-    // in application code because it spans documentation_package_portions,
-    // quantity_portions and work_execution_units, wider than any single-table
-    // CHECK constraint could express.
-    // F8.3-17/18 corrective: the Package is locked FOR UPDATE first (the
-    // canonical lock order this whole subsystem now uses — Package, then
-    // Case, then Document), before either evaluating its content-mutation
-    // policy or writing the new link — a concurrent handoff/return-to-PTO
-    // (both Package-first too) cannot interleave through this transaction.
-    // canMutateDocumentationPackageContent() (packages/domain) is the one
-    // shared policy — content-editable statuses only, and never while an
-    // SDO Case holds the Package locked (including CLOSED) — replacing the
-    // narrower, package_locked-only check this used to run on its own.
-    async linkDocumentationPackagePortion(a: Actor, packageId: string, d: any) { requirePermission(a, P.DOCUMENTATION_MANAGE); return transaction(async (c) => { await coordinate(c, 'service.ts#linkDocumentationPackagePortion', a.tenantId, { documentationPackage: packageId }); const pkg = await scoped(c, 'documentation_packages', packageId, a, true); const w = await scoped(c, 'works', pkg.objectWorkId, a); await packageMutationAccess(c, a, w); ensurePackageNotArchived(pkg); const sdoCase = await one(c, 'SELECT package_locked FROM sdo_closing_cases WHERE tenant_id=$1 AND documentation_package_id=$2', [a.tenantId, packageId]); const policy = canMutateDocumentationPackageContent({ packageStatus: pkg.status, sdoCaseExists: !!sdoCase, sdoCasePackageLocked: !!sdoCase?.packageLocked }); ensure(policy.allowed, policy.reason!); const portion = await scoped(c, 'quantity_portions', d.quantityPortionId, a); const unit = await scoped(c, 'work_execution_units', portion.executionUnitId, a); ensure(unit.objectWorkId === pkg.objectWorkId, 'Участок относится к другой работе'); ensure(!await one(c, 'SELECT id FROM documentation_package_portions WHERE tenant_id=$1 AND documentation_package_id=$2 AND quantity_portion_id=$3', [a.tenantId, packageId, d.quantityPortionId]), 'Участок уже привязан к пакету'); await c.query('SELECT 1 FROM works WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [a.tenantId, pkg.objectWorkId]); ensure(!(await overlappingClaims(c, a.tenantId, pkg.objectWorkId, [d.quantityPortionId], packageId)).length, PORTION_ALREADY_COVERED_MESSAGE); const link = await insert(c, 'documentation_package_portions', a.tenantId, { documentationPackageId: packageId, quantityPortionId: d.quantityPortionId }); await audit(c, a, 'DocumentationPackagePortion', link.id, 'CREATE', null, link); return link; }); }
+        const unit = await scoped(c, 'work_execution_units', unitId, a, true); const…5216 tokens truncated…ageLocked: !!sdoCase?.packageLocked }); ensure(policy.allowed, policy.reason!); const portion = await scoped(c, 'quantity_portions', d.quantityPortionId, a); const unit = await scoped(c, 'work_execution_units', portion.executionUnitId, a); ensure(unit.objectWorkId === pkg.objectWorkId, 'Участок относится к другой работе'); ensure(!await one(c, 'SELECT id FROM documentation_package_portions WHERE tenant_id=$1 AND documentation_package_id=$2 AND quantity_portion_id=$3', [a.tenantId, packageId, d.quantityPortionId]), 'Участок уже привязан к пакету'); await c.query('SELECT 1 FROM works WHERE tenant_id=$1 AND id=$2 FOR UPDATE', [a.tenantId, pkg.objectWorkId]); ensure(!(await overlappingClaims(c, a.tenantId, pkg.objectWorkId, [d.quantityPortionId], packageId)).length, PORTION_ALREADY_COVERED_MESSAGE); const link = await insert(c, 'documentation_package_portions', a.tenantId, { documentationPackageId: packageId, quantityPortionId: d.quantityPortionId }); await audit(c, a, 'DocumentationPackagePortion', link.id, 'CREATE', null, link); return link; }); }
     async createDocumentationDocument(a: Actor, packageId: string, d: any) { requirePermission(a, P.DOCUMENTATION_MANAGE); return transaction(async (c) => { await coordinate(c, 'service.ts#createDocumentationDocument', a.tenantId, { documentationPackage: packageId }); const pkg = await scoped(c, 'documentation_packages', packageId, a, true); const w = await scoped(c, 'works', pkg.objectWorkId, a); await packageMutationAccess(c, a, w); ensurePackageNotArchived(pkg); const sdoCase = await one(c, 'SELECT package_locked FROM sdo_closing_cases WHERE tenant_id=$1 AND documentation_package_id=$2', [a.tenantId, packageId]); const policy = canMutateDocumentationPackageContent({ packageStatus: pkg.status, sdoCaseExists: !!sdoCase, sdoCasePackageLocked: !!sdoCase?.packageLocked }); ensure(policy.allowed, policy.reason!); if ((DEDICATED_FLOW_DOCUMENT_TYPES as readonly string[]).includes(d.type)) ensure(false, BARE_DOCUMENT_REFUSED_MESSAGE[d.type as (typeof DEDICATED_FLOW_DOCUMENT_TYPES)[number]]); const doc = await insert(c, 'documentation_documents', a.tenantId, { documentationPackageId: packageId, type: d.type, createdBy: a.id }); await audit(c, a, 'DocumentationDocument', doc.id, 'CREATE', null, doc); return doc; }); }
     // Version history (F8.2 Decision Lock): a version is only ever inserted,
     // never edited — the document row locked FOR UPDATE for the duration of
