@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { createIsolatedDatabase, recordEvidence, scrubConnectionEnvironment, Session, waitUntilBlocked, until } from './helpers/gpr2-native-pg';
+import { createIsolatedDatabase, recordEvidence, scrubConnectionEnvironment, Session, waitUntilBlocked, until, settle } from './helpers/gpr2-native-pg';
 
 scrubConnectionEnvironment();
 test('R06b 037 native upgrade, direct SQL caps and two-session Work cap serialization', async () => {
@@ -30,10 +30,12 @@ test('R06b 037 native upgrade, direct SQL caps and two-session Work cap serializ
         const insertUnit = (s: Session, quantity: string) => s.query(`INSERT INTO work_execution_units(tenant_id,object_work_id,work_type_id,contractor_id,unit,planned_quantity)
             VALUES($1,$2,$3,$4,$5,$6) RETURNING id`,[pm.tenantId,work.id,type.id,contractor.contractorId,type.unit,quantity]);
         await a.begin(); const first = (await insertUnit(a,'6')).rows[0].id;
-        await b.begin(); const contender = insertUnit(b,'6');
+        await b.begin(); const contender = settle(insertUnit(b,'6'));
         await waitUntilBlocked(observer.client,b.pid,'second WEU insertion against same Work cap');
         await a.commit();
-        await assert.rejects(contender,/Work planned WEU cap exceeded/);
+        const exceeded = await contender;
+        assert.equal(exceeded.ok,false);
+        if (!exceeded.ok) assert.match(String(exceeded.error),/Work planned WEU cap exceeded/);
         await b.rollback();
         assert.equal((await pool.query('SELECT count(*)::int AS n FROM work_execution_units WHERE object_work_id=$1',[work.id])).rows[0].n,1);
         const portion = (await pool.query(`INSERT INTO quantity_portions(tenant_id,execution_unit_id,label,planned_quantity)
@@ -49,14 +51,18 @@ test('R06b 037 native upgrade, direct SQL caps and two-session Work cap serializ
         const blocker = await Session.open(db.url,'r06b-work-blocker');
         await blocker.begin();
         await blocker.query('SELECT id FROM works WHERE tenant_id=$1 AND id=$2 FOR UPDATE',[pm.tenantId,work.id]);
-        const pending = replaceWorkAllocation(pm,object.id,work.id,{expectedVersionId:good.versionId,units:[]},hash(login.token));
+        // Attach both resolution paths before unlocking the Work. The command
+        // may reject immediately after release, before the later assertion.
+        const pending = settle(replaceWorkAllocation(pm,object.id,work.id,{expectedVersionId:good.versionId,units:[]},hash(login.token)));
         try {
             await until(async () => (await observer.query(`SELECT count(*)::int AS n FROM pg_stat_activity
                 WHERE wait_event_type='Lock' AND query LIKE 'SELECT * FROM works WHERE tenant_id=%FOR UPDATE'`)).rows[0].n>0,
                 'R06b allocation blocked behind Work lock');
             await pool.query("UPDATE users SET role='GENERAL_DIRECTOR' WHERE tenant_id=$1 AND id=$2",[pm.tenantId,pm.id]);
         } finally { await blocker.rollback(); await blocker.close(); }
-        await assert.rejects(pending,/Недостаточно прав/);
+        const revoked = await pending;
+        assert.equal(revoked.ok,false);
+        if (!revoked.ok) assert.match(String(revoked.error),/Недостаточно прав/);
         await pool.query("UPDATE users SET role='PROJECT_MANAGER' WHERE tenant_id=$1 AND id=$2",[pm.tenantId,pm.id]);
         const pointer = (await pool.query('SELECT version_id FROM work_current_allocation WHERE work_id=$1',[work.id])).rows[0].version_id;
         await assert.rejects(pool.query(`INSERT INTO work_allocation_lines(tenant_id,object_id,work_id,version_id,execution_unit_id,quantity,unit)
