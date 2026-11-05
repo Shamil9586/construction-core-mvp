@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { PoolClient } from 'pg';
 import { connectUnguarded, markTransactionClient, poolGuard, unmarkTransactionClient } from './db';
 
 /**
@@ -38,12 +39,15 @@ export const MAX_ATTEMPTS_CEILING = 5;
 
 export interface CommandTxOptions {
     isolation?: Isolation;
+    /** FIN-only opt-in: select a limited pool connection BEFORE the transaction starts. */
+    connect?: () => Promise<PoolClient>;
     /** Total attempts (1 = no retry). Bounded: at most MAX_ATTEMPTS_CEILING, whatever is asked. */
     maxAttempts?: number;
 }
 
-async function runOnce<T>(kind: TxContext['kind'], isolation: Isolation, attempt: number, begin: string, fn: (tx: TxContext) => Promise<T>): Promise<T> {
-    const c = await connectUnguarded();
+async function runOnce<T>(kind: TxContext['kind'], isolation: Isolation, attempt: number, begin: string, fn: (tx: TxContext) => Promise<T>, connect: () => Promise<PoolClient> = connectUnguarded): Promise<T> {
+    // Connector is selected before BEGIN; no nested pool acquisition in guarded callback.
+    const c = await connect();
     try {
         await c.query(begin);
         markTransactionClient(c);
@@ -70,7 +74,7 @@ export async function runCommandTx<T>(fn: (tx: TxContext) => Promise<T>, opts: C
     const maxAttempts = Math.min(Math.max(1, Math.trunc(opts.maxAttempts ?? 1)), MAX_ATTEMPTS_CEILING);
     for (let attempt = 1; ; attempt++) {
         try {
-            return await runOnce('COMMAND', isolation, attempt, 'BEGIN ISOLATION LEVEL ' + isolation, fn);
+            return await runOnce('COMMAND', isolation, attempt, 'BEGIN ISOLATION LEVEL ' + isolation, fn, opts.connect);
         }
         catch (e: any) {
             if (attempt >= maxAttempts || !RETRYABLE_SQLSTATES.includes(e?.code))
@@ -79,6 +83,6 @@ export async function runCommandTx<T>(fn: (tx: TxContext) => Promise<T>, opts: C
     }
 }
 
-export function runSnapshotRead<T>(fn: (tx: TxContext) => Promise<T>): Promise<T> {
-    return runOnce('SNAPSHOT_READ', 'REPEATABLE READ', 1, 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY', fn);
+export function runSnapshotRead<T>(fn: (tx: TxContext) => Promise<T>, connect: () => Promise<PoolClient> = connectUnguarded): Promise<T> {
+    return runOnce('SNAPSHOT_READ', 'REPEATABLE READ', 1, 'BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY', fn, connect);
 }

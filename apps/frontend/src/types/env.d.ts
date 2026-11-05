@@ -6,6 +6,8 @@
 interface ImportMetaEnv {
   /** F6 provider selection — 'mock' | 'real', see data/selectDataProvider.ts. */
   readonly VITE_DATA_PROVIDER?: string;
+  /** FIN-SDO-1 gated workspace, not enabled in production without DB acceptance. */
+  readonly VITE_FIN_SDO_1?: string;
   /**
    * Vite's own built-in flag: true under `vite`/`vite dev` (the dev server),
    * false under `vite build` (any built bundle, wherever it is later

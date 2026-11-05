@@ -8,7 +8,7 @@ import ts from 'typescript';
  *
  * A "writer site" is
  *   TX         a call to `transaction(…)` or `<x>.transaction(…)` — every code path that opens a write transaction — and, since R05, a call to
- *              `runCommandTx(…)` (the R03a command context the GPR-2 stages write through)
+ *              `runCommandTx(…)` (the R03a command context the GPR-2 stages write through) or the FIN restricted-pool `runFinSdoCommandTx(…)`
  *   POOLWRITE  a write issued straight on the shared pool: pool.query('INSERT …'), insert(pool, …), one/rows(pool, 'UPDATE …')
  * Each is keyed `<file under apps/backend/src>#<enclosing method or function name>`.
  */
@@ -53,7 +53,7 @@ export function scanSource(relFile: string, text: string): WriterSite[] {
         if (ts.isCallExpression(n)) {
             const callee = n.expression.getText();
             const first = n.arguments[0];
-            if (callee === 'transaction' || callee.endsWith('.transaction') || callee === 'runCommandTx') {
+            if (callee === 'transaction' || callee.endsWith('.transaction') || callee === 'runCommandTx' || callee === 'runFinSdoCommandTx') {
                 const cb = n.arguments.find(a => ts.isArrowFunction(a) || ts.isFunctionExpression(a)) as WriterSite['callback'] | undefined;
                 add(n, 'TX', cb ?? null);
             }
