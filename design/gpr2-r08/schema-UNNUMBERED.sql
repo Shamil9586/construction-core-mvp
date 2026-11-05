@@ -28,6 +28,21 @@ CREATE TABLE gpr2_current_internal_sc_policy (
 
 -- Each requirement binds a specific target and prerequisite source. NULL scope is
 -- prohibited: unknown legacy location is not a match for a chosen target zone.
+CREATE TABLE gpr2_execution_unit_area_scopes (
+    tenant_id uuid NOT NULL,
+    object_id uuid NOT NULL,
+    work_id uuid NOT NULL,
+    execution_unit_id uuid NOT NULL,
+    area_scope_id uuid NOT NULL,
+    created_by uuid NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant_id, object_id, execution_unit_id, area_scope_id),
+    FOREIGN KEY (tenant_id, object_id, work_id) REFERENCES works(tenant_id, object_id, id),
+    FOREIGN KEY (tenant_id, execution_unit_id) REFERENCES work_execution_units(tenant_id, id),
+    FOREIGN KEY (tenant_id, object_id, area_scope_id) REFERENCES object_area_scopes(tenant_id, object_id, id),
+    FOREIGN KEY (tenant_id, created_by) REFERENCES users(tenant_id, id)
+);
+
 CREATE TABLE technical_release_requirements (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id uuid NOT NULL,
@@ -49,8 +64,10 @@ CREATE TABLE technical_release_requirements (
     FOREIGN KEY (tenant_id, object_id, source_work_id) REFERENCES works(tenant_id, object_id, id),
     FOREIGN KEY (tenant_id, object_id, target_area_scope_id) REFERENCES object_area_scopes(tenant_id, object_id, id),
     FOREIGN KEY (tenant_id, object_id, source_area_scope_id) REFERENCES object_area_scopes(tenant_id, object_id, id),
-    FOREIGN KEY (tenant_id, target_execution_unit_id) REFERENCES work_execution_units(tenant_id, id),
-    FOREIGN KEY (tenant_id, source_execution_unit_id) REFERENCES work_execution_units(tenant_id, id),
+    FOREIGN KEY (tenant_id, object_id, target_execution_unit_id, target_area_scope_id)
+      REFERENCES gpr2_execution_unit_area_scopes(tenant_id, object_id, execution_unit_id, area_scope_id),
+    FOREIGN KEY (tenant_id, object_id, source_execution_unit_id, source_area_scope_id)
+      REFERENCES gpr2_execution_unit_area_scopes(tenant_id, object_id, execution_unit_id, area_scope_id),
     FOREIGN KEY (tenant_id, created_by) REFERENCES users(tenant_id, id),
     CHECK (target_work_id <> source_work_id)
 );
