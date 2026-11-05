@@ -99,7 +99,7 @@ BEGIN
 END $$;
 
 CREATE FUNCTION gpr2_r07_quantity_pointer_guard() RETURNS trigger LANGUAGE plpgsql AS $$
-DECLARE v record; r record;
+DECLARE v record; r record; planned numeric;
 BEGIN
     SELECT quantity,source_kind,approved_request_id INTO v FROM work_quantity_versions WHERE tenant_id=NEW.tenant_id
       AND object_id=NEW.object_id AND work_id=NEW.work_id AND id=NEW.approved_version_id;
@@ -110,6 +110,16 @@ BEGIN
         RAISE EXCEPTION 'R07: quantity pointer requires approved request' USING ERRCODE='23514';
     END IF;
     PERFORM gpr2_r07_assert_floor(NEW.tenant_id,NEW.object_id,NEW.work_id,v.quantity);
+    SELECT coalesce(sum(planned_quantity),0) INTO planned FROM work_execution_units
+      WHERE tenant_id=NEW.tenant_id AND object_work_id=NEW.work_id;
+    IF planned>v.quantity AND NOT EXISTS(SELECT 1 FROM work_current_allocation a JOIN work_allocation_versions av
+       ON av.tenant_id=a.tenant_id AND av.object_id=a.object_id AND av.work_id=a.work_id AND av.id=a.version_id
+       WHERE a.tenant_id=NEW.tenant_id AND a.object_id=NEW.object_id AND a.work_id=NEW.work_id
+         AND av.quantity_version_id=NEW.approved_version_id AND av.approved_request_id=v.approved_request_id
+         AND EXISTS(SELECT 1 FROM work_allocation_lines l WHERE l.tenant_id=a.tenant_id AND l.object_id=a.object_id
+           AND l.version_id=a.version_id AND l.portion_id IS NULL AND l.quantity>0)) THEN
+        RAISE EXCEPTION 'R07: reduced Work requires coherent allocation snapshot' USING ERRCODE='23514';
+    END IF;
     RETURN NEW;
 END $$;
 CREATE CONSTRAINT TRIGGER gpr2_r07_quantity_pointer AFTER UPDATE OF approved_version_id ON work_current_quantity

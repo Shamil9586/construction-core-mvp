@@ -128,6 +128,10 @@ export async function r07Approve(ctx: Gpr2CommandContext) {
             if (!q || q.approvedVersionId !== r.quantityVersionId) throw new Gpr2Error('STALE_SOURCE_VERSION');
             const work = await one(c,`SELECT * FROM works WHERE tenant_id=$1 AND object_id=$2 AND id=$3 FOR UPDATE`,[a.tenantId,ctx.objectId,r.workId]);
             const next = new Decimal(r.proposedQuantity);
+            const s = r.surface ? parse(surface,r.surface) : null;
+            if (s && (!new Decimal(s.previousQuantity).eq(q.quantity) || !new Decimal(s.newQuantity).eq(next) ||
+                s.stageEffects.some(x=>!new Decimal(x.oldQuantity).eq(q.quantity) || !new Decimal(x.newQuantity).eq(s.newQuantity))))
+                throw new Gpr2Error('STALE_SOURCE_VERSION');
             const fact = (await loadWorkFacts(c,a.tenantId,[r.workId])).get(r.workId);
             if (!fact || !['KNOWN','NONE_REPORTED'].includes(fact.state) ||
                 (fact.quantity !== null && new Decimal(fact.quantity).gt(next))) throw new Gpr2Error('BELOW_PROTECTED_QUANTITY');
@@ -148,11 +152,16 @@ export async function r07Approve(ctx: Gpr2CommandContext) {
             if ((prior?.versionId ?? null) !== (d?.expectedVersionId ?? null) || (!!prior && !d)) throw new Gpr2Error('STALE_SOURCE_VERSION');
             const unitSum = (d?.units ?? []).reduce((s,x)=>s.plus(x.quantity),new Decimal(0));
             if (unitSum.gt(next)) throw new Gpr2Error('BELOW_PROTECTED_QUANTITY');
+            // A Work with existing WEU plans cannot be reduced below their sum without an explicit
+            // replacement allocation snapshot. Otherwise it advertises a smaller Work cap while
+            // retaining larger production obligations outside the quantity decision.
+            const planned = await one(c,`SELECT coalesce(sum(planned_quantity),0)::text AS total FROM work_execution_units
+                WHERE tenant_id=$1 AND object_work_id=$2`,[a.tenantId,r.workId]);
+            if (new Decimal(planned.total).gt(next) && (!d || unitSum.isZero())) throw new Gpr2Error('BELOW_PROTECTED_QUANTITY');
             for (const x of protectedRows) if (new Decimal(x.floor).gt(0)) {
                 const target = d?.units.flatMap(u=>u.portions).find(p=>p.portionId===x.portionId);
                 if (!target || new Decimal(target.quantity).lt(x.floor)) throw new Gpr2Error('BELOW_PROTECTED_QUANTITY');
             }
-            const s = r.surface ? parse(surface,r.surface) : null;
             if (s) {
                 const bindings = await rows(c,`SELECT occurrence_id,work_id FROM work_scope_bindings WHERE tenant_id=$1 AND object_id=$2
                     AND area_scope_id=$3 AND measure_scope='MAIN' AND binding_state='ACTIVE' ORDER BY work_id,occurrence_id`,
@@ -162,8 +171,6 @@ export async function r07Approve(ctx: Gpr2CommandContext) {
                 if (!expected.size || proposed.size!==s.stageEffects.length || proposed.size!==expected.size ||
                     [...expected].some(x=>!proposed.has(x)) || !s.stageEffects.some(x=>x.workId===r.workId))
                     throw new Gpr2Error('CROSS_SCOPE_REFERENCE');
-                if (!new Decimal(s.newQuantity).eq(next) || s.stageEffects.some(x=>!new Decimal(x.oldQuantity).eq(s.previousQuantity) ||
-                    !new Decimal(x.newQuantity).eq(s.newQuantity))) throw new Gpr2Error('VALIDATION_FAILED');
             }
             const version = await one(c,`INSERT INTO work_quantity_versions(tenant_id,object_id,work_id,sequence,quantity,unit,source_kind,approved_request_id,previous_id,created_by)
                 VALUES($1,$2,$3,$4,$5,$6,'APPROVED_REQUEST',$7,$8,$9) RETURNING id`,

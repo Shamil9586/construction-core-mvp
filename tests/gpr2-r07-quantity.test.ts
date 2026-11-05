@@ -74,3 +74,41 @@ test('protected 850 refuses 800, protected 800 permits 800; direct SQL cannot ad
     } finally { await client.query('ROLLBACK').catch(()=>undefined); client.release(); }
     assert.equal((await row('SELECT approved_version_id FROM work_current_quantity WHERE work_id=$1',[w.id])).approved_version_id,current.approved_version_id);
 });
+
+test('reduction below persisted WEU plans requires an explicit allocation; forged surface old quantity is stale',async()=>{
+    await g.h.as(p.pm);
+    const w = await g.h.req('works',{objectId:p.object.id,workTypeId:p.plaster.id,contractorId:p.contractors[0].id,
+        responsibleUserId:p.pm.id,name:'R07 planned WEU',unit:'м²',plannedQuantity:1000,plannedStartDate:'2026-03-01',plannedFinishDate:'2026-04-30',estimatedCost:'100000'});
+    await g.h.req('execution-units',{objectWorkId:w.id,workTypeId:p.plaster.id,contractorId:p.contractors[0].id,unit:'м²',plannedQuantity:900,location:'R07 zone'});
+    const prior=await row('SELECT approved_version_id FROM work_current_quantity WHERE work_id=$1',[w.id]);
+    const scope=await row('SELECT scope_version FROM work_scope_state WHERE tenant_id=$1 AND object_id=$2',[p.pm.tenantId,p.object.id]);
+    const draft=await call(pm,'POST','',{expectedScopeVersion:String(scope.scope_version),payload:{workId:w.id,newQuantity:'800',reason:'Уменьшение без распределения',
+        inputFingerprint:'a'.repeat(64),expectedSourceVersions:{quantity:prior.approved_version_id}}});
+    assert.equal(draft.status,200,JSON.stringify(draft.body)); const id=draft.body.resultIds[0];
+    assert.equal((await call(pm,'POST',`/${id}/submit`,{expectedVersion:'1',expectedScopeVersion:String(scope.scope_version),payload:{inputFingerprint:'a'.repeat(64),expectedSourceVersions:{quantity:prior.approved_version_id}}})).status,200);
+    const saved=await row('SELECT payload FROM gpr2_quantity_submissions WHERE request_id=$1',[id]);
+    const approve={expectedVersion:'2',expectedScopeVersion:String(scope.scope_version),payload:{inputFingerprint:contentHash(saved.payload),expectedSourceVersions:{quantity:prior.approved_version_id}}};
+    const reject=await call(deputy,'POST',`/${id}/approve`,approve);
+    assert.equal(reject.status,422,JSON.stringify(reject.body)); assert.equal(reject.body.code,'BELOW_PROTECTED_QUANTITY');
+    assert.equal((await row('SELECT approved_version_id FROM work_current_quantity WHERE work_id=$1',[w.id])).approved_version_id,prior.approved_version_id);
+    // The same check is enforced at commit even when someone writes a new version through SQL.
+    const client=await db.pool.connect();
+    try {
+        await client.query('BEGIN');
+        await client.query("UPDATE gpr2_quantity_requests SET state='APPROVED' WHERE id=$1",[id]);
+        const v=(await client.query(`INSERT INTO work_quantity_versions(tenant_id,object_id,work_id,sequence,quantity,unit,source_kind,approved_request_id,previous_id,created_by)
+            VALUES($1,$2,$3,2,800,$4,'APPROVED_REQUEST',$5,$6,$7) RETURNING id`,[p.pm.tenantId,p.object.id,w.id,w.unit,id,prior.approved_version_id,p.pm.id])).rows[0].id;
+        await client.query('UPDATE work_current_quantity SET approved_version_id=$1 WHERE work_id=$2',[v,w.id]);
+        await assert.rejects(client.query('COMMIT'),/coherent allocation snapshot/);
+    } finally { await client.query('ROLLBACK').catch(()=>undefined); client.release(); }
+    const stale=await call(pm,'POST','',{expectedScopeVersion:String(scope.scope_version),payload:{workId:w.id,newQuantity:'800',reason:'Ложный исходный объём',
+        inputFingerprint:'b'.repeat(64),expectedSourceVersions:{quantity:prior.approved_version_id},
+        surface:{areaScopeId:uuid(),previousQuantity:'900',newQuantity:'800',stageEffects:[{stageOccurrenceId:uuid(),workId:w.id,oldQuantity:'900',newQuantity:'800'}]}}});
+    assert.equal(stale.status,200,JSON.stringify(stale.body)); const sid=stale.body.resultIds[0];
+    assert.equal((await call(pm,'POST',`/${sid}/submit`,{expectedVersion:'1',expectedScopeVersion:String(scope.scope_version),payload:{inputFingerprint:'b'.repeat(64),expectedSourceVersions:{quantity:prior.approved_version_id}}})).status,200);
+    const ss=await row('SELECT payload FROM gpr2_quantity_submissions WHERE request_id=$1',[sid]);
+    const bad=await call(deputy,'POST',`/${sid}/approve`,{expectedVersion:'2',expectedScopeVersion:String(scope.scope_version),
+        payload:{inputFingerprint:contentHash(ss.payload),expectedSourceVersions:{quantity:prior.approved_version_id}}});
+    assert.equal(bad.status,409,JSON.stringify(bad.body)); assert.equal(bad.body.code,'STALE_SOURCE_VERSION');
+    assert.equal((await row('SELECT approved_version_id FROM work_current_quantity WHERE work_id=$1',[w.id])).approved_version_id,prior.approved_version_id);
+});
