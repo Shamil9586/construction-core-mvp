@@ -180,8 +180,9 @@ CREATE FUNCTION gpr2_r08_issue_scope_guard() RETURNS trigger LANGUAGE plpgsql AS
 BEGIN
   IF NOT EXISTS(SELECT 1 FROM issues i JOIN inspections x ON x.tenant_id=i.tenant_id AND x.id=i.inspection_id
     JOIN works w ON w.tenant_id=x.tenant_id AND w.id=x.object_work_id
+    JOIN quantity_portions p ON p.tenant_id=x.tenant_id AND p.id=x.portion_id
     WHERE i.tenant_id=NEW.tenant_id AND i.id=NEW.issue_id AND i.created_at=transaction_timestamp()
-      AND i.severity='CRITICAL' AND x.object_id=NEW.object_id
+      AND i.severity='CRITICAL' AND x.object_id=NEW.object_id AND p.execution_unit_id=NEW.execution_unit_id
       AND w.id=(SELECT m.work_id FROM gpr2_execution_unit_area_scopes m WHERE m.tenant_id=NEW.tenant_id
         AND m.object_id=NEW.object_id AND m.execution_unit_id=NEW.execution_unit_id AND m.area_scope_id=NEW.area_scope_id)) THEN
     RAISE EXCEPTION 'R08 issue scope mismatch' USING ERRCODE='23514';
