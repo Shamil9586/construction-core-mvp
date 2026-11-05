@@ -80,14 +80,27 @@ test('R08 source RP and applicable SC remain independent gates; no synthetic SC 
     executionUnitId:u.id,quantity:'20',portions:[{portionId:portion.id,quantity:'20'}]}]});
   await h.req(`objects/${o}/r08-release-setup`,{workId:work.id,executionUnitId:u.id,areaScopeId:area,
     basis:'explicit source scope',policy:'REQUIRED',requirements:[{sourceWorkId:source,
-      sourceExecutionUnitId:p.floor1.unit.id,sourceAreaScopeId:sourceArea,requiresInternalSc:true,cureDays:0}]});
+      sourceExecutionUnitId:p.floor1.unit.id,sourceAreaScopeId:sourceArea,requiresInternalSc:true,cureSeconds:172800}]});
   const route=`objects/${o}/works/${work.id}/execution-units/${u.id}/release`;
-  assert.deepEqual((await h.req(route)).reasons,['PREDECESSOR_RP_MISSING','INTERNAL_SC_MISSING']);
+  assert.deepEqual((await h.req(route)).reasons,['PREDECESSOR_RP_MISSING','INTERNAL_SC_MISSING','CURE_PENDING']);
   await reportFact(h,p.pm,p.floor1.portion.id,500);
-  assert.deepEqual((await h.req(route)).reasons,['INTERNAL_SC_MISSING']);
+  assert.deepEqual((await h.req(route)).reasons,['INTERNAL_SC_MISSING','CURE_PENDING']);
   assert.equal((await pool.query(`SELECT count(*)::int AS n FROM portion_quantity_confirmations WHERE portion_id=$1 AND source='INTERNAL_SC'`,
     [p.floor1.portion.id])).rows[0].n,0);
   await acceptInternalSc(h,p.floor1.portion.id,500);
   await h.as(p.pm);
-  assert.equal((await h.req(route)).allowed,true);
+  const pending=await h.req(route);
+  assert.deepEqual(pending.reasons,['CURE_PENDING']);
+  const rp=(await pool.query(`SELECT recorded_at FROM portion_quantity_confirmations WHERE portion_id=$1 AND source='RP_FACT'
+    ORDER BY recorded_at DESC LIMIT 1`,[p.floor1.portion.id])).rows[0].recorded_at;
+  assert.equal(Date.parse(pending.cureDeadlines[0].cureUntil)-new Date(rp).getTime(),172800000);
+  const sourceInspection=(await pool.query(`INSERT INTO inspections(tenant_id,object_id,object_work_id,portion_id,requested_by)
+    VALUES($1,$2,$3,$4,$5) RETURNING id`,[t,o,source,p.floor1.portion.id,p.pm.id])).rows[0].id;
+  await h.login('CONSTRUCTION_CONTROL');
+  await h.req(`inspections/${sourceInspection}/issues`,{title:'Source-only critical',severity:'CRITICAL',
+    responsibleUserId:p.pm.id,dueDate:'2026-12-01',version:1,areaScopeId:sourceArea,executionUnitId:p.floor1.unit.id});
+  await h.as(p.pm);
+  assert.deepEqual((await h.req(route)).reasons,['CURE_PENDING','CRITICAL_ISSUE']);
+  assert.equal((await h.req(`objects/${o}/works/${source}/execution-units/${p.floor2.unit.id}/release`)).allowed,true,
+    'a source issue must not become a whole-object blocker for unrelated U2');
 });
