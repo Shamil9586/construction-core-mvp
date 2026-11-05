@@ -120,7 +120,11 @@ export async function readZonalRelease(c: any, actor: Actor, objectId: string, w
         JOIN inspections x ON x.tenant_id=i.tenant_id AND x.id=i.inspection_id
         LEFT JOIN gpr2_critical_issue_scopes s ON s.tenant_id=i.tenant_id AND s.issue_id=i.id
         WHERE i.tenant_id=$1 AND x.object_id=$2 AND i.severity='CRITICAL' AND i.status<>'CLOSED'`,
-        [actor.tenantId,objectId])).map((i:any)=>({areaId:i.areaScopeId??null,executionUnitId:i.executionUnitId??null,critical:true,open:true}));
+        [actor.tenantId,objectId])).map((i:any)=>{
+            const sourceBlock=raw.some((r:any)=>r.sourceAreaScopeId===i.areaScopeId && r.sourceExecutionUnitId===i.executionUnitId);
+            return {areaId:sourceBlock ? null : i.areaScopeId??null,executionUnitId:sourceBlock ? null : i.executionUnitId??null,
+                critical:true,open:true};
+        });
     const localDate = (await one(c,'SELECT CURRENT_DATE::text AS day',[])).day;
     const activeAssignment = unit.contractorId && await one(c,`SELECT 1 AS present FROM object_contractors_active
         WHERE tenant_id=$1 AND object_id=$2 AND contractor_id=$3`,[actor.tenantId,objectId,unit.contractorId]);
