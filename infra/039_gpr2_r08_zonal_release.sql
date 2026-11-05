@@ -55,7 +55,7 @@ CREATE TABLE technical_release_requirements (
     source_execution_unit_id uuid NOT NULL,
     source_area_scope_id uuid NOT NULL,
     requires_internal_sc boolean NOT NULL,
-    cure_days integer NOT NULL DEFAULT 0 CHECK (cure_days >= 0),
+    cure_seconds integer NOT NULL DEFAULT 0 CHECK (cure_seconds BETWEEN 0 AND 315360000),
     created_by uuid NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE (tenant_id, object_id, id),
