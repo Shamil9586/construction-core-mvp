@@ -112,3 +112,73 @@ test('reduction below persisted WEU plans requires an explicit allocation; forge
     assert.equal(bad.status,409,JSON.stringify(bad.body)); assert.equal(bad.body.code,'STALE_SOURCE_VERSION');
     assert.equal((await row('SELECT approved_version_id FROM work_current_quantity WHERE work_id=$1',[w.id])).approved_version_id,prior.approved_version_id);
 });
+
+test('Deputy return retains submission and reason; PM revision opens a new immutable submission',async()=>{
+    await g.h.as(p.pm);
+    const w=await g.h.req('works',{objectId:p.object.id,workTypeId:p.plaster.id,contractorId:p.contractors[0].id,
+        responsibleUserId:p.pm.id,name:'R07 return lifecycle',unit:'м²',plannedQuantity:100,plannedStartDate:'2026-03-01',plannedFinishDate:'2026-04-30',estimatedCost:'100000'});
+    const q=await row('SELECT approved_version_id FROM work_current_quantity WHERE work_id=$1',[w.id]);
+    const s=await row('SELECT scope_version FROM work_scope_state WHERE tenant_id=$1 AND object_id=$2',[p.pm.tenantId,p.object.id]);
+    const c=await call(pm,'POST','',{expectedScopeVersion:String(s.scope_version),payload:{workId:w.id,newQuantity:'90',reason:'Первый вариант'}});
+    assert.equal(c.status,200); const id=c.body.resultIds[0];
+    assert.equal((await call(pm,'POST',`/${id}/submit`,{expectedVersion:'1',expectedScopeVersion:String(s.scope_version),payload:{inputFingerprint:'c'.repeat(64),expectedSourceVersions:{quantity:q.approved_version_id}}})).status,200);
+    const returned=await call(deputy,'POST',`/${id}/return`,{expectedVersion:'2',payload:{reason:'Уточните поверхность'}});
+    assert.equal(returned.status,200,JSON.stringify(returned.body));
+    const patch=await call(pm,'PATCH',`/${id}`,{expectedVersion:'3',payload:{newQuantity:'85',reason:'Уточнённый вариант'}});
+    assert.equal(patch.status,200,JSON.stringify(patch.body));
+    assert.equal((await call(pm,'POST',`/${id}/submit`,{expectedVersion:'4',expectedScopeVersion:String(s.scope_version),payload:{inputFingerprint:'d'.repeat(64),expectedSourceVersions:{quantity:q.approved_version_id}}})).status,200);
+    const versions=(await db.pool.query('SELECT number,payload FROM gpr2_quantity_submissions WHERE request_id=$1 ORDER BY number',[id])).rows;
+    assert.deepEqual(versions.map((x:any)=>x.number),[1,2]);
+    assert.equal(versions[0].payload.newQuantity,'90.0000'); assert.equal(versions[1].payload.newQuantity,'85.0000');
+    const events=(await db.pool.query('SELECT action,reason FROM gpr2_quantity_events WHERE request_id=$1 ORDER BY created_at,id',[id])).rows;
+    assert.ok(events.some((x:any)=>x.action==='RETURN' && x.reason==='Уточните поверхность'));
+});
+
+test('surface group rolls back primary version and all effects when sibling protected floor rejects',async()=>{
+    // Use the R05 guarded catalogue/generation routes to create two real MAIN producer bindings.
+    const mkArea=async (body:any) => {
+        const r=await g.call(pm,'POST',`/v2/objects/${p.object.id}/area-scopes`,{body:{payload:body},headers:{'Idempotency-Key':uuid()}});
+        assert.equal(r.status,200,JSON.stringify(r.body)); return r.body.resultIds[0] as string;
+    };
+    const building=await mkArea({kind:'BUILDING',code:'R07-B',name:'Корпус R07'});
+    const floor=await mkArea({parentId:building,kind:'FLOOR',code:'R07-F',name:'Этаж R07',measureQuantity:'1000',measureUnit:'м²'});
+    const sys=await g.call(pm,'POST',`/v2/objects/${p.object.id}/finish-systems`,{body:{payload:{finishType:{code:'R07-FIN',name:'Отделка R07'},stages:[
+        {occurrenceKey:'R07-A',position:1,workTypeId:p.plaster.id,required:true,measureScope:'MAIN',measureUnit:'м²'},
+        {occurrenceKey:'R07-B',position:2,workTypeId:p.plaster.id,required:true,measureScope:'MAIN',measureUnit:'м²'}
+    ]}},headers:{'Idempotency-Key':uuid()}});
+    assert.equal(sys.status,200,JSON.stringify(sys.body)); const [finishTypeId,systemVersionId]=sys.body.resultIds;
+    const preview=await g.call(pm,'POST',`/v2/objects/${p.object.id}/finish-systems/${finishTypeId}/preview`,
+        {body:{expectedVersion:'1',payload:{systemVersionId,areaScopeIds:[floor]}}});
+    assert.equal(preview.status,200,JSON.stringify(preview.body)); assert.equal(preview.body.preview.canConfirm,true,JSON.stringify(preview.body.preview));
+    const pv=preview.body.preview;
+    const confirm=await g.call(pm,'POST',`/v2/objects/${p.object.id}/finish-systems/${finishTypeId}/confirm`,{
+        body:{expectedVersion:'1',expectedScopeVersion:pv.scopeVersion,payload:{systemVersionId,areaScopeIds:[floor],previewFingerprint:pv.previewFingerprint,
+            expectedSourceVersions:{systemVersion:systemVersionId}}},headers:{'Idempotency-Key':uuid()}});
+    assert.equal(confirm.status,200,JSON.stringify(confirm.body));
+    const bindings=(await db.pool.query('SELECT occurrence_id,work_id FROM work_scope_bindings WHERE area_scope_id=$1 ORDER BY occurrence_id',[floor])).rows;
+    assert.equal(bindings.length,2); const [primary,sibling]=bindings;
+    const initial=await row('SELECT approved_version_id FROM work_current_quantity WHERE work_id=$1',[primary.work_id]);
+    const scope=await row('SELECT scope_version FROM work_scope_state WHERE tenant_id=$1 AND object_id=$2',[p.pm.tenantId,p.object.id]);
+    const effects=bindings.map((x:any)=>({stageOccurrenceId:x.occurrence_id,workId:x.work_id,oldQuantity:'1000',newQuantity:'800'}));
+    const draft=await call(pm,'POST','',{expectedScopeVersion:String(scope.scope_version),payload:{workId:primary.work_id,newQuantity:'800',reason:'Групповая поверхность',
+        surface:{areaScopeId:floor,previousQuantity:'1000',newQuantity:'800',stageEffects:effects}}});
+    assert.equal(draft.status,200,JSON.stringify(draft.body)); const id=draft.body.resultIds[0];
+    assert.equal((await call(pm,'POST',`/${id}/submit`,{expectedVersion:'1',expectedScopeVersion:String(scope.scope_version),payload:{inputFingerprint:'e'.repeat(64),expectedSourceVersions:{quantity:initial.approved_version_id}}})).status,200);
+    const saved=await row('SELECT payload FROM gpr2_quantity_submissions WHERE request_id=$1',[id]);
+    await db.pool.query('UPDATE works SET actual_quantity=850 WHERE id=$1',[sibling.work_id]);
+    const refused=await call(deputy,'POST',`/${id}/approve`,{expectedVersion:'2',expectedScopeVersion:String(scope.scope_version),
+        payload:{inputFingerprint:contentHash(saved.payload),expectedSourceVersions:{quantity:initial.approved_version_id}}});
+    assert.equal(refused.status,422,JSON.stringify(refused.body)); assert.equal(refused.body.code,'BELOW_PROTECTED_QUANTITY');
+    for(const b of bindings) assert.equal((await row('SELECT approved_version_id FROM work_current_quantity WHERE work_id=$1',[b.work_id])).approved_version_id,
+        (await row('SELECT id FROM work_quantity_versions WHERE work_id=$1 AND sequence=1',[b.work_id])).id);
+    assert.equal((await row('SELECT count(*)::int AS n FROM gpr2_surface_changes WHERE request_id=$1',[id])).n,0);
+    assert.equal((await row('SELECT count(*)::int AS n FROM gpr2_schedule_basis_invalidations WHERE request_id=$1',[id])).n,0);
+    await db.pool.query('UPDATE works SET actual_quantity=800 WHERE id=$1',[sibling.work_id]);
+    const applied=await call(deputy,'POST',`/${id}/approve`,{expectedVersion:'2',expectedScopeVersion:String(scope.scope_version),
+        payload:{inputFingerprint:contentHash(saved.payload),expectedSourceVersions:{quantity:initial.approved_version_id}}});
+    assert.equal(applied.status,200,JSON.stringify(applied.body));
+    for(const b of bindings) assert.equal((await row('SELECT v.quantity FROM work_current_quantity p JOIN work_quantity_versions v ON v.id=p.approved_version_id WHERE p.work_id=$1',[b.work_id])).quantity,'800.0000');
+    assert.equal((await row('SELECT count(*)::int AS n FROM gpr2_surface_changes WHERE request_id=$1',[id])).n,1);
+    assert.equal((await row('SELECT count(*)::int AS n FROM gpr2_surface_effects e JOIN gpr2_surface_changes s ON s.id=e.surface_change_id WHERE s.request_id=$1',[id])).n,2);
+    assert.equal((await row('SELECT count(*)::int AS n FROM gpr2_schedule_basis_invalidations WHERE request_id=$1',[id])).n,2);
+});
