@@ -19,7 +19,9 @@ export const objectEditDto = z.object({ name: text.optional(), address: text.opt
 export const workDto = z.object({ objectId: uuid, workTypeId: uuid, contractorId: uuid.nullish(), responsibleUserId: uuid.nullish(), name: text, unit: text, plannedQuantity: qty.refine(v => Number(v) > 0), plannedStartDate: date.nullish(), plannedFinishDate: date.nullish(), estimatedCost: money.nullish(), idempotencyKey: uuid.optional() }).strict().refine(d => [d.contractorId, d.responsibleUserId, d.plannedStartDate, d.plannedFinishDate, d.estimatedCost].every(v => v != null) || !!d.idempotencyKey, 'Для ранней работы необходим idempotencyKey');
 export const completeWorkPlanningDto = z.object({ contractorId: uuid.optional(), responsibleUserId: uuid.optional(), estimatedCost: money.optional(), plannedStartDate: date.optional(), plannedFinishDate: date.optional(), version, idempotencyKey: uuid }).strict().refine(d => Object.keys(d).some(k => k !== 'version' && k !== 'idempotencyKey'), 'Нужно заполнить хотя бы один реквизит');
 export const progressDto = z.object({ totalQuantity: qty, version, comment: text }).strict();
-export const issueDto = z.object({ title: text, description: text.optional(), severity: z.enum(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']), responsibleUserId: uuid, dueDate: date, version }).strict();
+export const issueDto = z.object({ title: text, description: text.optional(), severity: z.enum(['LOW', 'MEDIUM', 'HIGH', 'CRITICAL']), responsibleUserId: uuid, dueDate: date, version,
+    areaScopeId: uuid.optional(), executionUnitId: uuid.optional() }).strict().refine(v=>(!!v.areaScopeId)===(!!v.executionUnitId),
+    'Зона и единица исполнения должны быть указаны вместе');
 export const closeDto = z.object({ sdoCaseId: uuid, amount: money.refine(v => Number(v) > 0), period: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/), closingDate: date, version, idempotencyKey: uuid }).strict();
 // F8.1 Production Execution + Construction Control Foundation.
 // F12.3 (LOCKED DECISION 2): idempotencyKey is optional, not required like
