@@ -28,6 +28,8 @@ export function evaluateZonalRelease(input: {
   targetAreaId: string;
   targetExecutionUnitId: string;
   assigned: boolean;
+  /** Explicitly established target AreaScope/WEU association, never inferred from free-text location. */
+  scopeKnown: boolean;
   policy: InternalScPolicy | null;
   requirements: ReleaseRequirement[] | null;
   evidence: ReleaseEvidence[];
@@ -36,6 +38,7 @@ export function evaluateZonalRelease(input: {
 }): { allowed: boolean; reasons: ReleaseReason[]; requirementIds: string[] } {
   const reasons = new Set<ReleaseReason>();
   if (!input.assigned) reasons.add('ASSIGNMENT_MISSING');
+  if (!input.scopeKnown) reasons.add('EVIDENCE_MISSING');
   if (!input.policy) reasons.add('POLICY_UNKNOWN');
   // Null means legacy or incomplete mapping. Empty is a positively established absence of prerequisites.
   if (input.requirements === null) reasons.add('EVIDENCE_MISSING');
