@@ -6,6 +6,7 @@ import { Actor, objectAccess, workAccess } from './security';
 import { runSnapshotRead } from './tx-context';
 import { Permission, hasPermission } from '../../../packages/domain';
 import { QuantityRead, shapeQuantityRead } from '../../../packages/domain/gpr2/r06a-quantity';
+import { readAllocation } from './gpr2-r06b-allocation';
 
 /** Called after a newly created Work INSERT on the same coordinated command connection. Never run for historical rows. */
 export async function recordInitialWorkQuantity(c: any, work: { id: string; tenantId: string; objectId: string }, actorId: string,
@@ -53,7 +54,8 @@ export async function readWorkQuantity(actor: Actor, objectIdInput: string, work
             JOIN work_quantity_versions v ON (v.tenant_id=p.tenant_id AND v.object_id=p.object_id AND v.work_id=p.work_id AND v.id=p.approved_version_id)
             WHERE p.tenant_id=$1 AND p.object_id=$2 AND p.work_id=$3`, [actor.tenantId, objectId, workId]);
         const fact = (await loadWorkFacts(c, actor.tenantId, [workId])).get(workId);
-        return shapeQuantityRead({ workId, objectId, origin, pointer, observedQuantity: work.observedQuantity, observedUnit: work.unit,
+        const quantity = shapeQuantityRead({ workId, objectId, origin, pointer, observedQuantity: work.observedQuantity, observedUnit: work.unit,
             factQuantity: fact?.quantity ?? null, factState: fact?.state ?? 'UNKNOWN', factSourceMode: fact?.mode ?? 'UNKNOWN' });
+        return { ...quantity, ...(await readAllocation(c, actor.tenantId, objectId, workId, quantity.currentQuantity)) };
     });
 }
