@@ -39,6 +39,7 @@ test('R10 completed local day, DST and elapsed cure are independent of working d
     assert.equal(normalizeElapsed(2,'CALENDAR_DAYS'), seconds);
     assert.equal(elapsedRelease(new Date('2026-03-07T17:00:00Z'),seconds)?.toISOString(),'2026-03-09T17:00:00.000Z');
     assert.equal(elapsedRelease(null,seconds),null);
+    assert.throws(() => elapsedRelease(new Date('2026-03-07T17:00:00Z'), normalizeElapsed(3_000_000_000,'HOURS')), /вне диапазона/);
     assert.equal(countWorkingDays(ny,'2026-03-07','2026-03-08'),0);
     if (false) {
         // @ts-expect-error An elapsed duration is not a working-day offset.

@@ -112,5 +112,7 @@ export function normalizeElapsed(value: number, unit: 'HOURS' | 'CALENDAR_DAYS')
 export function elapsedRelease(start: Date | null, seconds: ElapsedSeconds): Date | null {
     if (start === null) return null;
     if (Number.isNaN(start.getTime()) || !Number.isSafeInteger(seconds) || seconds < 0) throw new Error('Некорректный момент выдержки');
-    return new Date(start.getTime() + seconds * 1000);
+    const result = new Date(start.getTime() + seconds * 1000);
+    if (Number.isNaN(result.getTime())) throw new Error('Момент завершения выдержки вне диапазона');
+    return result;
 }
