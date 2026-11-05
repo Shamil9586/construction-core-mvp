@@ -10,7 +10,7 @@ const evidence = [
   { requirementId: 'r1', sourceAreaId: 's1', sourceExecutionUnitId: 'p1', rpConfirmed: true, internalScConfirmed: true, evidenceKnown: true },
   { requirementId: 'r2', sourceAreaId: 's2', sourceExecutionUnitId: 'p2', rpConfirmed: false, internalScConfirmed: false, evidenceKnown: true },
 ];
-const base = { targetAreaId: 'a1', targetExecutionUnitId: 'u1', assigned: true, policy: 'REQUIRED' as const, requirements, evidence, issues: [], localDate: '2026-11-05' };
+const base = { targetAreaId: 'a1', targetExecutionUnitId: 'u1', assigned: true, scopeKnown: true, policy: 'REQUIRED' as const, requirements, evidence, issues: [], localDate: '2026-11-05' };
 
 test('R08 A11: blocked adjacent unit does not block a ready target', () => {
   assert.deepEqual(evaluateZonalRelease(base), { allowed: true, reasons: [], requirementIds: ['r1'] });
@@ -24,6 +24,7 @@ test('R08: whole-object critical issue applies to both; scoped issue only to its
 test('R08: unknown policy, legacy mapping and source ambiguity fail closed', () => {
   assert.deepEqual(evaluateZonalRelease({ ...base, policy: null, requirements: null, evidence: [] }).reasons, ['POLICY_UNKNOWN', 'EVIDENCE_MISSING']);
   assert.deepEqual(evaluateZonalRelease({ ...base, evidence: [] }).reasons, ['EVIDENCE_MISSING']);
+  assert.deepEqual(evaluateZonalRelease({ ...base, scopeKnown: false, requirements: [] }).reasons, ['EVIDENCE_MISSING']);
 });
 test('R08: NOT_REQUIRED skips internal SC only; missing RP and cure remain blockers', () => {
   const x = evaluateZonalRelease({ ...base, policy: 'NOT_REQUIRED', evidence: [{ ...evidence[0], internalScConfirmed: false }] });
