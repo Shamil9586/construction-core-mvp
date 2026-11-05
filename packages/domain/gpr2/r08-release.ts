@@ -10,7 +10,7 @@ export type ReleaseRequirement = {
   sourceAreaId: string;
   sourceExecutionUnitId: string;
   requiresInternalSc: boolean;
-  cureThroughLocalDate: string | null;
+  cureUntil: string | null;
 };
 
 export type ReleaseEvidence = {
@@ -34,7 +34,7 @@ export function evaluateZonalRelease(input: {
   requirements: ReleaseRequirement[] | null;
   evidence: ReleaseEvidence[];
   issues: ReleaseIssue[];
-  localDate: string;
+  now: string;
 }): { allowed: boolean; reasons: ReleaseReason[]; requirementIds: string[] } {
   const reasons = new Set<ReleaseReason>();
   if (!input.assigned) reasons.add('ASSIGNMENT_MISSING');
@@ -48,7 +48,7 @@ export function evaluateZonalRelease(input: {
     if (!e?.evidenceKnown) { reasons.add('EVIDENCE_MISSING'); continue; }
     if (!e.rpConfirmed) reasons.add('PREDECESSOR_RP_MISSING');
     if (r.requiresInternalSc && input.policy === 'REQUIRED' && !e.internalScConfirmed) reasons.add('INTERNAL_SC_MISSING');
-    if (r.cureThroughLocalDate && input.localDate < r.cureThroughLocalDate) reasons.add('CURE_PENDING');
+    if (r.cureUntil && Date.parse(input.now) < Date.parse(r.cureUntil)) reasons.add('CURE_PENDING');
   }
   for (const issue of input.issues) {
     if (!issue.critical || !issue.open) continue;
