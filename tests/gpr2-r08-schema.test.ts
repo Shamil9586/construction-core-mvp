@@ -38,9 +38,12 @@ test('R08 039 binds WEU to active AreaScope of exact Work and object, and preser
   await h.req(`objects/${o}/r08-release-setup`,setup);
   const route2=`objects/${o}/works/${w}/execution-units/${p.floor2.unit.id}/release`;
   assert.equal((await h.req(route2)).allowed,true);
-  const inspection=(await pool.query(`INSERT INTO inspections(tenant_id,object_id,object_work_id,requested_by)
-    VALUES($1,$2,$3,$4) RETURNING id`,[t,o,w,p.pm.id])).rows[0].id;
+  const inspection=(await pool.query(`INSERT INTO inspections(tenant_id,object_id,object_work_id,portion_id,requested_by)
+    VALUES($1,$2,$3,$4,$5) RETURNING id`,[t,o,w,p.floor2.portion.id,p.pm.id])).rows[0].id;
   await h.login('CONSTRUCTION_CONTROL');
+  assert.equal((await h.raw(`inspections/${inspection}/issues`,{title:'Incorrect zone',severity:'CRITICAL',
+    responsibleUserId:p.pm.id,dueDate:'2026-12-01',version:1,areaScopeId:area,executionUnitId:p.floor1.unit.id})).status,409);
+  assert.equal((await pool.query('SELECT count(*)::int AS n FROM issues WHERE inspection_id=$1',[inspection])).rows[0].n,0);
   const scopedIssue=(await h.req(`inspections/${inspection}/issues`,{title:'Zone 2 issue',severity:'CRITICAL',
     responsibleUserId:p.pm.id,dueDate:'2026-12-01',version:1,areaScopeId:area2,executionUnitId:p.floor2.unit.id})).id;
   await h.as(p.pm);
