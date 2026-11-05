@@ -88,11 +88,12 @@
 - Репозиторий: `Shamil9586/construction-core-mvp`; ветка сессии `claude/charming-gates-x5n4i9`.
 - Локальный кодовый коммит (кандидат, на нём получены все evidence): `3be8259ef5d4f69f353c8f5045d52d9c14576918`; поверх него отдельный docs-only коммит с этим файлом (код не менялся, tree кода идентичен), tree `4ea177c11f5b58bb1e99fafd2700779bbf347e85`, parents `fc98aae5…` + `1d89ecd3…`.
 - Blob'ы изменений относительно F02: `tests/helpers/gpr2-writer-scan.ts` `de671e76…`; `packages/domain/index.ts` `68e804a3…` (= main); `packages/domain/fin-sdo-1/index.ts` `c7b5fd6a…`; `apps/backend/src/fin-sdo-1.service.ts` `3e45ba2d…`; `tests/fin-sdo-1-access-matrix.test.ts` `5c08df1e…`.
-- **Опубликовано: НЕТ.** Push/PR не выполнялись, GitHub readback кандидата невозможен до публикации; значения выше — локальные. PR не создан.
+- **Опубликовано:** push ветки `claude/charming-gates-x5n4i9` выполнен с разрешения владельца (только эта ветка). Readback из GitHub: код-кандидат `3be8259…` существует; blob `tests/fin-sdo-1-access-matrix.test.ts` `5c08df1e…` совпал с локальным. HEAD ветки на момент readback — `e2bd18fc…` (docs-only); этот документ, правленный после push, лежит в следующем docs-only коммите, **код-кандидат `3be8259`/tree `4ea177c1…` не менялся**. Reviewer должен фиксировать SHA кандидата `3be8259…` и сверять `git diff 3be8259 HEAD` = только этот файл.
+- PR: **не создан** (не запрашивался). Actions: **не запускались**. Ссылка: https://github.com/Shamil9586/construction-core-mvp/tree/claude/charming-gates-x5n4i9
 
 ## G. Решение, необходимое от владельца/координатора
 
-1. **Push** локальной ветки `claude/charming-gates-x5n4i9` (без PR, без merge, без Actions) — чтобы кандидат был доступен для GitHub readback и независимого reviewer. Альтернатива (zip/сообщение) протоколом не допускается. Без публикации работа теряется при завершении контейнера.
+1. ~~Push ветки~~ — **выполнен** (см. F). Для создания PR / передачи reviewer'у разрешение на PR отдельно не запрашивалось и не использовалось.
 2. **Номер FIN-миграции** (координатор, после свежей инвентаризации main/веток; 035–039 недоступны).
 3. **CI-only PR + одна dispatch-сессия** для FIN-кандидата (новый reviewed профиль/workflow на цепочке 001–037+FIN). Только после п. 1 и по точному SHA.
 4. **Информационно, не FIN:** красный полный регресс `main` из-за R06b-триггера и фикстур легаси-тестов — решение за владельцем GPR.
