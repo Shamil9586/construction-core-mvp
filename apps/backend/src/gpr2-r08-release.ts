@@ -9,7 +9,7 @@ import { coordinate } from './coordination-lock';
 
 type Setup = { workId:string; executionUnitId:string; areaScopeId:string; basis:string;
     policy:'REQUIRED'|'NOT_REQUIRED'; requirements:{sourceWorkId:string;sourceExecutionUnitId:string;
-        sourceAreaScopeId:string;requiresInternalSc:boolean;cureDays:number}[] };
+        sourceAreaScopeId:string;requiresInternalSc:boolean;cureSeconds:number}[] };
 
 /** First-time explicit mapping on an unfactored target. No inference/backfill of legacy location. */
 export async function configureZonalRelease(actor:Actor, objectId:string, d:Setup, tokenHash:string) {
@@ -53,9 +53,9 @@ export async function configureZonalRelease(actor:Actor, objectId:string, d:Setu
             if(!sourceMap) await c.query(`INSERT INTO gpr2_execution_unit_area_scopes(tenant_id,object_id,work_id,execution_unit_id,area_scope_id,created_by)
                 VALUES($1,$2,$3,$4,$5,$6)`,[actor.tenantId,objectId,r.sourceWorkId,r.sourceExecutionUnitId,r.sourceAreaScopeId,currentActor.id]);
             await c.query(`INSERT INTO technical_release_requirements(tenant_id,object_id,target_work_id,target_execution_unit_id,target_area_scope_id,
-                source_work_id,source_execution_unit_id,source_area_scope_id,requires_internal_sc,cure_days,created_by)
+                source_work_id,source_execution_unit_id,source_area_scope_id,requires_internal_sc,cure_seconds,created_by)
                 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,[actor.tenantId,objectId,d.workId,d.executionUnitId,d.areaScopeId,
-                r.sourceWorkId,r.sourceExecutionUnitId,r.sourceAreaScopeId,r.requiresInternalSc,r.cureDays,currentActor.id]);
+                r.sourceWorkId,r.sourceExecutionUnitId,r.sourceAreaScopeId,r.requiresInternalSc,r.cureSeconds,currentActor.id]);
         }
         await c.query(`INSERT INTO gpr2_release_scope_completeness(tenant_id,object_id,work_id,execution_unit_id,area_scope_id,basis,declared_by)
             VALUES($1,$2,$3,$4,$5,$6,$7)`,[actor.tenantId,objectId,d.workId,d.executionUnitId,d.areaScopeId,d.basis,currentActor.id]);
@@ -87,7 +87,7 @@ export async function readZonalRelease(c: any, actor: Actor, objectId: string, w
         [actor.tenantId,objectId,workId,unitId,mapped.areaScopeId]) : [];
     const requirements: ReleaseRequirement[] = raw.map((r:any)=>({id:r.id,targetAreaId:r.targetAreaScopeId,
         targetExecutionUnitId:r.targetExecutionUnitId,sourceAreaId:r.sourceAreaScopeId,sourceExecutionUnitId:r.sourceExecutionUnitId,
-        requiresInternalSc:r.requiresInternalSc,cureThroughLocalDate:null}));
+        requiresInternalSc:r.requiresInternalSc,cureUntil:null}));
     const evidence: ReleaseEvidence[] = [];
     for (const r of raw) {
         const source = await one(c,'SELECT planned_quantity FROM work_execution_units WHERE tenant_id=$1 AND object_work_id=$2 AND id=$3',
@@ -100,12 +100,12 @@ export async function readZonalRelease(c: any, actor: Actor, objectId: string, w
         const rp = portions.reduce((sum:Decimal,p:any)=>sum.plus(figures.get(p.id)?.rpFact ?? 0),new Decimal(0));
         const sc = portions.reduce((sum:Decimal,p:any)=>sum.plus(figures.get(p.id)?.internalSc ?? 0),new Decimal(0));
         const known = !!source && sourceArea?.lifecycle==='ACTIVE' && portions.length>0 && portions.every((p:any)=>figures.get(p.id)?.rp.state==='RESOLVED');
-        if (r.cureDays>0) {
+        if (r.cureSeconds>0) {
             const latest = portions.map((p:any)=>figures.get(p.id)?.rp).filter((f:any)=>f?.state==='RESOLVED')
                 .map((f:any)=>f.recordedAt).sort().at(-1);
             if (latest) {
-                const date = await one(c,`SELECT (($1::timestamptz AT TIME ZONE 'Europe/Moscow')::date + $2::int)::text AS day`,[latest,r.cureDays]);
-                requirements.find(q=>q.id===r.id)!.cureThroughLocalDate=date.day;
+                const date = await one(c,`SELECT ($1::timestamptz + ($2::bigint * interval '1 second'))::text AS deadline`,[latest,r.cureSeconds]);
+                requirements.find(q=>q.id===r.id)!.cureUntil=date.deadline;
             }
         }
         evidence.push({requirementId:r.id,sourceAreaId:r.sourceAreaScopeId,sourceExecutionUnitId:r.sourceExecutionUnitId,
@@ -122,10 +122,11 @@ export async function readZonalRelease(c: any, actor: Actor, objectId: string, w
         WHERE i.tenant_id=$1 AND x.object_id=$2 AND i.severity='CRITICAL' AND i.status<>'CLOSED'`,
         [actor.tenantId,objectId])).map((i:any)=>{
             const sourceBlock=raw.some((r:any)=>r.sourceAreaScopeId===i.areaScopeId && r.sourceExecutionUnitId===i.executionUnitId);
-            return {areaId:sourceBlock ? null : i.areaScopeId??null,executionUnitId:sourceBlock ? null : i.executionUnitId??null,
+            return {areaId:sourceBlock ? mapped?.areaScopeId ?? null : i.areaScopeId??null,
+                executionUnitId:sourceBlock ? unitId : i.executionUnitId??null,
                 critical:true,open:true};
         });
-    const localDate = (await one(c,'SELECT CURRENT_DATE::text AS day',[])).day;
+    const now = (await one(c,'SELECT clock_timestamp()::text AS now',[])).now;
     const activeAssignment = unit.contractorId && await one(c,`SELECT 1 AS present FROM object_contractors_active
         WHERE tenant_id=$1 AND object_id=$2 AND contractor_id=$3`,[actor.tenantId,objectId,unit.contractorId]);
     const allocation = await one(c,`SELECT COALESCE(SUM(l.quantity),0)::text AS quantity FROM work_current_allocation p
@@ -136,6 +137,7 @@ export async function readZonalRelease(c: any, actor: Actor, objectId: string, w
     const allocated = !!allocation && new Decimal(allocation.quantity).gt(0);
     const verdict = evaluateZonalRelease({targetAreaId:mapped?.areaScopeId ?? '',targetExecutionUnitId:unitId,
         assigned:!!activeAssignment && allocated,scopeKnown:!!mapped && mapped.lifecycle==='ACTIVE',policy:policy?.policy ?? null,
-        requirements:complete && !missingLegacy ? requirements : null,evidence,issues,localDate});
-    return {objectId,workId,executionUnitId:unitId,areaScopeId:mapped?.areaScopeId ?? null,policyVersion:policy?.version ?? null,...verdict};
+        requirements:complete && !missingLegacy ? requirements : null,evidence,issues,now});
+    return {objectId,workId,executionUnitId:unitId,areaScopeId:mapped?.areaScopeId ?? null,policyVersion:policy?.version ?? null,
+        cureDeadlines:requirements.filter(r=>r.cureUntil).map(r=>({requirementId:r.id,cureUntil:r.cureUntil})),...verdict};
 }
