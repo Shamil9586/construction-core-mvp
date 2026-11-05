@@ -113,8 +113,8 @@ export async function readZonalRelease(c: any, actor: Actor, objectId: string, w
                 portions.every((p:any)=>figures.get(p.id)?.internal.state==='RESOLVED') && sc.gte(source.plannedQuantity),evidenceKnown:known});
     }
     const missingLegacy = await one(c,`SELECT 1 AS missing FROM work_dependencies d WHERE d.tenant_id=$1 AND d.successor_work_id=$2
-      AND NOT EXISTS(SELECT 1 FROM technical_release_requirements r WHERE r.tenant_id=d.tenant_id AND r.object_id=$3
-        AND r.target_execution_unit_id=$4 AND r.target_area_scope_id=$5 AND r.source_work_id=d.predecessor_work_id) LIMIT 1`,
+      AND (d.requires_document=true OR NOT EXISTS(SELECT 1 FROM technical_release_requirements r WHERE r.tenant_id=d.tenant_id AND r.object_id=$3
+        AND r.target_execution_unit_id=$4 AND r.target_area_scope_id=$5 AND r.source_work_id=d.predecessor_work_id)) LIMIT 1`,
         [actor.tenantId,workId,objectId,unitId,mapped?.areaScopeId ?? null]);
     const issues: ReleaseIssue[] = (await rows(c,`SELECT s.area_scope_id,s.execution_unit_id FROM issues i
         JOIN inspections x ON x.tenant_id=i.tenant_id AND x.id=i.inspection_id
