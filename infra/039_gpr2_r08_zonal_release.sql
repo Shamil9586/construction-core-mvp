@@ -37,6 +37,7 @@ CREATE TABLE gpr2_execution_unit_area_scopes (
     created_by uuid NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (tenant_id, object_id, execution_unit_id, area_scope_id),
+    UNIQUE (tenant_id, object_id, execution_unit_id),
     FOREIGN KEY (tenant_id, object_id, work_id) REFERENCES works(tenant_id, object_id, id),
     FOREIGN KEY (tenant_id, execution_unit_id) REFERENCES work_execution_units(tenant_id, id),
     FOREIGN KEY (tenant_id, object_id, area_scope_id) REFERENCES object_area_scopes(tenant_id, object_id, id),
@@ -83,11 +84,20 @@ CREATE TRIGGER gpr2_r08_requirement_immutable BEFORE UPDATE OR DELETE ON technic
 
 CREATE FUNCTION gpr2_r08_scope_guard() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
+  PERFORM 1 FROM works WHERE tenant_id=NEW.tenant_id AND object_id=NEW.object_id AND id=NEW.work_id FOR UPDATE;
   IF NOT EXISTS (SELECT 1 FROM work_execution_units u WHERE u.tenant_id=NEW.tenant_id
        AND u.id=NEW.execution_unit_id AND u.object_work_id=NEW.work_id) OR
      NOT EXISTS (SELECT 1 FROM object_area_scopes a WHERE a.tenant_id=NEW.tenant_id
        AND a.object_id=NEW.object_id AND a.id=NEW.area_scope_id AND a.lifecycle='ACTIVE') THEN
     RAISE EXCEPTION 'R08 execution unit / active AreaScope mismatch' USING ERRCODE='23514';
+  END IF;
+  IF EXISTS(SELECT 1 FROM works w WHERE w.tenant_id=NEW.tenant_id AND w.id=NEW.work_id AND w.actual_quantity>0)
+    OR EXISTS(SELECT 1 FROM work_progress p WHERE p.tenant_id=NEW.tenant_id AND p.object_work_id=NEW.work_id)
+    OR EXISTS(SELECT 1 FROM portion_quantity_confirmations f JOIN quantity_portions p ON p.tenant_id=f.tenant_id AND p.id=f.portion_id
+      JOIN work_execution_units u ON u.tenant_id=p.tenant_id AND u.id=p.execution_unit_id
+      WHERE f.tenant_id=NEW.tenant_id AND u.object_work_id=NEW.work_id)
+    OR EXISTS(SELECT 1 FROM inspections i WHERE i.tenant_id=NEW.tenant_id AND i.object_work_id=NEW.work_id) THEN
+    RAISE EXCEPTION 'R08 historical evidence needs I-LIVE mapping' USING ERRCODE='23514';
   END IF;
   RETURN NEW;
 END $$;
@@ -110,6 +120,76 @@ BEGIN
 END $$;
 CREATE TRIGGER gpr2_r08_requirement_check BEFORE INSERT ON technical_release_requirements
   FOR EACH ROW EXECUTE FUNCTION gpr2_r08_requirement_guard();
+
+-- An explicit completeness declaration is required even when the target has
+-- zero prerequisites. It cannot be inferred from an empty requirement query.
+CREATE TABLE gpr2_release_scope_completeness (
+    tenant_id uuid NOT NULL,
+    object_id uuid NOT NULL,
+    work_id uuid NOT NULL,
+    execution_unit_id uuid NOT NULL,
+    area_scope_id uuid NOT NULL,
+    basis text NOT NULL CHECK (btrim(basis)<>''),
+    declared_by uuid NOT NULL,
+    declared_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant_id, object_id, execution_unit_id, area_scope_id),
+    FOREIGN KEY (tenant_id, object_id, execution_unit_id, area_scope_id)
+      REFERENCES gpr2_execution_unit_area_scopes(tenant_id, object_id, execution_unit_id, area_scope_id),
+    FOREIGN KEY (tenant_id, object_id, work_id) REFERENCES works(tenant_id, object_id, id),
+    FOREIGN KEY (tenant_id, declared_by) REFERENCES users(tenant_id, id)
+);
+CREATE TRIGGER gpr2_r08_completeness_immutable BEFORE UPDATE OR DELETE ON gpr2_release_scope_completeness
+  FOR EACH ROW EXECUTE FUNCTION gpr2_r08_immutable();
+
+CREATE FUNCTION gpr2_r08_completeness_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE actual_work uuid;
+BEGIN
+  SELECT work_id INTO actual_work FROM gpr2_execution_unit_area_scopes WHERE tenant_id=NEW.tenant_id
+    AND object_id=NEW.object_id AND execution_unit_id=NEW.execution_unit_id AND area_scope_id=NEW.area_scope_id;
+  IF actual_work IS DISTINCT FROM NEW.work_id OR EXISTS (
+    SELECT 1 FROM work_dependencies d WHERE d.tenant_id=NEW.tenant_id AND d.successor_work_id=NEW.work_id
+      AND NOT EXISTS (SELECT 1 FROM technical_release_requirements r WHERE r.tenant_id=NEW.tenant_id
+        AND r.object_id=NEW.object_id AND r.target_execution_unit_id=NEW.execution_unit_id
+        AND r.target_area_scope_id=NEW.area_scope_id AND r.source_work_id=d.predecessor_work_id)) THEN
+    RAISE EXCEPTION 'R08 scope incomplete or legacy dependency unmapped' USING ERRCODE='23514';
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER gpr2_r08_completeness_check BEFORE INSERT ON gpr2_release_scope_completeness
+  FOR EACH ROW EXECUTE FUNCTION gpr2_r08_completeness_guard();
+
+-- A legacy issue without an exact mapping remains object-wide. New scoped
+-- mappings require the issue's inspected Work to belong to the same object.
+CREATE TABLE gpr2_critical_issue_scopes (
+    tenant_id uuid NOT NULL,
+    object_id uuid NOT NULL,
+    issue_id uuid NOT NULL,
+    area_scope_id uuid NOT NULL,
+    execution_unit_id uuid NOT NULL,
+    recorded_by uuid NOT NULL,
+    recorded_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant_id, issue_id),
+    FOREIGN KEY (tenant_id, object_id, execution_unit_id, area_scope_id)
+      REFERENCES gpr2_execution_unit_area_scopes(tenant_id, object_id, execution_unit_id, area_scope_id),
+    FOREIGN KEY (tenant_id, issue_id) REFERENCES issues(tenant_id, id),
+    FOREIGN KEY (tenant_id, recorded_by) REFERENCES users(tenant_id, id)
+);
+CREATE TRIGGER gpr2_r08_issue_scope_immutable BEFORE UPDATE OR DELETE ON gpr2_critical_issue_scopes
+  FOR EACH ROW EXECUTE FUNCTION gpr2_r08_immutable();
+CREATE FUNCTION gpr2_r08_issue_scope_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  IF NOT EXISTS(SELECT 1 FROM issues i JOIN inspections x ON x.tenant_id=i.tenant_id AND x.id=i.inspection_id
+    JOIN works w ON w.tenant_id=x.tenant_id AND w.id=x.object_work_id
+    WHERE i.tenant_id=NEW.tenant_id AND i.id=NEW.issue_id AND i.created_at=transaction_timestamp()
+      AND i.severity='CRITICAL' AND x.object_id=NEW.object_id
+      AND w.id=(SELECT m.work_id FROM gpr2_execution_unit_area_scopes m WHERE m.tenant_id=NEW.tenant_id
+        AND m.object_id=NEW.object_id AND m.execution_unit_id=NEW.execution_unit_id AND m.area_scope_id=NEW.area_scope_id)) THEN
+    RAISE EXCEPTION 'R08 issue scope mismatch' USING ERRCODE='23514';
+  END IF;
+  RETURN NEW;
+END $$;
+CREATE TRIGGER gpr2_r08_issue_scope_check BEFORE INSERT ON gpr2_critical_issue_scopes
+  FOR EACH ROW EXECUTE FUNCTION gpr2_r08_issue_scope_guard();
 
 CREATE FUNCTION gpr2_r08_policy_pointer_guard() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE old_seq int; new_seq int;
