@@ -110,6 +110,7 @@ export const WRITERS = {
     'gpr2-r05-legacy.ts#recordLegacyFinishMapping': S('R05b append-only legacy finish mapping of an object; rewrites no legacy id, WEU or Work'),
     'gpr2-r05-legacy.ts#recordLegacyWorkClassification': S('R05b append-only classification of a historical Work; the Work, its WEUs and facts are not written'),
     'gpr2-r06b-allocation.ts#replaceWorkAllocation': X('explicit allocation snapshot changes Work to WEU and portion scope under the approved current quantity'),
+    'gpr2-r08-release.ts#configureZonalRelease': X('first-time explicit target AreaScope and prerequisite release scope changes the production gate'),
     // ---- imports and files ------------------------------------------------------------------------------------------------------
     'importer.ts#commitImport': N('creates NEW objects (with their contractor link and monthly plan) from an import report; it creates no Work and touches no existing object, and nothing can contend for an object that does not exist yet'),
     'importer.ts#previewImport': N('writes an import report only; creates no object, Work or fact'),
