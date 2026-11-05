@@ -1,6 +1,6 @@
 /** GPR-2 R10 pure calendar engine. A version is a frozen value, never a mutable global calendar. */
 import Decimal from 'decimal.js';
-import { isScheduleDate, civilDayNumber } from './schedule';
+import { isScheduleDate, isCivilDate, civilDayNumber } from './schedule';
 
 export type WorkingDays = number & { readonly __unit: 'working-days' };
 export type ElapsedSeconds = number & { readonly __unit: 'elapsed-seconds' };
@@ -16,6 +16,10 @@ const DAY_MS = 86400000;
 
 function date(value: string): number {
     if (!isScheduleDate(value)) throw new Error('Дата вне диапазона графика: ' + value);
+    return civilDayNumber(value);
+}
+function reportDay(value: string): number {
+    if (!isCivilDate(value)) throw new Error('Некорректная отчётная дата: ' + value);
     return civilDayNumber(value);
 }
 function civil(day: number): string { return new Date(day * DAY_MS).toISOString().slice(0, 10); }
@@ -64,7 +68,12 @@ export function nextWorkingDay(version: CalendarVersion, from: string, direction
 }
 export function previousWorkingDay(version: CalendarVersion, from: string): string { return nextWorkingDay(version, from, -1); }
 
-export function addWorkingDays(version: CalendarVersion, from: string, days: number): string {
+/** Explicit unit conversion at the caller boundary; elapsed seconds cannot enter working-day arithmetic. */
+export function workingDays(value: number): WorkingDays {
+    if (!Number.isSafeInteger(value)) throw new Error('Некорректное число рабочих дней');
+    return value as WorkingDays;
+}
+export function addWorkingDays(version: CalendarVersion, from: string, days: WorkingDays): string {
     if (!Number.isSafeInteger(days)) throw new Error('Некорректное число рабочих дней');
     let n = date(from), remaining = Math.abs(days), direction = days < 0 ? -1 : 1;
     while (remaining) {
@@ -81,7 +90,9 @@ export function plannedQuantityThrough(version: CalendarVersion, start: string, 
     const total = countWorkingDays(version, start, finish);
     const q = new Decimal(quantity);
     if (!q.isFinite() || q.lte(0) || total === 0) throw new Error('Положительный объём требует рабочий день');
-    const elapsed = date(through) < date(start) ? 0 : countWorkingDays(version, start, civil(Math.min(date(through), date(finish))));
+    // A report cutoff may be outside 2000–2100; the pinned plan boundaries may not.
+    const cutoff = reportDay(through);
+    const elapsed = cutoff < date(start) ? 0 : countWorkingDays(version, start, civil(Math.min(cutoff, date(finish))));
     return q.mul(elapsed).div(total).toString();
 }
 
@@ -91,7 +102,7 @@ export function evaluatedThroughLocalDate(version: CalendarVersion, instant: Dat
     const parts = new Intl.DateTimeFormat('en-US', { timeZone: version.timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(instant);
     const part = (type: string) => parts.find(x => x.type === type)!.value;
     const today = `${part('year')}-${part('month')}-${part('day')}`;
-    return civil(date(today) - 1);
+    return civil(reportDay(today) - 1);
 }
 
 export function normalizeElapsed(value: number, unit: 'HOURS' | 'CALENDAR_DAYS'): ElapsedSeconds {
