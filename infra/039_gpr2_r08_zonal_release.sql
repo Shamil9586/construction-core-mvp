@@ -198,10 +198,20 @@ BEGIN
   SELECT version INTO new_seq FROM gpr2_internal_sc_policy_versions WHERE tenant_id=NEW.tenant_id
     AND object_id=NEW.object_id AND id=NEW.version_id;
   IF TG_OP='UPDATE' THEN
+    PERFORM 1 FROM works WHERE tenant_id=NEW.tenant_id AND object_id=NEW.object_id ORDER BY id FOR UPDATE;
     SELECT version INTO old_seq FROM gpr2_internal_sc_policy_versions WHERE tenant_id=OLD.tenant_id
       AND object_id=OLD.object_id AND id=OLD.version_id;
     IF NEW.tenant_id<>OLD.tenant_id OR NEW.object_id<>OLD.object_id OR new_seq<>old_seq+1 THEN
       RAISE EXCEPTION 'R08 policy version must advance by one' USING ERRCODE='23514';
+    END IF;
+    IF EXISTS(SELECT 1 FROM works w WHERE w.tenant_id=NEW.tenant_id AND w.object_id=NEW.object_id AND w.actual_quantity>0)
+      OR EXISTS(SELECT 1 FROM work_progress p JOIN works w ON w.tenant_id=p.tenant_id AND w.id=p.object_work_id
+        WHERE w.tenant_id=NEW.tenant_id AND w.object_id=NEW.object_id)
+      OR EXISTS(SELECT 1 FROM portion_quantity_confirmations f JOIN quantity_portions p ON p.tenant_id=f.tenant_id AND p.id=f.portion_id
+        JOIN work_execution_units u ON u.tenant_id=p.tenant_id AND u.id=p.execution_unit_id
+        JOIN works w ON w.tenant_id=u.tenant_id AND w.id=u.object_work_id
+        WHERE w.tenant_id=NEW.tenant_id AND w.object_id=NEW.object_id) THEN
+      RAISE EXCEPTION 'R08 policy change after fact needs separate reconciliation' USING ERRCODE='23514';
     END IF;
   ELSIF new_seq<>1 THEN
     RAISE EXCEPTION 'R08 initial policy version must be one' USING ERRCODE='23514';
