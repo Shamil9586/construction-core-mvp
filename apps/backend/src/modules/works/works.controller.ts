@@ -10,11 +10,27 @@ import * as V from '../../validation';
 import { readWorkQuantity } from '../../gpr2-r06a-quantity';
 import { hash } from '../../security';
 import { replaceWorkAllocation } from '../../gpr2-r06b-allocation';
+import { readZonalRelease, configureZonalRelease } from '../../gpr2-r08-release';
 @Controller()
 @ApiTags('Works')
 @ApiBearerAuth()
 export class WorksController {
     constructor(@Inject(ProductionService) private service: ProductionService, @Inject(ReadService) private read: ReadService) {}
+    @Get('objects/:objectId/works/:workId/execution-units/:unitId/release')
+    @Header('Cache-Control', 'no-store')
+    release(@Req() r: any, @Param('objectId') objectId: string, @Param('workId') workId: string,
+        @Param('unitId') unitId: string) {
+        return authenticate(r).then(a=>readZonalRelease(pool,a,V.uuid.parse(objectId),V.uuid.parse(workId),V.uuid.parse(unitId)));
+    }
+    @Post('objects/:objectId/r08-release-setup')
+    async releaseSetup(@Req() r:any,@Param('objectId') objectId:string,@Body() b:any) {
+        const body=z.object({workId:V.uuid,executionUnitId:V.uuid,areaScopeId:V.uuid,
+            basis:z.string().trim().min(1).max(1000),policy:z.enum(['REQUIRED','NOT_REQUIRED']),
+            requirements:z.array(z.object({sourceWorkId:V.uuid,sourceExecutionUnitId:V.uuid,
+                sourceAreaScopeId:V.uuid,requiresInternalSc:z.boolean(),cureDays:z.number().int().min(0).max(3650)}).strict()).max(100)}).strict().parse(b);
+        return configureZonalRelease(await authenticate(r),V.uuid.parse(objectId),body,
+            hash(String(r.headers.authorization).replace(/^Bearer /,'')));
+    }
     @Get('objects/:objectId/works/:workId/quantity')
     @Header('Cache-Control', 'no-store')
     async quantity(@Req() r: any, @Param('objectId') objectId: string, @Param('workId') workId: string) {
