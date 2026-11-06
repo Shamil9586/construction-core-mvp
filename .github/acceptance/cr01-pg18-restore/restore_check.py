@@ -44,11 +44,14 @@ def unpack_archive(archive: Path, target: Path) -> Path:
     seen = set()
     total = 0
     try:
-        with tarfile.open(archive, mode="r:gz") as inp:
-            members = inp.getmembers()
-            if not members or len(members) > MAX_MEMBER_COUNT:
-                raise RestoreFailure("Invalid archive entry count")
-            for item in members:
+        with tarfile.open(archive, mode="r|gz") as inp:
+            member_count = 0
+            # Stream tar headers: getmembers() builds an unbounded list before the
+            # entry-count gate, allowing archive metadata exhaustion.
+            for item in inp:
+                member_count += 1
+                if member_count > MAX_MEMBER_COUNT:
+                    raise RestoreFailure("Invalid archive entry count")
                 normalized_name = item.name.removeprefix("./")
                 p = PurePosixPath(normalized_name)
                 if (not normalized_name or normalized_name.startswith("/") or
@@ -73,6 +76,8 @@ def unpack_archive(archive: Path, target: Path) -> Path:
                 with source, dest.open("xb") as output:
                     shutil.copyfileobj(source, output, length=1024 * 1024)
                 dest.chmod(0o600)
+            if member_count == 0:
+                raise RestoreFailure("Invalid archive entry count")
     except (OSError, tarfile.TarError) as exc:
         raise RestoreFailure("Archive decompression failed") from exc
     tocs = list(target.rglob("toc.dat"))
