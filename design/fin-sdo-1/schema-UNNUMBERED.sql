@@ -1241,3 +1241,9 @@ END;
 $fin_commit_book$;
 REVOKE ALL ON FUNCTION public.fin_sdo_commit_edit_buffer(text,integer,integer,uuid,integer,integer,date,text,text) FROM PUBLIC;
 -- Unnumbered isolated SQL only. FIN-SDO-1 acceptance still pending.
+
+-- S-01 hygiene (FIN1-25 gate): trigger functions run only as triggers (PostgreSQL rejects a direct call), but no FIN function may stay
+-- executable by PUBLIC. Trigger firing does not need EXECUTE for the writing role, so behaviour is unchanged.
+REVOKE ALL ON FUNCTION public.fin_assert_quarter_book() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.fin_assert_history_links() FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.fin_guard_book_identity() FROM PUBLIC;

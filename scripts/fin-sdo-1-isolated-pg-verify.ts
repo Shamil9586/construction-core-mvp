@@ -38,8 +38,14 @@ async function main(){
  // GitHub Docker publishes on host 127.0.0.1 but PostgreSQL sees its own private bridge address.
  // The enforceable connection guard is the URL host 127.0.0.1 plus explicit *_test database and isolated-confirm flag.
  console.log('isolated PostgreSQL: '+who.rows[0].name+' '+address);
- const sql=readFileSync(resolve('design/fin-sdo-1/schema-UNNUMBERED.sql'),'utf8');
- await pool.query(sql);
+ if(process.env.FIN_SDO_SCHEMA_APPLIED==='1'){
+   // FIN1-25 numbered-sequence mode: the schema was applied by the migration runner (ledger row); it is NOT loaded here.
+   const present=await pool.query("SELECT count(*)::int n FROM information_schema.tables WHERE table_schema='public' AND table_name LIKE 'fin\\_%'");
+   assert.equal(present.rows[0].n,12,'FIN_SDO_SCHEMA_APPLIED=1 but the 12 FIN tables are absent');
+ }else{
+   const sql=readFileSync(resolve('design/fin-sdo-1/schema-UNNUMBERED.sql'),'utf8');
+   await pool.query(sql);
+ }
  const tenant=await pool.query("INSERT INTO tenants(portal,member_id,name) VALUES('fin1-isolated.example.test','fin1-isolated-member','FIN isolated') RETURNING id");
  const tenant2=await pool.query("INSERT INTO tenants(portal,member_id,name) VALUES('fin2-isolated.example.test','fin2-isolated-member','FIN isolated 2') RETURNING id");
  const t=tenant.rows[0].id,t2=tenant2.rows[0].id;
