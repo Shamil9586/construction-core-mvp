@@ -5,17 +5,56 @@
 // GitHub run, and writes a manifest with SHA-256 checksums of every file. The result is a TECHNICAL gate, never an acceptance verdict.
 //
 // CLI: node seal.mjs --profile <profile.json> --raw <raw dir|missing> --authorization <authorization.json> --identity <seal identity.json>
-//                    --runtime-result <success|failure|cancelled|skipped> --out <sealed dir>
+//                    --runtime-result <success|failure|cancelled|skipped> --out <sealed dir> [--source <seal-phase source-bundle record>]
+//                    [--normative-result <needs.normative.result: exactly `success`> --normative <normative job result dir> --stage-outputs <json of the stage job outputs> --stage-record <stage job stage.json>
+//                     --inputs-seal <stage.json recomputed by THIS job>]     (profiles with isolated files: provenance + merge of the isolated result)
+// For a candidate restored from an archived bundle (profile candidate.source), the authorize-, runtime- and seal-phase source-bundle.mjs records
+// must all be present, OK and bound to the pinned bundle SHA-256 and the authorised candidate; otherwise the identity is treated as not verified.
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { loadProfile } from './profile.mjs';
+import { loadProfile, findCandidate } from './profile.mjs';
 import { classifyRun, GATE, S } from './classify.mjs';
+import { RECORD_SCHEMA, REQUIRED_STEPS, sourcePin } from './source-bundle.mjs';
+import { isolatedFiles, isolatedProvenanceProblems, mergeIsolatedResults, normativeJobResultProblems } from './provenance.mjs';
 
 export const EVIDENCE_SCHEMA = 'construction-core/gpr2-acceptance-evidence@1';
 const readJson = f => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return null; } };
 const sha256File = f => crypto.createHash('sha256').update(fs.readFileSync(f)).digest('hex');
+
+const PHASES = ['authorize', 'runtime', 'seal'];
+const sameJson = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+/**
+ * Problems binding the three archived-source records to the registered candidate's pinned bundle (empty when the candidate has no source).
+ * A raw ok:true is never enough: each record must be of its own phase, for this profile id and digest (the workflow-commit profile, never the
+ * copy inside the evidence), name this candidate, carry the registered pin verbatim and show every restoration step as passed.
+ * `ctx` = { profileId, profileSha256 }; without it a candidate that has a source cannot be bound at all (fail closed).
+ */
+export function sourceBindingProblems(cand, records, ctx) {
+  if (!cand || !cand.source) return [];
+  const problems = [];
+  const pin = sourcePin(cand.source);
+  if (!ctx || typeof ctx.profileId !== 'string' || typeof ctx.profileSha256 !== 'string') problems.push('archived-source binding has no profile identity to check against');
+  for (const phase of PHASES) {
+    const rec = records ? records[phase] : undefined;
+    const bad = m => problems.push(`${phase}-phase archived-source record ${m}`);
+    if (!rec || rec.ok !== true) { bad('missing or not OK'); continue; }
+    if (rec.schema !== RECORD_SCHEMA) bad(`has schema ${JSON.stringify(rec.schema)}, expected ${RECORD_SCHEMA}`);
+    if (rec.phase !== phase) bad(`is a ${JSON.stringify(rec.phase)}-phase record, not ${phase}`);
+    if (!ctx || rec.profile_id !== ctx.profileId) bad(`is for profile ${JSON.stringify(rec.profile_id)}, not ${JSON.stringify(ctx?.profileId)}`);
+    if (!ctx || rec.profile_sha256 !== ctx.profileSha256) bad(`was made under profile digest ${JSON.stringify(rec.profile_sha256)}, not ${JSON.stringify(ctx?.profileSha256)}`);
+    if (rec.candidate_sha !== cand.sha || rec.candidate?.sha !== cand.sha || rec.candidate?.tree !== cand.tree || rec.observed?.sha256 !== cand.source.sha256 || rec.observed?.blob !== cand.source.blob || rec.observed?.bytes !== cand.source.bytes)
+      bad(`is not bound to candidate ${cand.sha} / bundle ${cand.source.sha256}`);
+    if (!rec.pin || !sameJson({ ...rec.pin, prerequisites: [...(rec.pin.prerequisites || [])].sort() }, { ...pin, prerequisites: [...pin.prerequisites].sort() })) bad('does not carry the registered source pin');
+    const steps = Array.isArray(rec.steps) ? rec.steps : [];
+    const missing = REQUIRED_STEPS.filter(name => !steps.some(s => s && s.step === name && s.ok === true));
+    const failed = steps.filter(s => !s || s.ok !== true).map(s => s?.step);
+    if (missing.length) bad(`lacks passed restoration step(s): ${missing.join(', ')}`);
+    if (failed.length) bad(`contains failed or malformed step(s): ${failed.join(', ')}`);
+  }
+  return problems;
+}
 
 export function listFiles(root) {
   const out = [];
@@ -76,7 +115,9 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
   fs.mkdirSync(out, { recursive: true });
   const rawPresent = fs.existsSync(a.raw) && fs.statSync(a.raw).isDirectory();
   if (rawPresent) copyTree(a.raw, path.join(out, 'raw'));
-  for (const [f, name] of [[a.authorization, 'authorization.json'], [a.identity, 'identity-seal.json']]) if (fs.existsSync(f)) fs.copyFileSync(f, path.join(out, name));
+  const authzSource = path.join(path.dirname(a.authorization), 'source-bundle-authorize.json');
+  for (const [f, name] of [[a.authorization, 'authorization.json'], [a.identity, 'identity-seal.json'], [authzSource, 'source-bundle-authorize.json'], [a.source, 'source-bundle-seal.json']])
+    if (f && fs.existsSync(f)) fs.copyFileSync(f, path.join(out, name));
   const rawDir = path.join(out, 'raw');
   const problems = [];
   if (!authz || authz.ok !== true) problems.push('authorization record missing or not OK');
@@ -84,6 +125,22 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
   if (authz && authz.candidate && identity && identity.candidate && authz.candidate.sha !== identity.candidate.sha) problems.push('sealed identity is a different candidate than the authorised one');
   const runtimeIdentity = readJson(path.join(rawDir, 'identity-runtime.json'));
   if (!runtimeIdentity || runtimeIdentity.ok !== true || runtimeIdentity.candidate?.sha !== authz?.candidate?.sha) problems.push('runtime pre-execution identity record missing or does not match the authorised candidate');
+  problems.push(...sourceBindingProblems(findCandidate(profile, authz?.candidate?.sha ?? ''), { authorize: readJson(path.join(out, 'source-bundle-authorize.json')),
+    runtime: readJson(path.join(rawDir, 'source-bundle-runtime.json')), seal: readJson(path.join(out, 'source-bundle-seal.json')) },
+    { profileId: profile.profile_id, profileSha256: sha256 }));
+  // Isolated files (profile files[].isolated): the normative job's result replaces the runtime job's DEFERRED entry, and every input is checked against the
+  // pins AND against this job's own recomputation from the private source (inputs-seal) and the stage job's outputs.
+  const candForIso = findCandidate(profile, authz?.candidate?.sha ?? '');
+  if (isolatedFiles(profile).length) {
+    problems.push(...normativeJobResultProblems(profile, a['normative-result']));
+    const normDir = a.normative ? path.resolve(a.normative) : null;
+    const normative = normDir ? readJson(path.join(normDir, 'result.json')) : null;
+    if (normDir && fs.existsSync(normDir)) copyTree(normDir, path.join(out, 'normative'));
+    for (const [f, name] of [[a['stage-outputs'], 'stage-outputs.json'], [a['stage-record'], 'stage-record.json'], [a['inputs-seal'], 'inputs-seal.json']]) if (f && fs.existsSync(f)) fs.copyFileSync(f, path.join(out, name));
+    if (rawPresent && normative) mergeIsolatedResults(rawDir, profile, normative);
+    problems.push(...isolatedProvenanceProblems({ profile, cand: candForIso, profileSha256: sha256, stageOutputs: readJson(path.join(out, 'stage-outputs.json')), stageRecord: readJson(path.join(out, 'stage-record.json')),
+      sealRecord: readJson(path.join(out, 'inputs-seal.json')), normative }));
+  }
   const runtimeResult = a['runtime-result'] || 'unknown';   // always enforced; an absent or unrecognised value fails closed (classify.mjs applyRuntimeResult)
   const result = classifyRun({ profile, rawDir, identity: problems.length ? { ok: false, refusals: [...problems, ...(identity?.refusals || [])] } : identity, runtimeResult });
   if (!rawPresent) { result.gate = result.gate === GATE.FAILED ? GATE.FAILED : GATE.INCONCLUSIVE; result.gate_reasons.push('no raw runtime evidence was uploaded'); }
@@ -97,7 +154,8 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
            baseline_sha: profile.baseline.sha, baseline_tree: profile.baseline.tree, diff_check: identity?.diff_check ?? null, changed_files_from_baseline: identity?.changed_files_from_baseline ?? null },
     github: { workflow_sha: process.env.GITHUB_SHA || authz?.workflow?.sha || null, workflow_ref: process.env.GITHUB_WORKFLOW_REF || null, run_id: process.env.GITHUB_RUN_ID || authz?.workflow?.run_id || null,
               run_attempt: process.env.GITHUB_RUN_ATTEMPT || authz?.workflow?.run_attempt || null, run_url: repo && process.env.GITHUB_RUN_ID ? `${server}/${repo}/actions/runs/${process.env.GITHUB_RUN_ID}/attempts/${process.env.GITHUB_RUN_ATTEMPT || 1}` : null,
-              actor: authz?.request?.actor ?? null, triggering_actor: authz?.request?.triggering_actor ?? null, runtime_job_result: runtimeResult },
+              actor: authz?.request?.actor ?? null, triggering_actor: authz?.request?.triggering_actor ?? null, runtime_job_result: runtimeResult,
+              normative_job_result: isolatedFiles(profile).length ? (a['normative-result'] ?? null) : undefined },
     environment: env, result, sealed_at: new Date().toISOString(),
     statement: 'Technical gates only. Not an acceptance, not an integration decision; authorises no merge, deployment, migration or LIVE access.',
   };
