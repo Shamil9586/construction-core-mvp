@@ -168,10 +168,19 @@ function lexSql(sql: string): { segments: SqlSegment[]; problems: string[] } {
 const FUNCTION_HEAD = /^\s*CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\b/i;
 const AS_BEFORE_BODY = /(?<![A-Za-z0-9_$\u0080-\uffff])AS\s*$/i;
 
-/** A hidden body is "armed" when reading it WITHOUT the exemption would produce a finding (or the body cannot be delimited with certainty). */
+/**
+ * Words that make a hidden body "armed" when they appear in its CODE (comments and literals removed): statements the DESTRUCTIVE list does not recognise in every
+ * spelling (MERGE, an UPDATE with an alias, DROP ROUTINE …) and dynamic SQL (EXECUTE), which no literal pattern can read. UPDATE does not count after FOR or DO
+ * (row locking, ON CONFLICT DO UPDATE SET), which the existing chain uses. This only widens which hidden bodies get the strict definitions-only treatment; it does
+ * not change what the scan reports for the top-level text of a file (the DESTRUCTIVE list, finding RV-05, is a separate task).
+ */
+const ARMED_CODE_WORDS = /\b(?:MERGE|EXECUTE|DELETE|TRUNCATE|DROP|ALTER|RENAME|COPY)\b|(?<!\b(?:FOR|DO|KEY)\s+)\bUPDATE\b/i;
+/** A hidden body is "armed" when reading it WITHOUT the exemption would produce a finding, uses one of ARMED_CODE_WORDS, or cannot be delimited with certainty. */
 function bodyIsArmed(inner: string): boolean {
     const r = scanSql(inner, false);
-    return r.problems.length > 0 || DESTRUCTIVE.some(([re]) => re.test(r.text));
+    if (r.problems.length > 0 || DESTRUCTIVE.some(([re]) => re.test(r.text)))
+        return true;
+    return ARMED_CODE_WORDS.test(lexSql(inner).segments.filter(seg => seg.kind === 'code').map(seg => seg.text).join(' '));
 }
 
 const NAME_PART = String.raw`(?:"(?:[^"]|"")*"|[A-Za-z_\u0080-\uffff][A-Za-z0-9_$\u0080-\uffff]*)`;
@@ -181,27 +190,152 @@ const CREATE_INDEX = new RegExp(String.raw`^CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?!CO
 const ALTER_TABLE = new RegExp(String.raw`^ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?(` + QUALIFIED_NAME + ')', 'i');
 const normalizedName = (name: string) => (name.match(new RegExp(NAME_PART, 'g')) ?? []).map(p => (p.startsWith('"') ? p.slice(1, -1).replace(/""/g, '"') : p.toLowerCase())).join('.');
 
+// ---- RV-06 -------------------------------------------------------------------------------------------------------------------------------------
+// PostgreSQL evaluates functions while it executes DDL, whatever the table holds: constant folding of an IMMUTABLE call in an index expression, an index
+// predicate or a CHECK; the eager evaluation of a non-volatile DEFAULT; a GENERATED column; an expression it has to plan. So "the table is new and empty",
+// "the function is declared VOLATILE" and "the statement is a plain DDL" prove nothing about a function that is reachable by name from an expression.
+// Model (closed world, fail closed): in a file that hides an armed body, NO expression of any statement may call a function unless it is one of a short list of
+// pure pg_catalog built-ins that this file does not redefine; no statement may mention a function the file itself creates, except to define / trigger-bind
+// / grant it; and anything not recognised is refused. Calls to user functions that already exist in the database are refused too — the scanner cannot see
+// what such a function calls, and a wrapper is exactly how a hidden body is reached indirectly.
+const MASK = { string: '\u0001', ident: '\u0002', dollar: '\u0003', code: ' ' } as const;
+/** Pure pg_catalog functions that FIN-SDO-1 and ordinary definitions use in DEFAULT / CHECK expressions. Nothing here runs SQL, takes a lock or reaches user code. */
+const VETTED_BUILTINS = new Set(['btrim', 'ltrim', 'rtrim', 'length', 'char_length', 'lower', 'upper', 'abs', 'round', 'mod', 'now', 'gen_random_uuid']);
+/** Words that may stand directly before '(' without being a function call: SQL syntax, or special forms the parser handles itself. */
+const BEFORE_PAREN = new Set(['and', 'or', 'not', 'in', 'any', 'some', 'all', 'exists', 'check', 'key', 'unique', 'primary', 'foreign', 'values', 'when', 'then', 'else', 'between',
+    'is', 'like', 'ilike', 'distinct', 'from', 'to', 'where', 'as', 'default', 'include', 'inherits', 'with', 'table', 'coalesce', 'nullif', 'greatest', 'least', 'array', 'row',
+    'cast', 'for', 'after', 'before', 'of', 'on', 'using', 'references', 'constraint', 'deferrable', 'initially', 'not_valid']);
+const TYPES_WITH_MODIFIER = new Set(['numeric', 'decimal', 'varchar', 'char', 'character', 'bpchar', 'bit', 'varbit', 'timestamp', 'timestamptz', 'time', 'timetz', 'interval']);
+const ACCESS_METHODS = new Set(['btree', 'hash', 'gin', 'gist', 'brin', 'spgist']);
+/** A word before a type name that makes `numeric(...)` an expression, not a column type. */
+const NOT_A_COLUMN_NAME = new Set(['default', 'and', 'or', 'not', 'when', 'then', 'else', 'in', 'between', 'is', 'check', 'where', 'on', 'using', 'values', 'return', 'select', 'any', 'some',
+    'all', 'like', 'ilike', 'collate', 'distinct', 'from', 'to', 'for', 'case', 'by', 'with', 'stored', 'generated', 'references']);
+
+type Tok = { t: 'word' | 'qid' | 'lit' | 'num' | 'punct'; start: number; end: number };
+function tokenize(skel: string): Tok[] {
+    const out: Tok[] = [];
+    const re = /\u0002+|[\u0001\u0003]+|[A-Za-z_\u0080-\uffff][A-Za-z0-9_$\u0080-\uffff]*|\d[A-Za-z0-9_.]*|::|[^\s]/g;
+    for (let m = re.exec(skel); m; m = re.exec(skel)) {
+        const text = m[0];
+        const t: Tok['t'] = text[0] === '\u0002' ? 'qid' : text[0] === '\u0001' || text[0] === '\u0003' ? 'lit' : /^[A-Za-z_\u0080-\uffff]/.test(text) ? 'word' : /^\d/.test(text) ? 'num' : 'punct';
+        out.push({ t, start: m.index, end: m.index + text.length });
+    }
+    return out;
+}
+
+/** Normalised unqualified name of the function a CREATE FUNCTION statement defines (last part of a possibly qualified name), or null. */
+const FUNCTION_NAME = new RegExp(String.raw`^\s*CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(` + QUALIFIED_NAME + ')', 'i');
+const lastNamePart = (name: string) => { const parts = normalizedName(name).split('.'); return parts[parts.length - 1]; };
+
 /**
- * With an armed function in the file, every OTHER statement must be unable to run it. Allowed: further CREATE FUNCTION, CREATE [CONSTRAINT] TRIGGER (creating
- * a trigger fires nothing), GRANT / REVOKE, COMMENT ON, CREATE TABLE name (…) without AS / IF NOT EXISTS, and CREATE INDEX / ALTER TABLE on a table created
- * earlier in this same file under exactly the same name (so it is empty, and with no DML in the file it stays empty — an index expression, CHECK, DEFAULT or
- * foreign key on it evaluates nothing). Everything else — SELECT, INSERT, UPDATE, DELETE, DO, CALL, COPY, WITH, CREATE TABLE AS, REFRESH, ALTER/INDEX on a
- * table the file did not create, CREATE EVENT TRIGGER, SET, … — is reported, because it might run the hidden DML at migration time. Fail closed: anything
- * not recognised is reported.
+ * Violations in the expressions of ONE statement of an armed file. `kind` says what the statement is, which decides what a function name may do there:
+ * a definition names its own function; CREATE TRIGGER may bind one with EXECUTE FUNCTION name('literal', …) — creating a trigger fires nothing and the file
+ * has no DML or DDL event that could fire it. Everywhere else a function may only be a vetted built-in.
  */
-function definitionOnlyViolations(statements: SqlSegment[][]): string[] {
+function expressionViolations(raw: string, skel: string, inFile: Set<string>, kind: 'function' | 'trigger' | 'ddl'): string[] {
+    const toks = tokenize(skel);
+    const out = new Set<string>();
+    const word = (t: Tok | undefined) => (t && t.t === 'word' ? raw.slice(t.start, t.end).toLowerCase() : null);
+    const nameOf = (t: Tok) => (t.t === 'qid' ? raw.slice(t.start + 1, t.end - 1).replace(/""/g, '"') : raw.slice(t.start, t.end).toLowerCase());
+    const isPunct = (t: Tok | undefined, c: string) => !!t && t.t === 'punct' && raw[t.start] === c;
+    for (let i = 0; i < toks.length; i++) {
+        const tok = toks[i];
+        if (tok.t !== 'word' && tok.t !== 'qid')
+            continue;
+        const name = nameOf(tok);
+        // start of a possibly qualified name `a.b.c` ending at tok
+        let first = i;
+        while (first >= 2 && isPunct(toks[first - 1], '.') && (toks[first - 2].t === 'word' || toks[first - 2].t === 'qid'))
+            first -= 2;
+        const qualified = first !== i;
+        const prev = word(toks[first - 1]);
+        const prev2 = word(toks[first - 2]);
+        const next = toks[i + 1];
+        const call = isPunct(next, '(');
+        const isDefinitionName = kind === 'function' && prev === 'function';
+        const isTriggerTarget = kind === 'trigger' && (prev === 'function' || prev === 'procedure') && prev2 === 'execute';
+        // (1) a function this file creates may not be named in an expression, a default, a constraint, an index … — only defined or trigger-bound
+        if (inFile.has(name) && !isDefinitionName && !isTriggerTarget)
+            out.add('references the file\'s own function ' + name);
+        if (!call)
+            continue;
+        // (2) a call: which of the harmless readings does it have?
+        if (isDefinitionName)
+            continue;
+        if (isTriggerTarget) {
+            let j = i + 2;
+            while (j < toks.length && !isPunct(toks[j], ')')) {
+                if (toks[j].t !== 'lit' && toks[j].t !== 'num' && !isPunct(toks[j], ','))
+                    out.add('trigger argument that is not a literal');
+                j++;
+            }
+            continue;
+        }
+        if (tok.t === 'word' && !qualified && BEFORE_PAREN.has(name))
+            continue;
+        if (tok.t === 'word' && !qualified && TYPES_WITH_MODIFIER.has(name)) {
+            const before = toks[i - 1];
+            if (before && (before.t === 'qid' || (before.t === 'word' && !NOT_A_COLUMN_NAME.has(word(before)!)) || raw.slice(before.start, before.end) === '::'))
+                continue;
+        }
+        if (tok.t === 'word' && !qualified && ACCESS_METHODS.has(name) && prev === 'using')
+            continue;
+        if (prev === 'table' || prev === 'references' || prev === 'on')
+            continue; // the name of a relation: CREATE TABLE name(, REFERENCES name(, CREATE INDEX … ON name(
+        const builtinQualifier = !qualified || word(toks[first]) === 'pg_catalog' && first + 2 === i;
+        if (tok.t === 'word' && VETTED_BUILTINS.has(name) && !inFile.has(name) && builtinQualifier)
+            continue;
+        out.add('calls ' + (tok.t === 'qid' ? 'a quoted-name function' : name + '()'));
+    }
+    return [...out];
+}
+
+/**
+ * With an armed function in the file, every OTHER statement must be unable to run it. Allowed statements: CREATE FUNCTION, CREATE [CONSTRAINT] TRIGGER, GRANT /
+ * REVOKE, COMMENT ON, CREATE TABLE name (…) without AS / IF NOT EXISTS, and CREATE INDEX / ALTER TABLE on a table created earlier in this same file under
+ * exactly the same name (kept as defence in depth — it is NOT what makes the expressions safe, see above). Everything else — SELECT, INSERT, UPDATE, DELETE, DO,
+ * CALL, COPY, WITH, CREATE TABLE AS, REFRESH, ALTER/INDEX on a table the file did not create, CREATE EVENT TRIGGER, SET, … — is reported. On top of that every
+ * allowed statement is checked by expressionViolations. Fail closed: anything not recognised is reported.
+ */
+function definitionOnlyViolations(statements: SqlSegment[][], firstArmed: number, phaseRule: boolean): string[] {
     const violations = new Set<string>();
     const fresh = new Set<string>();
-    for (const stmt of statements) {
+    const prepared = statements.map(stmt => {
         const rawFull = stmt.map(seg => seg.text).join('');
         const lead = rawFull.length - rawFull.trimStart().length;
-        const raw = rawFull.slice(lead).trimEnd();
-        // same length as raw: literals and quoted identifiers are masked, so a '(' or the word AS inside them never counts
-        const skel = stmt.map(seg => (seg.kind === 'code' ? seg.text : '\u0001'.repeat(seg.text.length))).join('').slice(lead).trimEnd();
+        return { raw: rawFull.slice(lead).trimEnd(), skel: stmt.map(seg => (seg.kind === 'code' ? seg.text : MASK[seg.kind].repeat(seg.text.length))).join('').slice(lead).trimEnd() };
+    });
+    const inFile = new Set<string>();
+    for (const { raw, skel } of prepared) {
+        const fn = FUNCTION_HEAD.test(skel) ? FUNCTION_NAME.exec(raw) : null;
+        if (fn)
+            inFile.add(lastNamePart(fn[1]));
+    }
+    const flag = (what: string, skel: string, detail?: string) => violations.add('HIDDEN FUNCTION DML COULD RUN: migration also contains ' + what + (detail ? ' (' + detail + ')' : ''));
+    for (const [statementIndex, { raw, skel }] of prepared.entries()) {
         if (!raw)
             continue;
-        if (FUNCTION_HEAD.test(skel) || /^(?:GRANT|REVOKE)\b/i.test(skel) || /^COMMENT\s+ON\b/i.test(skel) || /^CREATE\s+(?:OR\s+REPLACE\s+)?(?:CONSTRAINT\s+)?TRIGGER\b/i.test(skel))
+        if (/^(?:GRANT|REVOKE)\b/i.test(skel) || /^COMMENT\s+ON\b/i.test(skel))
+            continue; // evaluate nothing
+        const head = (skel.match(/^[A-Za-z]+(?:\s+[A-Za-z]+)?/)?.[0] ?? 'unrecognised statement').replace(/\s+/g, ' ').toUpperCase();
+        const check = (kind: 'function' | 'trigger' | 'ddl') => { for (const v of expressionViolations(raw, skel, inFile, kind)) flag(head, skel, v); };
+        if (FUNCTION_HEAD.test(skel)) {
+            // a SQL-standard body (RETURN expr / BEGIN ATOMIC), a SUPPORT or TRANSFORM clause are executed or planned outside the hidden body
+            if (/\b(?:SUPPORT|TRANSFORM|ATOMIC|RETURN)\b/i.test(skel))
+                flag(head, skel, 'SQL-standard body, SUPPORT or TRANSFORM clause');
+            check('function');
             continue;
+        }
+        if (/^CREATE\s+(?:OR\s+REPLACE\s+)?(?:CONSTRAINT\s+)?TRIGGER\b/i.test(skel)) {
+            check('trigger');
+            continue;
+        }
+        // Order is a second line of defence, not the main one (it says nothing about functions that already exist): expression-bearing DDL must come BEFORE the
+        // first armed function is created, so that no such expression can name it; only function / trigger / grant / comment statements may follow it.
+        if (phaseRule && statementIndex > firstArmed && /^(?:CREATE\s+TABLE|CREATE\s+(?:UNIQUE\s+)?INDEX|ALTER\s+TABLE)\b/i.test(skel)) {
+            flag(head, skel, 'after the first function with a hidden DML body — put tables, indexes and ALTER TABLE before it');
+            continue;
+        }
         const table = CREATE_TABLE.exec(raw);
         if (table) {
             let depth = 0;
@@ -212,24 +346,29 @@ function definitionOnlyViolations(statements: SqlSegment[][]): string[] {
             }
             if (close >= 0 && !/\bAS\b/i.test(skel.slice(close + 1))) {
                 fresh.add(normalizedName(table[1]));
+                check('ddl');
                 continue;
             }
         }
         const index = CREATE_INDEX.exec(raw);
-        if (index && fresh.has(normalizedName(index[1])))
+        if (index && fresh.has(normalizedName(index[1]))) {
+            check('ddl');
             continue;
+        }
         const alter = ALTER_TABLE.exec(raw);
-        if (alter && fresh.has(normalizedName(alter[1])) && !/\b(?:ATTACH|INHERIT)\b/i.test(skel))
+        if (alter && fresh.has(normalizedName(alter[1])) && !/\b(?:ATTACH|INHERIT)\b/i.test(skel)) {
+            check('ddl');
             continue;
-        violations.add('HIDDEN FUNCTION DML COULD RUN: migration also contains ' + (skel.match(/^[A-Za-z]+(?:\s+[A-Za-z]+)?/)?.[0] ?? 'unrecognised statement').replace(/\s+/g, ' ').toUpperCase());
+        }
+        flag(head, skel);
     }
     return [...violations];
 }
 
 /** The text the destructive scan reads, plus anything the lexer could not delimit safely. */
-function scanSql(sql: string, hideBodies = true): { text: string; problems: string[] } {
+function scanSql(sql: string, hideBodies = true, phaseRule = true): { text: string; problems: string[] } {
     const { segments, problems } = lexSql(sql);
-    let armed = false;
+    let firstArmed = -1;
     // statements = runs of segments separated by a top-level ';' (a ';' inside a string / quoted identifier / dollar quote never separates)
     const statements: SqlSegment[][] = [[]];
     for (const seg of segments) {
@@ -243,7 +382,7 @@ function scanSql(sql: string, hideBodies = true): { text: string; problems: stri
         });
     }
     const flat = (t: string) => t.replace(/;/g, ' ');
-    const out = statements.map(stmt => {
+    const out = statements.map((stmt, statementIndex) => {
         const isFunction = stmt.length > 0 && stmt[0].kind === 'code' && FUNCTION_HEAD.test(stmt[0].text);
         let bodyHidden = false;
         const text = stmt.map((seg, idx) => {
@@ -251,8 +390,8 @@ function scanSql(sql: string, hideBodies = true): { text: string; problems: stri
                 return seg.text;
             if (hideBodies && isFunction && !bodyHidden && seg.kind === 'dollar' && seg.closed && idx > 0 && stmt[idx - 1].kind === 'code' && AS_BEFORE_BODY.test(stmt[idx - 1].text)) {
                 bodyHidden = true;
-                if (bodyIsArmed(seg.text.slice(seg.open!.length, seg.text.length - seg.close!.length)))
-                    armed = true;
+                if (firstArmed < 0 && bodyIsArmed(seg.text.slice(seg.open!.length, seg.text.length - seg.close!.length)))
+                    firstArmed = statementIndex;
                 return ' ';
             }
             return flat(seg.text);
@@ -261,8 +400,8 @@ function scanSql(sql: string, hideBodies = true): { text: string; problems: stri
         return /^\s*ALTER\s+TABLE\s+[a-z_][a-z0-9_]*\s+ALTER\s+COLUMN\s+[a-z_][a-z0-9_]*\s+DROP\s+NOT\s+NULL\s*$/i.test(text) ? '' : text;
     });
     const text = out.join(';');
-    if (armed)
-        problems.push(...definitionOnlyViolations(statements));
+    if (firstArmed >= 0)
+        problems.push(...definitionOnlyViolations(statements, firstArmed, phaseRule));
     // A setting that changes how backslashes / quotes are read makes this lexer unreliable: refuse rather than guess.
     if (/\bstandard_conforming_strings\b/i.test(text))
         problems.push('STRING-SYNTAX SETTING (standard_conforming_strings)');
@@ -283,8 +422,12 @@ const DESTRUCTIVE: [RegExp, string][] = [
     [/\bALTER\s+COLUMN\s+\S+\s+SET\s+NOT\s+NULL\b/i, 'ALTER COLUMN … SET NOT NULL'],
     [/\bRENAME\b/i, 'RENAME']
 ];
-export function destructiveStatements(sql: string): string[] {
-    const { text, problems } = scanSql(sql);
+/**
+ * `phaseRule: false` switches off ONLY the ordering rule (tables / indexes / ALTER TABLE after the first armed function). It exists so each defence can be tested
+ * on its own; the runner never passes it.
+ */
+export function destructiveStatements(sql: string, options: { phaseRule?: boolean } = {}): string[] {
+    const { text, problems } = scanSql(sql, true, options.phaseRule !== false);
     return [...DESTRUCTIVE.filter(([re]) => re.test(text)).map(([, name]) => name), ...problems];
 }
 

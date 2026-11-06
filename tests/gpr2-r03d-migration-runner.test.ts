@@ -247,7 +247,7 @@ test('R03d/B1 DML inside the body of a CREATE FUNCTION is not a migration effect
     // nested block comment and quotes inside the body
     FN('f', "/* /* nested */ DELETE FROM t */ DELETE FROM t; SELECT 'it''s; DELETE FROM t'; SELECT E'\\'; UPDATE t SET a=1';"),
     // statements around it that are additive
-    'CREATE TABLE t(a int);\n' + FN('f', DML) + '\nREVOKE ALL ON FUNCTION f() FROM PUBLIC;\nCREATE INDEX i ON t(a);'
+    'CREATE TABLE t(a int);\nCREATE INDEX i ON t(a);\n' + FN('f', DML) + '\nREVOKE ALL ON FUNCTION f() FROM PUBLIC;'
   ])
     assert.deepEqual(destructiveStatements(sql), [], sql);
 });
@@ -398,6 +398,9 @@ test('R03d/B1 applying a migration that defines a DML function runs none of that
 // ----------------------------------------------------------------------------------------------------------------------------------
 const VIOLATION = /^HIDDEN FUNCTION DML COULD RUN/;
 const hasViolation = (sql: string) => destructiveStatements(sql).some(n => VIOLATION.test(n));
+/** The call / name / statement-kind model on its own, without the ordering rule — so a test cannot pass merely because the order was wrong. */
+const model = (sql: string) => destructiveStatements(sql, { phaseRule: false });
+const modelViolation = (sql: string) => model(sql).some(n => VIOLATION.test(n));
 const TAG_LENGTHS = [1, 63, 64, 127, 128, 129, 130, 131, 200, 1000, 5000];
 
 test('R03d/B1 RV-01 dollar tags of any length (128, 129, 200, 5000 …) delimit exactly like short ones — nothing after the literal is hidden', () => {
@@ -452,10 +455,10 @@ test('R03d/B1 RV-01 malformed or look-alike delimiters are never exempted and ne
 
 test('R03d/B1 RV-04 the source carries no literal U+FFFF; the escape is the same code-unit range', () => {
   const src = fs.readFileSync('scripts/migration-runner.ts', 'utf8');
-  assert.equal(src.includes('￿'), false, 'no literal noncharacter in the source');
+  assert.equal(src.includes('\uffff'), false, 'no literal noncharacter in the source');
   assert.equal([...src].every(c => c.charCodeAt(0) < 0x2100 || c.charCodeAt(0) === 0x2192), true, 'no stray invisible / noncharacter code points');
   assert.ok(src.includes('\\u0080-\\uffff'), 'the escape form is present');
-  assert.ok(/[\u0080-￿]/.test('￿') && /[\u0080-￿]/.test('ß') && !/[\u0080-￿]/.test('\u007f'), 'range semantics');
+  assert.ok(/[\u0080-\uffff]/.test('\uffff') && /[\u0080-\uffff]/.test('ß') && !/[\u0080-\uffff]/.test('\u007f'), 'range semantics');
 });
 
 // ---- ground truth: a real PostgreSQL decides whether a migration runs the hidden DML --------------------------------------------
@@ -514,18 +517,18 @@ test('R03d/B1 RV-02 every way a migration can RUN a hidden function body is refu
 test('R03d/B1 RV-02 what stays accepted: definitions only — and the real database confirms none of it touches data', async () => {
   const run = await oracle();
   const accepted: Record<string, string> = {
-    'armed functions + tables + indexes + constraint triggers + grants (FIN-shaped)':
-      WIPE_FN('wipe') + WIPE_FN('tw', 'trigger') + `CREATE TABLE fin_a(id int PRIMARY KEY, tenant int NOT NULL, kind text, amt numeric DEFAULT 0, CONSTRAINT chk CHECK (amt >= 0));
+    'tables + indexes + armed functions + constraint triggers + grants (FIN-shaped order)':
+      `CREATE TABLE fin_a(id int PRIMARY KEY, tenant int NOT NULL, kind text, amt numeric DEFAULT 0, CONSTRAINT chk CHECK (amt >= 0));
        CREATE TABLE fin_b(id int PRIMARY KEY, a_id int REFERENCES fin_a(id), ts timestamptz DEFAULT now());
        CREATE UNIQUE INDEX fin_a_one ON fin_a(tenant) WHERE kind = 'X';
        CREATE INDEX ON fin_b(a_id);
        ALTER TABLE fin_a ADD CONSTRAINT fin_a_amt CHECK (amt < 1000000);
-       ALTER TABLE fin_b ADD COLUMN note text DEFAULT 'n';
+       ALTER TABLE fin_b ADD COLUMN note text DEFAULT 'n';` + WIPE_FN('wipe') + WIPE_FN('tw', 'trigger') + `
        CREATE TRIGGER fin_t AFTER INSERT ON fin_a FOR EACH ROW EXECUTE FUNCTION tw();
        CREATE CONSTRAINT TRIGGER fin_c AFTER INSERT ON fin_b DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION tw();
        COMMENT ON FUNCTION wipe() IS 'x'; REVOKE ALL ON FUNCTION wipe() FROM PUBLIC; GRANT SELECT ON fin_a TO PUBLIC;`,
-    'quoted / mixed-case names are matched exactly': WIPE_FN('wipe') + 'CREATE TABLE "Fin_X"(a int); CREATE INDEX ON "Fin_X"(a); ALTER TABLE "Fin_X" ADD COLUMN b int;',
-    'schema-qualified consistently': WIPE_FN('wipe') + 'CREATE TABLE public.fin_q(a int); CREATE INDEX ON public.fin_q(a);'
+    'quoted / mixed-case names are matched exactly': 'CREATE TABLE "Fin_X"(a int); CREATE INDEX ON "Fin_X"(a); ALTER TABLE "Fin_X" ADD COLUMN b int;' + WIPE_FN('wipe'),
+    'schema-qualified consistently': 'CREATE TABLE public.fin_q(a int); CREATE INDEX ON public.fin_q(a);' + WIPE_FN('wipe')
   };
   for (const [name, sql] of Object.entries(accepted)) {
     assert.deepEqual(destructiveStatements(sql), [], name);
@@ -559,7 +562,7 @@ test('R03d/B1 RV-02 near-misses are refused: a table the file did not create, a 
     'CREATE PROCEDURE': ARMED + " CREATE PROCEDURE p() LANGUAGE sql AS 'select 1';"
   };
   for (const [name, sql] of Object.entries(refused))
-    assert.ok(hasViolation(sql), name + ' (got ' + JSON.stringify(destructiveStatements(sql)) + ')');
+    assert.ok(modelViolation(sql), name + ' (got ' + JSON.stringify(destructiveStatements(sql)) + ')');
   // the same statements next to an UNARMED function, or no function, are untouched by this rule
   assert.deepEqual(destructiveStatements(`CREATE FUNCTION f() RETURNS void LANGUAGE sql AS $$ SELECT 1 $$; CREATE INDEX ix ON u(a); SELECT f();`), []);
 });
@@ -627,8 +630,153 @@ test('R03d/B1 RV-02 a hidden body the scanner cannot read with certainty counts 
     "CREATE TABLE fin_s(a text DEFAULT $q$ ) AS SELECT 1 ( $q$); CREATE INDEX ON fin_s(a);",
     "CREATE TABLE fin_s(a text GENERATED ALWAYS AS (upper('(')) STORED);"
   ])
-    assert.deepEqual(destructiveStatements(armed + ok), [], ok);
+    assert.deepEqual(destructiveStatements(ok + armed), [], ok);
   // a real CREATE TABLE AS is still refused even when strings try to confuse the parenthesis matching
   for (const bad of ["CREATE TABLE fin_s(a) AS SELECT ')';", "CREATE TABLE fin_s(a text DEFAULT ')') AS SELECT 1;", "CREATE TABLE fin_s(a) AS SELECT '(' WHERE true;"])
-    assert.ok(hasViolation(armed + bad), bad);
+    assert.ok(modelViolation(armed + bad), bad);
+});
+
+// ----------------------------------------------------------------------------------------------------------------------------------
+// R03d / B1 correction cycle 2 — RV-06: PostgreSQL evaluates functions while it runs DDL (constant folding of IMMUTABLE calls, eager evaluation of
+// non-volatile DEFAULTs, GENERATED columns, CHECK / index expressions), so a hidden body is reachable from any expression, empty table or not.
+// ----------------------------------------------------------------------------------------------------------------------------------
+const RV06_WIPE = 'CREATE FUNCTION wipe() RETURNS int LANGUAGE plpgsql AS $f$ BEGIN DELETE FROM t; RETURN 1; END $f$;';
+const RV06_WRAPPERS: Record<string, string> = {
+  'IMMUTABLE sql': 'CREATE FUNCTION w_imm(int) RETURNS int LANGUAGE sql IMMUTABLE AS $w$ SELECT wipe() + $1 $w$;',
+  'STABLE sql': 'CREATE FUNCTION w_imm(int) RETURNS int LANGUAGE sql STABLE AS $w$ SELECT wipe() + $1 $w$;',
+  'VOLATILE sql': 'CREATE FUNCTION w_imm(int) RETURNS int LANGUAGE sql VOLATILE AS $w$ SELECT wipe() + $1 $w$;',
+  'IMMUTABLE plpgsql': 'CREATE FUNCTION w_imm(int) RETURNS int LANGUAGE plpgsql IMMUTABLE AS $w$ BEGIN RETURN wipe() + $1; END $w$;'
+};
+const RV06_SLOTS: Record<string, (e: string) => string> = {
+  'CREATE TABLE … DEFAULT': e => `CREATE TABLE nt(a int DEFAULT ${e});`,
+  'CREATE TABLE … CHECK': e => `CREATE TABLE nt(a int, CHECK (${e} > 0));`,
+  'CREATE TABLE … GENERATED': e => `CREATE TABLE nt(a int, g int GENERATED ALWAYS AS (${e}) STORED);`,
+  'CREATE TABLE … EXCLUDE': e => `CREATE TABLE nt(a int, EXCLUDE USING btree ((${e}) WITH =));`,
+  'CREATE TABLE … PARTITION BY': e => `CREATE TABLE nt(a int) PARTITION BY RANGE ((${e}));`,
+  'ALTER … ADD COLUMN DEFAULT': e => `CREATE TABLE nt(a int); ALTER TABLE nt ADD COLUMN c int DEFAULT ${e};`,
+  'ALTER … ADD COLUMN GENERATED': e => `CREATE TABLE nt(a int); ALTER TABLE nt ADD COLUMN g int GENERATED ALWAYS AS (${e}) STORED;`,
+  'ALTER … ADD CONSTRAINT CHECK': e => `CREATE TABLE nt(a int); ALTER TABLE nt ADD CONSTRAINT ck CHECK (${e} > 0);`,
+  'ALTER … SET DEFAULT': e => `CREATE TABLE nt(a int); ALTER TABLE nt ALTER COLUMN a SET DEFAULT ${e};`,
+  'CREATE INDEX (expression)': e => `CREATE TABLE nt(a int); CREATE INDEX ON nt ((${e}));`,
+  'CREATE INDEX … WHERE': e => `CREATE TABLE nt(a int); CREATE INDEX ON nt (a) WHERE ${e} > 0;`,
+  'CREATE TRIGGER … WHEN': e => `CREATE TABLE nt(a int); CREATE FUNCTION tf() RETURNS trigger LANGUAGE plpgsql AS $t$ BEGIN RETURN NEW; END $t$; CREATE TRIGGER g BEFORE INSERT ON nt FOR EACH ROW WHEN (${e} > 0) EXECUTE FUNCTION tf();`,
+  'CREATE FUNCTION … parameter DEFAULT': e => `CREATE FUNCTION h(x int DEFAULT ${e}) RETURNS int LANGUAGE sql AS $h$ SELECT x $h$;`
+};
+const RV06_NAMES = ['w_imm', 'public.w_imm', '"w_imm"', 'W_IMM', 'public."w_imm"', '"public"."w_imm"', 'w_imm /* c */'];
+const RV06_SHAPES: ((n: string) => string)[] = [n => `${n}(1)`, n => `${n}(1) + 1`, n => `coalesce(${n}(1), 0)`, n => `abs(${n}(1))`, n => `(${n}(1))`, n => `CAST(${n}(1) AS int)`,
+  n => `${n}(1)::int`, n => `length(${n}(1)::text)`, n => `mod(${n}(1), 7)`, n => `${n}(length('x'))`];
+
+test('R03d/B1 RV-06 matrix: expression slots x wrappers x spellings x shapes — whatever a real PostgreSQL really executes while applying the file is refused', async () => {
+  const run = await oracle();
+  const rnd = prng(20261107);
+  const pick = <T,>(xs: T[]): T => xs[Math.floor(rnd() * xs.length)];
+  let executed = 0, total = 0;
+  const executedBySlot: Record<string, number> = {};
+  const cases: [string, string, string][] = [];
+  for (const slot of Object.keys(RV06_SLOTS)) for (const w of Object.keys(RV06_WRAPPERS)) cases.push([slot, w, 'w_imm(1)']);
+  for (let i = 0; i < 500; i++) cases.push([pick(Object.keys(RV06_SLOTS)), pick(Object.keys(RV06_WRAPPERS)), pick(RV06_SHAPES)(pick(RV06_NAMES))]);
+  for (const [slot, w, expr] of cases) {
+    const sql = RV06_WIPE + RV06_WRAPPERS[w] + RV06_SLOTS[slot](expr);
+    const outcome = await run(sql);
+    total++;
+    if (outcome === 'changed') {
+      executed++;
+      executedBySlot[slot] = (executedBySlot[slot] ?? 0) + 1;
+      assert.ok(model(sql).length > 0, `PostgreSQL ran the hidden DML but the call model alone accepted it (ordering rule disabled):\n  slot=${slot} wrapper=${w}\n  ${expr}\n  ${sql}`);
+    }
+  }
+  assert.ok(Object.keys(executedBySlot).length >= 4, 'the matrix must hit several distinct DDL paths that really execute (PostgreSQL 17 via PGlite): ' + JSON.stringify(executedBySlot));
+  assert.ok(executed >= 100, 'executions in the corpus: ' + executed);
+  console.log(`# RV-06 matrix: cases=${total} executedByPostgreSQL=${executed} slots=${JSON.stringify(executedBySlot)}`);
+});
+
+test('R03d/B1 RV-06 the file\'s own function names cannot be used, shadowed or smuggled; user and unknown calls in expressions are refused; vetted built-ins stay usable', () => {
+  const A = RV06_WIPE;
+  const refused: Record<string, string> = {
+    'call of an in-file wrapper in DEFAULT': A + RV06_WRAPPERS['IMMUTABLE sql'] + 'CREATE TABLE nt(a int DEFAULT w_imm(1));',
+    'call of the armed function itself': A + 'CREATE TABLE nt(a int DEFAULT wipe());',
+    'quoted spelling': A + RV06_WRAPPERS['IMMUTABLE sql'] + 'CREATE TABLE nt(a int DEFAULT "w_imm"(1));',
+    'upper-case spelling': A + RV06_WRAPPERS['IMMUTABLE sql'] + 'CREATE TABLE nt(a int DEFAULT W_IMM(1));',
+    'schema-qualified spelling': A + RV06_WRAPPERS['IMMUTABLE sql'] + 'CREATE TABLE nt(a int DEFAULT public.w_imm(1));',
+    'comment between name and parenthesis': A + RV06_WRAPPERS['IMMUTABLE sql'] + 'CREATE TABLE nt(a int DEFAULT w_imm/*x*/(1));',
+    'nested inside a vetted built-in': A + RV06_WRAPPERS['IMMUTABLE sql'] + 'CREATE TABLE nt(a int DEFAULT abs(w_imm(1)));',
+    'attribute notation on the in-file name': A + 'CREATE TABLE nt(a int, CHECK ((nt.wipe) > 0));',
+    'a pre-existing user function (not visible to the scan)': A + 'CREATE TABLE nt(a int DEFAULT some_existing_wrapper(1));',
+    'a pre-existing function through a schema': A + 'CREATE TABLE nt(a int DEFAULT app.helper(1));',
+    'a catalog function that runs SQL': A + "CREATE TABLE nt(a int DEFAULT (query_to_xml('select 1', true, false, ''))::text::int);",
+    'a built-in redefined by the file (shadowing length(int))': A + 'CREATE FUNCTION length(int) RETURNS int LANGUAGE sql IMMUTABLE AS $l$ SELECT wipe() $l$; CREATE TABLE nt(a int, CHECK (length(1) > 0));',
+    'a built-in name qualified by another schema': A + 'CREATE TABLE nt(a int DEFAULT public.now());',
+    'a quoted-name call of a pre-existing user function': A + 'CREATE TABLE nt(a int DEFAULT "app_helper"(1));',
+    'a quoted-name call qualified by a schema': A + 'CREATE TABLE nt(a int DEFAULT "app"."helper"(1));',
+    'trigger argument that is a column-like identifier, not a literal': A + 'CREATE TABLE nt(a int); CREATE FUNCTION tf() RETURNS trigger LANGUAGE plpgsql AS $t$ BEGIN RETURN NEW; END $t$; CREATE TRIGGER g BEFORE INSERT ON nt FOR EACH ROW EXECUTE FUNCTION tf(a);',
+    'trigger argument that is an expression': A + 'CREATE TABLE nt(a int); CREATE FUNCTION tf() RETURNS trigger LANGUAGE plpgsql AS $t$ BEGIN RETURN NEW; END $t$; CREATE TRIGGER g BEFORE INSERT ON nt FOR EACH ROW EXECUTE FUNCTION tf(1 + 1);',
+    'a nextval default (not vetted)': A + "CREATE TABLE nt(a int DEFAULT nextval('s'));",
+    'OPERATOR() spelling': A + 'CREATE TABLE nt(a int DEFAULT 1 OPERATOR(public.+) 2);',
+    'type-with-modifier spelling used as a call': A + 'CREATE TABLE nt(a int DEFAULT numeric(1));',
+    'function head: parameter default': A + 'CREATE FUNCTION h(x int DEFAULT wipe()) RETURNS int LANGUAGE sql AS $h$ SELECT x $h$;',
+    'function head: SUPPORT clause': A + 'CREATE FUNCTION h(x int) RETURNS int LANGUAGE sql SUPPORT some_support AS $h$ SELECT x $h$;',
+    'function head: SQL-standard body': A + 'CREATE FUNCTION h() RETURNS int LANGUAGE sql RETURN 1;',
+    'function head: BEGIN ATOMIC': A + 'CREATE FUNCTION h() RETURNS void LANGUAGE sql BEGIN ATOMIC SELECT 1; END;',
+    'trigger WHEN with a user call': A + 'CREATE TABLE nt(a int); CREATE FUNCTION tf() RETURNS trigger LANGUAGE plpgsql AS $t$ BEGIN RETURN NEW; END $t$; CREATE TRIGGER g BEFORE INSERT ON nt FOR EACH ROW WHEN (other_fn(1)) EXECUTE FUNCTION tf();',
+    'trigger argument that is not a literal': A + 'CREATE TABLE nt(a int); CREATE FUNCTION tf() RETURNS trigger LANGUAGE plpgsql AS $t$ BEGIN RETURN NEW; END $t$; CREATE TRIGGER g BEFORE INSERT ON nt FOR EACH ROW EXECUTE FUNCTION tf(wipe());'
+  };
+  for (const [name, sql] of Object.entries(refused))
+    assert.ok(model(sql).length > 0, name + ' (the call model alone must refuse it; got ' + JSON.stringify(model(sql)) + ')');
+  // what stays usable in an armed file: structure, vetted pure built-ins, trigger binding, relation names, types with modifiers
+  const accepted: Record<string, string> = {
+    'built-ins in DEFAULT / CHECK': A + "CREATE TABLE nt(id uuid DEFAULT gen_random_uuid(), at timestamptz DEFAULT now(), name text CHECK (length(btrim(name)) > 0), amt numeric(14,2) CHECK (mod(amt, 100.00) = 0));",
+    'pg_catalog-qualified built-in': A + 'CREATE TABLE nt(at timestamptz DEFAULT pg_catalog.now());',
+    'special forms': A + 'CREATE TABLE nt(a int, b int, CHECK (coalesce(a, b) IS NOT NULL AND (a IN (1,2) OR greatest(a, b) > 0)));',
+    'foreign key, unique, primary key and index on a fresh table': A + 'CREATE TABLE np(id int PRIMARY KEY); CREATE TABLE nt(a int, b int REFERENCES np(id), UNIQUE (a, b), FOREIGN KEY (a, b) REFERENCES np (id, id)); CREATE UNIQUE INDEX ON nt USING btree (a, b) WHERE a IS NOT NULL;',
+    'trigger bound to an in-file and to a pre-existing function': A + "CREATE TABLE nt(a int); CREATE FUNCTION tf() RETURNS trigger LANGUAGE plpgsql AS $t$ BEGIN RETURN NEW; END $t$; CREATE TRIGGER g1 BEFORE INSERT ON nt FOR EACH ROW EXECUTE FUNCTION tf(); CREATE TRIGGER g2 BEFORE UPDATE OR DELETE ON nt FOR EACH ROW EXECUTE FUNCTION immutable_history('a', 1);",
+    'grant / revoke / comment naming the in-file functions': A + 'REVOKE ALL ON FUNCTION wipe() FROM PUBLIC; GRANT EXECUTE ON FUNCTION wipe() TO PUBLIC; COMMENT ON FUNCTION wipe() IS \'x\';',
+    'function heads with typed parameters': A + 'CREATE FUNCTION h(p_id uuid, p_amt numeric(14,2), p_n varchar(20)) RETURNS TABLE (id uuid, amt numeric(14,2)) LANGUAGE sql STABLE AS $h$ SELECT p_id, p_amt $h$;'
+  };
+  // the order FIN has: tables, indexes and ALTER TABLE first, the functions with hidden DML bodies after them
+  const armedLast = (sql: string) => (/CREATE TABLE/.test(sql) ? sql.slice(A.length) + A : sql);
+  for (const [name, sql] of Object.entries(accepted))
+    assert.deepEqual(destructiveStatements(armedLast(sql)), [], name);
+});
+
+test('R03d/B1 RV-06 ordering rule (second line of defence): after the first function with a hidden DML body no table, index or ALTER TABLE may follow — before it they may', async () => {
+  const run = await oracle();
+  const A = RV06_WIPE;
+  const tables = 'CREATE TABLE nt(a int PRIMARY KEY, b text DEFAULT now()::text CHECK (length(b) > 0)); CREATE INDEX ON nt (b); ALTER TABLE nt ADD COLUMN c int;';
+  const fnAfter = 'CREATE FUNCTION tf() RETURNS trigger LANGUAGE plpgsql AS $t$ BEGIN RETURN NEW; END $t$; CREATE TRIGGER g BEFORE INSERT ON nt FOR EACH ROW EXECUTE FUNCTION tf(); COMMENT ON FUNCTION wipe() IS \'x\'; REVOKE ALL ON FUNCTION wipe() FROM PUBLIC;';
+  assert.deepEqual(destructiveStatements(tables + A + fnAfter), [], 'DDL first, then the armed function, then functions / triggers / comments / grants');
+  assert.equal(await run(tables + A + fnAfter), 'unchanged');
+  for (const [name, late] of Object.entries({ 'CREATE TABLE': 'CREATE TABLE nt2(a int);', 'CREATE INDEX': 'CREATE INDEX ON nt (a);', 'ALTER TABLE': 'ALTER TABLE nt ADD COLUMN d int;' })) {
+    const sql = 'CREATE TABLE nt(a int);' + A + late;
+    assert.ok(hasViolation(sql), name + ' after the armed function is refused by default');
+    assert.deepEqual(model(sql).filter(n => /after the first function/.test(n)), [], name + ': … and that refusal is the ordering rule, not the call model');
+  }
+  // a function WITHOUT a hidden DML body does not start the ordering rule
+  assert.deepEqual(destructiveStatements('CREATE FUNCTION g() RETURNS int LANGUAGE sql AS $g$ SELECT 1 $g$; CREATE TABLE nt(a int); CREATE INDEX ON nt (a); SELECT g();'), []);
+});
+
+test('R03d/B1 RV-05 (hidden bodies only): a body using MERGE, an aliased UPDATE or dynamic SQL is armed, so a call in the same file is refused — and the real database shows those bodies really change data', async () => {
+  const run = await oracle();
+  const wrap = (body: string) => `CREATE FUNCTION f2() RETURNS int LANGUAGE plpgsql AS $f$ BEGIN ${body} RETURN 1; END $f$; SELECT f2();`;
+  const harmful: Record<string, string> = {
+    'MERGE … DELETE': 'MERGE INTO t USING u ON true WHEN MATCHED THEN DELETE;',
+    'MERGE … UPDATE': 'MERGE INTO t USING u ON true WHEN MATCHED THEN UPDATE SET a = 0;',
+    'UPDATE with an alias, no AS': 'UPDATE t x SET a = 0;',
+    'schema-qualified UPDATE with an alias': 'UPDATE public.t x SET a = 0;',
+    'dynamic SQL assembled from pieces': "EXECUTE 'DEL' || 'ETE FROM t';",
+    'dynamic SQL through format()': "EXECUTE format('%s %s %s', 'DELETE', 'FROM', 't');"
+  };
+  for (const [name, body] of Object.entries(harmful)) {
+    assert.equal(await run(wrap(body)), 'changed', name + ': the oracle must show the data really changing');
+    assert.ok(hasViolation(wrap(body)), name + ': a call next to this hidden body must be refused (got ' + JSON.stringify(destructiveStatements(wrap(body))) + ')');
+    assert.deepEqual(destructiveStatements(wrap(body).replace('SELECT f2();', '')), [], name + ': the definition alone is still fine');
+  }
+  // DROP ROUTINE / DROP PROCEDURE / DROP AGGREGATE in a body arm it too (not runnable in the oracle's fixture, but the words are code)
+  // MERGE on its own (no DELETE / UPDATE keyword) is still data-modifying SQL the DESTRUCTIVE list does not know: the body is armed
+  assert.ok(hasViolation(wrap('MERGE INTO t USING u ON true WHEN MATCHED THEN DO NOTHING;')), 'MERGE alone arms a body');
+  for (const body of ['DROP ROUTINE g();', 'DROP PROCEDURE g();', 'DROP AGGREGATE g(int);', 'ALTER TYPE x DROP ATTRIBUTE y;', 'TRUNCATE t;', 'COPY t FROM STDIN;'])
+    assert.ok(hasViolation(wrap(body)), body);
+  // harmless constructs the existing chain relies on do not arm a body (so calling such a function stays as permitted as before)
+  for (const body of ['PERFORM 1;', 'SELECT a FROM t FOR UPDATE;', 'SELECT a FROM t FOR NO KEY UPDATE;', 'INSERT INTO t VALUES (1) ON CONFLICT DO UPDATE SET a = 1;',
+    "IF TG_OP = 'DELETE' THEN RETURN 1; END IF;", "RAISE EXCEPTION 'cannot drop or delete here';", '-- DELETE FROM t;\n/* MERGE EXECUTE */ PERFORM 1;'])
+    assert.deepEqual(destructiveStatements(wrap(body)), [], body);
 });
