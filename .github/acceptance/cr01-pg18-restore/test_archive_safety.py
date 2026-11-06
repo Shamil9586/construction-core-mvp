@@ -6,6 +6,7 @@ from pathlib import Path
 import tarfile
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 from restore_check import RestoreFailure, digest_file, unpack_archive
 
 
@@ -30,6 +31,34 @@ class ArchiveSafetyTests(unittest.TestCase):
             self.make_archive(arc, ["pgdir/toc.dat", "pgdir/0001.dat.gz"])
             self.assertEqual(unpack_archive(arc, p / "work").name, "pgdir")
             self.assertEqual(len(digest_file(arc)), 64)
+
+    def test_member_limit_rejected_before_extraction_of_excess_entry(self):
+        with TemporaryDirectory() as w:
+            p = Path(w)
+            arc = p / "many.dir.tar.gz"
+            self.make_archive(arc, ["pgdir/toc.dat", "pgdir/0001.dat.gz", "pgdir/0002.dat.gz"])
+            with patch("restore_check.MAX_MEMBER_COUNT", 2):
+                with self.assertRaises(RestoreFailure):
+                    unpack_archive(arc, p / "work")
+            self.assertFalse((p / "work/pgdir/0002.dat.gz").exists())
+
+    def test_unpacked_size_limit_rejected_before_excess_entry(self):
+        with TemporaryDirectory() as w:
+            p = Path(w)
+            arc = p / "oversize.dir.tar.gz"
+            self.make_archive(arc, ["pgdir/toc.dat", "pgdir/0001.dat.gz"])
+            with patch("restore_check.MAX_UNPACKED_SIZE", len(b"synthetic-only")):
+                with self.assertRaises(RestoreFailure):
+                    unpack_archive(arc, p / "work")
+            self.assertFalse((p / "work/pgdir/0001.dat.gz").exists())
+
+    def test_canonical_duplicate_member_rejected(self):
+        with TemporaryDirectory() as w:
+            p = Path(w)
+            arc = p / "duplicate.dir.tar.gz"
+            self.make_archive(arc, ["pgdir/toc.dat", "./pgdir/toc.dat"])
+            with self.assertRaises(RestoreFailure):
+                unpack_archive(arc, p / "work")
 
     def test_traversal_rejected(self):
         with TemporaryDirectory() as w:
