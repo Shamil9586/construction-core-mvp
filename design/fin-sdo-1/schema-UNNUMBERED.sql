@@ -179,12 +179,12 @@ CREATE TABLE fin_command_ledger(
  FOREIGN KEY(tenant_id,actor_id) REFERENCES users(tenant_id,id)
 );
 
--- Revisions, ledger and original identities are append-only. 
+-- Revisions, ledger and original identities are append-only.
 CREATE TRIGGER fin_book_revisions_immutable BEFORE UPDATE OR DELETE ON fin_quarter_book_revisions FOR EACH ROW EXECUTE FUNCTION immutable_history();
 CREATE TRIGGER fin_line_revisions_immutable BEFORE UPDATE OR DELETE ON fin_quarter_plan_line_revisions FOR EACH ROW EXECUTE FUNCTION immutable_history();
 CREATE TRIGGER fin_command_ledger_immutable BEFORE UPDATE OR DELETE ON fin_command_ledger FOR EACH ROW EXECUTE FUNCTION immutable_history();
 -- IMPORTANT RELEASE GATE: runtime DB role MUST NOT have direct table DML permission.
--- FIN command mutations MUST be exposed through a reviewed SECURITY DEFINER write path, 
+-- FIN command mutations MUST be exposed through a reviewed SECURITY DEFINER write path,
 -- with table ownership distinct from the restricted runtime role.
 -- Until role grants and DB-level full-book conservation function exist, THIS SCHEMA IS NOT PRODUCTION READY.
 
