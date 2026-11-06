@@ -1,0 +1,148 @@
+# REVIEW-ONLY CI CANDIDATE, not yet published/approved.
+# CR01 restoration safety: synthetic test data only. NEVER uploads or accepts a real archive.
+# Separate approval needed to integrate, run, and design approved protected transfer.
+name: CR01 PG18 Restore Preflight (synthetic only, no Render)
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: 'Type APPROVE-CR01-PG18-SYNTHETIC-ONLY'
+        type: string
+        required: true
+        default: DO_NOT_RUN
+      expected_sha:
+        description: "Exact reviewed 40-character main commit SHA"
+        type: string
+        required: true
+        default: DO_NOT_RUN
+
+permissions: {}
+concurrency:
+  group: cr01-pg18-synthetic-preflight
+  cancel-in-progress: false
+
+jobs:
+  synthetic-restore:
+    if: >-
+      github.repository == 'Shamil9586/construction-core-mvp' &&
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
+      github.actor == 'Shamil9586' &&
+      github.triggering_actor == 'Shamil9586' &&
+      github.run_attempt == 1 &&
+      github.sha == inputs.expected_sha &&
+      inputs.confirmation == 'APPROVE-CR01-PG18-SYNTHETIC-ONLY'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-bootstrap-only
+          POSTGRES_DB: postgres
+        ports:
+          - 127.0.0.1:5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - name: Read only pinned workflow source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Confirm exact source identity and clean tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test -z "$(git status --porcelain)"
+          echo "Identity: exact dispatch SHA verified"
+
+      - name: Check archive extractor against synthetic malicious inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 .github/acceptance/cr01-pg18-restore/test_archive_safety.py
+
+      - name: Generate a synthetic PG18 directory backup on disposable local PostgreSQL
+        id: fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          tempdir="$(mktemp -d "${RUNNER_TEMP}/cc-pg18.XXXXXXXX")"
+          echo "scratch=$tempdir" >> "$GITHUB_OUTPUT"
+
+          client() {
+            docker run --rm --network host \
+              --user "$(id -u):$(id -g)" --cap-drop ALL \
+              --security-opt no-new-privileges \
+              -e PGPASSWORD=ci-bootstrap-only \
+              postgres:18-alpine "$@"
+          }
+          identity="$(client psql -X -qAt -v ON_ERROR_STOP=1 -h 127.0.0.1 -p 5432 -U postgres -d postgres \
+            -c "SELECT current_setting('server_version_num')::int / 10000, current_setting('port')")"
+          # Docker-published ports map client loopback to a private container bridge IP.
+          test "$identity" = "18|5432"
+          client psql -X -q -v ON_ERROR_STOP=1 -h 127.0.0.1 -p 5432 -U postgres -d postgres \
+            -c 'CREATE DATABASE cc_restore_source'
+          client psql -X -q -v ON_ERROR_STOP=1 -h 127.0.0.1 -p 5432 -U postgres -d cc_restore_source \
+            -c "CREATE TABLE public.synthetic_restore_probe (id bigint PRIMARY KEY, label text NOT NULL); INSERT INTO public.synthetic_restore_probe VALUES (1,'synthetic-A'),(2,'synthetic-B')"
+          client psql -X -q -v ON_ERROR_STOP=1 -h 127.0.0.1 -p 5432 -U postgres -d postgres \
+            -c "CREATE ROLE cc_restore_limited LOGIN PASSWORD 'ci-restore-test-only' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION"
+          client psql -X -q -v ON_ERROR_STOP=1 -h 127.0.0.1 -p 5432 -U postgres -d postgres \
+            -c "CREATE DATABASE cc_restore_probe OWNER cc_restore_limited"
+
+          docker run --rm --network host \
+            --user "$(id -u):$(id -g)" --cap-drop ALL \
+            --security-opt no-new-privileges \
+            -e PGPASSWORD=ci-bootstrap-only \
+            --mount "type=bind,src=$tempdir,dst=/work" \
+            postgres:18-alpine \
+            pg_dump -Fd -h 127.0.0.1 -p 5432 -U postgres -d cc_restore_source -f /work/pgdir
+
+          tar -czf "$tempdir/synthetic.dir.tar.gz" -C "$tempdir" pgdir
+          sha256sum "$tempdir/synthetic.dir.tar.gz" | awk '{print $1}' > "$tempdir/expected.sha256"
+          echo "Synthetic-only archive created; not published as an artifact"
+
+      - name: Verify checksum and restore synthetic export with restricted PG role
+        shell: bash
+        env:
+          SCRATCH: ${{ steps.fixture.outputs.scratch }}
+        run: |
+          set -euo pipefail
+          sha="$(cat "$SCRATCH/expected.sha256")"
+          python3 .github/acceptance/cr01-pg18-restore/restore_check.py \
+            --archive "$SCRATCH/synthetic.dir.tar.gz" \
+            --sha256 "$sha" \
+            --report "$SCRATCH/restored.json"
+          docker run --rm --network host \
+            --user "$(id -u):$(id -g)" --cap-drop ALL \
+            --security-opt no-new-privileges \
+            -e PGPASSWORD=ci-restore-test-only \
+            postgres:18-alpine \
+            psql -X -v ON_ERROR_STOP=1 -qAt -h 127.0.0.1 -p 5432 \
+              -U cc_restore_limited -d cc_restore_probe \
+              -c 'SELECT count(*) FROM public.synthetic_restore_probe' | grep -qx '2'
+          # Never upload raw pg_dump, recovered rows, SQL statements or DB logs.
+          cat "$SCRATCH/restored.json"
+          echo 'PASS synthetic PostgreSQL 18 restore and row-count fixture'
+
+      - name: Clean runner scratch data even when failed
+        if: always()
+        shell: bash
+        env:
+          SCRATCH: ${{ steps.fixture.outputs.scratch }}
+        run: |
+          set +e
+          if [[ -n "$SCRATCH" && "$SCRATCH" == "$RUNNER_TEMP"/cc-pg18.* && -d "$SCRATCH" ]]; then
+            rm -rf -- "$SCRATCH"
+            test ! -e "$SCRATCH"
+          fi
+          # GitHub-hosted PostgreSQL service container is also automatically destroyed with job.
