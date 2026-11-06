@@ -227,3 +227,161 @@ test('R03d the real chain on a fresh database: all files applied with checksums,
   assert.deepEqual((await migrate({ mode: 'boot' })).applied, [], 'boot mode on a fully migrated database does nothing');
   void transaction;
 });
+
+// ----------------------------------------------------------------------------------------------------------------------------------
+// R03d / B1 — the additive scan must not mistake the stored body of CREATE FUNCTION for an effect of applying the migration, and must not
+// hide anything else. Only comments and the dollar-quoted body of a top-level CREATE [OR REPLACE] FUNCTION … AS are ever removed.
+// ----------------------------------------------------------------------------------------------------------------------------------
+const FN = (name: string, body: string, tag = '$$') => `CREATE OR REPLACE FUNCTION ${name}() RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS ${tag}\nBEGIN\n${body}\nEND;\n${tag};`;
+const FN_TAIL = (name: string, body: string, tag = '$$') => `CREATE FUNCTION ${name}() RETURNS void AS ${tag}\nBEGIN\n${body}\nEND;\n${tag} LANGUAGE plpgsql;`;
+const DML = 'DELETE FROM t WHERE x = 1;\nUPDATE t SET a = 2 WHERE b = 3;\nINSERT INTO t(a) VALUES (1);';
+
+test('R03d/B1 DML inside the body of a CREATE FUNCTION is not a migration effect; the same file stays additive', () => {
+  for (const sql of [
+    FN('f', DML), FN_TAIL('f', DML), FN('f', DML, '$body$'), FN('f', DML, '$_$'), FN('f', DML, '$ß$'),
+    FN('f', 'TRUNCATE t; DROP TABLE u; ALTER TABLE t DROP COLUMN c; ALTER TABLE t RENAME TO v;'),
+    // two functions, one of them replaced, and a trigger that merely names the function
+    FN('f', DML) + '\n' + FN_TAIL('g', DML, '$g$') + '\nCREATE TRIGGER trg BEFORE UPDATE OR DELETE ON t FOR EACH ROW EXECUTE FUNCTION f();',
+    // a different dollar tag inside the body does not end it; neither does '$$' inside a string of a named-tag body
+    FN('f', "EXECUTE $q$ DELETE FROM t $q$; SELECT '$$ not the end';", '$body$'),
+    // nested block comment and quotes inside the body
+    FN('f', "/* /* nested */ DELETE FROM t */ DELETE FROM t; SELECT 'it''s; DELETE FROM t'; SELECT E'\\'; UPDATE t SET a=1';"),
+    // statements around it that are additive
+    'CREATE TABLE t(a int);\n' + FN('f', DML) + '\nREVOKE ALL ON FUNCTION f() FROM PUBLIC;\nCREATE INDEX i ON t(a);'
+  ])
+    assert.deepEqual(destructiveStatements(sql), [], sql);
+});
+
+test('R03d/B1 a FIN-SDO-1-shaped file (SECURITY DEFINER functions whose bodies delete and update their own tables) is additive; nothing else in it is hidden', () => {
+  const fin = `-- migration-class: additive\nCREATE TABLE fin_buf(id int primary key, v int);\n` +
+    FN('fin_sdo_update_edit_buffer', 'DELETE FROM fin_buf WHERE id = 1;\nUPDATE fin_buf SET v = v + 1;') + '\n' +
+    FN('fin_sdo_commit_edit_buffer', 'UPDATE fin_buf SET v = 0;') + '\nREVOKE ALL ON FUNCTION fin_sdo_commit_edit_buffer() FROM PUBLIC;\n';
+  assert.deepEqual(destructiveStatements(fin), []);
+  assert.deepEqual(destructiveStatements(fin + 'DELETE FROM fin_buf;'), ['DELETE FROM'], 'a top-level DELETE after the functions is still found');
+  assert.deepEqual(destructiveStatements('DELETE FROM fin_buf;\n' + fin), ['DELETE FROM'], '… and before them');
+});
+
+test('R03d/B1 fail closed: destructive statements are found before, after and between functions, and in everything that is not a function body', () => {
+  const danger: [string, string][] = [
+    ['DROP TABLE t;', 'DROP'], ['DELETE FROM t;', 'DELETE FROM'], ['UPDATE t SET a = 1;', 'UPDATE … SET (data rewrite)'], ['TRUNCATE t;', 'TRUNCATE'],
+    ['ALTER TABLE t DROP COLUMN c;', 'DROP'], ['ALTER TABLE t ALTER COLUMN c DROP DEFAULT;', 'ALTER TABLE … DROP'], ['ALTER TABLE t RENAME TO u;', 'RENAME'],
+    ['ALTER TABLE t ALTER COLUMN c TYPE bigint;', 'ALTER COLUMN … TYPE'], ['ALTER TABLE t ALTER COLUMN c SET NOT NULL;', 'ALTER COLUMN … SET NOT NULL']
+  ];
+  for (const [bad, label] of danger) {
+    const harmless = FN('f', DML);
+    for (const sql of [
+      bad, harmless + '\n' + bad, bad + '\n' + harmless, harmless + '\n' + bad + '\n' + FN_TAIL('g', DML, '$g$'),
+      // DO blocks run at migration time: never exempt, alone or right after / before a function
+      `DO $$ BEGIN ${bad} END $$;`, harmless + `\nDO $$ BEGIN ${bad} END $$;`, `DO $do$ BEGIN ${bad} END $do$;\n` + harmless,
+      // the dollar string is not the body of a CREATE FUNCTION: after the AS-clause, after a comma, in a procedure, in a statement that only mentions FUNCTION
+      `CREATE FUNCTION f() RETURNS int AS $a$ SELECT 1 $a$ LANGUAGE sql, $b$ ${bad} $b$;`,
+      `CREATE PROCEDURE p() LANGUAGE sql AS $$ ${bad} $$;`,
+      `CREATE FUNCTION f() RETURNS int LANGUAGE sql AS $a$ SELECT 1 $a$ AS $b$ ${bad} $b$;`,
+      `COMMENT ON FUNCTION f() IS $c$ ${bad} $c$;`, `SELECT $x$ ${bad} $x$;`,
+      // a single-quoted (old-style) body is not exempt
+      `CREATE FUNCTION f() RETURNS void AS 'BEGIN ${bad.replace(/'/g, "''")} END;' LANGUAGE plpgsql;`,
+      // clauses after the body are still scanned
+      FN_TAIL('f', DML).replace('LANGUAGE plpgsql;', `LANGUAGE plpgsql; ${bad}`),
+      // CREATE FUNCTION that is not at the start of its statement does not qualify
+      `EXPLAIN CREATE FUNCTION f() RETURNS void AS $$ ${bad} $$ LANGUAGE sql;`, `SELECT 1 CREATE FUNCTION f() RETURNS void AS $$ ${bad} $$ LANGUAGE sql;`,
+      // SQL-standard unquoted bodies run statement by statement in the file
+      `CREATE FUNCTION f() RETURNS void LANGUAGE sql BEGIN ATOMIC ${bad} END;`
+    ])
+      assert.ok(destructiveStatements(sql).includes(label), `${label} must be found in: ${sql} (got ${JSON.stringify(destructiveStatements(sql))})`);
+  }
+});
+
+test('R03d/B1 only the first AS-body of a function statement is exempt, and only when closed', () => {
+  // a dollar string inside a function statement that does NOT follow the AS keyword is not the body (default value, SET clause, comment text)
+  for (const sql of ['CREATE FUNCTION f(a text DEFAULT $d$ DELETE FROM t $d$) RETURNS void AS $$ x $$ LANGUAGE sql;',
+    'CREATE FUNCTION f() RETURNS void LANGUAGE sql SET search_path = $s$ DELETE FROM t $s$ AS $$ x $$;',
+    'CREATE FUNCTION f() RETURNS text LANGUAGE sql RETURN $r$ DELETE FROM t $r$;'])
+    assert.deepEqual(destructiveStatements(sql), ['DELETE FROM'], sql);
+  // DO is never a function head: even a dollar string directly after DO ... AS-like text is scanned
+  for (const sql of ['DO $$ DELETE FROM t $$;', 'DO LANGUAGE plpgsql $$ DELETE FROM t $$;', 'DO AS $$ DELETE FROM t $$;'])
+    assert.deepEqual(destructiveStatements(sql), ['DELETE FROM'], sql);
+  assert.deepEqual(destructiveStatements('CREATE FUNCTION f() RETURNS void AS $a$ DELETE FROM t $a$ LANGUAGE sql;'), []);
+  assert.deepEqual(destructiveStatements('CREATE FUNCTION f() RETURNS void AS $a$ x $a$ AS $b$ DELETE FROM t $b$;'), ['DELETE FROM'], 'a second AS-clause is not a second exemption');
+  assert.ok(destructiveStatements('CREATE FUNCTION f() RETURNS void AS $a$ DELETE FROM t').includes('UNTERMINATED DOLLAR QUOTE'));
+  assert.ok(destructiveStatements('CREATE FUNCTION f() RETURNS void AS $a$ DELETE FROM t').includes('DELETE FROM'), 'an unterminated body is scanned, not exempted');
+});
+
+test('R03d/B1 comments, strings, quoted identifiers and dollar quotes cannot be used to hide a statement', () => {
+  const hides: [string, string][] = [
+    ["SELECT '--'; DROP TABLE t;", 'DROP'],                          // '--' inside a string is not a comment
+    ["SELECT '/*'; DELETE FROM t; SELECT '*/';", 'DELETE FROM'],      // nor is '/*'
+    ['SELECT "--"; DROP TABLE t;', 'DROP'], ['SELECT "a;b"; TRUNCATE t;', 'TRUNCATE'],
+    ['-- x\rDROP TABLE t;', 'DROP'], ['-- x\r\nDROP TABLE t;', 'DROP'],  // CR ends a line comment in PostgreSQL
+    ['/* a */ /* b */ DROP TABLE t;', 'DROP'], ['/* /* nested */ still comment */ DELETE FROM t;', 'DELETE FROM'],
+    ["SELECT E'\\''; DROP TABLE t; SELECT E'x';", 'DROP'],            // E'' escape does not leave the string open
+    ["SELECT '$$'; DELETE FROM t; SELECT '$$';", 'DELETE FROM'],       // '$$' in a string does not start a dollar quote
+    ['SELECT $a$ $$ $a$; TRUNCATE t;', 'TRUNCATE'], ['SELECT $$ $a$ $$; TRUNCATE t;', 'TRUNCATE'],
+    ['-- CREATE FUNCTION f() RETURNS void AS $$\nDELETE FROM t;\n-- $$ LANGUAGE sql;', 'DELETE FROM'],   // a function header in a comment opens nothing
+    ["CREATE FUNCTION f() RETURNS void AS $$ x $$ LANGUAGE sql; -- ok\nDELETE FROM t;", 'DELETE FROM'],
+    ["ALTER TABLE t ADD COLUMN c text DEFAULT 'a;b', DROP COLUMN x;", 'DROP'],  // ';' in a string does not end the statement
+    ["ALTER TABLE t ADD COLUMN c text DEFAULT $$a;b$$, ALTER COLUMN y DROP DEFAULT;", 'ALTER TABLE … DROP']
+  ];
+  for (const [sql, label] of hides)
+    assert.ok(destructiveStatements(sql).includes(label), `${label} must be found in: ${JSON.stringify(sql)} (got ${JSON.stringify(destructiveStatements(sql))})`);
+  // and what is genuinely a comment is still not a statement
+  for (const ok of ['-- DELETE FROM t;\nSELECT 1;', '/* DROP TABLE t; /* nested */ TRUNCATE t; */ SELECT 1;', '-- x\r-- DROP TABLE t\rSELECT 1;', 'SELECT 1; /* UPDATE t SET a=1 */'])
+    assert.deepEqual(destructiveStatements(ok), [], ok);
+});
+
+test('R03d/B1 SQL the scanner cannot delimit with certainty is reported, so an additive file containing it is refused', () => {
+  const cases: [string, string][] = [
+    ['SELECT 1; /* DROP TABLE t;', 'UNTERMINATED COMMENT'], ["SELECT 'x; DROP TABLE t;", 'UNTERMINATED QUOTE'], ['SELECT "x; DROP TABLE t;', 'UNTERMINATED QUOTE'],
+    ['DO $$ BEGIN DELETE FROM t; END', 'UNTERMINATED DOLLAR QUOTE'], ['SELECT $a$ x $b$;', 'UNTERMINATED DOLLAR QUOTE'],
+    ['SELECT a$b$ x $b$;', 'AMBIGUOUS DOLLAR QUOTE'], ['SELECT 1$$ x -- $$; DROP TABLE t;', 'AMBIGUOUS DOLLAR QUOTE'],
+    ["SET standard_conforming_strings = off; SELECT 'a\\'; DROP TABLE t; --';", 'STRING-SYNTAX SETTING (standard_conforming_strings)'],
+    ["SELECT set_config('standard_conforming_strings', 'off', true);", 'STRING-SYNTAX SETTING (standard_conforming_strings)']
+  ];
+  for (const [sql, label] of cases)
+    assert.ok(destructiveStatements(sql).includes(label), `${label} for ${JSON.stringify(sql)} (got ${JSON.stringify(destructiveStatements(sql))})`);
+  // parameter placeholders and identifiers that merely contain '$' are fine
+  assert.deepEqual(destructiveStatements('CREATE TABLE t$1(a int); SELECT $1, $2;'), []);
+});
+
+test('R03d/B1 class semantics through readMigrationFiles: additive with a function body passes; additive with a DO / top-level DML is refused; contract is unchanged', () => {
+  const real = fs.readdirSync('infra').filter(f => /^\d+_.*\.sql$/.test(f) && Number(f.split('_')[0]) <= 25);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gpr2-mig-b1-'));
+  try {
+    for (const f of real) fs.copyFileSync(path.join('infra', f), path.join(dir, f));
+    const m = readLegacyManifest('infra');
+    const put = (sql: string) => fs.writeFileSync(path.join(dir, '026_n.sql'), sql);
+    const additive = (body: string) => '-- migration-class: additive\nCREATE TABLE n(a int);\n' + body;
+    put(additive(FN('n_fn', 'DELETE FROM n; UPDATE n SET a = 1;')));
+    assert.equal(code(() => readMigrationFiles(dir, m)), 'NO ERROR');
+    assert.equal(readMigrationFiles(dir, m)[25].class, 'additive');
+    for (const bad of [FN('n_fn', DML) + '\nDELETE FROM n;', 'DELETE FROM n;\n' + FN('n_fn', DML), FN('n_fn', DML) + '\nDO $$ BEGIN DELETE FROM n; END $$;',
+      'DO $$ BEGIN UPDATE n SET a = 1; END $$;\n' + FN('n_fn', DML), FN('n_fn', DML) + '\nDROP TABLE n;', FN('n_fn', DML) + '\nALTER TABLE n DROP COLUMN a;',
+      FN('n_fn', DML).replace('$$;', '$$; /* unterminated')]) {
+      put(additive(bad));
+      assert.equal(code(() => readMigrationFiles(dir, m)), 'MIGRATION_NOT_ADDITIVE', bad);
+    }
+    // contract: never scanned, still gated at run time exactly as before
+    put('-- migration-class: contract\n' + FN('n_fn', DML) + '\nDROP TABLE n;');
+    assert.equal(code(() => readMigrationFiles(dir, m)), 'NO ERROR');
+    assert.equal(readMigrationFiles(dir, m)[25].class, 'contract');
+    assert.equal(code(() => planMigrations(readMigrationFiles(dir, m), [])), 'MIGRATION_CONTRACT_NOT_ALLOWED');
+    // checksum / change-after-apply protection is independent of the scan
+    put(additive(FN('n_fn', DML)));
+    const files = readMigrationFiles(dir, m);
+    assert.equal(code(() => planMigrations(files, [{ version: 26, checksum: 'f'.repeat(64) }])), 'MIGRATION_CHANGED_AFTER_APPLY');
+  }
+  finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('R03d/B1 applying a migration that defines a DML function runs none of that DML: the data is untouched, the function exists', async () => {
+  const { transaction, pool } = await memoryDb();
+  await pool.query('DROP SCHEMA public CASCADE');
+  await pool.query('CREATE SCHEMA public');
+  await pool.query('CREATE TABLE b1_rows(id int primary key, v int); INSERT INTO b1_rows VALUES (1, 10), (2, 20);');
+  const fn = `CREATE OR REPLACE FUNCTION b1_wipe() RETURNS void LANGUAGE plpgsql AS $$ BEGIN DELETE FROM b1_rows; UPDATE b1_rows SET v = 0; END; $$;`;
+  const chain = [file(1, 'additive', fn)];
+  assert.deepEqual(destructiveStatements(fn), []);
+  const r = await transaction(c => applyMigrations(c, chain));
+  assert.deepEqual(r.applied.map(a => a.version), [1]);
+  assert.deepEqual((await pool.query('SELECT id, v FROM b1_rows ORDER BY id')).rows, [{ id: 1, v: 10 }, { id: 2, v: 20 }], 'the migration did not execute the body');
+  assert.equal((await pool.query("SELECT to_regproc('b1_wipe') IS NOT NULL AS x")).rows[0].x, true);
+});

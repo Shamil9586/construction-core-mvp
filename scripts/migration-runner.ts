@@ -52,9 +52,152 @@ export function declaredClass(sql: string): string | null {
     return null;
 }
 
-/** The statements of a migration with comments and $$-quoted function bodies removed — what the destructive scan reads. */
+/**
+ * R03d/B1 — the additive scan reads what the migration EXECUTES when it is applied. Exactly two things are removed from that text, both only after a
+ * real lexical pass (never by a regular expression over raw SQL):
+ *   1. comments (a double-hyphen line comment ends at CR or LF; a slash-star block comment nests, as in PostgreSQL); and
+ *   2. the dollar-quoted BODY of a top-level `CREATE [OR REPLACE] FUNCTION … AS $tag$ body $tag$` statement. CREATE FUNCTION stores the body; its DML runs
+ *      later, under the function's own guards, and is not an effect of applying the migration.
+ * Everything else stays visible, in particular string literals and every dollar-quoted string that is not such a body — so a DO block (which DOES run
+ * at migration time), a dollar string after a function, the function's signature and its trailing clauses are all still scanned.
+ * Fail closed: SQL the lexer cannot delimit with certainty (an unterminated comment / quote / dollar quote, a `$tag$` glued to an identifier, a
+ * standard_conforming_strings setting that would change how quotes are read) is reported as a finding, so an additive file containing it is refused
+ * instead of being partially hidden.
+ */
+type SqlSegment = { kind: 'code' | 'string' | 'ident' | 'dollar'; text: string; open?: string; close?: string; closed: boolean };
+const IDENT_CHAR = /[A-Za-z0-9_$\u0080-￿]/;
+const DOLLAR_OPEN = /^\$(?:[A-Za-z_\u0080-￿][A-Za-z0-9_\u0080-￿]*)?\$/;
+
+function lexSql(sql: string): { segments: SqlSegment[]; problems: string[] } {
+    const segments: SqlSegment[] = [];
+    const problems = new Set<string>();
+    let code = '';
+    const flush = () => { if (code) { segments.push({ kind: 'code', text: code, closed: true }); code = ''; } };
+    let i = 0;
+    while (i < sql.length) {
+        const ch = sql[i];
+        const next = sql[i + 1];
+        if (ch === '-' && next === '-') {
+            // PostgreSQL ends a line comment at LF or CR.
+            let j = i + 2;
+            while (j < sql.length && sql[j] !== '\n' && sql[j] !== '\r')
+                j++;
+            code += ' ';
+            i = j;
+        }
+        else if (ch === '/' && next === '*') {
+            let depth = 1;
+            let j = i + 2;
+            while (j < sql.length && depth > 0) {
+                if (sql[j] === '/' && sql[j + 1] === '*') { depth++; j += 2; }
+                else if (sql[j] === '*' && sql[j + 1] === '/') { depth--; j += 2; }
+                else
+                    j++;
+            }
+            if (depth > 0) {
+                // Unterminated: PostgreSQL would reject the file. The remainder is NOT treated as a comment, so it stays scanned.
+                problems.add('UNTERMINATED COMMENT');
+                code += ' ' + sql.slice(i + 2);
+                i = sql.length;
+            }
+            else {
+                code += ' ';
+                i = j;
+            }
+        }
+        else if (ch === "'" || ch === '"') {
+            // E'…' honours backslash escapes; every other string and every identifier doubles its quote.
+            const escaped = ch === "'" && /^[eE]$/.test(sql[i - 1] ?? '') && !IDENT_CHAR.test(sql[i - 2] ?? ' ');
+            let j = i + 1;
+            let closed = false;
+            while (j < sql.length) {
+                if (escaped && sql[j] === '\\') { j += 2; continue; }
+                if (sql[j] === ch) {
+                    if (sql[j + 1] === ch) { j += 2; continue; }
+                    closed = true;
+                    j++;
+                    break;
+                }
+                j++;
+            }
+            if (!closed) {
+                problems.add('UNTERMINATED QUOTE');
+                j = sql.length;
+            }
+            // keep an E/U& prefix already in `code` with the code segment; the literal itself is its own segment
+            flush();
+            segments.push({ kind: ch === "'" ? 'string' : 'ident', text: sql.slice(i, j), closed });
+            i = j;
+        }
+        else if (ch === '$' && DOLLAR_OPEN.test(sql.slice(i, i + 130))) {
+            const open = DOLLAR_OPEN.exec(sql.slice(i, i + 130))![0];
+            if (IDENT_CHAR.test(sql[i - 1] ?? ' '))
+                problems.add('AMBIGUOUS DOLLAR QUOTE');
+            const endAt = sql.indexOf(open, i + open.length);
+            flush();
+            if (endAt < 0) {
+                problems.add('UNTERMINATED DOLLAR QUOTE');
+                segments.push({ kind: 'dollar', text: sql.slice(i), open, close: open, closed: false });
+                i = sql.length;
+            }
+            else {
+                segments.push({ kind: 'dollar', text: sql.slice(i, endAt + open.length), open, close: open, closed: true });
+                i = endAt + open.length;
+            }
+        }
+        else {
+            code += ch;
+            i++;
+        }
+    }
+    flush();
+    return { segments, problems: [...problems] };
+}
+
+const FUNCTION_HEAD = /^\s*CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\b/i;
+const AS_BEFORE_BODY = /(?<![A-Za-z0-9_$\u0080-￿])AS\s*$/i;
+
+/** The text the destructive scan reads, plus anything the lexer could not delimit safely. */
+function scanSql(sql: string): { text: string; problems: string[] } {
+    const { segments, problems } = lexSql(sql);
+    // statements = runs of segments separated by a top-level ';' (a ';' inside a string / quoted identifier / dollar quote never separates)
+    const statements: SqlSegment[][] = [[]];
+    for (const seg of segments) {
+        if (seg.kind !== 'code') { statements[statements.length - 1].push(seg); continue; }
+        const parts = seg.text.split(';');
+        parts.forEach((part, n) => {
+            if (n > 0)
+                statements.push([]);
+            if (part)
+                statements[statements.length - 1].push({ kind: 'code', text: part, closed: true });
+        });
+    }
+    const flat = (t: string) => t.replace(/;/g, ' ');
+    const out = statements.map(stmt => {
+        const isFunction = stmt.length > 0 && stmt[0].kind === 'code' && FUNCTION_HEAD.test(stmt[0].text);
+        let bodyHidden = false;
+        const text = stmt.map((seg, idx) => {
+            if (seg.kind === 'code')
+                return seg.text;
+            if (isFunction && !bodyHidden && seg.kind === 'dollar' && seg.closed && idx > 0 && stmt[idx - 1].kind === 'code' && AS_BEFORE_BODY.test(stmt[idx - 1].text)) {
+                bodyHidden = true;
+                return ' ';
+            }
+            return flat(seg.text);
+        }).join('');
+        // R04: only a COMPLETE standalone nullability expansion is exempt. A trailing DROP COLUMN/SET NOT NULL/UPDATE in the same statement remains visible.
+        return /^\s*ALTER\s+TABLE\s+[a-z_][a-z0-9_]*\s+ALTER\s+COLUMN\s+[a-z_][a-z0-9_]*\s+DROP\s+NOT\s+NULL\s*$/i.test(text) ? '' : text;
+    });
+    const text = out.join(';');
+    // A setting that changes how backslashes / quotes are read makes this lexer unreliable: refuse rather than guess.
+    if (/\bstandard_conforming_strings\b/i.test(text))
+        problems.push('STRING-SYNTAX SETTING (standard_conforming_strings)');
+    return { text, problems };
+}
+
+/** The statements of a migration with comments and CREATE FUNCTION bodies removed — what the destructive scan reads. */
 export function executableText(sql: string): string {
-    return sql.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/--[^\n]*/g, ' ');
+    return scanSql(sql).text;
 }
 const DESTRUCTIVE: [RegExp, string][] = [
     [/\bDROP\s+(TABLE|COLUMN|SCHEMA|DATABASE|TYPE|VIEW|INDEX|CONSTRAINT|TRIGGER|FUNCTION|SEQUENCE|POLICY|EXTENSION)\b/i, 'DROP'],
@@ -67,12 +210,8 @@ const DESTRUCTIVE: [RegExp, string][] = [
     [/\bRENAME\b/i, 'RENAME']
 ];
 export function destructiveStatements(sql: string): string[] {
-    // R04: only a COMPLETE standalone nullability expansion is exempt. A trailing
-    // DROP COLUMN/SET NOT NULL/UPDATE in the same statement remains visible.
-    const text = executableText(sql).split(';').map(statement =>
-        /^\s*ALTER\s+TABLE\s+[a-z_][a-z0-9_]*\s+ALTER\s+COLUMN\s+[a-z_][a-z0-9_]*\s+DROP\s+NOT\s+NULL\s*$/i.test(statement) ? '' : statement
-    ).join(';');
-    return DESTRUCTIVE.filter(([re]) => re.test(text)).map(([, name]) => name);
+    const { text, problems } = scanSql(sql);
+    return [...DESTRUCTIVE.filter(([re]) => re.test(text)).map(([, name]) => name), ...problems];
 }
 
 export function readMigrationFiles(dir = 'infra', legacyManifest = readLegacyManifest(dir)): MigrationFile[] {
