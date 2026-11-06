@@ -365,8 +365,207 @@ function definitionOnlyViolations(statements: SqlSegment[][], firstArmed: number
     return [...violations];
 }
 
+// ---- RV-05: what a statement IS, not what its text happens to contain -----------------------------------------------------------------------------
+// A regular expression over the whole text sees `UPDATE t SET` but not `UPDATE t x SET`, `MERGE`, `DROP PROCEDURE`, or `EXPLAIN ANALYZE UPDATE …`. These findings come
+// from the TOKENS of each lexed statement instead: a data-changing or dropping verb at the position where a statement (or a CTE / EXPLAIN / PREPARE body) begins
+// is that statement, however it is spelled; so is the UPDATE of INSERT … ON CONFLICT DO UPDATE and the action of a rule (DO ALSO / DO INSTEAD …). Trigger events
+// (BEFORE UPDATE), row locking (FOR UPDATE), referential actions (ON DELETE CASCADE) and privileges (GRANT UPDATE) never stand at such a position. The names reuse the existing finding names where the meaning is the same.
+const STATEMENT_START_VERB: Record<string, string> = { update: 'UPDATE … SET (data rewrite)', delete: 'DELETE FROM', truncate: 'TRUNCATE', drop: 'DROP', merge: 'MERGE' };
+/** Words that, in the CODE of a DO block, mean it changes data or builds SQL at run time. UPDATE does not count after FOR / DO / KEY (row locking, ON CONFLICT DO UPDATE). */
+const DO_BODY_VERBS = /\b(?:(DELETE)|(TRUNCATE)|(DROP)|(MERGE)|(EXECUTE))\b|(?<!\b(?:FOR|DO|KEY)\s+)\b(UPDATE)\b/gi;
+const DO_BODY_NAMES = ['DELETE FROM', 'TRUNCATE', 'DROP', 'MERGE', 'DYNAMIC SQL (EXECUTE)', 'UPDATE … SET (data rewrite)'];
+
+function statementFindings(stmt: SqlSegment[]): string[] {
+    const raw = stmt.map(seg => seg.text).join('');
+    if (!raw.trim())
+        return [];
+    const skel = stmt.map(seg => (seg.kind === 'code' ? seg.text : MASK[seg.kind].repeat(seg.text.length))).join('');
+    const out: string[] = [];
+    const toks = tokenize(skel);
+    const word = (t: Tok | undefined) => (t && t.t === 'word' ? raw.slice(t.start, t.end).toLowerCase() : null);
+    const punct = (t: Tok | undefined, c: string) => !!t && t.t === 'punct' && raw[t.start] === c;
+    for (let i = 0; i < toks.length; i++) {
+        const w = word(toks[i]);
+        if (!w || !(w in STATEMENT_START_VERB))
+            continue;
+        const prev = toks[i - 1];
+        const before = word(prev);
+        if (!prev || punct(prev, '(') || punct(prev, ')') || before === 'analyze' || before === 'verbose' || before === 'explain' || before === 'as' || before === 'do' || before === 'also' || before === 'instead')
+            out.push(STATEMENT_START_VERB[w]);
+    }
+    const head = word(toks[0]);
+    if (head === 'copy' && toks.some(t => word(t) === 'program'))
+        out.push('COPY … PROGRAM');
+    if (head === 'do') {
+        const body = stmt.find(seg => seg.kind === 'dollar' || seg.kind === 'string');
+        if (body) {
+            const inner = body.kind === 'dollar' ? body.text.slice(body.open!.length, body.text.length - body.close!.length) : body.text.slice(1, -1).replace(/''/g, "'");
+            const lexed = lexSql(inner);
+            out.push(...lexed.problems);
+            const code = lexed.segments.filter(seg => seg.kind === 'code').map(seg => seg.text).join(' ');
+            for (let m = DO_BODY_VERBS.exec(code); m; m = DO_BODY_VERBS.exec(code))
+                out.push(DO_BODY_NAMES[m.slice(1).findIndex(g => g !== undefined)]);
+        }
+    }
+    return out;
+}
+
+// ---- RV-07: a chain of migrations is applied one after the other -------------------------------------------------------------------------------------
+// Judging every file alone lets a LATER additive file run what an EARLIER file hid: file 1 defines a function whose hidden body deletes data (accepted: it is only
+// a definition), file 2 calls it, INSERTs into a table whose trigger calls it, or touches a table / view whose DEFAULT, CHECK or query names it. File 2 contains
+// nothing destructive and nothing that names a hidden body, so it passed. The remedy is to carry state along the chain, in version order, over EVERY file whatever
+// its class (a legacy or contract file may define dangerous functions and triggers too):
+//   * seeds: functions whose hidden body is armed;
+//   * taint: a function, table or view whose definition (function body, DEFAULT, CHECK, index, trigger binding, view query …) mentions a tainted name is tainted;
+//   * rule for an additive file: no statement may mention a tainted name, except where nothing is evaluated — GRANT / REVOKE / COMMENT ON, the target of
+//     CREATE TRIGGER … EXECUTE FUNCTION and its ON table, the name a CREATE FUNCTION defines — and the hidden body of a new function, which merely passes the taint on.
+// Names are compared by their last part, case-folded unless quoted, and overloads share a node: all deliberate over-approximations.
+export interface MigrationChain {
+    /** node (function, table or view) -> every name its definition mentions */
+    mentions: Map<string, Set<string>>;
+    /** functions whose hidden body is armed */
+    armed: Set<string>;
+    /** functions run by an event trigger: such a function fires on EVERY later DDL command without any statement naming it */
+    eventFunctions: Set<string>;
+}
+export const emptyChain = (): MigrationChain => ({ mentions: new Map(), armed: new Set(), eventFunctions: new Set() });
+const cloneChain = (c: MigrationChain): MigrationChain => ({ mentions: new Map([...c.mentions].map(([k, v]) => [k, new Set(v)])), armed: new Set(c.armed), eventFunctions: new Set(c.eventFunctions) });
+
+const IDENTIFIER = /"((?:[^"]|"")+)"|([A-Za-z_\u0080-\uffff][A-Za-z0-9_$\u0080-\uffff]*)/g;
+function identifiers(text: string): string[] {
+    const out: string[] = [];
+    for (let m = IDENTIFIER.exec(text); m; m = IDENTIFIER.exec(text))
+        out.push(m[1] !== undefined ? m[1].replace(/""/g, '"') : m[2].toLowerCase());
+    return out;
+}
+const ROUTINE_HEAD = /^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)\b/i;
+const ROUTINE_NAME = new RegExp(String.raw`^\s*CREATE\s+(?:OR\s+REPLACE\s+)?(?:FUNCTION|PROCEDURE)\s+(` + QUALIFIED_NAME + ')', 'i');
+const TARGETS: RegExp[] = [
+    new RegExp(String.raw`^CREATE\s+(?:(?:GLOBAL\s+|LOCAL\s+)?(?:TEMP|TEMPORARY)\s+|UNLOGGED\s+)?TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(` + QUALIFIED_NAME + ')', 'i'),
+    new RegExp(String.raw`^ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?(` + QUALIFIED_NAME + ')', 'i'),
+    new RegExp(String.raw`^CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+NOT\s+EXISTS\s+)?(?:(?!ON\b)` + QUALIFIED_NAME + String.raw`\s+)?ON\s+(?:ONLY\s+)?(` + QUALIFIED_NAME + ')', 'i'),
+    new RegExp(String.raw`^CREATE\s+(?:OR\s+REPLACE\s+)?(?:CONSTRAINT\s+)?TRIGGER\s+` + QUALIFIED_NAME + String.raw`[\s\S]*?\bON\s+(` + QUALIFIED_NAME + ')', 'i'),
+    new RegExp(String.raw`^CREATE\s+(?:OR\s+REPLACE\s+)?(?:(?:TEMP|TEMPORARY)\s+)?(?:RECURSIVE\s+)?(?:MATERIALIZED\s+)?VIEW\s+(` + QUALIFIED_NAME + ')', 'i'),
+    new RegExp(String.raw`^CREATE\s+POLICY\s+` + QUALIFIED_NAME + String.raw`\s+ON\s+(` + QUALIFIED_NAME + ')', 'i'),
+    new RegExp(String.raw`^CREATE\s+(?:OR\s+REPLACE\s+)?RULE\s+` + QUALIFIED_NAME + String.raw`\s+AS\s+ON\s+[A-Za-z]+\s+TO\s+(` + QUALIFIED_NAME + ')', 'i')
+];
+/** Index of the statement's routine body (the dollar or string segment right after AS), or -1. */
+function routineBodyIndex(stmt: SqlSegment[]): number {
+    return stmt.findIndex((seg, idx) => (seg.kind === 'dollar' || seg.kind === 'string') && seg.closed && idx > 0 && stmt[idx - 1].kind === 'code' && AS_BEFORE_BODY.test(stmt[idx - 1].text));
+}
+const bodyInner = (seg: SqlSegment) => (seg.kind === 'dollar' ? seg.text.slice(seg.open!.length, seg.text.length - seg.close!.length) : seg.text.slice(1, -1).replace(/''/g, "'"));
+const textWithoutBody = (stmt: SqlSegment[], body: number) => stmt.map((seg, idx) => (idx === body ? ' ' : seg.text)).join('');
+
+/** Record what the statements of one file define and what each definition mentions. Call it for EVERY file of the chain, in version order, whatever its class. */
+export function absorbStatements(chain: MigrationChain, statements: SqlSegment[][]): void {
+    for (const stmt of statements) {
+        const raw = stmt.map(seg => seg.text).join('').trim();
+        if (!raw)
+            continue;
+        const skel = stmt.map(seg => (seg.kind === 'code' ? seg.text : MASK[seg.kind].repeat(seg.text.length))).join('').trim();
+        const add = (node: string, names: string[]) => {
+            const set = chain.mentions.get(node) ?? new Set<string>();
+            for (const n of names)
+                if (n !== node)
+                    set.add(n);
+            chain.mentions.set(node, set);
+        };
+        if (ROUTINE_HEAD.test(skel)) {
+            const nm = ROUTINE_NAME.exec(raw);
+            if (!nm)
+                continue;
+            const name = lastNamePart(nm[1]);
+            const body = routineBodyIndex(stmt);
+            chain.mentions.delete(name); // CREATE OR REPLACE: the new definition is what is live
+            add(name, identifiers(textWithoutBody(stmt, body)).concat(body >= 0 ? identifiers(bodyInner(stmt[body])) : []));
+            if (body >= 0 && bodyIsArmed(bodyInner(stmt[body])))
+                chain.armed.add(name);
+            else
+                chain.armed.delete(name);
+            continue;
+        }
+        if (/^CREATE\s+EVENT\s+TRIGGER\b/i.test(skel)) {
+            const target = new RegExp(String.raw`\bEXECUTE\s+(?:FUNCTION|PROCEDURE)\s+(` + QUALIFIED_NAME + ')', 'i').exec(raw);
+            if (target)
+                chain.eventFunctions.add(lastNamePart(target[1]));
+            continue;
+        }
+        for (const re of TARGETS) {
+            const m = re.exec(raw);
+            if (m) {
+                add(lastNamePart(m[1]), identifiers(raw));
+                break;
+            }
+        }
+    }
+}
+/** Same as absorbStatements, from SQL text. */
+export function absorbSql(chain: MigrationChain, sql: string): void {
+    absorbStatements(chain, scanSql(sql, false).statements);
+}
+/** Every name that can reach an armed function through the definitions recorded so far (the armed functions included). */
+export function taintedNames(chain: MigrationChain): Set<string> {
+    const tainted = new Set(chain.armed);
+    for (let changed = true; changed;) {
+        changed = false;
+        for (const [node, names] of chain.mentions)
+            if (!tainted.has(node) && [...names].some(n => tainted.has(n))) {
+                tainted.add(node);
+                changed = true;
+            }
+    }
+    return tainted;
+}
+/**
+ * What an additive file may not do given the chain before it. The file is walked statement by statement on a COPY of the chain, so a function the file itself
+ * defines that mentions a tainted name is tainted for the statements after it (taint is carried through the file as well as between files). Afterwards, if any
+ * event trigger runs a function that can now reach hidden DML, the whole file is refused: every DDL command fires an event trigger, and no statement has to name it.
+ */
+function chainViolations(statements: SqlSegment[][], chain: MigrationChain): string[] {
+    const work = cloneChain(chain);
+    const found = new Set<string>();
+    for (const stmt of statements) {
+        const tainted = taintedNames(work);
+        const raw = stmt.map(seg => seg.text).join('').trim();
+        const skel = stmt.map(seg => (seg.kind === 'code' ? seg.text : MASK[seg.kind].repeat(seg.text.length))).join('').trim();
+        if (tainted.size > 0 && raw && !/^(?:GRANT|REVOKE)\b/i.test(skel) && !/^COMMENT\s+ON\b/i.test(skel)) {
+            let text = raw;
+            const exempt: string[] = [];
+            if (ROUTINE_HEAD.test(skel)) {
+                text = textWithoutBody(stmt, routineBodyIndex(stmt));
+                const nm = ROUTINE_NAME.exec(raw);
+                if (nm)
+                    exempt.push(lastNamePart(nm[1]));
+            }
+            else if (/^CREATE\s+(?:OR\s+REPLACE\s+)?(?:CONSTRAINT\s+)?TRIGGER\b/i.test(skel)) {
+                const target = new RegExp(String.raw`\bEXECUTE\s+(?:FUNCTION|PROCEDURE)\s+(` + QUALIFIED_NAME + ')', 'i').exec(raw);
+                const table = TARGETS[3].exec(raw);
+                if (target)
+                    exempt.push(lastNamePart(target[1]));
+                if (table)
+                    exempt.push(lastNamePart(table[1]));
+            }
+            const ids = identifiers(text);
+            for (const name of exempt) {
+                const at = ids.indexOf(name);
+                if (at >= 0)
+                    ids.splice(at, 1);
+            }
+            for (const name of new Set(ids))
+                if (tainted.has(name))
+                    found.add('CHAIN: a statement mentions "' + name + '", which can reach a function with hidden DML from an earlier migration');
+        }
+        absorbStatements(work, [stmt]);
+    }
+    const after = taintedNames(work);
+    for (const fn of work.eventFunctions)
+        if (after.has(fn))
+            found.add('CHAIN: the event trigger function "' + fn + '" can reach hidden DML, and every DDL command fires it');
+    return [...found];
+}
+
 /** The text the destructive scan reads, plus anything the lexer could not delimit safely. */
-function scanSql(sql: string, hideBodies = true, phaseRule = true): { text: string; problems: string[] } {
+function scanSql(sql: string, hideBodies = true, phaseRule = true): { text: string; problems: string[]; statements: SqlSegment[][] } {
     const { segments, problems } = lexSql(sql);
     let firstArmed = -1;
     // statements = runs of segments separated by a top-level ';' (a ';' inside a string / quoted identifier / dollar quote never separates)
@@ -405,7 +604,10 @@ function scanSql(sql: string, hideBodies = true, phaseRule = true): { text: stri
     // A setting that changes how backslashes / quotes are read makes this lexer unreliable: refuse rather than guess.
     if (/\bstandard_conforming_strings\b/i.test(text))
         problems.push('STRING-SYNTAX SETTING (standard_conforming_strings)');
-    return { text, problems };
+    if (hideBodies)
+        for (const stmt of statements)
+            problems.push(...statementFindings(stmt));
+    return { text, problems, statements };
 }
 
 /** The statements of a migration with comments and CREATE FUNCTION bodies removed — what the destructive scan reads. */
@@ -415,6 +617,7 @@ export function executableText(sql: string): string {
 const DESTRUCTIVE: [RegExp, string][] = [
     [/\bDROP\s+(TABLE|COLUMN|SCHEMA|DATABASE|TYPE|VIEW|INDEX|CONSTRAINT|TRIGGER|FUNCTION|SEQUENCE|POLICY|EXTENSION)\b/i, 'DROP'],
     [/\bALTER\s+TABLE\b[^;]*\bDROP\b/i, 'ALTER TABLE … DROP'],
+    [/\bALTER\s+(?!TABLE\b)[A-Za-z]+[^;]*\bDROP\b/i, 'ALTER … DROP'],
     [/\bTRUNCATE\b/i, 'TRUNCATE'],
     [/\bDELETE\s+FROM\b/i, 'DELETE FROM'],
     [/\bUPDATE\s+(ONLY\s+)?[A-Za-z_."]+\s+(AS\s+\w+\s+)?SET\b/i, 'UPDATE … SET (data rewrite)'],
@@ -426,13 +629,28 @@ const DESTRUCTIVE: [RegExp, string][] = [
  * `phaseRule: false` switches off ONLY the ordering rule (tables / indexes / ALTER TABLE after the first armed function). It exists so each defence can be tested
  * on its own; the runner never passes it.
  */
-export function destructiveStatements(sql: string, options: { phaseRule?: boolean } = {}): string[] {
-    const { text, problems } = scanSql(sql, true, options.phaseRule !== false);
-    return [...DESTRUCTIVE.filter(([re]) => re.test(text)).map(([, name]) => name), ...problems];
+export function destructiveStatements(sql: string, options: { phaseRule?: boolean; chain?: MigrationChain } = {}): string[] {
+    const { text, problems, statements } = scanSql(sql, true, options.phaseRule !== false);
+    const chainFindings = options.chain ? chainViolations(statements, options.chain) : [];
+    return [...new Set([...DESTRUCTIVE.filter(([re]) => re.test(text)).map(([, name]) => name), ...problems, ...chainFindings])];
+}
+
+/**
+ * The additive verdicts for a whole chain, in version order: findings[i] belongs to files[i] and is empty for legacy and contract files (which are not scanned for
+ * additivity but ARE absorbed, so what they define is known to the files after them). The runner calls this through readMigrationFiles.
+ */
+export function scanMigrationChain(files: { sql: string; class: MigrationClass }[]): string[][] {
+    const chain = emptyChain();
+    return files.map(f => {
+        const findings = f.class === 'additive' ? destructiveStatements(f.sql, { chain }) : [];
+        absorbSql(chain, f.sql);
+        return findings;
+    });
 }
 
 export function readMigrationFiles(dir = 'infra', legacyManifest = readLegacyManifest(dir)): MigrationFile[] {
     const out: MigrationFile[] = [];
+    const chain = emptyChain(); // RV-07: every file is judged with what the files before it defined
     for (const file of fs.readdirSync(dir).filter(f => /^\d+_.*\.sql$/.test(f)).sort()) {
         const version = Number(file.split('_')[0]);
         if (out.some(m => m.version === version))
@@ -453,11 +671,12 @@ export function readMigrationFiles(dir = 'infra', legacyManifest = readLegacyMan
                 throw new MigrationError('MIGRATION_CLASS_UNKNOWN', file + ' declares class "' + declared + '"');
             cls = declared;
             if (cls === 'additive') {
-                const bad = destructiveStatements(sql);
+                const bad = destructiveStatements(sql, { chain });
                 if (bad.length)
                     throw new MigrationError('MIGRATION_NOT_ADDITIVE', file + ' is declared additive but contains: ' + bad.join(', '));
             }
         }
+        absorbSql(chain, sql);
         out.push({ version, file, sql, checksum, class: cls });
     }
     return out;

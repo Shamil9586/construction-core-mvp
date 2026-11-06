@@ -6,7 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import {
-  MigrationError, MigrationFile, applyMigrations, checksumOf, declaredClass, destructiveStatements, parseCliArgs, planMigrations, readLegacyManifest, readMigrationFiles
+  MigrationError, MigrationFile, absorbSql, applyMigrations, checksumOf, declaredClass, destructiveStatements, emptyChain, parseCliArgs, planMigrations, readLegacyManifest, readMigrationFiles,
+  scanMigrationChain, taintedNames
 } from '../scripts/migration-runner';
 
 /**
@@ -463,20 +464,24 @@ test('R03d/B1 RV-04 the source carries no literal U+FFFF; the escape is the same
 
 // ---- ground truth: a real PostgreSQL decides whether a migration runs the hidden DML --------------------------------------------
 class Rolled { constructor(readonly result: 'changed' | 'unchanged' | 'error') {} }
-async function oracle() {
+async function oracle(extraFixture = '') {
   const { transaction, pool } = await memoryDb();
   await pool.query('DROP SCHEMA public CASCADE');
   await pool.query('CREATE SCHEMA public');
-  await pool.query('CREATE TABLE t(a int); INSERT INTO t VALUES (1),(2); CREATE TABLE u(a int); INSERT INTO u VALUES (7);');
+  await pool.query('CREATE TABLE t(a int); INSERT INTO t VALUES (1),(2); CREATE TABLE u(a int); INSERT INTO u VALUES (7);' + extraFixture);
   const observe = async (c: any) => {
     const t = (await c.query("SELECT to_regclass('t') IS NOT NULL AS ok")).rows[0].ok ? (await c.query("SELECT coalesce(string_agg(a::text, ',' ORDER BY a), '') AS v FROM t")).rows[0].v : 'DROPPED';
     const u = (await c.query("SELECT to_regclass('u') IS NOT NULL AS ok")).rows[0].ok ? (await c.query("SELECT coalesce(string_agg(a::text, ',' ORDER BY a), '') AS v FROM u")).rows[0].v : 'DROPPED';
     return t + '|' + u;
   };
-  /** Apply `sql` the way the runner does (one multi-statement query inside a transaction), report whether the data changed, always roll back. */
-  return async (sql: string): Promise<'changed' | 'unchanged' | 'error'> => {
+  /**
+   * Apply `sql` the way the runner does (one multi-statement query inside a transaction), report whether the data changed, always roll back.
+   * `prefix` (the earlier files of a chain) is applied first and is NOT part of the observation: only what `sql` itself does to the data counts.
+   */
+  return async (sql: string, prefix = ''): Promise<'changed' | 'unchanged' | 'error'> => {
     try {
       await transaction(async (c: any) => {
+        if (prefix) { try { await c.query(prefix); } catch { throw new Rolled('error'); } }
         const before = await observe(c);
         try { await c.query(sql); } catch { throw new Rolled('error'); }
         throw new Rolled((await observe(c)) === before ? 'unchanged' : 'changed');
@@ -779,4 +784,189 @@ test('R03d/B1 RV-05 (hidden bodies only): a body using MERGE, an aliased UPDATE 
   for (const body of ['PERFORM 1;', 'SELECT a FROM t FOR UPDATE;', 'SELECT a FROM t FOR NO KEY UPDATE;', 'INSERT INTO t VALUES (1) ON CONFLICT DO UPDATE SET a = 1;',
     "IF TG_OP = 'DELETE' THEN RETURN 1; END IF;", "RAISE EXCEPTION 'cannot drop or delete here';", '-- DELETE FROM t;\n/* MERGE EXECUTE */ PERFORM 1;'])
     assert.deepEqual(destructiveStatements(wrap(body)), [], body);
+});
+
+// ----------------------------------------------------------------------------------------------------------------------------------
+// R03d security gate — RV-05 (what a statement IS) and RV-07 (a chain of migrations is applied one after the other)
+// ----------------------------------------------------------------------------------------------------------------------------------
+test('R03d/RV-05 data-changing statements are recognised by position, whatever the spelling — a real PostgreSQL shows each one really changes data', async () => {
+  const run = await oracle();
+  const changing: Record<string, string> = {
+    'UPDATE with an alias, no AS': 'UPDATE t x SET a = 0;',
+    'UPDATE with AS': 'UPDATE t AS x SET a = 0;',
+    'schema-qualified UPDATE with an alias': 'UPDATE public.t x SET a = 0;',
+    'UPDATE ONLY with an alias': 'UPDATE ONLY t x SET a = 0;',
+    'quoted-name UPDATE with an alias': 'UPDATE "t" x SET a = 0;',
+    'MERGE … DELETE': 'MERGE INTO t USING u ON true WHEN MATCHED THEN DELETE;',
+    'MERGE … UPDATE': 'MERGE INTO t USING u ON true WHEN MATCHED THEN UPDATE SET a = 0;',
+    'MERGE … INSERT (adds rows: still a data-modifying verb the additive scan refuses)': 'MERGE INTO t USING u ON false WHEN NOT MATCHED THEN INSERT (a) VALUES (9);',
+    'upsert that rewrites existing rows': 'CREATE UNIQUE INDEX t_a ON t(a); INSERT INTO t VALUES (1) ON CONFLICT (a) DO UPDATE SET a = 99;',
+    'CTE that deletes': 'WITH d AS (DELETE FROM t RETURNING 1) SELECT count(*) FROM d;',
+    'CTE that updates, aliased': 'WITH d AS (UPDATE t x SET a = 0 RETURNING 1) SELECT count(*) FROM d;',
+    'second CTE that updates': 'WITH s AS (SELECT 1), d AS (UPDATE t x SET a = 0 RETURNING 1) SELECT count(*) FROM d;',
+    'EXPLAIN ANALYZE UPDATE': 'EXPLAIN ANALYZE UPDATE t x SET a = 0;',
+    'EXPLAIN (ANALYZE) DELETE': 'EXPLAIN (ANALYZE) DELETE FROM t;',
+    'PREPARE … AS UPDATE then EXECUTE': 'PREPARE p_rv05 AS UPDATE t x SET a = 0; EXECUTE p_rv05;',
+    'DO with MERGE': 'DO $$ BEGIN MERGE INTO t USING u ON true WHEN MATCHED THEN DELETE; END $$;',
+    'DO with an aliased UPDATE': 'DO $$ BEGIN UPDATE t x SET a = 0; END $$;',
+    'DO with dynamic SQL assembled from pieces': "DO $$ BEGIN EXECUTE 'DEL' || 'ETE FROM t'; END $$;",
+    'DO with format()': "DO $$ BEGIN EXECUTE format('%s %s %s', 'DELETE', 'FROM', 't'); END $$;",
+    'DO written with a string body': "DO 'BEGIN UPDATE t x SET a = 0; END';",
+    'TRUNCATE': 'TRUNCATE t;',
+    'DROP TABLE': 'DROP TABLE u;'
+  };
+  for (const [name, sql] of Object.entries(changing)) {
+    assert.equal(await run(sql), 'changed', name + ': the oracle must show the data really changing, or this case proves nothing');
+    assert.ok(destructiveStatements(sql).length > 0, name + ': must be refused as additive (got ' + JSON.stringify(destructiveStatements(sql)) + ')');
+  }
+  // definition-level destructive verbs the oracle's fixture does not observe — the scan alone
+  for (const sql of ['DROP PROCEDURE p();', 'DROP ROUTINE f();', 'DROP AGGREGATE a(int);', 'DROP MATERIALIZED VIEW m;', 'DROP DOMAIN d;', 'DROP RULE r ON t;', 'DROP OWNED BY someone;', 'DROP ROLE someone;',
+    'DROP FOREIGN TABLE ft;', 'DROP OPERATOR === (int, int);', 'DROP CAST (int AS text);', 'DROP IF EXISTS_NOT_A_KEYWORD;', 'ALTER TYPE ty DROP ATTRIBUTE y;', 'ALTER DOMAIN d DROP CONSTRAINT c;',
+    'ALTER DOMAIN d DROP DEFAULT;', 'ALTER PUBLICATION p DROP TABLE t;', "COPY t FROM PROGRAM 'rm -rf /';", "COPY t TO PROGRAM 'cat > /tmp/x';"])
+    assert.ok(destructiveStatements(sql).length > 0, sql);
+  // what must stay accepted: the same words in the places where they are not statements
+  for (const ok of [
+    'CREATE TRIGGER g BEFORE UPDATE OR DELETE ON t FOR EACH ROW EXECUTE FUNCTION f();', 'CREATE TRIGGER g AFTER UPDATE OF a ON t FOR EACH ROW EXECUTE FUNCTION f();',
+    'GRANT UPDATE, DELETE ON t TO someone;', 'REVOKE DELETE, UPDATE ON t FROM someone;', 'GRANT UPDATE (a) ON t TO someone;',
+    'CREATE POLICY p ON t FOR UPDATE USING (true);', 'CREATE POLICY p ON t FOR DELETE USING (true);',
+    'ALTER TABLE t ADD FOREIGN KEY (a) REFERENCES u(a) ON DELETE CASCADE ON UPDATE CASCADE;', 'SELECT a FROM t FOR UPDATE;', 'SELECT a FROM t FOR NO KEY UPDATE;',
+    "COMMENT ON COLUMN t.a IS 'update delete merge drop';", 'INSERT INTO t VALUES (1) ON CONFLICT DO NOTHING;', 'INSERT INTO t VALUES (1);',
+    'DO $$ BEGIN PERFORM 1; END $$;', 'DO $$ BEGIN PERFORM a FROM t FOR UPDATE; RAISE NOTICE \'ok\'; END $$;', "DO $$ BEGIN IF TG_OP = 'DELETE' THEN NULL; END IF; END $$;",
+    'CREATE TABLE tt (update_count int, delete_flag boolean, merge_id int, drop_zone int);', 'ALTER TABLE t ALTER COLUMN a DROP NOT NULL;',
+    "COPY t FROM '/tmp/x';", 'CREATE INDEX i ON t (a) WHERE a > 0;'
+  ])
+    assert.deepEqual(destructiveStatements(ok), [], ok);
+});
+
+test('R03d/RV-05 the destructive scan cannot be bypassed by wrapping the verb in a CTE, EXPLAIN, PREPARE or a comment', () => {
+  for (const sql of ['/* x */ UPDATE t x SET a = 0;', '-- x\nUPDATE t x SET a = 0;', 'WITH /* c */ d AS (UPDATE t x SET a = 0 RETURNING 1) SELECT 1;', 'EXPLAIN (ANALYZE, VERBOSE) MERGE INTO t USING u ON true WHEN MATCHED THEN DELETE;',
+    'PREPARE p (int) AS UPDATE t x SET a = $1;', 'SELECT 1; UPDATE t x SET a = 0;', 'UPDATE\nt\nx\nSET a = 0;', 'update t x set a = 0;', 'MERGE INTO t USING u ON true WHEN MATCHED THEN DO NOTHING;',
+    "SELECT '--'; UPDATE t x SET a = 0;", 'SELECT $q$ x $q$; MERGE INTO t USING u ON true WHEN MATCHED THEN DELETE;'])
+    assert.ok(destructiveStatements(sql).length > 0, sql);
+  // a statement-start verb that is only text stays inert
+  for (const ok of ["SELECT 'UPDATE t x SET a = 0';", '-- UPDATE t x SET a = 0\nSELECT 1;', '/* MERGE INTO t */ SELECT 1;', 'SELECT $$ UPDATE t x SET a = 0 $$;'])
+    assert.deepEqual(destructiveStatements(ok), [], ok);
+});
+
+// ---- RV-07 ------------------------------------------------------------------------------------------------------------------------
+const ADD = (sqls: string[]) => sqls.map(sql => ({ sql, class: 'additive' as const }));
+/** Apply files[0..n-2], then report whether the LAST file changes the data. One transaction, always rolled back. */
+async function oracleChain(run: Awaited<ReturnType<typeof oracle>>, files: string[]) {
+  return run(files[files.length - 1], files.slice(0, -1).join('\n'));
+}
+const W = {
+  armed: (n = 'wipe') => `CREATE FUNCTION ${n}() RETURNS int LANGUAGE plpgsql AS $f$ BEGIN DELETE FROM public.t; RETURN 1; END $f$;`,
+  innocent: (n = 'f') => `CREATE FUNCTION ${n}() RETURNS int LANGUAGE plpgsql AS $f$ BEGIN RETURN 1; END $f$;`,
+  replace: (n = 'f', ret = 'int', val = '1') => `CREATE OR REPLACE FUNCTION ${n}() RETURNS ${ret} LANGUAGE plpgsql AS $f$ BEGIN DELETE FROM public.t; RETURN ${val}; END $f$;`,
+  trigger: (n = 'tw') => `CREATE FUNCTION ${n}() RETURNS trigger LANGUAGE plpgsql AS $f$ BEGIN DELETE FROM public.t; RETURN NEW; END $f$;`
+};
+
+test('R03d/RV-07 a chain of migrations: each file alone is additive, yet the last one runs what an earlier one hid — refused, and PostgreSQL confirms each chain really destroys data', async () => {
+  const run = await oracle('CREATE TABLE par(id int PRIMARY KEY, v int UNIQUE); INSERT INTO par VALUES (1, 1); CREATE TABLE chd(pv int REFERENCES par(v) ON UPDATE CASCADE); INSERT INTO chd VALUES (1);');
+  const chains: Record<string, string[]> = {
+    'file 2 calls the function file 1 defined': [W.armed(), 'SELECT wipe();'],
+    'file 2: DO block calls it': [W.armed(), 'DO $$ BEGIN PERFORM wipe(); END $$;'],
+    'upper-case spelling in file 2': [W.armed(), 'SELECT WIPE();'],
+    'schema-qualified spelling in file 2': [W.armed(), 'SELECT public.wipe();'],
+    'quoted function defined in file 1, quoted call in file 2': [W.armed('"Wipe"'), 'SELECT "Wipe"();'],
+    'quoted and qualified spelling in file 2': [W.armed(), 'SELECT "public"."wipe"();'],
+    'comment between the name and the parenthesis': [W.armed(), 'SELECT wipe /* x */ ();'],
+    'file 2: CREATE TABLE AS': [W.armed(), 'CREATE TABLE z AS SELECT wipe()::text AS w;'],
+    'file 1 adds an innocent-looking wrapper, file 2 calls the wrapper': [W.armed() + 'CREATE FUNCTION w() RETURNS int LANGUAGE sql AS $w$ SELECT wipe() $w$;', 'SELECT w();'],
+    'a wrapper of a wrapper': [W.armed() + 'CREATE FUNCTION w1() RETURNS int LANGUAGE sql AS $w$ SELECT wipe() $w$; CREATE FUNCTION w2() RETURNS int LANGUAGE sql AS $w$ SELECT w1() $w$;', 'SELECT w2();'],
+    'trigger on an existing table bound in file 1, file 2 INSERTs': [W.trigger() + 'CREATE TRIGGER g AFTER INSERT ON u FOR EACH ROW EXECUTE FUNCTION tw();', 'INSERT INTO u VALUES (8);'],
+    'trigger on a table file 1 creates, file 2 INSERTs': ['CREATE TABLE g1(a int);' + W.trigger() + 'CREATE TRIGGER g AFTER INSERT ON g1 FOR EACH ROW EXECUTE FUNCTION tw();', 'INSERT INTO g1 VALUES (1);'],
+    'trigger on a table, file 2 INSERT … SELECT': ['CREATE TABLE g1(a int);' + W.trigger() + 'CREATE TRIGGER g AFTER INSERT ON g1 FOR EACH ROW EXECUTE FUNCTION tw();', 'INSERT INTO g1 SELECT 1;'],
+    'innocent f used as a DEFAULT, then replaced by an armed body, then an INSERT (3 files)': [W.innocent() + 'CREATE TABLE d1(a int DEFAULT f());', W.replace(), 'INSERT INTO d1 DEFAULT VALUES;'],
+    'view over f, f replaced, SELECT from the view (3 files)': [W.innocent() + 'CREATE VIEW v1 AS SELECT f() AS x;', W.replace(), 'SELECT * FROM v1;'],
+    'trigger -> innocent wrapper -> inner function, inner replaced, INSERT (3 files)': [W.innocent('inner_fn') + 'CREATE FUNCTION outer_tg() RETURNS trigger LANGUAGE plpgsql AS $o$ BEGIN PERFORM inner_fn(); RETURN NEW; END $o$; CREATE TRIGGER g AFTER INSERT ON u FOR EACH ROW EXECUTE FUNCTION outer_tg();', W.replace('inner_fn'), 'INSERT INTO u VALUES (5);'],
+    'CHECK on an existing table calls f, f replaced, INSERT (3 files)': [W.innocent('chk').replace('RETURNS int', 'RETURNS boolean').replace('RETURN 1', 'RETURN true') + 'ALTER TABLE u ADD CONSTRAINT ck CHECK (chk());', W.replace('chk', 'boolean', 'true'), 'INSERT INTO u VALUES (1);'],
+    'materialized view over f, f replaced, REFRESH (3 files)': [W.innocent() + 'CREATE MATERIALIZED VIEW mv AS SELECT f()::text AS x;', W.replace(), 'REFRESH MATERIALIZED VIEW mv;'],
+    'forward reference: a wrapper names a function that does not exist yet, which file 2 then defines armed (3 files)': ['CREATE FUNCTION g() RETURNS int LANGUAGE plpgsql AS $g$ BEGIN RETURN later_fn(); END $g$;', W.armed('later_fn'), 'SELECT g();'],
+    'a function defined in the SAME file as its caller, wrapping a tainted one': [W.armed(), 'CREATE FUNCTION h() RETURNS int LANGUAGE sql AS $h$ SELECT wipe() $h$; SELECT h();'],
+    'event trigger whose function is later replaced by an armed body (the replacing file itself fires it)': ['CREATE FUNCTION ew() RETURNS event_trigger LANGUAGE plpgsql AS $e$ BEGIN NULL; END $e$; CREATE EVENT TRIGGER et ON ddl_command_end EXECUTE FUNCTION ew();',
+      'CREATE OR REPLACE FUNCTION ew() RETURNS event_trigger LANGUAGE plpgsql AS $e$ BEGIN DELETE FROM public.t; END $e$;'],
+    'upsert that cascades into a child table whose trigger is armed': [W.trigger() + 'CREATE TRIGGER g AFTER UPDATE ON chd FOR EACH ROW EXECUTE FUNCTION tw();', 'INSERT INTO par VALUES (1, 1) ON CONFLICT (id) DO UPDATE SET v = 2;']
+  };
+  for (const [name, files] of Object.entries(chains)) {
+    assert.equal(await oracleChain(run, files), 'changed', name + ': the last file really changes data (oracle)');
+    const verdicts = scanMigrationChain(ADD(files));
+    const last = verdicts[verdicts.length - 1];
+    // the gap this closes: judged on its own, the last file looks harmless …
+    if (!/event trigger|upsert/.test(name)) assert.deepEqual(destructiveStatements(files[files.length - 1]), [], name + ': alone, the last file is accepted');
+    // … and so is every earlier file; only the chain-aware verdict of the file that does the damage refuses
+    assert.ok(last.length > 0, name + ': the chain must refuse the last file (got ' + JSON.stringify(last) + ')');
+    for (let i = 0; i < verdicts.length - 1; i++)
+      assert.deepEqual(verdicts[i], [], name + ': file ' + (i + 1) + ' on its own is legitimate and stays accepted (got ' + JSON.stringify(verdicts[i]) + ')');
+  }
+});
+
+test('R03d/RV-07 no over-refusal: what an armed earlier file does not reach stays additive, and an earlier armed file alone is accepted as before', async () => {
+  const run = await oracle();
+  const ok: Record<string, string[]> = {
+    'unrelated INSERT': [W.armed(), 'CREATE TABLE other(a int); INSERT INTO other VALUES (1);'],
+    'plain SELECT and a built-in': [W.armed(), 'SELECT 1, now();'],
+    'only GRANT / REVOKE / COMMENT naming the function': [W.armed(), "REVOKE ALL ON FUNCTION wipe() FROM PUBLIC; GRANT EXECUTE ON FUNCTION wipe() TO PUBLIC; COMMENT ON FUNCTION wipe() IS 'x';"],
+    'binding an earlier armed trigger function to a NEW table runs nothing (creating a trigger fires no trigger)': [W.trigger(), 'CREATE TABLE nt(a int); CREATE TRIGGER g BEFORE INSERT ON nt FOR EACH ROW EXECUTE FUNCTION tw();'],
+    'binding it to an existing table likewise': [W.trigger(), 'CREATE TRIGGER g2 AFTER INSERT ON u FOR EACH ROW EXECUTE FUNCTION tw();'],
+    'a new function that mentions nothing tainted, then called': [W.armed(), 'CREATE FUNCTION clean() RETURNS int LANGUAGE sql AS $c$ SELECT 1 $c$; SELECT clean();'],
+    'the armed function is replaced by a clean body and then called': [W.armed(), 'CREATE OR REPLACE FUNCTION wipe() RETURNS int LANGUAGE sql AS $c$ SELECT 1 $c$; SELECT wipe();'],
+    'a wrapper of the armed function is replaced by a clean body in a later file, then called (taint ends with the old definition)': [W.armed() + 'CREATE FUNCTION w() RETURNS int LANGUAGE sql AS $w$ SELECT wipe() $w$;', 'CREATE OR REPLACE FUNCTION w() RETURNS int LANGUAGE sql AS $c$ SELECT 1 $c$;', 'SELECT w();'],
+    'a harmless second trigger on a table whose first trigger is armed (creating a trigger fires nothing)': [W.trigger() + 'CREATE TRIGGER g AFTER INSERT ON u FOR EACH ROW EXECUTE FUNCTION tw();', 'CREATE FUNCTION nothing_fn() RETURNS trigger LANGUAGE plpgsql AS $n$ BEGIN RETURN NEW; END $n$; CREATE TRIGGER g2 BEFORE UPDATE ON u FOR EACH ROW EXECUTE FUNCTION nothing_fn();']
+  };
+  for (const [name, files] of Object.entries(ok)) {
+    const verdicts = scanMigrationChain(ADD(files));
+    assert.deepEqual(verdicts, files.map(() => []), name);
+    assert.equal(await oracleChain(run, files), 'unchanged', name + ': and PostgreSQL agrees nothing is destroyed');
+  }
+});
+
+test('R03d/RV-07 the real chain 001-037 defines no armed function, so adding chain awareness changes no existing verdict; FIN-SDO-1-shaped follow-ups behave', () => {
+  const chain = emptyChain();
+  const files = fs.readdirSync('infra').filter(f => /^\d+_.*\.sql$/.test(f)).sort();
+  for (const f of files) absorbSql(chain, fs.readFileSync(path.join('infra', f), 'utf8'));
+  assert.equal(chain.armed.size, 0, 'no function of the existing chain has an armed hidden body');
+  assert.equal(taintedNames(chain).size, 0);
+  assert.equal(chain.eventFunctions.size, 0, 'and no event trigger exists');
+  // every additive file of the real chain, judged in chain order, has exactly the verdict it has alone
+  const items = files.map(f => ({ sql: fs.readFileSync(path.join('infra', f), 'utf8'), class: (Number(f.split('_')[0]) <= 25 ? 'legacy' : 'additive') as MigrationFile['class'] }));
+  const verdicts = scanMigrationChain(items);
+  items.forEach((it, i) => { if (it.class === 'additive') assert.deepEqual(verdicts[i], destructiveStatements(it.sql), files[i]); });
+  // a FIN-shaped file 038 (tables first, armed RPC-style functions after, a trigger on a pre-existing trigger function) followed by realistic file 039s
+  const fin = `-- migration-class: additive\nCREATE TABLE fin_buf(id int PRIMARY KEY, v int DEFAULT 0, created_at timestamptz DEFAULT now());\nCREATE UNIQUE INDEX fin_buf_v ON fin_buf(v) WHERE v > 0;\n` +
+    FN('fin_sdo_update_edit_buffer', 'DELETE FROM fin_buf WHERE id = 1;\nUPDATE fin_buf SET v = v + 1;') + FN('fin_sdo_commit_edit_buffer', 'UPDATE fin_buf SET v = 0;') +
+    "CREATE TRIGGER fin_h BEFORE UPDATE OR DELETE ON fin_buf FOR EACH ROW EXECUTE FUNCTION immutable_history();\nREVOKE ALL ON FUNCTION fin_sdo_update_edit_buffer() FROM PUBLIC;\n";
+  const after = (sql: string) => scanMigrationChain(ADD([fin, sql]))[1];
+  assert.deepEqual(scanMigrationChain(ADD([fin]))[0], [], 'FIN-shaped file on its own');
+  for (const okSql of ['CREATE TABLE fin_extra(id int PRIMARY KEY);', 'INSERT INTO fin_buf VALUES (1, 1);', 'ALTER TABLE fin_buf ADD COLUMN note text;', 'CREATE INDEX fin_buf_c ON fin_buf (created_at);', 'SELECT 1;'])
+    assert.deepEqual(after(okSql), [], 'a later additive file may keep working with the FIN tables: ' + okSql);
+  for (const bad of ['SELECT fin_sdo_update_edit_buffer();', 'DO $$ BEGIN PERFORM fin_sdo_commit_edit_buffer(); END $$;', 'CREATE TABLE zz AS SELECT fin_sdo_update_edit_buffer();',
+    'CREATE TABLE zz(a int DEFAULT fin_sdo_commit_edit_buffer());', 'CREATE VIEW zv AS SELECT fin_sdo_update_edit_buffer() AS x;'])
+    assert.ok(after(bad).length > 0, 'a later additive file may not run the FIN functions: ' + bad);
+});
+
+test('R03d/RV-07 readMigrationFiles enforces the chain: a later additive file that runs an earlier hidden body is refused with MIGRATION_NOT_ADDITIVE; legacy and contract files are absorbed, not scanned', () => {
+  const real = fs.readdirSync('infra').filter(f => /^\d+_.*\.sql$/.test(f) && Number(f.split('_')[0]) <= 25);
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gpr2-mig-rv07-'));
+  try {
+    for (const f of real) fs.copyFileSync(path.join('infra', f), path.join(dir, f));
+    const m = readLegacyManifest('infra');
+    const put = (name: string, sql: string) => fs.writeFileSync(path.join(dir, name), sql);
+    const head = (cls: string) => `-- migration-class: ${cls}\n`;
+    put('026_a.sql', head('additive') + W.armed());
+    put('027_b.sql', head('additive') + 'CREATE TABLE ok_table(a int);');
+    assert.equal(code(() => readMigrationFiles(dir, m)), 'NO ERROR', 'an armed definition followed by an unrelated file is fine');
+    put('027_b.sql', head('additive') + 'SELECT wipe();');
+    assert.equal(code(() => readMigrationFiles(dir, m)), 'MIGRATION_NOT_ADDITIVE', 'the later file runs the earlier hidden body');
+    // the same call in a CONTRACT file is not scanned (it is gated at run time instead) …
+    put('027_b.sql', head('contract') + 'SELECT wipe();');
+    assert.equal(code(() => readMigrationFiles(dir, m)), 'NO ERROR');
+    // … but what a contract file defines is known to the additive files after it
+    put('026_a.sql', head('contract') + W.armed() + 'CREATE FUNCTION w() RETURNS int LANGUAGE sql AS $w$ SELECT wipe() $w$;');
+    put('027_b.sql', head('additive') + 'SELECT w();');
+    assert.equal(code(() => readMigrationFiles(dir, m)), 'MIGRATION_NOT_ADDITIVE', 'a function defined by a contract file is tainted for later additive files');
+    put('027_b.sql', head('additive') + 'SELECT 1;');
+    assert.equal(code(() => readMigrationFiles(dir, m)), 'NO ERROR');
+  }
+  finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
