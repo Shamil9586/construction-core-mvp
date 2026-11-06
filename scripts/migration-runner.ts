@@ -427,9 +427,21 @@ export interface MigrationChain {
     armed: Set<string>;
     /** functions run by an event trigger: such a function fires on EVERY later DDL command without any statement naming it */
     eventFunctions: Set<string>;
+    /**
+     * every name mentioned by a definition that makes PostgreSQL call a function WITHOUT naming it: an operator (the symbol is used, not the function), a cast (also
+     * implicit), an aggregate, a type or domain, an operator class, a conversion, a language, a wrapper, an extension … and any object kind this scanner does not
+     * know. Such a function cannot be followed by name, so it must never become reachable from hidden DML at all.
+     */
+    implicitMentions: Set<string>;
 }
-export const emptyChain = (): MigrationChain => ({ mentions: new Map(), armed: new Set(), eventFunctions: new Set() });
-const cloneChain = (c: MigrationChain): MigrationChain => ({ mentions: new Map([...c.mentions].map(([k, v]) => [k, new Set(v)])), armed: new Set(c.armed), eventFunctions: new Set(c.eventFunctions) });
+export const emptyChain = (): MigrationChain => ({ mentions: new Map(), armed: new Set(), eventFunctions: new Set(), implicitMentions: new Set() });
+const cloneChain = (c: MigrationChain): MigrationChain => ({
+    mentions: new Map([...c.mentions].map(([k, v]) => [k, new Set(v)])), armed: new Set(c.armed), eventFunctions: new Set(c.eventFunctions), implicitMentions: new Set(c.implicitMentions)
+});
+/** Object kinds whose definitions bind no function that is later called without being named (the ones whose bindings ARE named are followed by the mention graph). */
+const NAMED_BINDING_KINDS = new Set(['TABLE', 'INDEX', 'SEQUENCE', 'VIEW', 'FUNCTION', 'PROCEDURE', 'ROUTINE', 'TRIGGER', 'SCHEMA', 'POLICY', 'RULE', 'ROLE', 'USER', 'GROUP', 'DATABASE', 'TABLESPACE',
+    'DEFAULT', 'PUBLICATION', 'STATISTICS', 'COLLATION']);
+const OBJECT_KIND = /^(?:CREATE|ALTER)\s+(?:OR\s+REPLACE\s+)?(?:(?:GLOBAL|LOCAL|TEMP|TEMPORARY|UNLOGGED|RECURSIVE|UNIQUE|CONSTRAINT|MATERIALIZED|TRUSTED|PROCEDURAL)\s+)*([A-Za-z]+)/i;
 
 const IDENTIFIER = /"((?:[^"]|"")+)"|([A-Za-z_\u0080-\uffff][A-Za-z0-9_$\u0080-\uffff]*)/g;
 function identifiers(text: string): string[] {
@@ -478,10 +490,14 @@ export function absorbStatements(chain: MigrationChain, statements: SqlSegment[]
             const body = routineBodyIndex(stmt);
             chain.mentions.delete(name); // CREATE OR REPLACE: the new definition is what is live
             add(name, identifiers(textWithoutBody(stmt, body)).concat(body >= 0 ? identifiers(bodyInner(stmt[body])) : []));
-            if (body >= 0 && bodyIsArmed(bodyInner(stmt[body])))
+            // BEGIN ATOMIC bodies are split at every ';' into separate top-level statements the function node never sees: not followable, so armed
+            if ((body >= 0 && bodyIsArmed(bodyInner(stmt[body]))) || /\bATOMIC\b/i.test(skel))
                 chain.armed.add(name);
             else
                 chain.armed.delete(name);
+            if (/\bSUPPORT\b/i.test(skel))
+                for (const n of identifiers(textWithoutBody(stmt, body)))
+                    chain.implicitMentions.add(n);
             continue;
         }
         if (/^CREATE\s+EVENT\s+TRIGGER\b/i.test(skel)) {
@@ -490,13 +506,20 @@ export function absorbStatements(chain: MigrationChain, statements: SqlSegment[]
                 chain.eventFunctions.add(lastNamePart(target[1]));
             continue;
         }
+        let tracked = false;
         for (const re of TARGETS) {
             const m = re.exec(raw);
             if (m) {
                 add(lastNamePart(m[1]), identifiers(raw));
+                tracked = true;
                 break;
             }
         }
+        // anything else that defines or alters an object: if it is not a kind whose bindings are named, it may call a function without naming it (fail closed for unknown kinds)
+        const kind = tracked ? null : OBJECT_KIND.exec(skel)?.[1].toUpperCase();
+        if (kind && !NAMED_BINDING_KINDS.has(kind))
+            for (const n of identifiers(raw))
+                chain.implicitMentions.add(n);
     }
 }
 /** Same as absorbStatements, from SQL text. */
@@ -519,7 +542,8 @@ export function taintedNames(chain: MigrationChain): Set<string> {
 /**
  * What an additive file may not do given the chain before it. The file is walked statement by statement on a COPY of the chain, so a function the file itself
  * defines that mentions a tainted name is tainted for the statements after it (taint is carried through the file as well as between files). Afterwards, if any
- * event trigger runs a function that can now reach hidden DML, the whole file is refused: every DDL command fires an event trigger, and no statement has to name it.
+ * event trigger — or an operator, cast, aggregate, type, domain or any object kind that calls a function without naming it — can now reach hidden DML, the whole file is
+ * refused (and so is every later one): nothing has to name the function for it to run, so it cannot be followed by name.
  */
 function chainViolations(statements: SqlSegment[][], chain: MigrationChain): string[] {
     const work = cloneChain(chain);
@@ -561,6 +585,9 @@ function chainViolations(statements: SqlSegment[][], chain: MigrationChain): str
     for (const fn of work.eventFunctions)
         if (after.has(fn))
             found.add('CHAIN: the event trigger function "' + fn + '" can reach hidden DML, and every DDL command fires it');
+    for (const name of work.implicitMentions)
+        if (after.has(name))
+            found.add('CHAIN: "' + name + '" is bound by an operator, cast, aggregate, type, domain or other object that calls it without naming it, and can now reach hidden DML');
     return [...found];
 }
 

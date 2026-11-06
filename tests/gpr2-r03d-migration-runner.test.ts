@@ -970,3 +970,126 @@ test('R03d/RV-07 readMigrationFiles enforces the chain: a later additive file th
   }
   finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+// ----------------------------------------------------------------------------------------------------------------------------------
+// R03d security gate, correction cycle — objects that call a function WITHOUT naming it (operators, casts, aggregates, domains, unknown kinds), BEGIN ATOMIC
+// bodies, and the upsert decision
+// ----------------------------------------------------------------------------------------------------------------------------------
+const CLEAN_BOOL = (n: string, args = 'int, int') => `CREATE FUNCTION ${n}(${args}) RETURNS boolean LANGUAGE sql AS $f$ SELECT true $f$;`;
+const ARM_BOOL = (n: string, args = 'int, int') => `CREATE OR REPLACE FUNCTION ${n}(${args}) RETURNS boolean LANGUAGE plpgsql AS $f$ BEGIN DELETE FROM public.t; RETURN true; END $f$;`;
+
+test('R03d/RV-07 operators, casts, aggregates and domains run a function without naming it: a later file that arms the function is refused — PostgreSQL confirms every chain really destroys data', async () => {
+  const run = await oracle();
+  // [files, class of file 1, index of the file the chain must refuse first (1 = the file that arms the function; 2 = the file that uses the wrapper)]
+  const chains: Record<string, [string[], MigrationFile['class']?, number?]> = {
+    'the same operator written over several lines, as real definitions are': [[CLEAN_BOOL('op_fn') + 'CREATE OPERATOR ===\n(\n  LEFTARG = int,\n  RIGHTARG = int,\n  FUNCTION = op_fn\n);', ARM_BOOL('op_fn'), 'SELECT 1 === 2;']],
+    'CREATE OPERATOR, function replaced, only the operator symbol used (the reviewer\'s chain)': [[CLEAN_BOOL('op_fn') + 'CREATE OPERATOR === (LEFTARG = int, RIGHTARG = int, FUNCTION = op_fn);', ARM_BOOL('op_fn'), 'SELECT 1 === 2;']],
+    'the same with the older PROCEDURE = keyword': [[CLEAN_BOOL('op_fn') + 'CREATE OPERATOR === (LEFTARG = int, RIGHTARG = int, PROCEDURE = op_fn);', ARM_BOOL('op_fn'), 'SELECT 1 === 2;']],
+    'operator in another schema, used as OPERATOR(s.===)': [['CREATE SCHEMA s;' + CLEAN_BOOL('s.op_fn') + 'CREATE OPERATOR s.=== (LEFTARG = int, RIGHTARG = int, FUNCTION = s.op_fn);', ARM_BOOL('s.op_fn'), 'SELECT 1 OPERATOR(s.===) 2;']],
+    'operator bound to one overload; that overload is the one replaced': [[CLEAN_BOOL('op_fn') + CLEAN_BOOL('op_fn', 'text, text') + 'CREATE OPERATOR === (LEFTARG = int, RIGHTARG = int, FUNCTION = op_fn);', ARM_BOOL('op_fn'), 'SELECT 1 === 2;']],
+    'operator bound to a wrapper whose inner function is replaced': [[CLEAN_BOOL('inner_fn') + 'CREATE FUNCTION op_fn(int, int) RETURNS boolean LANGUAGE sql AS $f$ SELECT inner_fn($1, $2) $f$; CREATE OPERATOR === (LEFTARG = int, RIGHTARG = int, FUNCTION = op_fn);', ARM_BOOL('inner_fn'), 'SELECT 1 === 2;']],
+    'operator defined by a CONTRACT file, function replaced in an additive file, operator used': [[CLEAN_BOOL('op_fn') + 'CREATE OPERATOR === (LEFTARG = int, RIGHTARG = int, FUNCTION = op_fn);', ARM_BOOL('op_fn'), 'SELECT 1 === 2;'], 'contract'],
+    'operator defined by a LEGACY file': [[CLEAN_BOOL('op_fn') + 'CREATE OPERATOR === (LEFTARG = int, RIGHTARG = int, FUNCTION = op_fn);', ARM_BOOL('op_fn'), 'SELECT 1 === 2;'], 'legacy'],
+    'CREATE CAST … AS IMPLICIT between composite types': [['CREATE TYPE ty1 AS (x int); CREATE TYPE ty2 AS (y int); CREATE FUNCTION c12(ty1) RETURNS ty2 LANGUAGE sql AS $f$ SELECT ROW(($1).x)::ty2 $f$; CREATE CAST (ty1 AS ty2) WITH FUNCTION c12(ty1) AS IMPLICIT;',
+      'CREATE OR REPLACE FUNCTION c12(ty1) RETURNS ty2 LANGUAGE plpgsql AS $f$ BEGIN DELETE FROM public.t; RETURN ROW(($1).x)::ty2; END $f$;', 'SELECT ROW(1)::ty1::ty2;']],
+    'IMPLICIT cast applied by an assignment: the last file names neither the function nor the cast': [['CREATE TYPE ty1 AS (x int); CREATE TYPE ty2 AS (y int); CREATE FUNCTION c12(ty1) RETURNS ty2 LANGUAGE sql AS $f$ SELECT ROW(($1).x)::ty2 $f$; CREATE CAST (ty1 AS ty2) WITH FUNCTION c12(ty1) AS IMPLICIT;',
+      'CREATE OR REPLACE FUNCTION c12(ty1) RETURNS ty2 LANGUAGE plpgsql AS $f$ BEGIN DELETE FROM public.t; RETURN ROW(($1).x)::ty2; END $f$;', 'CREATE TABLE zz2(a ty2); INSERT INTO zz2 VALUES (ROW(1)::ty1);']],
+    'CREATE AGGREGATE, state function replaced': [["CREATE FUNCTION sf(int, int) RETURNS int LANGUAGE sql AS 'select $1 + $2'; CREATE AGGREGATE agg1(int) (SFUNC = sf, STYPE = int);",
+      'CREATE OR REPLACE FUNCTION sf(int, int) RETURNS int LANGUAGE plpgsql AS $f$ BEGIN DELETE FROM public.t; RETURN $1 + $2; END $f$;', 'SELECT agg1(a) FROM u;']],
+    'CREATE DOMAIN with a CHECK function, domain used': [['CREATE FUNCTION chk(int) RETURNS boolean LANGUAGE sql AS $f$ SELECT true $f$; CREATE DOMAIN dpos AS int CHECK (chk(VALUE));',
+      'CREATE OR REPLACE FUNCTION chk(int) RETURNS boolean LANGUAGE plpgsql AS $f$ BEGIN DELETE FROM public.t; RETURN true; END $f$;', 'CREATE TABLE zz(a dpos); INSERT INTO zz VALUES (1);']],
+    'a wrapper declared with BEGIN ATOMIC (its body is split at every ;): wrapper defined before the function is armed': [['CREATE FUNCTION inner_fn() RETURNS int LANGUAGE sql AS $f$ SELECT 1 $f$; CREATE FUNCTION w() RETURNS int LANGUAGE sql BEGIN ATOMIC SELECT 1; SELECT inner_fn(); END;',
+      'CREATE OR REPLACE FUNCTION inner_fn() RETURNS int LANGUAGE plpgsql AS $f$ BEGIN DELETE FROM public.t; RETURN 1; END $f$;', 'SELECT w();'], undefined, 2]
+  };
+  for (const [name, [files, cls1, firstRefused = 1]] of Object.entries(chains)) {
+    assert.equal(await oracleChain(run, files), 'changed', name + ': the last file really changes data (oracle)');
+    const verdicts = scanMigrationChain(files.map((sql, i) => ({ sql, class: i === 0 && cls1 ? cls1 : ('additive' as const) })));
+    assert.ok(verdicts[firstRefused].length > 0, name + ': file ' + (firstRefused + 1) + ' must be the first one refused, before anything can run the hidden DML (got ' + JSON.stringify(verdicts[firstRefused]) + ')');
+    for (let i = 0; i < firstRefused; i++) if (!(i === 0 && (cls1 === 'contract' || cls1 === 'legacy'))) assert.deepEqual(verdicts[i], [], name + ': file ' + (i + 1) + ' alone is legitimate and stays accepted (got ' + JSON.stringify(verdicts[i]) + ')');
+    // if somebody applied the arming file anyway, the file that USES the object is refused as well
+    assert.ok(verdicts[2].length > 0, name + ': and so is the file that uses it (got ' + JSON.stringify(verdicts[2]) + ')');
+  }
+});
+
+test('R03d/RV-07 an operator created by an additive file stays guarded when a CONTRACT or LEGACY file later arms its function', () => {
+  const files = [CLEAN_BOOL('op_fn') + 'CREATE OPERATOR === (LEFTARG = int, RIGHTARG = int, FUNCTION = op_fn);', ARM_BOOL('op_fn'), 'SELECT 1 === 2;'];
+  for (const cls of ['contract', 'legacy'] as const) {
+    const v = scanMigrationChain([{ sql: files[0], class: 'additive' }, { sql: files[1], class: cls }, { sql: files[2], class: 'additive' }]);
+    assert.deepEqual(v[0], [], 'file 1 is legitimate');
+    assert.deepEqual(v[1], [], cls + ' files are not scanned for additivity (a contract file is gated at run time)');
+    assert.ok(v[2].length > 0, 'but the additive file after it is refused: ' + cls + ' ' + JSON.stringify(v[2]));
+  }
+});
+
+test('R03d/RV-07 no over-refusal for function-binding objects: creating them, or changing their function to another clean body, stays additive', async () => {
+  const run = await oracle();
+  const ok: Record<string, string[]> = {
+    'an operator is only created': [CLEAN_BOOL('op_fn') + 'CREATE OPERATOR === (LEFTARG = int, RIGHTARG = int, FUNCTION = op_fn);', 'SELECT 1;'],
+    'the operator function is replaced by another CLEAN body and the operator used': [CLEAN_BOOL('op_fn') + 'CREATE OPERATOR === (LEFTARG = int, RIGHTARG = int, FUNCTION = op_fn);', 'CREATE OR REPLACE FUNCTION op_fn(int, int) RETURNS boolean LANGUAGE sql AS $f$ SELECT $1 = $2 $f$;', 'SELECT 1 === 2;'],
+    'an armed function that no operator, cast, aggregate or domain refers to': [CLEAN_BOOL('op_fn') + 'CREATE OPERATOR === (LEFTARG = int, RIGHTARG = int, FUNCTION = op_fn);', W.armed('unrelated_wipe'), 'SELECT 1 === 2;'],
+    'a domain over a built-in check': ['CREATE DOMAIN dpos AS int CHECK (VALUE > 0);', 'CREATE TABLE zz(a dpos); INSERT INTO zz VALUES (1);']
+  };
+  for (const [name, files] of Object.entries(ok)) {
+    const v = scanMigrationChain(files.map(sql => ({ sql, class: 'additive' as const })));
+    assert.deepEqual(name.startsWith('an armed function that no') ? v.slice(0, 2) : v, files.map(() => []).slice(0, name.startsWith('an armed function that no') ? 2 : files.length), name + ' ' + JSON.stringify(v));
+    assert.equal(await oracleChain(run, files), 'unchanged', name + ': and PostgreSQL agrees nothing is destroyed');
+  }
+});
+
+test('R03d/RV-07 object kinds are classified by KIND, not by modifiers: TEMP / UNLOGGED / OR REPLACE / UNIQUE / MATERIALIZED / CONSTRAINT do not hide an unknown kind and do not make a known one unknown', () => {
+  const implicit = (sql: string) => { const c = emptyChain(); absorbSql(c, sql); return c.implicitMentions.size > 0; };
+  for (const known of ['CREATE TEMP SEQUENCE s1;', 'CREATE UNLOGGED SEQUENCE s2;', 'CREATE OR REPLACE VIEW v1 AS SELECT 1;', 'CREATE TEMPORARY VIEW v2 AS SELECT 1;', 'CREATE UNIQUE INDEX i1 ON t(a);',
+    'CREATE MATERIALIZED VIEW m1 AS SELECT 1;', 'CREATE RECURSIVE VIEW v3(n) AS SELECT 1;', 'CREATE UNLOGGED TABLE tt(a int);', 'CREATE CONSTRAINT TRIGGER g AFTER INSERT ON t DEFERRABLE FOR EACH ROW EXECUTE FUNCTION f();',
+    'ALTER SEQUENCE s1 RESTART;', 'ALTER INDEX i1 SET (fillfactor = 70);', 'ALTER TABLE t ADD COLUMN c int;', 'CREATE POLICY p ON t USING (true);', 'CREATE SCHEMA sc;'])
+    assert.equal(implicit(known), false, known + ' binds no function without naming it');
+  for (const unknown of ['CREATE TRUSTED LANGUAGE lx HANDLER h;', 'CREATE OR REPLACE TRUSTED PROCEDURAL LANGUAGE ly HANDLER h;', 'CREATE OR REPLACE AGGREGATE a1(int) (SFUNC = sf, STYPE = int);', 'CREATE TEMP FROBNICATOR fr;',
+    'CREATE OPERATOR === (LEFTARG = int, RIGHTARG = int, FUNCTION = f);', 'CREATE CAST (int AS text) WITH FUNCTION f(int);', 'CREATE DOMAIN d AS int CHECK (f(VALUE));'])
+    assert.equal(implicit(unknown), true, unknown + ' may call a function without naming it');
+});
+
+test('R03d/RV-07 object kinds this scanner does not know are treated as calling a function without naming it (fail closed): a later file that arms a function they mention is refused', () => {
+  const statements: Record<string, string> = {
+    'CREATE OPERATOR CLASS': 'CREATE OPERATOR CLASS oc1 FOR TYPE int USING btree AS FUNCTION 1 fn_x(int, int);',
+    'CREATE OPERATOR FAMILY / ALTER ... ADD FUNCTION': 'ALTER OPERATOR FAMILY of1 USING btree ADD FUNCTION 1 fn_x(int, int);',
+    'ALTER OPERATOR … SET (RESTRICT = …)': 'ALTER OPERATOR === (int, int) SET (RESTRICT = fn_x);',
+    'CREATE CONVERSION': "CREATE CONVERSION cv1 FOR 'UTF8' TO 'LATIN1' FROM fn_x;",
+    'CREATE TRANSFORM': 'CREATE TRANSFORM FOR int LANGUAGE plpgsql (FROM SQL WITH FUNCTION fn_x(internal));',
+    'CREATE LANGUAGE': 'CREATE LANGUAGE lx HANDLER fn_x;',
+    'CREATE FOREIGN DATA WRAPPER': 'CREATE FOREIGN DATA WRAPPER w1 HANDLER fn_x;',
+    'CREATE ACCESS METHOD': 'CREATE ACCESS METHOD am1 TYPE INDEX HANDLER fn_x;',
+    'CREATE TEXT SEARCH DICTIONARY': 'CREATE TEXT SEARCH DICTIONARY d1 (TEMPLATE = simple, STOPWORDS = fn_x);',
+    'CREATE TYPE (range with a canonical function)': 'CREATE TYPE r1 AS RANGE (SUBTYPE = int, CANONICAL = fn_x);',
+    'ALTER TYPE': 'ALTER TYPE ty1 SET (RECEIVE = fn_x);',
+    'ALTER DOMAIN … ADD CONSTRAINT': 'ALTER DOMAIN dom1 ADD CONSTRAINT c CHECK (fn_x(VALUE));',
+    'CREATE FOREIGN TABLE': 'CREATE FOREIGN TABLE ft1 (a int) SERVER srv OPTIONS (fn_x \'1\');',
+    'an object kind nobody has heard of': 'CREATE FROBNICATOR fr1 USING fn_x;',
+    'a function with a SUPPORT clause': 'CREATE FUNCTION g(int) RETURNS int LANGUAGE sql SUPPORT fn_x AS $g$ SELECT $1 $g$;'
+  };
+  for (const [name, stmt] of Object.entries(statements)) {
+    const files = [CLEAN_BOOL('fn_x') + stmt, ARM_BOOL('fn_x')];
+    const verdicts = scanMigrationChain(files.map((sql, i) => ({ sql, class: i === 0 ? ('contract' as const) : ('additive' as const) })));
+    assert.ok(verdicts[1].length > 0, name + ': arming fn_x must be refused (got ' + JSON.stringify(verdicts[1]) + ')');
+  }
+  // a function with BEGIN ATOMIC is never trusted to be clean: its body is not followable
+  assert.ok(taintedNames((() => { const c = emptyChain(); absorbSql(c, 'CREATE FUNCTION w() RETURNS int LANGUAGE sql BEGIN ATOMIC SELECT 1; SELECT 2; END;'); return c; })()).has('w'));
+});
+
+test('R03d/RV-05 decision: a top-level upsert that updates (ON CONFLICT … DO UPDATE) is a data-rewriting UPDATE and stays refused; DO NOTHING never touches existing rows and stays accepted', async () => {
+  const run = await oracle();
+  // the fixture's table t holds 1 and 2: every row below conflicts, so DO NOTHING must leave the data exactly as it was
+  const doNothing = ['CREATE UNIQUE INDEX t_a ON t(a); INSERT INTO t VALUES (1) ON CONFLICT (a) DO NOTHING;', 'CREATE UNIQUE INDEX t_a ON t(a); INSERT INTO t VALUES (1) ON CONFLICT DO NOTHING;',
+    'CREATE UNIQUE INDEX t_a ON t(a); INSERT INTO t VALUES (1), (2) ON CONFLICT (a) DO NOTHING;', 'CREATE UNIQUE INDEX t_a ON t(a); INSERT INTO t SELECT a FROM t ON CONFLICT (a) DO NOTHING;'];
+  for (const sql of doNothing) {
+    assert.deepEqual(destructiveStatements(sql), [], sql);
+    assert.equal(await run(sql), 'unchanged', sql + ': DO NOTHING never touches an existing row (oracle)');
+  }
+  // the one thing DO NOTHING cannot do — change an existing row — is exactly what DO UPDATE does
+  const rewrite = await run('CREATE UNIQUE INDEX t_a ON t(a); INSERT INTO t VALUES (1) ON CONFLICT (a) DO UPDATE SET a = 99;');
+  assert.equal(rewrite, 'changed', 'DO UPDATE rewrites an existing row (oracle)');
+  assert.equal(await run('CREATE UNIQUE INDEX t_a ON t(a); INSERT INTO t VALUES (1) ON CONFLICT (a) DO NOTHING;'), 'unchanged', 'DO NOTHING leaves every existing row as it was (oracle)');
+  for (const sql of ['INSERT INTO t VALUES (1) ON CONFLICT (a) DO UPDATE SET a = 99;', 'INSERT INTO t VALUES (1) ON CONFLICT (a) DO UPDATE SET a = EXCLUDED.a;', 'INSERT INTO t VALUES (1) ON CONFLICT ON CONSTRAINT t_a DO UPDATE SET a = 99;',
+    'INSERT INTO t VALUES (1) ON CONFLICT (a) DO UPDATE SET a = 99 WHERE false;', 'INSERT INTO t AS x VALUES (1) ON CONFLICT (a) DO UPDATE SET a = x.a + 1;', 'WITH i AS (SELECT 1) INSERT INTO t SELECT * FROM i ON CONFLICT (a) DO UPDATE SET a = 2;'])
+    assert.ok(destructiveStatements(sql).includes('UPDATE … SET (data rewrite)'), sql + ' (the contract names "a data-rewriting UPDATE … SET"; the static scan cannot prove WHERE false stays false)');
+  // consistency with the long-standing rule: a plain UPDATE is refused whatever its WHERE says, so an upsert whose UPDATE branch is guarded the same way is refused too
+  for (const plain of ['UPDATE t SET a = a WHERE false;', 'UPDATE t SET a = a;']) assert.ok(destructiveStatements(plain).includes('UPDATE … SET (data rewrite)'), plain);
+});
