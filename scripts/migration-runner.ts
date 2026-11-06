@@ -60,13 +60,24 @@ export function declaredClass(sql: string): string | null {
  *      later, under the function's own guards, and is not an effect of applying the migration.
  * Everything else stays visible, in particular string literals and every dollar-quoted string that is not such a body — so a DO block (which DOES run
  * at migration time), a dollar string after a function, the function's signature and its trailing clauses are all still scanned.
+ * Hidden bodies are only safe while nothing in the SAME migration can run them (a direct call, a DO block, CREATE TABLE AS, a trigger fired by a later
+ * INSERT, an expression index / CHECK / DEFAULT over existing rows, a materialized view, an event trigger …). Nothing here proves "not called", so:
+ * a function whose hidden body itself contains something the scan would flag ("armed") is accepted only in a file that is DEFINITIONS ONLY — see
+ * definitionOnlyViolations. A body with nothing to flag changes nothing against the previous scanner, which read that body too.
  * Fail closed: SQL the lexer cannot delimit with certainty (an unterminated comment / quote / dollar quote, a `$tag$` glued to an identifier, a
  * standard_conforming_strings setting that would change how quotes are read) is reported as a finding, so an additive file containing it is refused
  * instead of being partially hidden.
  */
 type SqlSegment = { kind: 'code' | 'string' | 'ident' | 'dollar'; text: string; open?: string; close?: string; closed: boolean };
-const IDENT_CHAR = /[A-Za-z0-9_$\u0080-￿]/;
-const DOLLAR_OPEN = /^\$(?:[A-Za-z_\u0080-￿][A-Za-z0-9_\u0080-￿]*)?\$/;
+const IDENT_CHAR = /[A-Za-z0-9_$\u0080-\uffff]/;
+// A dollar-quote opener is `$` + optional tag + `$` (PostgreSQL: dolqdelim). The tag has NO length limit, so the match is anchored at the current position
+// with a sticky regex over the whole input — never over a fixed-size window (a window made long tags look like plain code).
+const DOLLAR_OPEN = /\$(?:[A-Za-z_\u0080-\uffff][A-Za-z0-9_\u0080-\uffff]*)?\$/y;
+function dollarOpenAt(sql: string, i: number): string | null {
+    DOLLAR_OPEN.lastIndex = i;
+    const m = DOLLAR_OPEN.exec(sql);
+    return m ? m[0] : null;
+}
 
 function lexSql(sql: string): { segments: SqlSegment[]; problems: string[] } {
     const segments: SqlSegment[] = [];
@@ -129,8 +140,8 @@ function lexSql(sql: string): { segments: SqlSegment[]; problems: string[] } {
             segments.push({ kind: ch === "'" ? 'string' : 'ident', text: sql.slice(i, j), closed });
             i = j;
         }
-        else if (ch === '$' && DOLLAR_OPEN.test(sql.slice(i, i + 130))) {
-            const open = DOLLAR_OPEN.exec(sql.slice(i, i + 130))![0];
+        else if (ch === '$' && dollarOpenAt(sql, i) !== null) {
+            const open = dollarOpenAt(sql, i)!;
             if (IDENT_CHAR.test(sql[i - 1] ?? ' '))
                 problems.add('AMBIGUOUS DOLLAR QUOTE');
             const endAt = sql.indexOf(open, i + open.length);
@@ -155,11 +166,70 @@ function lexSql(sql: string): { segments: SqlSegment[]; problems: string[] } {
 }
 
 const FUNCTION_HEAD = /^\s*CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\b/i;
-const AS_BEFORE_BODY = /(?<![A-Za-z0-9_$\u0080-￿])AS\s*$/i;
+const AS_BEFORE_BODY = /(?<![A-Za-z0-9_$\u0080-\uffff])AS\s*$/i;
+
+/** A hidden body is "armed" when reading it WITHOUT the exemption would produce a finding (or the body cannot be delimited with certainty). */
+function bodyIsArmed(inner: string): boolean {
+    const r = scanSql(inner, false);
+    return r.problems.length > 0 || DESTRUCTIVE.some(([re]) => re.test(r.text));
+}
+
+const NAME_PART = String.raw`(?:"(?:[^"]|"")*"|[A-Za-z_\u0080-\uffff][A-Za-z0-9_$\u0080-\uffff]*)`;
+const QUALIFIED_NAME = NAME_PART + String.raw`(?:\s*\.\s*` + NAME_PART + ')*';
+const CREATE_TABLE = new RegExp(String.raw`^CREATE\s+TABLE\s+(?!IF\s+NOT\s+EXISTS\b)(` + QUALIFIED_NAME + String.raw`)\s*\(`, 'i');
+const CREATE_INDEX = new RegExp(String.raw`^CREATE\s+(?:UNIQUE\s+)?INDEX\s+(?!CONCURRENTLY\b)(?:IF\s+NOT\s+EXISTS\s+)?(?:(?!ON\b)` + QUALIFIED_NAME + String.raw`\s+)?ON\s+(?:ONLY\s+)?(` + QUALIFIED_NAME + ')', 'i');
+const ALTER_TABLE = new RegExp(String.raw`^ALTER\s+TABLE\s+(?:IF\s+EXISTS\s+)?(?:ONLY\s+)?(` + QUALIFIED_NAME + ')', 'i');
+const normalizedName = (name: string) => (name.match(new RegExp(NAME_PART, 'g')) ?? []).map(p => (p.startsWith('"') ? p.slice(1, -1).replace(/""/g, '"') : p.toLowerCase())).join('.');
+
+/**
+ * With an armed function in the file, every OTHER statement must be unable to run it. Allowed: further CREATE FUNCTION, CREATE [CONSTRAINT] TRIGGER (creating
+ * a trigger fires nothing), GRANT / REVOKE, COMMENT ON, CREATE TABLE name (…) without AS / IF NOT EXISTS, and CREATE INDEX / ALTER TABLE on a table created
+ * earlier in this same file under exactly the same name (so it is empty, and with no DML in the file it stays empty — an index expression, CHECK, DEFAULT or
+ * foreign key on it evaluates nothing). Everything else — SELECT, INSERT, UPDATE, DELETE, DO, CALL, COPY, WITH, CREATE TABLE AS, REFRESH, ALTER/INDEX on a
+ * table the file did not create, CREATE EVENT TRIGGER, SET, … — is reported, because it might run the hidden DML at migration time. Fail closed: anything
+ * not recognised is reported.
+ */
+function definitionOnlyViolations(statements: SqlSegment[][]): string[] {
+    const violations = new Set<string>();
+    const fresh = new Set<string>();
+    for (const stmt of statements) {
+        const rawFull = stmt.map(seg => seg.text).join('');
+        const lead = rawFull.length - rawFull.trimStart().length;
+        const raw = rawFull.slice(lead).trimEnd();
+        // same length as raw: literals and quoted identifiers are masked, so a '(' or the word AS inside them never counts
+        const skel = stmt.map(seg => (seg.kind === 'code' ? seg.text : '\u0001'.repeat(seg.text.length))).join('').slice(lead).trimEnd();
+        if (!raw)
+            continue;
+        if (FUNCTION_HEAD.test(skel) || /^(?:GRANT|REVOKE)\b/i.test(skel) || /^COMMENT\s+ON\b/i.test(skel) || /^CREATE\s+(?:OR\s+REPLACE\s+)?(?:CONSTRAINT\s+)?TRIGGER\b/i.test(skel))
+            continue;
+        const table = CREATE_TABLE.exec(raw);
+        if (table) {
+            let depth = 0;
+            let close = -1;
+            for (let i = table[0].length - 1; i < skel.length && close < 0; i++) {
+                if (skel[i] === '(') depth++;
+                else if (skel[i] === ')' && --depth === 0) close = i;
+            }
+            if (close >= 0 && !/\bAS\b/i.test(skel.slice(close + 1))) {
+                fresh.add(normalizedName(table[1]));
+                continue;
+            }
+        }
+        const index = CREATE_INDEX.exec(raw);
+        if (index && fresh.has(normalizedName(index[1])))
+            continue;
+        const alter = ALTER_TABLE.exec(raw);
+        if (alter && fresh.has(normalizedName(alter[1])) && !/\b(?:ATTACH|INHERIT)\b/i.test(skel))
+            continue;
+        violations.add('HIDDEN FUNCTION DML COULD RUN: migration also contains ' + (skel.match(/^[A-Za-z]+(?:\s+[A-Za-z]+)?/)?.[0] ?? 'unrecognised statement').replace(/\s+/g, ' ').toUpperCase());
+    }
+    return [...violations];
+}
 
 /** The text the destructive scan reads, plus anything the lexer could not delimit safely. */
-function scanSql(sql: string): { text: string; problems: string[] } {
+function scanSql(sql: string, hideBodies = true): { text: string; problems: string[] } {
     const { segments, problems } = lexSql(sql);
+    let armed = false;
     // statements = runs of segments separated by a top-level ';' (a ';' inside a string / quoted identifier / dollar quote never separates)
     const statements: SqlSegment[][] = [[]];
     for (const seg of segments) {
@@ -179,8 +249,10 @@ function scanSql(sql: string): { text: string; problems: string[] } {
         const text = stmt.map((seg, idx) => {
             if (seg.kind === 'code')
                 return seg.text;
-            if (isFunction && !bodyHidden && seg.kind === 'dollar' && seg.closed && idx > 0 && stmt[idx - 1].kind === 'code' && AS_BEFORE_BODY.test(stmt[idx - 1].text)) {
+            if (hideBodies && isFunction && !bodyHidden && seg.kind === 'dollar' && seg.closed && idx > 0 && stmt[idx - 1].kind === 'code' && AS_BEFORE_BODY.test(stmt[idx - 1].text)) {
                 bodyHidden = true;
+                if (bodyIsArmed(seg.text.slice(seg.open!.length, seg.text.length - seg.close!.length)))
+                    armed = true;
                 return ' ';
             }
             return flat(seg.text);
@@ -189,6 +261,8 @@ function scanSql(sql: string): { text: string; problems: string[] } {
         return /^\s*ALTER\s+TABLE\s+[a-z_][a-z0-9_]*\s+ALTER\s+COLUMN\s+[a-z_][a-z0-9_]*\s+DROP\s+NOT\s+NULL\s*$/i.test(text) ? '' : text;
     });
     const text = out.join(';');
+    if (armed)
+        problems.push(...definitionOnlyViolations(statements));
     // A setting that changes how backslashes / quotes are read makes this lexer unreliable: refuse rather than guess.
     if (/\bstandard_conforming_strings\b/i.test(text))
         problems.push('STRING-SYNTAX SETTING (standard_conforming_strings)');

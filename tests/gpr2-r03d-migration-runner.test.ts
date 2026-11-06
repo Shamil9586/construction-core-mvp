@@ -257,8 +257,11 @@ test('R03d/B1 a FIN-SDO-1-shaped file (SECURITY DEFINER functions whose bodies d
     FN('fin_sdo_update_edit_buffer', 'DELETE FROM fin_buf WHERE id = 1;\nUPDATE fin_buf SET v = v + 1;') + '\n' +
     FN('fin_sdo_commit_edit_buffer', 'UPDATE fin_buf SET v = 0;') + '\nREVOKE ALL ON FUNCTION fin_sdo_commit_edit_buffer() FROM PUBLIC;\n';
   assert.deepEqual(destructiveStatements(fin), []);
-  assert.deepEqual(destructiveStatements(fin + 'DELETE FROM fin_buf;'), ['DELETE FROM'], 'a top-level DELETE after the functions is still found');
-  assert.deepEqual(destructiveStatements('DELETE FROM fin_buf;\n' + fin), ['DELETE FROM'], '… and before them');
+  // a top-level DELETE next to armed functions is found twice over: as itself, and as a statement that could run the hidden DML (RV-02)
+  for (const bad of [fin + 'DELETE FROM fin_buf;', 'DELETE FROM fin_buf;\n' + fin]) {
+    assert.ok(destructiveStatements(bad).includes('DELETE FROM'), 'a top-level DELETE next to the functions is still found');
+    assert.ok(destructiveStatements(bad).some(n => n.startsWith('HIDDEN FUNCTION DML COULD RUN')), 'and the file is no longer definitions-only');
+  }
 });
 
 test('R03d/B1 fail closed: destructive statements are found before, after and between functions, and in everything that is not a function body', () => {
@@ -384,4 +387,248 @@ test('R03d/B1 applying a migration that defines a DML function runs none of that
   assert.deepEqual(r.applied.map(a => a.version), [1]);
   assert.deepEqual((await pool.query('SELECT id, v FROM b1_rows ORDER BY id')).rows, [{ id: 1, v: 10 }, { id: 2, v: 20 }], 'the migration did not execute the body');
   assert.equal((await pool.query("SELECT to_regproc('b1_wipe') IS NOT NULL AS x")).rows[0].x, true);
+});
+
+// ----------------------------------------------------------------------------------------------------------------------------------
+// R03d / B1 correction cycle 1
+//   RV-01  a dollar-quote tag has no length limit (no 130-character window)
+//   RV-02  a function body hidden from the scan must not be runnable by the SAME migration (call, DO, CTAS, trigger + INSERT, …)
+//   RV-04  no literal U+FFFF in the source
+// Ground truth for "does it run" is a real PostgreSQL (PGlite), not this file's opinion.
+// ----------------------------------------------------------------------------------------------------------------------------------
+const VIOLATION = /^HIDDEN FUNCTION DML COULD RUN/;
+const hasViolation = (sql: string) => destructiveStatements(sql).some(n => VIOLATION.test(n));
+const TAG_LENGTHS = [1, 63, 64, 127, 128, 129, 130, 131, 200, 1000, 5000];
+
+test('R03d/B1 RV-01 dollar tags of any length (128, 129, 200, 5000 …) delimit exactly like short ones — nothing after the literal is hidden', () => {
+  for (const len of TAG_LENGTHS) for (const ch of ['a', 'ß']) {
+    const t = '$' + ch.repeat(len) + '$';
+    const label = `tag length ${len} (${ch})`;
+    // the reviewer's pattern: a comment marker INSIDE the literal must not swallow the statement after it
+    assert.ok(destructiveStatements(`SELECT ${t} x -- ${t}; DROP TABLE t;`).includes('DROP'), label + ': -- inside the literal');
+    assert.ok(destructiveStatements(`SELECT ${t} x /* ${t}; DELETE FROM t; /* y */`).includes('DELETE FROM'), label + ': /* inside the literal');
+    assert.ok(destructiveStatements(`SELECT ${t} ' ${t}; TRUNCATE t;`).includes('TRUNCATE'), label + ': quote inside the literal');
+    assert.ok(destructiveStatements(`SELECT ${t} x ${t}\n-- c\n; UPDATE t SET a = 1;`).includes('UPDATE … SET (data rewrite)'), label + ': after the literal and a comment');
+    assert.ok(destructiveStatements(`DO ${t} BEGIN DELETE FROM t; END ${t};`).includes('DELETE FROM'), label + ': DO block');
+    // a long tag does not stop a function body from being a body (definitions only: accepted), nor from hiding anything after it
+    const fn = `CREATE FUNCTION f() RETURNS void AS ${t} BEGIN DELETE FROM t; END ${t} LANGUAGE plpgsql;`;
+    assert.deepEqual(destructiveStatements(fn), [], label + ': function body');
+    assert.ok(destructiveStatements(fn + '\nDROP TABLE u;').includes('DROP'), label + ': DROP after a function');
+    assert.ok(destructiveStatements(fn.replace(/\$ LANGUAGE/, '$ -- ') + '\nDROP TABLE u;').includes('DROP'), label + ': comment after the body');
+    // not closed / closed by a different tag: reported and scanned, never exempted
+    const open = destructiveStatements(`SELECT ${t} DELETE FROM t`);
+    assert.ok(open.includes('UNTERMINATED DOLLAR QUOTE') && open.includes('DELETE FROM'), label + ': unterminated');
+    const other = destructiveStatements(`SELECT ${t} x $${ch.repeat(len + 1)}$; DELETE FROM t;`);
+    assert.ok(other.includes('UNTERMINATED DOLLAR QUOTE') && other.includes('DELETE FROM'), label + ': closed by a longer tag');
+    const unclosedBody = destructiveStatements(`CREATE FUNCTION f() RETURNS void AS ${t} DELETE FROM t`);
+    assert.ok(unclosedBody.includes('DELETE FROM') && unclosedBody.includes('UNTERMINATED DOLLAR QUOTE'), label + ': unterminated function body');
+  }
+  // the verdict must not depend on the tag length at all
+  const verdict = (len: number) => JSON.stringify(destructiveStatements(`SELECT $${'a'.repeat(len)}$ -- $${'a'.repeat(len)}$; DROP TABLE t; CREATE FUNCTION f() RETURNS void AS $${'a'.repeat(len)}$ DELETE FROM t $${'a'.repeat(len)}$ LANGUAGE sql;`));
+  for (const len of TAG_LENGTHS) assert.equal(verdict(len), verdict(1), 'length ' + len);
+});
+
+test('R03d/B1 RV-01 malformed or look-alike delimiters are never exempted and never hide what follows', () => {
+  const flagged: [string, string][] = [
+    ['SELECT $1$ DELETE FROM t $1$;', 'DELETE FROM'],              // a tag cannot start with a digit: $1 is a parameter
+    ['SELECT $a b$ DELETE FROM t $a b$;', 'DELETE FROM'],          // a space ends the would-be tag
+    ['SELECT $a-b$ DELETE FROM t $a-b$;', 'DELETE FROM'],
+    ['SELECT $a DELETE FROM t;', 'DELETE FROM'],                   // no second $
+    ['SELECT $ DELETE FROM t;', 'DELETE FROM'],
+    ['SELECT $$ x $a$; DELETE FROM t;', 'UNTERMINATED DOLLAR QUOTE'],
+    ['SELECT $a$ x $A$; DELETE FROM t;', 'UNTERMINATED DOLLAR QUOTE'],   // tags are case sensitive
+    ['SELECT x$tag$ y $tag$; DELETE FROM t;', 'AMBIGUOUS DOLLAR QUOTE'],
+    ['SELECT 1$tag$ y $tag$; DELETE FROM t;', 'AMBIGUOUS DOLLAR QUOTE']
+  ];
+  for (const [sql, label] of flagged)
+    assert.ok(destructiveStatements(sql).includes(label), `${label} in ${JSON.stringify(sql)} (got ${JSON.stringify(destructiveStatements(sql))})`);
+  // the scan stays linear: no pathological input makes it quadratic
+  for (const sql of ['$a'.repeat(200000), '$' + 'a'.repeat(300000), '$a$ '.repeat(100000), "'".repeat(100000), '/*'.repeat(100000)]) {
+    const t0 = Date.now();
+    destructiveStatements(sql);
+    assert.ok(Date.now() - t0 < 3000, 'linear time for ' + sql.slice(0, 8));
+  }
+});
+
+test('R03d/B1 RV-04 the source carries no literal U+FFFF; the escape is the same code-unit range', () => {
+  const src = fs.readFileSync('scripts/migration-runner.ts', 'utf8');
+  assert.equal(src.includes('￿'), false, 'no literal noncharacter in the source');
+  assert.equal([...src].every(c => c.charCodeAt(0) < 0x2100 || c.charCodeAt(0) === 0x2192), true, 'no stray invisible / noncharacter code points');
+  assert.ok(src.includes('\\u0080-\\uffff'), 'the escape form is present');
+  assert.ok(/[\u0080-￿]/.test('￿') && /[\u0080-￿]/.test('ß') && !/[\u0080-￿]/.test('\u007f'), 'range semantics');
+});
+
+// ---- ground truth: a real PostgreSQL decides whether a migration runs the hidden DML --------------------------------------------
+class Rolled { constructor(readonly result: 'changed' | 'unchanged' | 'error') {} }
+async function oracle() {
+  const { transaction, pool } = await memoryDb();
+  await pool.query('DROP SCHEMA public CASCADE');
+  await pool.query('CREATE SCHEMA public');
+  await pool.query('CREATE TABLE t(a int); INSERT INTO t VALUES (1),(2); CREATE TABLE u(a int); INSERT INTO u VALUES (7);');
+  const observe = async (c: any) => {
+    const t = (await c.query("SELECT to_regclass('t') IS NOT NULL AS ok")).rows[0].ok ? (await c.query("SELECT coalesce(string_agg(a::text, ',' ORDER BY a), '') AS v FROM t")).rows[0].v : 'DROPPED';
+    const u = (await c.query("SELECT to_regclass('u') IS NOT NULL AS ok")).rows[0].ok ? (await c.query("SELECT coalesce(string_agg(a::text, ',' ORDER BY a), '') AS v FROM u")).rows[0].v : 'DROPPED';
+    return t + '|' + u;
+  };
+  /** Apply `sql` the way the runner does (one multi-statement query inside a transaction), report whether the data changed, always roll back. */
+  return async (sql: string): Promise<'changed' | 'unchanged' | 'error'> => {
+    try {
+      await transaction(async (c: any) => {
+        const before = await observe(c);
+        try { await c.query(sql); } catch { throw new Rolled('error'); }
+        throw new Rolled((await observe(c)) === before ? 'unchanged' : 'changed');
+      });
+    }
+    catch (e: any) { if (e instanceof Rolled) return e.result; throw e; }
+    throw new Error('unreachable');
+  };
+}
+const WIPE_FN = (name: string, ret = 'void', body = 'DELETE FROM t;', extra = '') => `CREATE FUNCTION ${name}() RETURNS ${ret} LANGUAGE plpgsql AS $f$ BEGIN ${body} ${ret === 'void' || ret === 'event_trigger' ? '' : ret === 'trigger' ? 'RETURN NULL;' : ret === 'boolean' ? 'RETURN true;' : 'RETURN 1;'} END; $f$;${extra}`;
+
+test('R03d/B1 RV-02 every way a migration can RUN a hidden function body is refused — and the real database confirms each one really runs it', async () => {
+  const run = await oracle();
+  const ARMED = WIPE_FN('wipe');
+  const paths: Record<string, string> = {
+    'direct call': ARMED + ' SELECT wipe();',
+    'DO block': ARMED + ' DO $$ BEGIN PERFORM wipe(); END $$;',
+    'CREATE TABLE AS': ARMED + ' CREATE TABLE z AS SELECT wipe()::text AS w;',
+    'SELECT INTO': ARMED + ' SELECT wipe()::text INTO TEMP z2;',
+    'trigger + INSERT': WIPE_FN('tw', 'trigger') + ' CREATE TRIGGER trg AFTER INSERT ON u FOR EACH ROW EXECUTE FUNCTION tw(); INSERT INTO u VALUES (8);',
+    'INSERT … SELECT': ARMED + ' INSERT INTO u SELECT 1 FROM (SELECT wipe()::text) s;',
+    'WITH': ARMED + ' WITH x AS (SELECT wipe()::text AS w) SELECT w FROM x;',
+    'materialized view (PostgreSQL 17 runs it with a safe search_path, hence public.t)': WIPE_FN('wipe_q', 'void', 'DELETE FROM public.t;') + ' CREATE MATERIALIZED VIEW mv AS SELECT wipe_q()::text AS w;',
+    'prepared statement': ARMED + ' PREPARE p AS SELECT wipe(); EXECUTE p;',
+    'VOLATILE DEFAULT on an existing table': WIPE_FN('wipe_int', 'int') + ' ALTER TABLE u ADD COLUMN c int DEFAULT wipe_int();',
+    'CHECK validated on an existing table': WIPE_FN('wipe_bool', 'boolean') + ' ALTER TABLE u ADD CONSTRAINT ck CHECK (wipe_bool());',
+    'event trigger + later DDL': WIPE_FN('ew', 'event_trigger') + ' CREATE EVENT TRIGGER et ON ddl_command_end EXECUTE FUNCTION ew(); CREATE TABLE zz(a int);',
+    'indirect: an innocent-looking function calls the armed one': ARMED + ' CREATE FUNCTION g() RETURNS void LANGUAGE plpgsql AS $g$ BEGIN PERFORM wipe(); END; $g$; SELECT g();',
+    'procedure + CALL': ARMED + ' CREATE PROCEDURE p() LANGUAGE plpgsql AS $p$ BEGIN PERFORM wipe(); END; $p$; CALL p();',
+    'trigger fired by an UPDATE': WIPE_FN('tw', 'trigger') + ' CREATE TRIGGER trg AFTER UPDATE ON u FOR EACH ROW EXECUTE FUNCTION tw(); UPDATE u SET a = a;'
+  };
+  for (const [name, sql] of Object.entries(paths)) {
+    assert.equal(await run(sql), 'changed', name + ': the oracle must show the data really changing, or this case proves nothing');
+    assert.ok(destructiveStatements(sql).length > 0, name + ': must be refused as additive (got ' + JSON.stringify(destructiveStatements(sql)) + ')');
+  }
+});
+
+test('R03d/B1 RV-02 what stays accepted: definitions only — and the real database confirms none of it touches data', async () => {
+  const run = await oracle();
+  const accepted: Record<string, string> = {
+    'armed functions + tables + indexes + constraint triggers + grants (FIN-shaped)':
+      WIPE_FN('wipe') + WIPE_FN('tw', 'trigger') + `CREATE TABLE fin_a(id int PRIMARY KEY, tenant int NOT NULL, kind text, amt numeric DEFAULT 0, CONSTRAINT chk CHECK (amt >= 0));
+       CREATE TABLE fin_b(id int PRIMARY KEY, a_id int REFERENCES fin_a(id), ts timestamptz DEFAULT now());
+       CREATE UNIQUE INDEX fin_a_one ON fin_a(tenant) WHERE kind = 'X';
+       CREATE INDEX ON fin_b(a_id);
+       ALTER TABLE fin_a ADD CONSTRAINT fin_a_amt CHECK (amt < 1000000);
+       ALTER TABLE fin_b ADD COLUMN note text DEFAULT 'n';
+       CREATE TRIGGER fin_t AFTER INSERT ON fin_a FOR EACH ROW EXECUTE FUNCTION tw();
+       CREATE CONSTRAINT TRIGGER fin_c AFTER INSERT ON fin_b DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION tw();
+       COMMENT ON FUNCTION wipe() IS 'x'; REVOKE ALL ON FUNCTION wipe() FROM PUBLIC; GRANT SELECT ON fin_a TO PUBLIC;`,
+    'quoted / mixed-case names are matched exactly': WIPE_FN('wipe') + 'CREATE TABLE "Fin_X"(a int); CREATE INDEX ON "Fin_X"(a); ALTER TABLE "Fin_X" ADD COLUMN b int;',
+    'schema-qualified consistently': WIPE_FN('wipe') + 'CREATE TABLE public.fin_q(a int); CREATE INDEX ON public.fin_q(a);'
+  };
+  for (const [name, sql] of Object.entries(accepted)) {
+    assert.deepEqual(destructiveStatements(sql), [], name);
+    assert.equal(await run(sql), 'unchanged', name + ': and the data is untouched');
+  }
+  // a function whose body has nothing to flag behaves exactly as before: it may be called in the same file (the old scanner read that body too)
+  const innocent = `CREATE FUNCTION ins() RETURNS void LANGUAGE plpgsql AS $f$ BEGIN INSERT INTO u VALUES (9); END; $f$; SELECT ins();`;
+  assert.deepEqual(destructiveStatements(innocent), []);
+});
+
+test('R03d/B1 RV-02 near-misses are refused: a table the file did not create, a different spelling, IF NOT EXISTS, AS, CONCURRENTLY, ATTACH, ordering', () => {
+  const ARMED = WIPE_FN('wipe');
+  const refused: Record<string, string> = {
+    'index on an existing table': ARMED + ' CREATE INDEX ix ON u(a);',
+    'ALTER an existing table': ARMED + ' ALTER TABLE u ADD COLUMN c int DEFAULT 1;',
+    'qualified vs unqualified': ARMED + ' CREATE TABLE s.fin_a(a int); CREATE INDEX ON fin_a(a);',
+    'unqualified vs qualified': ARMED + ' CREATE TABLE fin_a(a int); CREATE INDEX ON s.fin_a(a);',
+    'different quoting case': ARMED + ' CREATE TABLE "Fin_a"(a int); CREATE INDEX ON fin_a(a);',
+    'IF NOT EXISTS (may be a table with rows)': ARMED + ' CREATE TABLE IF NOT EXISTS fin_a(a int); CREATE INDEX ON fin_a(a);',
+    'CREATE TABLE … AS': ARMED + ' CREATE TABLE fin_a(a) AS SELECT 1;',
+    'CREATE TABLE AS without a column list': ARMED + ' CREATE TABLE fin_a AS SELECT 1;',
+    'index before the table exists': ARMED + ' CREATE INDEX ON fin_a(a); CREATE TABLE fin_a(a int);',
+    'CONCURRENTLY': ARMED + ' CREATE TABLE fin_a(a int); CREATE INDEX CONCURRENTLY ON fin_a(a);',
+    'ATTACH PARTITION': ARMED + ' CREATE TABLE fin_a(a int) PARTITION BY LIST (a); ALTER TABLE fin_a ATTACH PARTITION u FOR VALUES IN (7);',
+    'INHERIT': ARMED + ' CREATE TABLE fin_a(a int); ALTER TABLE fin_a INHERIT u;',
+    'a string that looks like a closing paren': ARMED + " CREATE TABLE fin_a(a text DEFAULT ')') AS SELECT 1;",
+    'SET search_path': ARMED + ' SET search_path = x;',
+    'BEGIN / COMMIT': ARMED + ' BEGIN; COMMIT;',
+    'CREATE EVENT TRIGGER': ARMED + ' CREATE EVENT TRIGGER et ON ddl_command_end EXECUTE FUNCTION ew();',
+    'CREATE VIEW': ARMED + ' CREATE VIEW v AS SELECT 1;',
+    'CREATE PROCEDURE': ARMED + " CREATE PROCEDURE p() LANGUAGE sql AS 'select 1';"
+  };
+  for (const [name, sql] of Object.entries(refused))
+    assert.ok(hasViolation(sql), name + ' (got ' + JSON.stringify(destructiveStatements(sql)) + ')');
+  // the same statements next to an UNARMED function, or no function, are untouched by this rule
+  assert.deepEqual(destructiveStatements(`CREATE FUNCTION f() RETURNS void LANGUAGE sql AS $$ SELECT 1 $$; CREATE INDEX ix ON u(a); SELECT f();`), []);
+});
+
+// ---- differential: a randomised corpus judged by the real database, and compared with the previous scanner -------------------------
+/** The scanner as it was before B1 (comment strip + regexes over everything), kept here as the reference for "nothing that used to be found is lost". */
+const LEGACY_DESTRUCTIVE: [RegExp, string][] = [
+  [/\bDROP\s+(TABLE|COLUMN|SCHEMA|DATABASE|TYPE|VIEW|INDEX|CONSTRAINT|TRIGGER|FUNCTION|SEQUENCE|POLICY|EXTENSION)\b/i, 'DROP'], [/\bALTER\s+TABLE\b[^;]*\bDROP\b/i, 'ALTER TABLE … DROP'],
+  [/\bTRUNCATE\b/i, 'TRUNCATE'], [/\bDELETE\s+FROM\b/i, 'DELETE FROM'], [/\bUPDATE\s+(ONLY\s+)?[A-Za-z_."]+\s+(AS\s+\w+\s+)?SET\b/i, 'UPDATE … SET (data rewrite)'],
+  [/\bALTER\s+COLUMN\s+\S+\s+(SET\s+DATA\s+)?TYPE\b/i, 'ALTER COLUMN … TYPE'], [/\bALTER\s+COLUMN\s+\S+\s+SET\s+NOT\s+NULL\b/i, 'ALTER COLUMN … SET NOT NULL'], [/\bRENAME\b/i, 'RENAME']
+];
+const legacyFlags = (sql: string) => { const text = sql.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/--[^\n]*/g, ' '); return LEGACY_DESTRUCTIVE.some(([re]) => re.test(text)); };
+function prng(seed: number) { return () => { seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), 1 | seed); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+
+test('R03d/B1 differential: 600 random migrations judged by a real PostgreSQL — whatever really changes data is flagged, and the previous scanner\'s catches are kept', async () => {
+  const run = await oracle();
+  const rnd = prng(20261106);
+  const pick = <T,>(xs: T[]): T => xs[Math.floor(rnd() * xs.length)];
+  const tag = () => { const n = pick([0, 1, 3, 63, 127, 128, 129, 130, 200, 5000]); return n === 0 ? '$$' : '$' + pick(['a', 'ß', 'Q']).repeat(n) + '$'; };
+  const dangers = ['DELETE FROM t;', 'DROP TABLE u;', 'TRUNCATE t;', 'UPDATE t SET a = a + 1;', 'ALTER TABLE u RENAME TO u2;', 'ALTER TABLE t ALTER COLUMN a TYPE bigint;'];
+  const noise = (): string => {
+    const t = tag();
+    return pick([
+      () => 'SELECT 1;', () => `SELECT '--';`, () => `SELECT '/*';`, () => `SELECT '*/';`, () => `SELECT E'\\'';`, () => `SELECT "--" FROM (SELECT 1 AS "--") q;`,
+      () => `SELECT ${t} x -- ${t};`, () => `SELECT ${t} x /* ${t};`, () => `SELECT ${t} ' ${t};`, () => `SELECT ${t} ; ${t};`, () => `SELECT 1 -- c\n;`, () => `SELECT 1 /* c ; */;`,
+      () => `SELECT 1 /* a /* nested */ b */;`, () => `-- ${t}\nSELECT 1;`, () => `-- c\rSELECT 1;`, () => `/* ${t} */ SELECT 1;`,
+      () => `CREATE OR REPLACE FUNCTION nf${Math.floor(rnd() * 1e6)}() RETURNS int LANGUAGE sql AS ${t} SELECT 1 ${t};`,
+      () => `CREATE OR REPLACE FUNCTION nd${Math.floor(rnd() * 1e6)}() RETURNS void LANGUAGE plpgsql AS ${t} BEGIN ${pick(dangers)} END; ${t};`
+    ])();
+  };
+  let executed = 0, caughtByNew = 0, missedByLegacy = 0, lostFromLegacy = 0;
+  for (let i = 0; i < 600; i++) {
+    const parts = Array.from({ length: 1 + Math.floor(rnd() * 5) }, noise);
+    const danger = pick(dangers);
+    parts.splice(Math.floor(rnd() * (parts.length + 1)), 0, danger);
+    const sql = parts.join(rnd() < 0.5 ? '\n' : ' ');
+    const outcome = await run(sql);
+    const flagged = destructiveStatements(sql).length > 0;
+    if (outcome === 'changed') {
+      executed++;
+      assert.ok(flagged, 'the database changed data but the scan accepted it:\n' + sql.slice(0, 600));
+      caughtByNew++;
+      if (!legacyFlags(sql)) missedByLegacy++;
+    }
+    // monotonic against the previous scanner where the DB shows the danger is real
+    if (outcome === 'changed' && legacyFlags(sql) && !flagged) lostFromLegacy++;
+  }
+  assert.ok(executed >= 150, 'the corpus must exercise real executions (' + executed + ')');
+  assert.equal(lostFromLegacy, 0, 'nothing the previous scanner caught (and that really runs) may be lost');
+  assert.equal(caughtByNew, executed);
+  console.log(`# differential: executed=${executed} caughtByNew=${caughtByNew} missedByPreviousScanner=${missedByLegacy}`);
+});
+
+test('R03d/B1 RV-02 a hidden body the scanner cannot read with certainty counts as armed; string literals inside a table definition do not confuse the definitions-only check', () => {
+  // a non-SQL body (here Python) with an unbalanced quote cannot be delimited reliably: treated as armed, so a later call is refused
+  const py = (call: string) => `CREATE FUNCTION f() RETURNS void LANGUAGE plpython3u AS $p$\n# it's a comment\npass\n$p$; ${call}`;
+  assert.deepEqual(destructiveStatements(py('')), [], 'on its own, a definition is fine');
+  assert.ok(hasViolation(py('SELECT f();')), 'but the file may not also run it');
+  assert.ok(destructiveStatements(py('SELECT f();')).length > 0);
+  // parentheses and the word AS inside string literals / quoted identifiers of a table definition are not structure
+  const armed = WIPE_FN('wipe');
+  for (const ok of [
+    "CREATE TABLE fin_s(a text DEFAULT '(', b text DEFAULT ')', c text DEFAULT 'x AS y');",
+    `CREATE TABLE fin_s("a (" text, "b AS" text DEFAULT ')');`,
+    "CREATE TABLE fin_s(a text DEFAULT $q$ ) AS SELECT 1 ( $q$); CREATE INDEX ON fin_s(a);",
+    "CREATE TABLE fin_s(a text GENERATED ALWAYS AS (upper('(')) STORED);"
+  ])
+    assert.deepEqual(destructiveStatements(armed + ok), [], ok);
+  // a real CREATE TABLE AS is still refused even when strings try to confuse the parenthesis matching
+  for (const bad of ["CREATE TABLE fin_s(a) AS SELECT ')';", "CREATE TABLE fin_s(a text DEFAULT ')') AS SELECT 1;", "CREATE TABLE fin_s(a) AS SELECT '(' WHERE true;"])
+    assert.ok(hasViolation(armed + bad), bad);
 });
