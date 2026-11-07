@@ -24,7 +24,8 @@ export const OWNER_SQL: Partial<Record<Gpr2ResourceRef['kind'], string>> = {
     WORK_TYPE: 'SELECT tenant_id, object_id FROM work_types WHERE id=$1',
     WORK_TYPE_PUBLICATION_REQUEST: 'SELECT tenant_id, NULL::uuid AS object_id FROM work_type_publication_requests WHERE id=$1',
     FINISH_SYSTEM: 'SELECT tenant_id, object_id FROM object_finish_types WHERE id=$1',
-    FINISH_TEMPLATE: 'SELECT tenant_id, NULL::uuid AS object_id FROM finish_templates WHERE id=$1'
+    FINISH_TEMPLATE: 'SELECT tenant_id, NULL::uuid AS object_id FROM finish_templates WHERE id=$1',
+    QUANTITY_CHANGE_REQUEST: 'SELECT tenant_id, object_id FROM gpr2_quantity_requests WHERE id=$1'
 };
 
 /** Who owns an R05 aggregate. Read-only, one plain SELECT; any other kind is unknown here (and therefore unaddressable). */
