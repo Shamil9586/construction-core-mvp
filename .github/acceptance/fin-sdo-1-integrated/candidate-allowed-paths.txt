@@ -1,0 +1,2 @@
+docs/fin-sdo-1-executor-handoff-2026-11-05.md
+scripts/fin-sdo-1-isolated-evidence-gaps-verify.ts
