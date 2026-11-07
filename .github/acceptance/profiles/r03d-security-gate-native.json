@@ -1,9 +1,9 @@
 {
-  "$comment": "Draft CI-only R03d exact candidate. Owner authorized Draft profile PR, NOT merge/dispatch. Native R03d test #3 is a pre-existing baseline failure: mandatory true; no waiver and no automatic green gate.",
+  "$comment": "Draft CI-only R03d exact candidate, re-pinned after OWNER-AUTHORIZED one-array migration test-fixture correction on PR #40. Owner did not approve profile merge or Actions dispatch. All tests remain mandatory, no waiver; native outcomes are NOT VERIFIED until a future isolated run.",
   "schema": "construction-core/gpr2-acceptance-profile@1",
   "profile_id": "r03d-security-gate-native",
   "stage": "R03d",
-  "title": "R03d Security Gate exact-SHA PG16, PGlite, typecheck/build",
+  "title": "R03d Security Gate exact-SHA PG16, PGlite, typecheck/build (fixture 026-037 corrected)",
   "status": "ACTIVE",
   "baseline": {
     "sha": "516935803f2c211a660df33cae4a48b706ef77a1",
@@ -12,22 +12,22 @@
   },
   "candidates": [
     {
-      "sha": "e41c22ac0b8100f53fb63a077613bdc93238d983",
-      "tree": "99e9fd25631f1ffaf10a3688eef66327de5dbbbe",
+      "sha": "da0a035a3d21d364dcd592da0a832994bfa854e4",
+      "tree": "294161642e5279a37af2ace14b3772256ca0f2a9",
       "lineage": [
         {
           "rev": "HEAD^",
-          "sha": "63ed96657df861153b0c81cf2565826627bffbaa",
-          "tree": "74a081bcdb7e71443fc22829a1856ee20721dd74"
+          "sha": "e41c22ac0b8100f53fb63a077613bdc93238d983",
+          "tree": "99e9fd25631f1ffaf10a3688eef66327de5dbbbe"
         },
         {
-          "rev": "HEAD~6",
+          "rev": "HEAD~7",
           "sha": "516935803f2c211a660df33cae4a48b706ef77a1",
           "tree": "f1a6d22af3e4f7a1453e656e8fc4dfdd973e6221"
         }
       ],
       "diff_check_from": "516935803f2c211a660df33cae4a48b706ef77a1",
-      "approval": "Owner on 2026-11-07 authorized CI-only Draft profile preparation for e41c22ac R03d PR40; explicitly NO profile merge or GitHub Actions dispatch."
+      "approval": "Owner on 2026-11-07 authorized correction of R03d legacy test fixture 026-035 to 026-037 in Draft PR40, and repinning CI-only Draft PR41 to corrected exact candidate, plus independent affected-scope review. NO merge or Actions dispatch."
     }
   ],
   "runtime": {
@@ -105,9 +105,10 @@
     }
   ],
   "notes": [
-    "This file is proposed in a Draft PR. ACTIVE refers only to profile status AFTER separate independent review/owner-authorized merge into main.",
-    "NO allow_known_failure or any bypass: current strict profile validator rejects unknown keys; mandatory native R03d ledger test #3 currently FAILS from historical expected versions 026-035 versus 036/037. This profile cannot honestly claim a green gate until separately authorized fixture repair (and affected SHA review) or revised independently approved gate. Do not dispatch in present state.",
-    "Three separately failing historical R05 native suites are outside this narrow profile and remain explicitly NOT VERIFIED; no universal npm test PASS is claimed.",
-    "Exact SHA/tree pin, independent profile review, owner-only workflow_dispatch permission, isolation and cleanup remain required. No workflow run, product merge, LIVE, production DB, migrations, or deployment authorized."
+    "Proposed ACTIVE profile is only on Draft PR #41, not main; its name, candidate and content do NOT authorize a GitHub Actions run.",
+    "The previously stale A29 test #3 expected migrations 026-035; in corrected product candidate da0a035a the expectation is 026-037. This is a one-array TEST-ONLY correction, not proof of real native PG PASS. All mandatory native/PGlite/build checks stay enforced. No allow_known_failure, no skip exemption.",
+    "This revised profile requires independent affected-scope review of both corrected product SHA and profile identity, then separate owner approval for profile merge and any owner-only workflow_dispatch.",
+    "Three unrelated existing R05 native fixture failures remain outside this bounded R03d profile and are NOT VERIFIED by it; no full npm test PASS is claimed.",
+    "No CI, product merge, migration change/execution, LIVE, production DB, secrets or deployment authorized."
   ]
 }
