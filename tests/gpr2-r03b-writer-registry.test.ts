@@ -78,7 +78,8 @@ test('R03b every NONE row carries a real reason', () => {
 test('R03b the EXCLUSIVE set is exactly the scope-changing writers (a change of this list is a design decision, not an edit)', () => {
     const exclusive = Object.entries(registry).filter(([, e]) => e.mode === 'EXCLUSIVE').map(([k]) => k).sort();
     // GPR-2 R05d: Work generation from a finish system (finish-system.confirm) is scope-changing Work generation (TD §12.3 item 1).
-    assert.deepEqual(exclusive, ['gpr2-r05-generation.ts#confirmGeneration', 'gpr2-r06b-allocation.ts#replaceWorkAllocation', 'schedule-service.ts#approveDraft', 'service.ts#completeWorkPlanning', 'service.ts#createWork', 'service.ts#dependency']);
+    // GPR-2 R07: approval of a quantity request changes the approved Work quantity and allocation under exclusive object coordination (registry header: quantity approval joins in R07).
+    assert.deepEqual(exclusive, ['gpr2-r05-generation.ts#confirmGeneration', 'gpr2-r06b-allocation.ts#replaceWorkAllocation', 'gpr2-r07-quantity.ts#r07Approve', 'schedule-service.ts#approveDraft', 'service.ts#completeWorkPlanning', 'service.ts#createWork', 'service.ts#dependency']);
 });
 
 test('R03b the fact / SC / PTO / SDO writers named by the Technical Design are all SHARED', () => {
