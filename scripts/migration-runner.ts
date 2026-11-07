@@ -174,13 +174,22 @@ const AS_BEFORE_BODY = /(?<![A-Za-z0-9_$\u0080-\uffff])AS\s*$/i;
  * (row locking, ON CONFLICT DO UPDATE SET), which the existing chain uses. This only widens which hidden bodies get the strict definitions-only treatment; it does
  * not change what the scan reports for the top-level text of a file (the DESTRUCTIVE list, finding RV-05, is a separate task).
  */
-const ARMED_CODE_WORDS = /\b(?:MERGE|EXECUTE|DELETE|TRUNCATE|DROP|ALTER|RENAME|COPY)\b|(?<!\b(?:FOR|DO|KEY)\s+)\bUPDATE\b/i;
-/** A hidden body is "armed" when reading it WITHOUT the exemption would produce a finding, uses one of ARMED_CODE_WORDS, or cannot be delimited with certainty. */
-function bodyIsArmed(inner: string): boolean {
+const ARMED_CODE_WORDS = /\b(?:MERGE|EXECUTE|DELETE|TRUNCATE|DROP|ALTER|RENAME|COPY)\b|(?<!\b(?:FOR|KEY)\s+)\bUPDATE\b/i;
+/**
+ * The same, for a body that belongs to a function declared RETURNS trigger: its ON CONFLICT … DO UPDATE is the only thing it is allowed on top of the ordinary rule — the
+ * existing chain (032–037) keeps counters and scope versions that way. Such a function cannot be called (PostgreSQL refuses), it runs only when a row event fires it; that is
+ * handled separately (see upsertTriggerFunctions). An ordinary function or procedure gets NO such exemption: a later migration can simply call it.
+ */
+const ARMED_CODE_WORDS_TRIGGER = /\b(?:MERGE|EXECUTE|DELETE|TRUNCATE|DROP|ALTER|RENAME|COPY)\b|(?<!\b(?:FOR|DO|KEY)\s+)\bUPDATE\b/i;
+/** True only for a declared `RETURNS trigger` (optionally pg_catalog-qualified); read from the head with every literal and quoted name masked, so text inside a string cannot claim it. */
+const RETURNS_TRIGGER = /\bRETURNS\s+(?:pg_catalog\s*\.\s*)?trigger\b/i;
+const headReturnsTrigger = (head: SqlSegment[]) => RETURNS_TRIGGER.test(head.map(seg => (seg.kind === 'code' ? seg.text : MASK[seg.kind].repeat(seg.text.length))).join(''));
+/** A hidden body is "armed" when reading it WITHOUT the exemption would produce a finding, uses one of the armed words, or cannot be delimited with certainty. */
+function bodyIsArmed(inner: string, trigger = false): boolean {
     const r = scanSql(inner, false);
     if (r.problems.length > 0 || DESTRUCTIVE.some(([re]) => re.test(r.text)))
         return true;
-    return ARMED_CODE_WORDS.test(lexSql(inner).segments.filter(seg => seg.kind === 'code').map(seg => seg.text).join(' '));
+    return (trigger ? ARMED_CODE_WORDS_TRIGGER : ARMED_CODE_WORDS).test(lexSql(inner).segments.filter(seg => seg.kind === 'code').map(seg => seg.text).join(' '));
 }
 
 const NAME_PART = String.raw`(?:"(?:[^"]|"")*"|[A-Za-z_\u0080-\uffff][A-Za-z0-9_$\u0080-\uffff]*)`;
@@ -371,8 +380,8 @@ function definitionOnlyViolations(statements: SqlSegment[][], firstArmed: number
 // is that statement, however it is spelled; so is the UPDATE of INSERT … ON CONFLICT DO UPDATE and the action of a rule (DO ALSO / DO INSTEAD …). Trigger events
 // (BEFORE UPDATE), row locking (FOR UPDATE), referential actions (ON DELETE CASCADE) and privileges (GRANT UPDATE) never stand at such a position. The names reuse the existing finding names where the meaning is the same.
 const STATEMENT_START_VERB: Record<string, string> = { update: 'UPDATE … SET (data rewrite)', delete: 'DELETE FROM', truncate: 'TRUNCATE', drop: 'DROP', merge: 'MERGE' };
-/** Words that, in the CODE of a DO block, mean it changes data or builds SQL at run time. UPDATE does not count after FOR / DO / KEY (row locking, ON CONFLICT DO UPDATE). */
-const DO_BODY_VERBS = /\b(?:(DELETE)|(TRUNCATE)|(DROP)|(MERGE)|(EXECUTE))\b|(?<!\b(?:FOR|DO|KEY)\s+)\b(UPDATE)\b/gi;
+/** Words that, in the CODE of a DO block, mean it changes data or builds SQL at run time. UPDATE does not count after FOR / KEY (row locking); ON CONFLICT … DO UPDATE counts: a DO block runs at once. */
+const DO_BODY_VERBS = /\b(?:(DELETE)|(TRUNCATE)|(DROP)|(MERGE)|(EXECUTE))\b|(?<!\b(?:FOR|KEY)\s+)\b(UPDATE)\b/gi;
 const DO_BODY_NAMES = ['DELETE FROM', 'TRUNCATE', 'DROP', 'MERGE', 'DYNAMIC SQL (EXECUTE)', 'UPDATE … SET (data rewrite)'];
 
 function statementFindings(stmt: SqlSegment[]): string[] {
@@ -433,10 +442,18 @@ export interface MigrationChain {
      * know. Such a function cannot be followed by name, so it must never become reachable from hidden DML at all.
      */
     implicitMentions: Set<string>;
+    /**
+     * RETURNS trigger functions whose body upserts with ON CONFLICT … DO UPDATE. They are not armed (defining them is allowed, as in 032–037) but they rewrite existing rows
+     * whenever a row event fires them: a later additive file may not perform that event on a table bound to one (see firingFindings).
+     */
+    upsertTriggerFunctions: Set<string>;
+    /** names defined by CREATE FUNCTION / PROCEDURE: only these can be CALLED (a table name before a parenthesis is a relation, not a call) */
+    routines: Set<string>;
 }
-export const emptyChain = (): MigrationChain => ({ mentions: new Map(), armed: new Set(), eventFunctions: new Set(), implicitMentions: new Set() });
+export const emptyChain = (): MigrationChain => ({ mentions: new Map(), armed: new Set(), eventFunctions: new Set(), implicitMentions: new Set(), upsertTriggerFunctions: new Set(), routines: new Set() });
 const cloneChain = (c: MigrationChain): MigrationChain => ({
-    mentions: new Map([...c.mentions].map(([k, v]) => [k, new Set(v)])), armed: new Set(c.armed), eventFunctions: new Set(c.eventFunctions), implicitMentions: new Set(c.implicitMentions)
+    mentions: new Map([...c.mentions].map(([k, v]) => [k, new Set(v)])), armed: new Set(c.armed), eventFunctions: new Set(c.eventFunctions), implicitMentions: new Set(c.implicitMentions),
+    upsertTriggerFunctions: new Set(c.upsertTriggerFunctions), routines: new Set(c.routines)
 });
 /** Object kinds whose definitions bind no function that is later called without being named (the ones whose bindings ARE named are followed by the mention graph). */
 const NAMED_BINDING_KINDS = new Set(['TABLE', 'INDEX', 'SEQUENCE', 'VIEW', 'FUNCTION', 'PROCEDURE', 'ROUTINE', 'TRIGGER', 'SCHEMA', 'POLICY', 'RULE', 'ROLE', 'USER', 'GROUP', 'DATABASE', 'TABLESPACE',
@@ -488,13 +505,20 @@ export function absorbStatements(chain: MigrationChain, statements: SqlSegment[]
                 continue;
             const name = lastNamePart(nm[1]);
             const body = routineBodyIndex(stmt);
+            chain.routines.add(name);
             chain.mentions.delete(name); // CREATE OR REPLACE: the new definition is what is live
             add(name, identifiers(textWithoutBody(stmt, body)).concat(body >= 0 ? identifiers(bodyInner(stmt[body])) : []));
             // BEGIN ATOMIC bodies are split at every ';' into separate top-level statements the function node never sees: not followable, so armed
-            if ((body >= 0 && bodyIsArmed(bodyInner(stmt[body]))) || /\bATOMIC\b/i.test(skel))
+            const trigger = headReturnsTrigger(body >= 0 ? stmt.slice(0, body) : stmt);
+            if ((body >= 0 && bodyIsArmed(bodyInner(stmt[body]), trigger)) || /\bATOMIC\b/i.test(skel))
                 chain.armed.add(name);
             else
                 chain.armed.delete(name);
+            // a RETURNS trigger body that upserts is not armed, but firing it rewrites existing rows
+            if (trigger && body >= 0 && /\bON\s+CONFLICT\b[^;]*?\bDO\s+UPDATE\b/i.test(lexSql(bodyInner(stmt[body])).segments.filter(seg => seg.kind === 'code').map(seg => seg.text).join(' ')))
+                chain.upsertTriggerFunctions.add(name);
+            else
+                chain.upsertTriggerFunctions.delete(name);
             if (/\bSUPPORT\b/i.test(skel))
                 for (const n of identifiers(textWithoutBody(stmt, body)))
                     chain.implicitMentions.add(n);
@@ -528,7 +552,11 @@ export function absorbSql(chain: MigrationChain, sql: string): void {
 }
 /** Every name that can reach an armed function through the definitions recorded so far (the armed functions included). */
 export function taintedNames(chain: MigrationChain): Set<string> {
-    const tainted = new Set(chain.armed);
+    return taintedFrom(chain, chain.armed);
+}
+/** Every name that reaches one of `seeds` through the mention graph (the seeds included). */
+function taintedFrom(chain: MigrationChain, seeds: Set<string>): Set<string> {
+    const tainted = new Set(seeds);
     for (let changed = true; changed;) {
         changed = false;
         for (const [node, names] of chain.mentions)
@@ -538,6 +566,51 @@ export function taintedNames(chain: MigrationChain): Set<string> {
             }
     }
     return tainted;
+}
+/**
+ * Statements of a later additive file that FIRE a trigger which upserts over existing rows: an INSERT INTO / MERGE INTO / COPY whose target is a table (or a view over a table)
+ * bound to such a trigger function, or a call of a function that reaches one. `hazard` is every name that reaches an upsert-trigger function through the mention graph. Anything that
+ * only defines or alters (ALTER TABLE, CREATE INDEX, CREATE TRIGGER, GRANT …) fires nothing and stays allowed — that is what 033–037 do to the tables guarded in 032–034. Targets and
+ * calls are read from the tokens of the statement and, for a DO block, of the code of its body.
+ */
+function firingFindings(stmt: SqlSegment[], hazard: Set<string>, routines: Set<string>, exemptNames: string[]): string[] {
+    const found = new Set<string>();
+    const look = (raw: string, skel: string) => {
+        const toks = tokenize(skel);
+        const word = (t: Tok | undefined) => (t && t.t === 'word' ? raw.slice(t.start, t.end).toLowerCase() : null);
+        const nameOf = (t: Tok) => (t.t === 'qid' ? raw.slice(t.start + 1, t.end - 1).replace(/""/g, '"') : raw.slice(t.start, t.end).toLowerCase());
+        const isName = (t: Tok | undefined) => !!t && (t.t === 'word' || t.t === 'qid');
+        const punct = (t: Tok | undefined, c: string) => !!t && t.t === 'punct' && raw[t.start] === c;
+        // the last part of a possibly qualified name starting at token i
+        const qualifiedAt = (i: number) => { let j = i; while (isName(toks[j]) && punct(toks[j + 1], '.') && isName(toks[j + 2])) j += 2; return isName(toks[j]) ? nameOf(toks[j]) : null; };
+        const skipOnce = [...exemptNames];
+        for (let i = 0; i < toks.length; i++) {
+            const w = word(toks[i]);
+            if ((w === 'into' && (word(toks[i - 1]) === 'insert' || word(toks[i - 1]) === 'merge')) || (w === 'copy' && !punct(toks[i + 1], '('))) {
+                const target = qualifiedAt(i + 1);
+                if (target !== null && hazard.has(target))
+                    found.add('CHAIN: a statement fires "' + target + '"\'s trigger, which upserts over existing rows (an earlier migration)');
+            }
+            if (isName(toks[i]) && punct(toks[i + 1], '(') && hazard.has(nameOf(toks[i])) && routines.has(nameOf(toks[i])) && !['table', 'references', 'on'].includes(word(toks[i - 1]) ?? '')) {
+                const at = skipOnce.indexOf(nameOf(toks[i]));
+                if (at >= 0)
+                    skipOnce.splice(at, 1);
+                else
+                    found.add('CHAIN: a statement calls "' + nameOf(toks[i]) + '", which reaches a trigger function that upserts over existing rows (an earlier migration)');
+            }
+        }
+    };
+    look(stmt.map(seg => seg.text).join(''), stmt.map(seg => (seg.kind === 'code' ? seg.text : MASK[seg.kind].repeat(seg.text.length))).join(''));
+    const head = stmt.map(seg => (seg.kind === 'code' ? seg.text : MASK[seg.kind].repeat(seg.text.length))).join('').trim().split(/\s+/)[0]?.toLowerCase();
+    if (head === 'do') {
+        const body = stmt.find(seg => seg.kind === 'dollar' || seg.kind === 'string');
+        if (body) {
+            const code = lexSql(bodyInner(body)).segments.map(seg => (seg.kind === 'code' ? seg.text : MASK[seg.kind].repeat(seg.text.length))).join(' ');
+            const rawCode = lexSql(bodyInner(body)).segments.map(seg => seg.text).join(' ');
+            look(rawCode, code);
+        }
+    }
+    return [...found];
 }
 /**
  * What an additive file may not do given the chain before it. The file is walked statement by statement on a COPY of the chain, so a function the file itself
@@ -550,8 +623,16 @@ function chainViolations(statements: SqlSegment[][], chain: MigrationChain): str
     const found = new Set<string>();
     for (const stmt of statements) {
         const tainted = taintedNames(work);
+        const hazard = taintedFrom(work, work.upsertTriggerFunctions);
         const raw = stmt.map(seg => seg.text).join('').trim();
         const skel = stmt.map(seg => (seg.kind === 'code' ? seg.text : MASK[seg.kind].repeat(seg.text.length))).join('').trim();
+        if (hazard.size > 0 && raw && !/^(?:GRANT|REVOKE)\b/i.test(skel) && !/^COMMENT\s+ON\b/i.test(skel)) {
+            const own: string[] = [];
+            if (ROUTINE_HEAD.test(skel)) { const nm = ROUTINE_NAME.exec(raw); if (nm) own.push(lastNamePart(nm[1])); }
+            else if (/^CREATE\s+(?:OR\s+REPLACE\s+)?(?:CONSTRAINT\s+)?TRIGGER\b/i.test(skel)) { const target = new RegExp(String.raw`\bEXECUTE\s+(?:FUNCTION|PROCEDURE)\s+(` + QUALIFIED_NAME + ')', 'i').exec(raw); if (target) own.push(lastNamePart(target[1])); }
+            for (const f of firingFindings(ROUTINE_HEAD.test(skel) ? stmt.map((seg, idx) => (idx === routineBodyIndex(stmt) ? { ...seg, kind: 'code' as const, text: ' ' } : seg)) : stmt, hazard, work.routines, own))
+                found.add(f);
+        }
         if (tainted.size > 0 && raw && !/^(?:GRANT|REVOKE)\b/i.test(skel) && !/^COMMENT\s+ON\b/i.test(skel)) {
             let text = raw;
             const exempt: string[] = [];
@@ -616,7 +697,7 @@ function scanSql(sql: string, hideBodies = true, phaseRule = true): { text: stri
                 return seg.text;
             if (hideBodies && isFunction && !bodyHidden && seg.kind === 'dollar' && seg.closed && idx > 0 && stmt[idx - 1].kind === 'code' && AS_BEFORE_BODY.test(stmt[idx - 1].text)) {
                 bodyHidden = true;
-                if (firstArmed < 0 && bodyIsArmed(seg.text.slice(seg.open!.length, seg.text.length - seg.close!.length)))
+                if (firstArmed < 0 && bodyIsArmed(seg.text.slice(seg.open!.length, seg.text.length - seg.close!.length), headReturnsTrigger(stmt.slice(0, idx))))
                     firstArmed = statementIndex;
                 return ' ';
             }

@@ -464,7 +464,7 @@ test('R03d/B1 RV-04 the source carries no literal U+FFFF; the escape is the same
 
 // ---- ground truth: a real PostgreSQL decides whether a migration runs the hidden DML --------------------------------------------
 class Rolled { constructor(readonly result: 'changed' | 'unchanged' | 'error') {} }
-async function oracle(extraFixture = '') {
+async function oracle(extraFixture = '', extraObserve = '') {
   const { transaction, pool } = await memoryDb();
   await pool.query('DROP SCHEMA public CASCADE');
   await pool.query('CREATE SCHEMA public');
@@ -472,7 +472,7 @@ async function oracle(extraFixture = '') {
   const observe = async (c: any) => {
     const t = (await c.query("SELECT to_regclass('t') IS NOT NULL AS ok")).rows[0].ok ? (await c.query("SELECT coalesce(string_agg(a::text, ',' ORDER BY a), '') AS v FROM t")).rows[0].v : 'DROPPED';
     const u = (await c.query("SELECT to_regclass('u') IS NOT NULL AS ok")).rows[0].ok ? (await c.query("SELECT coalesce(string_agg(a::text, ',' ORDER BY a), '') AS v FROM u")).rows[0].v : 'DROPPED';
-    return t + '|' + u;
+    return t + '|' + u + (extraObserve ? '|' + (await c.query(extraObserve)).rows[0].v : '');
   };
   /**
    * Apply `sql` the way the runner does (one multi-statement query inside a transaction), report whether the data changed, always roll back.
@@ -776,12 +776,15 @@ test('R03d/B1 RV-05 (hidden bodies only): a body using MERGE, an aliased UPDATE 
     assert.deepEqual(destructiveStatements(wrap(body).replace('SELECT f2();', '')), [], name + ': the definition alone is still fine');
   }
   // DROP ROUTINE / DROP PROCEDURE / DROP AGGREGATE in a body arm it too (not runnable in the oracle's fixture, but the words are code)
+  // an upsert that updates rewrites existing rows when the function is called: an ORDINARY function (or procedure) holding one is armed — only RETURNS trigger bodies keep the old exemption
+  for (const body of ['INSERT INTO t VALUES (1) ON CONFLICT DO UPDATE SET a = 1;', 'INSERT INTO t VALUES (1) ON CONFLICT (a) DO UPDATE SET a = EXCLUDED.a + 1;', 'INSERT INTO t VALUES (1) ON CONFLICT ON CONSTRAINT t_pkey DO UPDATE SET a = 2;'])
+    assert.ok(hasViolation(wrap(body)), 'an ordinary function with this upsert is armed: ' + body);
   // MERGE on its own (no DELETE / UPDATE keyword) is still data-modifying SQL the DESTRUCTIVE list does not know: the body is armed
   assert.ok(hasViolation(wrap('MERGE INTO t USING u ON true WHEN MATCHED THEN DO NOTHING;')), 'MERGE alone arms a body');
   for (const body of ['DROP ROUTINE g();', 'DROP PROCEDURE g();', 'DROP AGGREGATE g(int);', 'ALTER TYPE x DROP ATTRIBUTE y;', 'TRUNCATE t;', 'COPY t FROM STDIN;'])
     assert.ok(hasViolation(wrap(body)), body);
   // harmless constructs the existing chain relies on do not arm a body (so calling such a function stays as permitted as before)
-  for (const body of ['PERFORM 1;', 'SELECT a FROM t FOR UPDATE;', 'SELECT a FROM t FOR NO KEY UPDATE;', 'INSERT INTO t VALUES (1) ON CONFLICT DO UPDATE SET a = 1;',
+  for (const body of ['PERFORM 1;', 'SELECT a FROM t FOR UPDATE;', 'SELECT a FROM t FOR NO KEY UPDATE;',
     "IF TG_OP = 'DELETE' THEN RETURN 1; END IF;", "RAISE EXCEPTION 'cannot drop or delete here';", '-- DELETE FROM t;\n/* MERGE EXECUTE */ PERFORM 1;'])
     assert.deepEqual(destructiveStatements(wrap(body)), [], body);
 });
@@ -1092,4 +1095,119 @@ test('R03d/RV-05 decision: a top-level upsert that updates (ON CONFLICT … DO U
     assert.ok(destructiveStatements(sql).includes('UPDATE … SET (data rewrite)'), sql + ' (the contract names "a data-rewriting UPDATE … SET"; the static scan cannot prove WHERE false stays false)');
   // consistency with the long-standing rule: a plain UPDATE is refused whatever its WHERE says, so an upsert whose UPDATE branch is guarded the same way is refused too
   for (const plain of ['UPDATE t SET a = a WHERE false;', 'UPDATE t SET a = a;']) assert.ok(destructiveStatements(plain).includes('UPDATE … SET (data rewrite)'), plain);
+});
+
+// ----------------------------------------------------------------------------------------------------------------------------------
+// R03d security gate — the last HIGH: an ordinary function (or procedure) whose body upserts with ON CONFLICT … DO UPDATE is armed; a RETURNS trigger function that does
+// so keeps being allowed to be DEFINED (migrations 032–037), but a later additive file may not FIRE it; a DO block that upserts runs at once and is refused
+// ----------------------------------------------------------------------------------------------------------------------------------
+const SHARED_FIXTURE = "CREATE TABLE shared(k text PRIMARY KEY, v int); INSERT INTO shared VALUES ('shared-key', 100);";
+const SHARED_OBSERVE = "SELECT coalesce(string_agg(k || '=' || v, ',' ORDER BY k), '') AS v FROM shared";
+const UPSERT_ROW = `INSERT INTO shared(k, v) VALUES ($1, 1) ON CONFLICT (k) DO UPDATE SET v = shared.v + 1000`;
+const UPSERT_TRIG = `INSERT INTO shared(k, v) VALUES ('shared-key', 1) ON CONFLICT (k) DO UPDATE SET v = shared.v + 1000`;
+const TRIG_UPSERT_FN = (n = 'tw') => `CREATE FUNCTION ${n}() RETURNS trigger LANGUAGE plpgsql AS $f$ BEGIN ${UPSERT_TRIG}; RETURN NEW; END $f$;`;
+
+test('R03d/HIGH an ordinary function with an upsert is refused as soon as a later additive file uses it — two files, before any existing row is touched; PostgreSQL shows 100 becoming 1100', async () => {
+  const run = await oracle(SHARED_FIXTURE, SHARED_OBSERVE);
+  const A = (sig: string, body: string, lang = 'plpgsql') => `CREATE FUNCTION bump(text) ${sig} LANGUAGE ${lang} AS $f$ ${body} $f$;`;
+  const chains: Record<string, string[]> = {
+    'the reviewer\'s chain: plpgsql, RETURNS void, then SELECT': [A('RETURNS void', `BEGIN ${UPSERT_ROW}; END`), `SELECT bump('shared-key');`],
+    'LANGUAGE sql': [A('RETURNS void', UPSERT_ROW, 'sql'), `SELECT bump('shared-key');`],
+    'RETURNS int': [A('RETURNS int', `BEGIN ${UPSERT_ROW}; RETURN 1; END`), `SELECT bump('shared-key');`],
+    'RETURNS SETOF int': [A('RETURNS SETOF int', `BEGIN ${UPSERT_ROW}; RETURN NEXT 1; END`), `SELECT * FROM bump('shared-key');`],
+    'RETURNS TABLE': [A('RETURNS TABLE(n int)', `BEGIN ${UPSERT_ROW}; RETURN QUERY SELECT 1; END`), `SELECT * FROM bump('shared-key');`],
+    'ON CONFLICT ON CONSTRAINT': [A('RETURNS void', `BEGIN INSERT INTO shared(k, v) VALUES ($1, 1) ON CONFLICT ON CONSTRAINT shared_pkey DO UPDATE SET v = shared.v + 1000; END`), `SELECT bump('shared-key');`],
+    'the upsert inside a CTE (LANGUAGE sql)': [A('RETURNS int', `WITH i AS (INSERT INTO shared(k, v) VALUES ($1, 1) ON CONFLICT (k) DO UPDATE SET v = shared.v + 1000 RETURNING 1) SELECT 1 FROM i`, 'sql'), `SELECT bump('shared-key');`],
+    'invoked from a DO block': [A('RETURNS void', `BEGIN ${UPSERT_ROW}; END`), `DO $$ BEGIN PERFORM bump('shared-key'); END $$;`],
+    'invoked after another statement in the same file (statement chaining)': [A('RETURNS void', `BEGIN ${UPSERT_ROW}; END`), `SELECT 1; SELECT bump('shared-key');`],
+    'invoked through CREATE TABLE AS': [A('RETURNS void', `BEGIN ${UPSERT_ROW}; END`), `CREATE TABLE z AS SELECT bump('shared-key')::text AS x;`],
+    'invoked through a wrapper': [A('RETURNS void', `BEGIN ${UPSERT_ROW}; END`) + `CREATE FUNCTION w() RETURNS void LANGUAGE sql AS $w$ SELECT bump('shared-key') $w$;`, 'SELECT w();'],
+    'PROCEDURE, then CALL': [`CREATE PROCEDURE bump_p(text) LANGUAGE plpgsql AS $f$ BEGIN ${UPSERT_ROW}; END $f$;`, `CALL bump_p('shared-key');`],
+    'a head that CLAIMS RETURNS trigger in a string default': [`CREATE FUNCTION bump(a text DEFAULT 'RETURNS trigger') RETURNS void LANGUAGE plpgsql AS $f$ BEGIN ${UPSERT_ROW.replace('$1', 'a')}; END $f$;`, `SELECT bump('shared-key');`],
+    'a head that CLAIMS RETURNS trigger in a comment': [`CREATE FUNCTION bump(a text) /* RETURNS trigger */ RETURNS void LANGUAGE plpgsql AS $f$ BEGIN ${UPSERT_ROW.replace('$1', 'a')}; END $f$;`, `SELECT bump('shared-key');`]
+  };
+  for (const [name, files] of Object.entries(chains)) {
+    assert.equal(await oracleChain(run, files), 'changed', name + ': the last file really rewrites the pre-existing row (oracle)');
+    const v = scanMigrationChain(files.map(sql => ({ sql, class: 'additive' as const })));
+    assert.deepEqual(v[0], [], name + ': file 1 alone is only a definition and stays accepted (got ' + JSON.stringify(v[0]) + ')');
+    assert.ok(v[1].length > 0, name + ': file 2 must be refused before anything is applied (got ' + JSON.stringify(v[1]) + ')');
+    assert.deepEqual(destructiveStatements(files[1]), [], name + ': alone, file 2 looks harmless — only the chain refuses it');
+  }
+  // the exemption is for RETURNS trigger and nothing else: event_trigger, a quoted or schema-spelled lookalike, a procedure — all ordinary
+  for (const [name, sql] of Object.entries({
+    'RETURNS event_trigger': `CREATE FUNCTION ev() RETURNS event_trigger LANGUAGE plpgsql AS $f$ BEGIN ${UPSERT_TRIG}; END $f$;`,
+    'RETURNS "trigger" (quoted)': `CREATE FUNCTION tq() RETURNS "trigger" LANGUAGE plpgsql AS $f$ BEGIN ${UPSERT_TRIG}; RETURN NEW; END $f$;`,
+    'RETURNS trigger inside a DEFAULT string only': `CREATE FUNCTION tx(a text DEFAULT 'RETURNS trigger') RETURNS int LANGUAGE plpgsql AS $f$ BEGIN ${UPSERT_TRIG}; RETURN 1; END $f$;`
+  })) {
+    const c = emptyChain(); absorbSql(c, sql);
+    assert.equal(c.armed.size, 1, name + ' is armed (no trigger exemption)');
+    assert.equal(c.upsertTriggerFunctions.size, 0, name);
+  }
+  // a plain INSERT without DO UPDATE is not an upsert: unchanged behaviour
+  assert.deepEqual(scanMigrationChain(ADD([A('RETURNS void', `BEGIN INSERT INTO shared(k, v) VALUES ($1 || '-new', 1) ON CONFLICT DO NOTHING; END`), `SELECT bump('x');`])), [[], []]);
+});
+
+test('R03d/HIGH RETURNS trigger functions that upsert (as in 032–037): defining them stays allowed, later DDL on their table stays allowed, FIRING them from a later additive file is refused', async () => {
+  const run = await oracle(SHARED_FIXTURE, SHARED_OBSERVE);
+  const def = TRIG_UPSERT_FN() + 'CREATE TRIGGER g AFTER INSERT ON u FOR EACH ROW EXECUTE FUNCTION tw();';
+  // allowed: the definition on its own, and later files that only define or alter
+  assert.deepEqual(scanMigrationChain(ADD([def]))[0], [], 'the definition is accepted, as in 032–037');
+  for (const ok of ['ALTER TABLE u ADD COLUMN extra int;', 'CREATE INDEX u_a ON u(a);', 'CREATE INDEX u_x ON u USING btree (a) WHERE a > 0;', 'CREATE TRIGGER g2 BEFORE UPDATE ON u FOR EACH ROW EXECUTE FUNCTION nothing_fn();',
+    'GRANT SELECT ON u TO PUBLIC;', "COMMENT ON TABLE u IS 'x';", 'CREATE TABLE other(id int PRIMARY KEY, uid int REFERENCES u(a));', 'CREATE VIEW vu AS SELECT a FROM u;', 'INSERT INTO shared VALUES (\'unrelated\', 5);',
+    'SELECT a FROM u;', 'CREATE TABLE fresh(a int); INSERT INTO fresh VALUES (1);'])
+    assert.deepEqual(scanMigrationChain(ADD([def, ok]))[1], [], 'a later additive file that fires nothing is accepted: ' + ok);
+  // refused: every way of firing the trigger
+  const firing: Record<string, string> = {
+    'INSERT INTO the bound table': 'INSERT INTO u VALUES (8);',
+    'INSERT … SELECT': 'INSERT INTO u SELECT 9;',
+    'schema-qualified target': 'INSERT INTO public.u VALUES (8);',
+    'quoted target': 'INSERT INTO "u" VALUES (8);',
+    'with a column list and an alias': 'INSERT INTO u AS x (a) VALUES (8);',
+    'inside a CTE': 'WITH i AS (INSERT INTO u VALUES (8) RETURNING a) SELECT * FROM i;',
+    'prepared': 'PREPARE ins_u AS INSERT INTO u VALUES (8); EXECUTE ins_u;',
+    'inside a DO block': 'DO $$ BEGIN INSERT INTO u VALUES (8); END $$;',
+    'after another statement in the same file': 'SELECT 1; INSERT INTO u VALUES (8);',
+    'COPY into the table': "COPY u FROM '/tmp/u.csv';",
+    'MERGE into the table': 'MERGE INTO u USING (SELECT 1 AS a) s ON false WHEN NOT MATCHED THEN INSERT VALUES (8);'
+  };
+  const firingChains: [string, string[]][] = [];
+  for (const [name, sql] of Object.entries(firing)) {
+    assert.ok(scanMigrationChain(ADD([def, sql]))[1].length > 0, name + ': must be refused (got ' + JSON.stringify(scanMigrationChain(ADD([def, sql]))[1]) + ')');
+    if (!/COPY|MERGE|prepared/.test(name)) firingChains.push([name, [def, sql]]);
+  }
+  for (const [name, files] of firingChains) assert.equal(await oracleChain(run, files), 'changed', name + ': PostgreSQL really rewrites the pre-existing row when the trigger fires (oracle)');
+  // reaching the table by another name or by a function
+  assert.ok(scanMigrationChain(ADD([def + 'CREATE VIEW vu AS SELECT a FROM u;', 'INSERT INTO vu VALUES (8);']))[1].length > 0, 'INSERT through a view over the table');
+  assert.ok(scanMigrationChain(ADD([def + 'CREATE FUNCTION add_u() RETURNS void LANGUAGE sql AS $a$ INSERT INTO u VALUES (8) $a$;', 'SELECT add_u();']))[1].length > 0, 'a function whose body inserts into the table, then called');
+  assert.ok(scanMigrationChain(ADD([def, 'CREATE FUNCTION add_u() RETURNS void LANGUAGE sql AS $a$ INSERT INTO u VALUES (8) $a$;', 'SELECT add_u();']))[2].length > 0, 'the same with the wrapper defined in a middle file');
+  // when the trigger function is replaced by a clean body the table is no longer guarded
+  const replaced = scanMigrationChain(ADD([def, 'CREATE OR REPLACE FUNCTION tw() RETURNS trigger LANGUAGE plpgsql AS $f$ BEGIN RETURN NEW; END $f$;', 'INSERT INTO u VALUES (8);']));
+  assert.deepEqual(replaced, [[], [], []], 'a clean replacement ends the hazard');
+  assert.equal(await oracleChain(run, [def, 'CREATE OR REPLACE FUNCTION tw() RETURNS trigger LANGUAGE plpgsql AS $f$ BEGIN RETURN NEW; END $f$;', 'INSERT INTO u VALUES (8);']) === 'changed', true, '(the oracle sees the new row u(8) — data added, nothing rewritten)');
+  // a trigger function that does more than upsert is armed outright
+  const delTrig = scanMigrationChain(ADD([W.trigger() + 'CREATE TRIGGER g AFTER INSERT ON u FOR EACH ROW EXECUTE FUNCTION tw();', 'INSERT INTO u VALUES (8);']));
+  assert.ok(delTrig[1].length > 0, 'a trigger function with DELETE stays armed (RV-07)');
+});
+
+test('R03d/HIGH a DO block that upserts runs at migration time and is refused; the same words that do not rewrite rows are not', async () => {
+  const run = await oracle(SHARED_FIXTURE, SHARED_OBSERVE);
+  const rewrite = `DO $$ BEGIN ${UPSERT_TRIG}; END $$;`;
+  assert.equal(await run(rewrite), 'changed', 'the DO block rewrites the pre-existing row (oracle)');
+  assert.ok(destructiveStatements(rewrite).includes('UPDATE … SET (data rewrite)'), 'refused as a data-rewriting UPDATE');
+  for (const ok of ["DO $$ BEGIN INSERT INTO shared VALUES ('shared-key', 1) ON CONFLICT DO NOTHING; END $$;", 'DO $$ BEGIN PERFORM v FROM shared FOR UPDATE; END $$;', 'DO $$ BEGIN PERFORM 1; END $$;'])
+    assert.deepEqual(destructiveStatements(ok), [], ok);
+  assert.equal(await run("DO $$ BEGIN INSERT INTO shared VALUES ('shared-key', 1) ON CONFLICT DO NOTHING; END $$;"), 'unchanged');
+});
+
+test('R03d/HIGH the real chain: no ordinary function upserts, the RETURNS trigger upserts of 032–034 are registered and guard their tables, and no existing verdict changes', () => {
+  const files = fs.readdirSync('infra').filter(f => /^\d+_.*\.sql$/.test(f)).sort();
+  const chain = emptyChain();
+  for (const f of files) absorbSql(chain, fs.readFileSync(path.join('infra', f), 'utf8'));
+  assert.equal(chain.armed.size, 0, 'no function of the existing chain is armed (so no ordinary function upserts)');
+  assert.ok(chain.upsertTriggerFunctions.size >= 1, 'the RETURNS trigger functions that upsert (032–037) are registered as such');
+  for (const name of chain.upsertTriggerFunctions) assert.ok(chain.routines.has(name), name);
+  const items = files.map(f => ({ sql: fs.readFileSync(path.join('infra', f), 'utf8'), class: (Number(f.split('_')[0]) <= 25 ? 'legacy' : 'additive') as MigrationFile['class'] }));
+  const verdicts = scanMigrationChain(items);
+  items.forEach((it, i) => { if (it.class === 'additive') assert.deepEqual(verdicts[i], destructiveStatements(it.sql), files[i] + ': the chain verdict equals the single-file verdict'); });
+  assert.equal(readMigrationFiles('infra').length, files.length);
 });
