@@ -1,0 +1,138 @@
+# FIN-SDO-1 FIN1-25 NUMBERED-SEQUENCE NATIVE ROUTE — PARKED, REVIEW-ONLY CONFIG.
+# Cannot run as committed: the candidate ref below and every pin in .github/acceptance/fin-sdo-1-sequence/candidate.env are PENDING, so checkout fails
+# and verify-identity.sh refuses PENDING values. A later reviewed PR pins ONE exact candidate (GPR 038 + 039 integrated, FIN migration 040 authorized,
+# migration-runner treatment decided) and fills: this file's `ref:` and confirmation, candidate.env, candidate-allowed-paths.txt.
+# Manual only. No secrets, no deployment, no LIVE/production database. A green run is a TECHNICAL gate only.
+# Dispatch needs a separate owner decision for the exact candidate; this file being on main does not grant it.
+name: FIN-SDO-1 FIN1-25 numbered sequence native (CI-only, exact candidate)
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: 'Type exactly the confirmation pinned in candidate.env (PENDING while parked)'
+        required: true
+        type: string
+        default: DO_NOT_RUN
+
+permissions: {}
+
+concurrency:
+  group: fin-sdo-1-sequence-native
+  cancel-in-progress: false
+
+jobs:
+  native:
+    if: >-
+      github.repository == 'Shamil9586/construction-core-mvp' &&
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
+      github.actor == 'Shamil9586' &&
+      github.triggering_actor == 'Shamil9586' &&
+      github.run_attempt == 1 &&
+      inputs.confirmation == 'APPROVE-FIN-SEQUENCE-NATIVE-PENDING'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: fin-test-only
+          POSTGRES_DB: fin_sdo_test
+        ports:
+          - 127.0.0.1:5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d fin_sdo_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      CI: 'true'
+      TZ: UTC
+      DATABASE_URL: postgres://postgres:fin-test-only@127.0.0.1:5432/fin_sdo_test
+      FIN_SDO_ISOLATED_CONFIRM: 'YES'
+    steps:
+      - name: Checkout reviewed harness from main (not candidate code)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          path: harness
+          persist-credentials: false
+
+      - name: Checkout immutable candidate, full history, no credentials (ref PENDING while parked)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: PENDING-exact-40-hex-candidate-sha
+          path: core
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Pin SHA, tree, ancestry, allowlisted diff and migration inventory BEFORE any candidate code runs
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence-raw
+          harness/.github/acceptance/fin-sdo-1-sequence/verify-identity.sh core evidence-raw 2>&1 | tee evidence-raw/identity.stdout.log
+
+      - name: Pin Node.js 22.22.0 (no dependency cache)
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: '22.22.0'
+
+      - name: Install candidate dependencies with full raw log and exit code
+        shell: bash
+        run: |
+          set +e
+          (cd core && npm ci --no-audit --no-fund) > evidence-raw/npm-ci.stdout.log 2> evidence-raw/npm-ci.stderr.log
+          rc=$?; echo "$rc" > evidence-raw/npm-ci.exit; exit "$rc"
+
+      - name: Checks on disposable PostgreSQL 16 (001..GPR, FIN as the NEXT numbered migration, native FIN suites over real HTTP, reviewer probe, tamper)
+        shell: bash
+        run: harness/.github/acceptance/fin-sdo-1-sequence/run-checks.sh core harness evidence-raw
+
+      - name: Capture PostgreSQL logs, stop the service with verifiable state and seal evidence even after errors
+        if: always()
+        shell: bash
+        env:
+          SERVICE_ID: ${{ job.services.postgres.id }}
+        run: |
+          # Discovery/log failures must never prevent teardown or sealing. The container is addressed by the job's own service id, not by "first postgres:16".
+          set +e
+          mkdir -p evidence-raw || exit 90
+          status=0
+          {
+            printf 'service_id=%s\n' "$SERVICE_ID"
+            docker ps -a --format '{{.ID}} {{.Image}} {{.Status}}' > evidence-raw/docker-ps-before.stdout.log 2> evidence-raw/docker-ps-before.stderr.log
+            printf 'docker_ps_before_exit=%s\n' "$?"
+          } > evidence-raw/teardown.txt
+          if [[ -n "$SERVICE_ID" ]] && docker inspect "$SERVICE_ID" >/dev/null 2>&1; then
+            docker logs "$SERVICE_ID" > evidence-raw/postgres-container.stdout.log 2> evidence-raw/postgres-container.stderr.log
+            logs_rc=$?; printf 'docker_logs_exit=%s\n' "$logs_rc" >> evidence-raw/teardown.txt; [[ "$logs_rc" -ne 0 ]] && status=1
+            docker stop "$SERVICE_ID" > evidence-raw/postgres-stop.stdout.log 2> evidence-raw/postgres-stop.stderr.log
+            stop_rc=$?; printf 'docker_stop_exit=%s\n' "$stop_rc" >> evidence-raw/teardown.txt; [[ "$stop_rc" -ne 0 ]] && status=1
+            printf 'container_state_after_stop=%s\n' "$(docker inspect -f '{{.State.Status}} running={{.State.Running}}' "$SERVICE_ID" 2>&1)" >> evidence-raw/teardown.txt
+            if (exec 3<>/dev/tcp/127.0.0.1/5432) 2>/dev/null; then printf 'port_5432_after_stop=STILL_OPEN\n' >> evidence-raw/teardown.txt; status=1; else printf 'port_5432_after_stop=closed\n' >> evidence-raw/teardown.txt; fi
+          else
+            printf 'service_container=NOT_FOUND\ndocker_logs_exit=NOT_RUN\ndocker_stop_exit=NOT_RUN\n' >> evidence-raw/teardown.txt; status=1
+          fi
+          source harness/.github/acceptance/fin-sdo-1-sequence/candidate.env 2>/dev/null
+          {
+            printf 'runner_os=%s\n' "${{ runner.os }}"
+            printf 'run_id=%s\n' "${{ github.run_id }}"
+            printf 'run_attempt=%s\n' "${{ github.run_attempt }}"
+            printf 'candidate=%s\n' "${CANDIDATE_SHA:-UNKNOWN}"
+            printf 'workflow_sha=%s\n' "${{ github.sha }}"
+            printf 'actor=%s triggering_actor=%s\n' "${{ github.actor }}" "${{ github.triggering_actor }}"
+          } > evidence-raw/run-identity.txt || status=1
+          harness/.github/acceptance/fin-sdo-1-sequence/seal.sh evidence-raw || status=1
+          exit "$status"
+
+      - name: Upload raw logs, exit codes and SHA-256 manifest, even on FAIL
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fin-sdo-1-sequence-native-run${{ github.run_id }}-a${{ github.run_attempt }}
+          path: evidence-raw/
+          if-no-files-found: error
+          retention-days: 30
