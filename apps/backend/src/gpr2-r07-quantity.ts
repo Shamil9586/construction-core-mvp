@@ -46,8 +46,8 @@ export async function r07Draft(ctx: Gpr2CommandContext) {
         id === 'quantity.request.patch' ? parse(change, ctx.command.payload) :
         id === 'quantity.request.return' || id === 'quantity.request.review-note' ? parse(note, ctx.command.payload) : null;
     return runCommandTx(async tx => {
+        await coordinate(tx.c, 'gpr2-r07-quantity.ts#r07Draft', ctx.actor.tenantId, { object: ctx.objectId! });
         const c = tx.c;
-        await coordinate(c, 'gpr2-r07-quantity.ts#draft', ctx.actor.tenantId, { object: ctx.objectId! });
         return (await ledgered(c, ctx, async a => {
             if (id === 'quantity.request.create') {
                 const d = payload as z.infer<typeof proposal>;
@@ -110,8 +110,8 @@ export async function r07Draft(ctx: Gpr2CommandContext) {
 
 export async function r07Approve(ctx: Gpr2CommandContext) {
     return runCommandTx(async tx => {
+        await coordinate(tx.c,'gpr2-r07-quantity.ts#r07Approve',ctx.actor.tenantId,{object:ctx.objectId!});
         const c = tx.c;
-        await coordinate(c,'gpr2-r07-quantity.ts#approve',ctx.actor.tenantId,{object:ctx.objectId!});
         return (await ledgered(c,ctx,async a => {
             const r = await request(c,ctx);
             transitionForEndpoint(QUANTITY_CHANGE_REQUEST,r.state,ctx.endpoint.id);
