@@ -391,3 +391,39 @@ test('R07-REV-03a structure: a request cannot skip its lifecycle, be approved by
     await assert.rejects(db.pool.query("UPDATE gpr2_quantity_requests SET version=version+1 WHERE id=$1",[draft]),/invalid quantity request transition APPROVED -> APPROVED/);
     await assert.rejects(db.pool.query("UPDATE gpr2_quantity_requests SET state='DRAFT' WHERE id=$1",[draft]),/invalid quantity request transition APPROVED -> DRAFT/);
 });
+
+test('R07-REV-05/06 the quantity pointer cannot be deleted and re-inserted under a real RP fact, and an approved request cannot be replayed for another allocation',async()=>{
+    await g.h.as(p.pm);
+    const w=await g.h.req('works',{objectId:p.object.id,workTypeId:p.plaster.id,contractorId:p.contractors[0].id,
+        responsibleUserId:p.pm.id,name:'R07 pointer lifecycle',unit:'м²',plannedQuantity:1000,plannedStartDate:'2026-03-01',plannedFinishDate:'2026-04-30',estimatedCost:'100000'});
+    const unit=await g.h.req('execution-units',{objectWorkId:w.id,workTypeId:p.plaster.id,contractorId:p.contractors[0].id,unit:'м²',plannedQuantity:1000,location:'R07 lifecycle zone'});
+    const portion=await g.h.req(`execution-units/${unit.id}/portions`,{label:'R07 lifecycle участок',plannedQuantity:1000});
+    await reportFact(g.h,p.pm,portion.id,800);
+    const source=(await row('SELECT approved_version_id FROM work_current_quantity WHERE work_id=$1',[w.id])).approved_version_id as string;
+    const pointerBefore=await row('SELECT * FROM work_current_quantity WHERE work_id=$1',[w.id]);
+    // REV-05: the original attack (DELETE the pointer, INSERT a draft request, a version of 300, a new pointer) is refused at its first statement
+    const client=await db.pool.connect();
+    try {
+        await client.query('BEGIN');
+        await assert.rejects(client.query('DELETE FROM work_current_quantity WHERE work_id=$1',[w.id]),/the current quantity pointer is never deleted/);
+    } finally { await client.query('ROLLBACK').catch(()=>undefined); client.release(); }
+    assert.deepEqual(await row('SELECT * FROM work_current_quantity WHERE work_id=$1',[w.id]),pointerBefore);
+    await assert.rejects(db.pool.query('UPDATE work_current_quantity SET work_id=$2 WHERE work_id=$1',[w.id,uuid()]),/pointer identity is immutable/);
+    assert.equal((await row('SELECT approved_version_id FROM work_current_quantity WHERE work_id=$1',[w.id])).approved_version_id,source);
+    // REV-06: a legitimate approval 1000 -> 800 with an allocation, then the SAME request replayed for another allocation version
+    const scope=await row('SELECT scope_version FROM work_scope_state WHERE tenant_id=$1 AND object_id=$2',[p.pm.tenantId,p.object.id]);
+    const alloc={expectedVersionId:null,units:[{executionUnitId:unit.id,quantity:'800',portions:[{portionId:portion.id,quantity:'800'}]}]};
+    const c=await call(pm,'POST','',{expectedScopeVersion:String(scope.scope_version),payload:{workId:w.id,newQuantity:'800',reason:'REV-06 replay',inputFingerprint:'7'.repeat(64),expectedSourceVersions:{quantity:source},allocation:alloc}});
+    assert.equal(c.status,200,JSON.stringify(c.body)); const id=c.body.resultIds[0];
+    assert.equal((await call(pm,'POST',`/${id}/submit`,{expectedVersion:'1',expectedScopeVersion:String(scope.scope_version),payload:{inputFingerprint:'7'.repeat(64),expectedSourceVersions:{quantity:source}}})).status,200);
+    const saved=await row('SELECT payload FROM gpr2_quantity_submissions WHERE request_id=$1',[id]);
+    assert.equal((await call(deputy,'POST',`/${id}/approve`,{expectedVersion:'2',expectedScopeVersion:String(scope.scope_version),payload:{inputFingerprint:contentHash(saved.payload),expectedSourceVersions:{quantity:source}}})).status,200);
+    const al=await row('SELECT a.version_id, v.sequence, v.quantity_version_id FROM work_current_allocation a JOIN work_allocation_versions v ON v.id=a.version_id WHERE a.work_id=$1',[w.id]);
+    const replay=await db.pool.connect();
+    try {
+        await replay.query('BEGIN');
+        await assert.rejects(replay.query(`INSERT INTO work_allocation_versions(tenant_id,object_id,work_id,sequence,previous_id,quantity_version_id,unit,created_by,approved_request_id) VALUES($1,$2,$3,$4,$5,$6,'м²',$7,$8)`,
+            [p.pm.tenantId,p.object.id,w.id,al.sequence+1,al.version_id,al.quantity_version_id,p.pm.id,id]),/gpr2_r07_one_allocation_per_work_request/);
+    } finally { await replay.query('ROLLBACK').catch(()=>undefined); replay.release(); }
+    assert.equal((await row('SELECT version_id FROM work_current_allocation WHERE work_id=$1',[w.id])).version_id,al.version_id);
+});
