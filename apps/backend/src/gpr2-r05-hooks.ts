@@ -5,6 +5,7 @@ import { resolveR05Owner } from './gpr2-r05-support';
 import { approveWorkTypePublication, createAreaScope, createObjectWorkType, draftFinishTemplate, publishFinishTemplate, rejectWorkTypePublication, requestWorkTypePublication, upsertFinishSystem } from './gpr2-r05-catalog';
 import { confirmGeneration, previewGeneration } from './gpr2-r05-generation';
 import { CommandResult, Gpr2Error } from '../../../packages/domain/gpr2';
+import { r07Draft, r07Approve } from './gpr2-r07-quantity';
 
 /**
  * GPR-2 R05 — the behaviour behind the R05 rows of the endpoint register. Every OTHER command keeps exactly the R01 behaviour: its aggregates are
@@ -22,7 +23,13 @@ export const R05_HANDLERS: Readonly<Record<string, (ctx: Gpr2CommandContext) => 
     'finish-system.upsert': upsertFinishSystem,
     // A pure preview answers its projection (PreviewResponse), not a CommandResult: it is not a command and has no command id (register: pure).
     'finish-system.preview': previewGeneration as unknown as (ctx: Gpr2CommandContext) => Promise<CommandResult>,
-    'finish-system.confirm': confirmGeneration
+    'finish-system.confirm': confirmGeneration,
+    'quantity.request.create': r07Draft,
+    'quantity.request.patch': r07Draft,
+    'quantity.request.submit': r07Draft,
+    'quantity.request.return': r07Draft,
+    'quantity.request.review-note': r07Draft,
+    'quantity.request.approve': r07Approve
 });
 
 export const R05_HOOKS: Gpr2Hooks = Object.freeze({
