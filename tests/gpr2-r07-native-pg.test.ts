@@ -13,12 +13,16 @@ import { roles } from '../packages/domain';
  * never LIVE, never an inherited DATABASE_URL — the helper refuses anything else). R07a–d, A04 / A06 / A07 / A19 / A30.
  *
  * WHAT IS ENFORCED WHERE (the contract these tests pin; coordinator disposition D-1 / R07-REV-03 asked for it to be stated):
- *   DATABASE (must hold for any writer, including direct SQL by the application role)
+ *   DATABASE (must hold against ORDINARY DML by the application role: INSERT / UPDATE / DELETE, including direct SQL. It does NOT hold against a role that can
+ *   switch triggers off or forge audit rows: the schema owner (ALTER TABLE ... DISABLE TRIGGER), a superuser (SET session_replication_role = 'replica'), a bulk
+ *   table wipe. The application role is the owner of these tables, so R07-RES-01 — the single application database role — stays OPEN; no test here closes it.)
  *     - R06b freeze: an allocation pointer WITHOUT a request is refused once any fact / SC / customer evidence exists            (N5, D4)
- *     - protected Work floor under a request-bound pointer, and "no closing allocation"                                          (N3, D8)
+ *     - protected Work floor from facts under a request-bound pointer                                                            (N3, D8)
+ *     - no reduction while an ACTIVE SDO closing allocation exists on the Work (database function AND service, tested apart)     (R07-REV-10)
  *     - a request-bound pointer needs a request of THIS Work, one version per (Work, request), history rows immutable           (D2b, D2c, D5)
  *     - a reduced Work needs a coherent allocation snapshot                                                                      (D6)
- *     - the per-portion protected floor of a request-bound allocation                                                            (D3  = R07-REV-03 b)
+ *     - the per-portion protected floor of a request-bound allocation                                                            (R07-REV-03c, R07-REV-07)
+ *     - the allocation of a request equals its immutable submitted snapshot (line set, line count, shape of the snapshot)         (R07-REV-06, -11, -12)
  *     - the provenance of "APPROVED" (the request really was submitted and decided by someone else)                              (D1  = R07-REV-03 a)
  *     - a request-bound version is built on the source version the request was written against                                   (D2a = R07-REV-03 request/version mismatch)
  *   HTTP / SERVICE (guarded /v2): roles, tenant / object scope, author != approver, auth-before-replay                           (A19)
@@ -635,11 +639,12 @@ test('R07-REV-03b surface sibling and allocation binding: a sibling version must
 // ================================================================================================================================================
 /** A complete, consistent approval history (what the service writes, row for row), with knobs to break exactly one property. Looked-up ids come from the caller. */
 async function history(c: any, W: World, workId: string, source: string, quantity: number, decider: string,
-    o: { snapshot?: (payload: any) => void; submitEventActor?: string; approveEventActor?: string; allocation?: any; decidedBy?: string } = {}) {
+    o: { snapshot?: (payload: any) => void; submitEventActor?: string; approveEventActor?: string; allocation?: any; rawAllocation?: string; decidedBy?: string } = {}) {
+    const allocationText = o.rawAllocation !== undefined ? o.rawAllocation : o.allocation ? JSON.stringify(o.allocation) : null;
     const id = (await c.query(`INSERT INTO gpr2_quantity_requests(tenant_id,object_id,work_id,proposed_quantity,quantity_version_id,reason,author_id,allocation) VALUES($1,$2,$3,$4,$5,'direct SQL (R07 native)',$6,$7::jsonb) RETURNING id`,
-        [W.pm.tenantId, W.object.id, workId, quantity, source, W.pm.id, o.allocation ? JSON.stringify(o.allocation) : null])).rows[0].id as string;
+        [W.pm.tenantId, W.object.id, workId, quantity, source, W.pm.id, allocationText])).rows[0].id as string;
     const payload: any = { workId, newQuantity: String(quantity), quantityVersionId: source, reason: 'direct SQL (R07 native)' };
-    if (o.allocation) payload.allocation = o.allocation;
+    if (allocationText !== null) payload.allocation = JSON.parse(allocationText); // the snapshot carries exactly what the request carries (JSON null included)
     o.snapshot?.(payload);
     await c.query('INSERT INTO gpr2_quantity_submissions(tenant_id,object_id,request_id,number,payload,submitted_by) VALUES($1,$2,$3,1,$4::jsonb,$5)', [W.pm.tenantId, W.object.id, id, JSON.stringify(payload), W.pm.id]);
     await c.query("INSERT INTO gpr2_quantity_events(tenant_id,object_id,request_id,submission_number,action,actor_id) VALUES($1,$2,$3,1,'SUBMIT',$4)", [W.pm.tenantId, W.object.id, id, o.submitEventActor ?? W.pm.id]);
@@ -933,6 +938,115 @@ test('R07-REV-07 isolated: the per-portion floor refuses a portion line OMITTED 
     const exact = await directSql(async c => { const snap = snapshotOf([{ unit: ca, qty: 600 }, { unit: cb, qty: 100 }]); const id = await history(c, W, kc.work.id, cs, 700, decider, { allocation: snap }); const v = await advance(c, W, kc.work.id, id, cs, 700);
         await installAllocation(c, W, kc.work.id, v, id, [...unitAndPortion(ca, 600), ...unitAndPortion(cb, 100)], 1, null); });
     assert.equal(exact.committed, true, String(exact.error));
+});
+
+// ================================================================================================================================================
+// R07-REV-10 / R07-REV-11 / R07-REV-12 (independent review of 464ffc8; Issue #56; probes Q6h, Q6i, mutations X7, X9, R6c)
+// ================================================================================================================================================
+/** A synthetic ACTIVE SDO closing allocation on a portion: documentation package + SDO closing case + portion allocation (active while cancelled_at IS NULL). */
+async function activeClosing(W: World, workId: string, portionId: string) {
+    const pkg = (await pool.query(`INSERT INTO documentation_packages(tenant_id,object_id,object_work_id,responsible_user_id,created_by) VALUES($1,$2,$3,$4,$4) RETURNING id`, [W.pm.tenantId, W.object.id, workId, W.pm.id])).rows[0].id as string;
+    const kase = (await pool.query(`INSERT INTO sdo_closing_cases(tenant_id,object_id,object_work_id,documentation_package_id,created_by) VALUES($1,$2,$3,$4,$5) RETURNING id`, [W.pm.tenantId, W.object.id, workId, pkg, W.pm.id])).rows[0].id as string;
+    const alloc = (await pool.query(`INSERT INTO sdo_closing_portion_allocations(tenant_id,sdo_closing_case_id,quantity_portion_id,amount,created_by) VALUES($1,$2,$3,100.00,$4) RETURNING id`, [W.pm.tenantId, kase, portionId, W.pm.id])).rows[0].id as string;
+    return { pkg, kase, alloc };
+}
+const cancelClosing = (W: World, allocationId: string) => pool.query('UPDATE sdo_closing_portion_allocations SET cancelled_at=now(), cancelled_by=$2 WHERE id=$1', [allocationId, W.pm.id]);
+
+test('R07-REV-10 an ACTIVE SDO closing allocation blocks a reduction in the service (422) and in the database function (apart); a cancelled closing and a Work without one do not', async () => {
+    const W = await world();
+    const decider = await deciderId(W);
+    // ---- a Work with an active closing allocation on its only portion; no fact, no SC: the closing is the ONLY thing that can refuse
+    const w = await mkWork(W, 'R07REV10 closing', 1000, [{ quantity: 1000, portions: [1000] }]);
+    const portion = w.units[0].portions[0]; const src = await currentVersion(w.work.id);
+    const closing = await activeClosing(W, w.work.id, portion.id);
+    assert.equal((await rpFacts(portion.id)).length, 0, 'no RP fact: nothing but the closing protects this Work');
+    // (1) the SERVICE: a reduction with a complete, otherwise valid allocation is refused as BELOW_PROTECTED_QUANTITY. The status 422 with this code is the service's own;
+    //     a refusal by the database function surfaces unmapped (see the DB case below), so this assertion tells the two layers apart.
+    const r = await submitted(W, w.work.id, '800', { allocation: allocationFor(w.units, [[800]]) });
+    const refused = await approve(W, r);
+    assert.equal(refused.status, 422, JSON.stringify(refused.body)); assert.equal(refused.body.code, 'BELOW_PROTECTED_QUANTITY');
+    assert.equal(await currentVersion(w.work.id), src); assert.equal((await row('SELECT state FROM gpr2_quantity_requests WHERE id=$1', [r.id])).state, 'SUBMITTED');
+    // (2) the DATABASE function gpr2_r07_assert_floor(has_closing), without the service: a request with a COMPLETE forged history; the Work floor is 0 and every portion floor is 0
+    const dbRefusal = await directSql(async c => {
+        const snap = snapshotOf([{ unit: w.units[0], qty: 800 }]); const id = await history(c, W, w.work.id, src, 800, decider, { allocation: snap });
+        const v = await advance(c, W, w.work.id, id, src, 800); await installAllocation(c, W, w.work.id, v, id, unitAndPortion(w.units[0], 800), 1, null);
+    });
+    assert.equal(dbRefusal.committed, false); assert.equal(String(dbRefusal.error?.message), 'R07: BELOW_PROTECTED_QUANTITY', 'the Work-level refusal of the closing, not the portion floor');
+    assert.equal(await currentVersion(w.work.id), src);
+    // (3) a closing on ANOTHER portion of the Work blocks too (the rule is per Work): two units, closing only on the second
+    const w2 = await mkWork(W, 'R07REV10 closing on the other portion', 1000, [{ quantity: 500, portions: [500] }, { quantity: 500, portions: [500] }]);
+    const s2 = await currentVersion(w2.work.id); await activeClosing(W, w2.work.id, w2.units[1].portions[0].id);
+    const other = await directSql(async c => {
+        const snap = snapshotOf([{ unit: w2.units[0], qty: 400 }, { unit: w2.units[1], qty: 300 }]); const id = await history(c, W, w2.work.id, s2, 700, decider, { allocation: snap });
+        const v = await advance(c, W, w2.work.id, id, s2, 700); await installAllocation(c, W, w2.work.id, v, id, [...unitAndPortion(w2.units[0], 400), ...unitAndPortion(w2.units[1], 300)], 1, null);
+    });
+    assert.equal(other.committed, false); assert.equal(String(other.error?.message), 'R07: BELOW_PROTECTED_QUANTITY');
+    // (4) controls. A Work WITHOUT a closing takes the same reduction through the database and through the service.
+    const free = await mkWork(W, 'R07REV10 no closing', 1000, [{ quantity: 1000, portions: [1000] }]); const fs = await currentVersion(free.work.id);
+    const ok = await directSql(async c => {
+        const snap = snapshotOf([{ unit: free.units[0], qty: 800 }]); const id = await history(c, W, free.work.id, fs, 800, decider, { allocation: snap });
+        const v = await advance(c, W, free.work.id, id, fs, 800); await installAllocation(c, W, free.work.id, v, id, unitAndPortion(free.units[0], 800), 1, null);
+    });
+    assert.equal(ok.committed, true, String(ok.error)); assert.equal(await currentQuantity(free.work.id), '800.0000');
+    const free2 = await mkWork(W, 'R07REV10 no closing api', 1000, [{ quantity: 1000, portions: [1000] }]);
+    assert.equal((await approve(W, await submitted(W, free2.work.id, '800', { allocation: allocationFor(free2.units, [[800]]) }))).status, 200);
+    // a CANCELLED closing allocation no longer protects: the very request that was refused is now approved
+    await cancelClosing(W, closing.alloc);
+    const released = await approve(W, r);
+    assert.equal(released.status, 200, JSON.stringify(released.body)); assert.equal(await currentQuantity(w.work.id), '800.0000');
+});
+
+test('R07-REV-11 a snapshot that lists one unit twice is refused by the line-count comparison (the set difference alone cannot see it); a unique snapshot is accepted', async () => {
+    const W = await world(); const decider = await deciderId(W);
+    const entry = (u: any, q: number) => ({ executionUnitId: u.unit.id, quantity: String(q), portions: [{ portionId: u.portions[0].id, quantity: String(q) }] });
+    const run = async (label: string, entries: (a: any, b: any) => any[]) => {
+        const w = await mkWork(W, 'R07REV11 ' + label, 1000, [{ quantity: 500, portions: [500] }, { quantity: 500, portions: [500] }]); const [a, b] = w.units; const src = await currentVersion(w.work.id);
+        const out = await directSql(async c => {
+            const id = await history(c, W, w.work.id, src, 700, decider, { allocation: { expectedVersionId: null, units: entries(a, b) } }); const v = await advance(c, W, w.work.id, id, src, 700);
+            await installAllocation(c, W, w.work.id, v, id, [...unitAndPortion(a, 400), ...unitAndPortion(b, 300)], 1, null);   // one line per unit and portion: the 037 unique indexes allow nothing else
+        });
+        return { out, work: w, src };
+    };
+    // control: a unique snapshot with the same lines is accepted
+    const good = await run('unique', (a, b) => [entry(a, 400), entry(b, 300)]);
+    assert.equal(good.out.committed, true, String(good.out.error)); assert.equal(await currentQuantity(good.work.work.id), '700.0000');
+    // Q6i of the review: unit A is listed TWICE, identically; the lines list it once
+    const dup = await run('duplicate entry', (a, b) => [entry(a, 400), entry(a, 400), entry(b, 300)]);
+    assert.equal(dup.out.committed, false, 'only the line-count comparison can see a repeated snapshot entry'); assert.match(String(dup.out.error), /allocation differs from the approved snapshot of its request/);
+    assert.equal(await currentVersion(dup.work.work.id), dup.src);
+    // and a repeated PORTION entry inside one unit
+    const dupPortion = await run('duplicate portion entry', (a, b) => [{ ...entry(a, 400), portions: [entry(a, 400).portions[0], entry(a, 400).portions[0]] }, entry(b, 300)]);
+    assert.equal(dupPortion.out.committed, false); assert.match(String(dupPortion.out.error), /allocation differs from the approved snapshot of its request/);
+});
+
+test('R07-REV-12 a malformed or incomplete allocation snapshot is refused fail-closed (NULL-safe); an empty allocation and a normal one are accepted', async () => {
+    const W = await world(); const decider = await deciderId(W);
+    const unitId = randomUUID();
+    const shapes: [string, string][] = [
+        ['Q6h object without the key units', '{"expectedVersionId":null}'], ['units is JSON null', '{"expectedVersionId":null,"units":null}'], ['units is a string', '{"units":"x"}'],
+        ['units is an object', '{"units":{}}'], ['units is a number', '{"units":5}'], ['snapshot is an array', '[]'], ['snapshot is a string', '"allocation"'], ['snapshot is a number', '7'],
+        ['snapshot is JSON null', 'null'], ['a units entry is a scalar', '{"units":[1]}'], ['a units entry has a null unit id', '{"units":[{"executionUnitId":null,"quantity":"1","portions":[]}]}'],
+        ['portions is a string', `{"units":[{"executionUnitId":"${unitId}","quantity":"1","portions":"x"}]}`], ['a non-numeric quantity', `{"units":[{"executionUnitId":"${unitId}","quantity":"abc","portions":[]}]}`]];
+    for (const [label, raw] of shapes) {
+        const w = await mkWork(W, 'R07REV12 ' + label, 1000); const src = await currentVersion(w.work.id);   // no WEU, so no allocation line can exist: the snapshot check is the only guard
+        const out = await directSql(async c => {
+            const id = await history(c, W, w.work.id, src, 700, decider, { rawAllocation: raw }); const v = await advance(c, W, w.work.id, id, src, 700);
+            await c.query(`INSERT INTO work_allocation_versions(tenant_id,object_id,work_id,sequence,previous_id,quantity_version_id,unit,created_by,approved_request_id) VALUES($1,$2,$3,1,NULL,$4,'м²',$5,$6)`, [W.pm.tenantId, W.object.id, w.work.id, v, W.pm.id, id]);
+            await c.query('INSERT INTO work_current_allocation(tenant_id,object_id,work_id,version_id) SELECT $1,$2,$3,id FROM work_allocation_versions WHERE work_id=$3 AND approved_request_id=$4', [W.pm.tenantId, W.object.id, w.work.id, id]);
+        });
+        assert.equal(out.committed, false, `${label} (${raw}) must not pass the snapshot check`);
+        assert.equal(await currentVersion(w.work.id), src, label + ': the pointer did not move');
+        if (label.startsWith('Q6h')) assert.match(String(out.error), /an allocation version needs an allocation in the approved snapshot of its request/);
+    }
+    // controls: a legitimate EMPTY allocation (units: []) on a Work without WEU is accepted, and the normal snapshot of the other tests still is
+    const empty = await mkWork(W, 'R07REV12 empty control', 1000); const es = await currentVersion(empty.work.id);
+    const accepted = await directSql(async c => {
+        const id = await history(c, W, empty.work.id, es, 700, decider, { rawAllocation: '{"expectedVersionId":null,"units":[]}' }); const v = await advance(c, W, empty.work.id, id, es, 700);
+        await installAllocation(c, W, empty.work.id, v, id, [], 1, null);
+    });
+    assert.equal(accepted.committed, true, String(accepted.error)); assert.equal(await currentQuantity(empty.work.id), '700.0000');
+    const normal = await mkWork(W, 'R07REV12 normal control', 1000, [{ quantity: 500, portions: [500] }, { quantity: 500, portions: [500] }]);
+    assert.equal((await approve(W, await submitted(W, normal.work.id, '700', { allocation: allocationFor(normal.units, [[400], [300]]) }))).status, 200);
 });
 
 // ------------------------------------------------------------------------------------------------------------------------------------------------
