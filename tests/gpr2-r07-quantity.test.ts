@@ -2,6 +2,7 @@ import './helpers/gpr2-isolation';
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { gpr2Harness, pilotScenario, uuid, type Gpr2Harness } from './helpers/gpr2-fixtures';
+import { reportFact } from './helpers/gpr-fixtures';
 import { contentHash } from '../packages/domain/gpr2';
 
 let g: Gpr2Harness, p: Awaited<ReturnType<typeof pilotScenario>>, db: any, pm: string, deputy: string;
@@ -181,4 +182,137 @@ test('surface group rolls back primary version and all effects when sibling prot
     assert.equal((await row('SELECT count(*)::int AS n FROM gpr2_surface_changes WHERE request_id=$1',[id])).n,1);
     assert.equal((await row('SELECT count(*)::int AS n FROM gpr2_surface_effects e JOIN gpr2_surface_changes s ON s.id=e.surface_change_id WHERE s.request_id=$1',[id])).n,2);
     assert.equal((await row('SELECT count(*)::int AS n FROM gpr2_schedule_basis_invalidations WHERE request_id=$1',[id])).n,2);
+});
+
+// ---- R07-REV-02 (independent review of 2ae913c): the two roadmap R07 acceptance facts that no earlier test asserted ----------------------------------
+
+/** A digest of every row of a table: equal before and after proves no row was added, changed or removed (an empty table has a stable digest too). */
+const digest = async (sql:string) => row(`SELECT md5(coalesce(string_agg(t::text,'|' ORDER BY t::text),'')) AS d, count(*)::int AS n FROM (${sql}) t`);
+/** Everything that records production fact activity. R07 must not write any of it: an exclusion is not a fact. */
+const factState = async () => ({
+    confirmations: await digest('SELECT row_to_json(c)::text FROM portion_quantity_confirmations c'),
+    rpFacts: await digest("SELECT row_to_json(c)::text FROM portion_quantity_confirmations c WHERE c.source='RP_FACT'"),
+    progress: await digest('SELECT row_to_json(w)::text FROM work_progress w'),
+    actual: await digest('SELECT id::text||\':\'||actual_quantity::text FROM works')
+});
+
+test('R07-REV-02a LOCAL 150 stays 150: a refused and an applied MAIN surface group never touch it, and a LOCAL stage cannot be dragged into the MAIN group',async()=>{
+    const mkArea=async (body:any) => {
+        const r=await g.call(pm,'POST',`/v2/objects/${p.object.id}/area-scopes`,{body:{payload:body},headers:{'Idempotency-Key':uuid()}});
+        assert.equal(r.status,200,JSON.stringify(r.body)); return r.body.resultIds[0] as string;
+    };
+    const building=await mkArea({kind:'BUILDING',code:'R07L-B',name:'Корпус R07 LOCAL'});
+    const floor=await mkArea({parentId:building,kind:'FLOOR',code:'R07L-F',name:'Этаж R07 LOCAL',measureQuantity:'1000',measureUnit:'м²'});
+    const sys=await g.call(pm,'POST',`/v2/objects/${p.object.id}/finish-systems`,{body:{payload:{finishType:{code:'R07L-FIN',name:'Отделка R07 LOCAL'},stages:[
+        {occurrenceKey:'R07L-A',position:1,workTypeId:p.plaster.id,required:true,measureScope:'MAIN',measureUnit:'м²'},
+        {occurrenceKey:'R07L-M',position:2,workTypeId:p.plaster.id,required:true,measureScope:'MAIN',measureUnit:'м²'},
+        {occurrenceKey:'R07L-L',position:3,workTypeId:p.plaster.id,required:true,measureScope:'LOCAL',measureUnit:'м²'}
+    ]}},headers:{'Idempotency-Key':uuid()}});
+    assert.equal(sys.status,200,JSON.stringify(sys.body)); const [finishTypeId,systemVersionId]=sys.body.resultIds;
+    const generation={systemVersionId,areaScopeIds:[floor],localQuantities:[{occurrenceKey:'R07L-L',areaScopeId:floor,quantity:'150'}]};
+    const preview=await g.call(pm,'POST',`/v2/objects/${p.object.id}/finish-systems/${finishTypeId}/preview`,{body:{expectedVersion:'1',payload:generation}});
+    assert.equal(preview.status,200,JSON.stringify(preview.body)); assert.equal(preview.body.preview.canConfirm,true,JSON.stringify(preview.body.preview));
+    const pv=preview.body.preview;
+    const confirm=await g.call(pm,'POST',`/v2/objects/${p.object.id}/finish-systems/${finishTypeId}/confirm`,{
+        body:{expectedVersion:'1',expectedScopeVersion:pv.scopeVersion,payload:{...generation,previewFingerprint:pv.previewFingerprint,expectedSourceVersions:{systemVersion:systemVersionId}}},
+        headers:{'Idempotency-Key':uuid()}});
+    assert.equal(confirm.status,200,JSON.stringify(confirm.body));
+    const all=(await db.pool.query('SELECT occurrence_id,work_id,measure_scope,basis_quantity::text AS basis FROM work_scope_bindings WHERE area_scope_id=$1 ORDER BY occurrence_id',[floor])).rows;
+    assert.equal(all.length,3); const main=all.filter((b:any)=>b.measure_scope==='MAIN'), local=all.filter((b:any)=>b.measure_scope==='LOCAL');
+    assert.equal(main.length,2); assert.equal(local.length,1); assert.equal(local[0].basis,'150.0000','the LOCAL obligation was generated for the stated local 150');
+    const lw=local[0].work_id as string, [primary,sibling]=main;
+    const localState=async()=>({
+        current:await row('SELECT p.approved_version_id,v.quantity::text AS quantity,v.sequence FROM work_current_quantity p JOIN work_quantity_versions v ON v.id=p.approved_version_id WHERE p.work_id=$1',[lw]),
+        versions:(await row('SELECT count(*)::int AS n FROM work_quantity_versions WHERE work_id=$1',[lw])).n,
+        planned:(await row('SELECT planned_quantity::text AS q FROM works WHERE id=$1',[lw])).q,
+        allocation:(await row('SELECT count(*)::int AS n FROM work_allocation_versions WHERE work_id=$1',[lw])).n,
+        effects:(await row('SELECT count(*)::int AS n FROM gpr2_surface_effects WHERE work_id=$1',[lw])).n,
+        invalidations:(await row('SELECT count(*)::int AS n FROM gpr2_schedule_basis_invalidations WHERE work_id=$1',[lw])).n,
+        labor:(await row('SELECT count(*)::int AS n FROM gpr2_labor_coverage_recalculations WHERE work_id=$1',[lw])).n
+    });
+    const baseline=await localState();
+    assert.equal(baseline.current.quantity,'150.0000'); assert.equal(baseline.versions,1); assert.equal(baseline.planned.startsWith('150'),true);
+    assert.deepEqual([baseline.allocation,baseline.effects,baseline.invalidations,baseline.labor],[0,0,0,0]);
+    const initial=await row('SELECT approved_version_id FROM work_current_quantity WHERE work_id=$1',[primary.work_id]);
+    const scope=await row('SELECT scope_version FROM work_scope_state WHERE tenant_id=$1 AND object_id=$2',[p.pm.tenantId,p.object.id]);
+    const effects=main.map((x:any)=>({stageOccurrenceId:x.occurrence_id,workId:x.work_id,oldQuantity:'1000',newQuantity:'800'}));
+    const draft=await call(pm,'POST','',{expectedScopeVersion:String(scope.scope_version),payload:{workId:primary.work_id,newQuantity:'800',reason:'Поверхность с LOCAL 150',
+        surface:{areaScopeId:floor,previousQuantity:'1000',newQuantity:'800',stageEffects:effects}}});
+    assert.equal(draft.status,200,JSON.stringify(draft.body)); const id=draft.body.resultIds[0];
+    assert.equal((await call(pm,'POST',`/${id}/submit`,{expectedVersion:'1',expectedScopeVersion:String(scope.scope_version),payload:{inputFingerprint:'f'.repeat(64),expectedSourceVersions:{quantity:initial.approved_version_id}}})).status,200);
+    const saved=await row('SELECT payload FROM gpr2_quantity_submissions WHERE request_id=$1',[id]);
+    const approveBody={expectedVersion:'2',expectedScopeVersion:String(scope.scope_version),payload:{inputFingerprint:contentHash(saved.payload),expectedSourceVersions:{quantity:initial.approved_version_id}}};
+    // (1) refused: the MAIN sibling carries 850 of protected fact. The LOCAL Work is neither part of the group nor modified by the rollback.
+    await db.pool.query('UPDATE works SET actual_quantity=850 WHERE id=$1',[sibling.work_id]);
+    const refusedFacts=await factState();
+    const refused=await call(deputy,'POST',`/${id}/approve`,approveBody);
+    assert.equal(refused.status,422,JSON.stringify(refused.body)); assert.equal(refused.body.code,'BELOW_PROTECTED_QUANTITY');
+    assert.deepEqual(await localState(),baseline,'LOCAL 150 is unchanged after a REFUSED MAIN surface approval');
+    assert.deepEqual(await factState(),refusedFacts,'a refused approval writes no fact activity');
+    // (2) applied: both MAIN Works move 1000 -> 800; the LOCAL Work stays at 150 with the very same version row.
+    await db.pool.query('UPDATE works SET actual_quantity=800 WHERE id=$1',[sibling.work_id]);
+    const appliedFacts=await factState();
+    const applied=await call(deputy,'POST',`/${id}/approve`,approveBody);
+    assert.equal(applied.status,200,JSON.stringify(applied.body));
+    for(const b of main) assert.equal((await row('SELECT v.quantity::text AS quantity FROM work_current_quantity p JOIN work_quantity_versions v ON v.id=p.approved_version_id WHERE p.work_id=$1',[b.work_id])).quantity,'800.0000');
+    assert.equal((await row('SELECT count(*)::int AS n FROM gpr2_surface_effects e JOIN gpr2_surface_changes s ON s.id=e.surface_change_id WHERE s.request_id=$1',[id])).n,2,'exactly the two MAIN effects were written');
+    assert.deepEqual(await localState(),baseline,'LOCAL 150 is unchanged after an APPLIED MAIN surface approval (same version id, no effect, invalidation or recalculation row)');
+    assert.deepEqual(await factState(),appliedFacts,'an applied approval writes no fact activity either');
+    // (3) a client that tries to treat the LOCAL stage as part of the MAIN group is refused as a whole; nothing changes.
+    const scope2=await row('SELECT scope_version FROM work_scope_state WHERE tenant_id=$1 AND object_id=$2',[p.pm.tenantId,p.object.id]);
+    const current=await row('SELECT approved_version_id FROM work_current_quantity WHERE work_id=$1',[primary.work_id]);
+    const dragged=all.map((x:any)=>({stageOccurrenceId:x.occurrence_id,workId:x.work_id,oldQuantity:'800',newQuantity:'700'}));
+    const bad=await call(pm,'POST','',{expectedScopeVersion:String(scope2.scope_version),payload:{workId:primary.work_id,newQuantity:'700',reason:'LOCAL втянут в MAIN',
+        surface:{areaScopeId:floor,previousQuantity:'800',newQuantity:'700',stageEffects:dragged}}});
+    assert.equal(bad.status,200,JSON.stringify(bad.body)); const badId=bad.body.resultIds[0];
+    assert.equal((await call(pm,'POST',`/${badId}/submit`,{expectedVersion:'1',expectedScopeVersion:String(scope2.scope_version),payload:{inputFingerprint:'9'.repeat(64),expectedSourceVersions:{quantity:current.approved_version_id}}})).status,200);
+    const badSaved=await row('SELECT payload FROM gpr2_quantity_submissions WHERE request_id=$1',[badId]);
+    const beforeBad={main:(await db.pool.query('SELECT work_id,approved_version_id FROM work_current_quantity WHERE work_id=ANY($1) ORDER BY work_id',[main.map((b:any)=>b.work_id)])).rows,facts:await factState()};
+    const refusedLocal=await call(deputy,'POST',`/${badId}/approve`,{expectedVersion:'2',expectedScopeVersion:String(scope2.scope_version),
+        payload:{inputFingerprint:contentHash(badSaved.payload),expectedSourceVersions:{quantity:current.approved_version_id}}});
+    assert.equal(refusedLocal.status,422,JSON.stringify(refusedLocal.body)); assert.equal(refusedLocal.body.code,'CROSS_SCOPE_REFERENCE');
+    assert.deepEqual(await localState(),baseline,'LOCAL 150 is unchanged after a refused attempt to move it with the MAIN surface');
+    assert.deepEqual({main:(await db.pool.query('SELECT work_id,approved_version_id FROM work_current_quantity WHERE work_id=ANY($1) ORDER BY work_id',[main.map((b:any)=>b.work_id)])).rows,facts:await factState()},beforeBad,'the MAIN Works and the fact tables are untouched too');
+    assert.equal((await row('SELECT count(*)::int AS n FROM gpr2_surface_changes WHERE request_id=$1',[badId])).n,0);
+});
+
+test('R07-REV-02b an exclusion never writes RP_FACT: a real reported fact stays byte-identical across a refused and an applied approval',async()=>{
+    await g.h.as(p.pm);
+    const w=await g.h.req('works',{objectId:p.object.id,workTypeId:p.plaster.id,contractorId:p.contractors[0].id,
+        responsibleUserId:p.pm.id,name:'R07 exclusion without fact',unit:'м²',plannedQuantity:1000,plannedStartDate:'2026-03-01',plannedFinishDate:'2026-04-30',estimatedCost:'100000'});
+    const unit=await g.h.req('execution-units',{objectWorkId:w.id,workTypeId:p.plaster.id,contractorId:p.contractors[0].id,unit:'м²',plannedQuantity:1000,location:'R07 fact zone'});
+    const portion=await g.h.req(`execution-units/${unit.id}/portions`,{label:'R07 участок',plannedQuantity:1000});
+    // The RP fact comes through the real route; it is the only RP_FACT row this Work will ever have.
+    await reportFact(g.h,p.pm,portion.id,300);
+    const rp=(await db.pool.query("SELECT id,quantity::text AS quantity FROM portion_quantity_confirmations WHERE portion_id=$1 AND source='RP_FACT' ORDER BY id",[portion.id])).rows;
+    assert.ok(rp.length>=1,'the fixture really carries an RP_FACT row'); const rpTotal=rp.reduce((s:number,x:any)=>s+Number(x.quantity),0); assert.equal(rpTotal,300);
+    const prior=await row('SELECT approved_version_id FROM work_current_quantity WHERE work_id=$1',[w.id]);
+    const scope=await row('SELECT scope_version FROM work_scope_state WHERE tenant_id=$1 AND object_id=$2',[p.pm.tenantId,p.object.id]);
+    const request=async(newQuantity:string,units:string,fp:string)=>{
+        const c=await call(pm,'POST','',{expectedScopeVersion:String(scope.scope_version),payload:{workId:w.id,newQuantity,reason:'Исключение '+newQuantity,inputFingerprint:fp.repeat(64),expectedSourceVersions:{quantity:prior.approved_version_id},
+            allocation:{expectedVersionId:null,units:[{executionUnitId:unit.id,quantity:units,portions:[{portionId:portion.id,quantity:units}]}]}}});
+        assert.equal(c.status,200,JSON.stringify(c.body)); const id=c.body.resultIds[0];
+        assert.equal((await call(pm,'POST',`/${id}/submit`,{expectedVersion:'1',expectedScopeVersion:String(scope.scope_version),payload:{inputFingerprint:fp.repeat(64),expectedSourceVersions:{quantity:prior.approved_version_id}}})).status,200);
+        const saved=await row('SELECT payload FROM gpr2_quantity_submissions WHERE request_id=$1',[id]);
+        return {id,body:{expectedVersion:'2',expectedScopeVersion:String(scope.scope_version),payload:{inputFingerprint:contentHash(saved.payload),expectedSourceVersions:{quantity:prior.approved_version_id}}}};
+    };
+    // (1) refused: 250 is below the 300 protected RP fact. No fact row appears, none changes.
+    const low=await request('250','250','1');
+    const beforeRefused=await factState();
+    const refused=await call(deputy,'POST',`/${low.id}/approve`,low.body);
+    assert.equal(refused.status,422,JSON.stringify(refused.body)); assert.equal(refused.body.code,'BELOW_PROTECTED_QUANTITY');
+    assert.deepEqual(await factState(),beforeRefused,'a REFUSED exclusion leaves every fact table byte-identical');
+    assert.equal((await row('SELECT approved_version_id FROM work_current_quantity WHERE work_id=$1',[w.id])).approved_version_id,prior.approved_version_id);
+    // (2) applied: 1000 -> 800 with the fact at 300. The excluded 200 is a quantity decision, not a fact.
+    const ok=await request('800','800','2');
+    const beforeApplied=await factState();
+    const applied=await call(deputy,'POST',`/${ok.id}/approve`,ok.body);
+    assert.equal(applied.status,200,JSON.stringify(applied.body));
+    assert.equal((await row('SELECT v.quantity::text AS quantity FROM work_current_quantity p JOIN work_quantity_versions v ON v.id=p.approved_version_id WHERE p.work_id=$1',[w.id])).quantity,'800.0000');
+    assert.deepEqual(await factState(),beforeApplied,'an APPLIED exclusion leaves every fact table byte-identical');
+    assert.deepEqual((await db.pool.query("SELECT id,quantity::text AS quantity FROM portion_quantity_confirmations WHERE portion_id=$1 AND source='RP_FACT' ORDER BY id",[portion.id])).rows,rp,'the RP_FACT rows are exactly the reported ones — no RP_FACT of 200, none of 800');
+    assert.equal((await row("SELECT count(*)::int AS n FROM portion_quantity_confirmations WHERE portion_id=$1 AND source<>'RP_FACT'",[portion.id])).n,0,'and no other kind of confirmation either');
+    // The check is not vacuous: the approval did write its own rows (quantity decision, event, invalidation) while the fact tables stayed still.
+    assert.equal((await row("SELECT count(*)::int AS n FROM gpr2_quantity_events WHERE request_id=$1 AND action='APPROVE'",[ok.id])).n,1);
+    assert.equal((await row('SELECT count(*)::int AS n FROM gpr2_schedule_basis_invalidations WHERE request_id=$1',[ok.id])).n,1);
 });
