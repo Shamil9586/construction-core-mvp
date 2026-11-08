@@ -611,23 +611,328 @@ test('R07-REV-03b surface sibling and allocation binding: a sibling version must
     assert.equal((await approve(W, group)).status, 200, 'the legitimate group still applies, nothing was lost');
     assert.equal(await currentQuantity(sibling.work_id), '800.0000');
 
-    // (2) an allocation of an EARLIER approved request cannot be attached to the quantity version a LATER request made
-    const w = await mkWork(W, 'R07B3S allocation binding', 1000, [{ quantity: 1000, portions: [1000] }]);
-    const first = await submitted(W, w.work.id, '900', { allocation: allocationFor(w.units, [[900]]) });
+    // (2) an allocation of an EARLIER approved request cannot be attached to the quantity version a LATER request made. The earlier request is approved
+    // WITHOUT an allocation, so it has not consumed one (REV-06's one-allocation-per-request index does not stand in front of this check).
+    const w = await mkWork(W, 'R07B3S allocation binding', 1000, [{ quantity: 800, portions: [800] }]); // WEU plan 800 <= 900, so the first approval needs no allocation
+    const first = await submitted(W, w.work.id, '900');
     assert.equal((await approve(W, first)).status, 200);
-    const allocation1 = (await row('SELECT version_id FROM work_current_allocation WHERE work_id=$1', [w.work.id])).version_id as string;
-    const second = await submitted(W, w.work.id, '800', { allocation: { expectedVersionId: allocation1, units: [{ executionUnitId: w.units[0].unit.id, quantity: '800', portions: [{ portionId: w.units[0].portions[0].id, quantity: '800' }] }] } });
+    const second = await submitted(W, w.work.id, '800', { allocation: allocationFor(w.units, [[800]]) });
     assert.equal((await approve(W, second)).status, 200);
     const allocation2 = (await row('SELECT version_id FROM work_current_allocation WHERE work_id=$1', [w.work.id])).version_id as string;
     const current = await currentVersion(w.work.id);
     const mixed = await directSql(async c => {
-        // sequence 3, bound to the CURRENT quantity version but to the FIRST (genuinely approved) request
-        const al = (await c.query(`INSERT INTO work_allocation_versions(tenant_id,object_id,work_id,sequence,previous_id,quantity_version_id,unit,created_by,approved_request_id) VALUES($1,$2,$3,3,$4,$5,'м²',$6,$7) RETURNING id`, [W.pm.tenantId, W.object.id, w.work.id, allocation2, current, W.pm.id, first.id])).rows[0].id;
+        // sequence 2, bound to the CURRENT quantity version but to the FIRST (genuinely approved) request
+        const al = (await c.query(`INSERT INTO work_allocation_versions(tenant_id,object_id,work_id,sequence,previous_id,quantity_version_id,unit,created_by,approved_request_id) VALUES($1,$2,$3,2,$4,$5,'м²',$6,$7) RETURNING id`, [W.pm.tenantId, W.object.id, w.work.id, allocation2, current, W.pm.id, first.id])).rows[0].id;
         await c.query(`INSERT INTO work_allocation_lines(tenant_id,object_id,work_id,version_id,execution_unit_id,portion_id,quantity,unit) VALUES($1,$2,$3,$4,$5,NULL,800,'м²'),($1,$2,$3,$4,$5,$6,800,'м²')`, [W.pm.tenantId, W.object.id, w.work.id, al, w.units[0].unit.id, w.units[0].portions[0].id]);
         await c.query('UPDATE work_current_allocation SET version_id=$1 WHERE work_id=$2', [al, w.work.id]);
     });
     assert.equal(mixed.committed, false); assert.match(String(mixed.error), /allocation pointer requires approved quantity request/);
     assert.equal((await row('SELECT version_id FROM work_current_allocation WHERE work_id=$1', [w.work.id])).version_id, allocation2);
+});
+
+// ================================================================================================================================================
+// R07-REV-05 / R07-REV-06 / R07-REV-07 (independent review of ab4c143, probes B, E, H, J, K, L, M, P; owner authorisation of 2026-11-08, Issue #52)
+// ================================================================================================================================================
+/** A complete, consistent approval history (what the service writes, row for row), with knobs to break exactly one property. Looked-up ids come from the caller. */
+async function history(c: any, W: World, workId: string, source: string, quantity: number, decider: string,
+    o: { snapshot?: (payload: any) => void; submitEventActor?: string; approveEventActor?: string; allocation?: any; decidedBy?: string } = {}) {
+    const id = (await c.query(`INSERT INTO gpr2_quantity_requests(tenant_id,object_id,work_id,proposed_quantity,quantity_version_id,reason,author_id,allocation) VALUES($1,$2,$3,$4,$5,'direct SQL (R07 native)',$6,$7::jsonb) RETURNING id`,
+        [W.pm.tenantId, W.object.id, workId, quantity, source, W.pm.id, o.allocation ? JSON.stringify(o.allocation) : null])).rows[0].id as string;
+    const payload: any = { workId, newQuantity: String(quantity), quantityVersionId: source, reason: 'direct SQL (R07 native)' };
+    if (o.allocation) payload.allocation = o.allocation;
+    o.snapshot?.(payload);
+    await c.query('INSERT INTO gpr2_quantity_submissions(tenant_id,object_id,request_id,number,payload,submitted_by) VALUES($1,$2,$3,1,$4::jsonb,$5)', [W.pm.tenantId, W.object.id, id, JSON.stringify(payload), W.pm.id]);
+    await c.query("INSERT INTO gpr2_quantity_events(tenant_id,object_id,request_id,submission_number,action,actor_id) VALUES($1,$2,$3,1,'SUBMIT',$4)", [W.pm.tenantId, W.object.id, id, o.submitEventActor ?? W.pm.id]);
+    await c.query("UPDATE gpr2_quantity_requests SET state='SUBMITTED',submitter_id=$2,submission_number=1 WHERE id=$1", [id, W.pm.id]);
+    await c.query("UPDATE gpr2_quantity_requests SET state='APPROVED',decided_by=$2 WHERE id=$1", [id, o.decidedBy ?? decider]);
+    await c.query("INSERT INTO gpr2_quantity_events(tenant_id,object_id,request_id,submission_number,action,actor_id) VALUES($1,$2,$3,1,'APPROVE',$4)", [W.pm.tenantId, W.object.id, id, o.approveEventActor ?? decider]);
+    return id;
+}
+/** Quantity version for a request plus the pointer move: the whole ordinary UPDATE path. */
+const advance = async (c: any, W: World, workId: string, requestId: string, source: string, quantity: number, sequence = 2) => {
+    const v = await forgeVersion(c, W, workId, sequence, quantity, requestId, source); await movePointer(c, workId, v); return v;
+};
+/** An allocation version bound to `requestId`, with the given unit / portion lines, and the pointer move (INSERT when there is no pointer, UPDATE otherwise). */
+async function installAllocation(c: any, W: World, workId: string, quantityVersion: string, requestId: string, lines: { unit: any; qty: number; portion?: any }[], sequence: number, previous: string | null) {
+    const al = (await c.query(`INSERT INTO work_allocation_versions(tenant_id,object_id,work_id,sequence,previous_id,quantity_version_id,unit,created_by,approved_request_id) VALUES($1,$2,$3,$4,$5,$6,'м²',$7,$8) RETURNING id`,
+        [W.pm.tenantId, W.object.id, workId, sequence, previous, quantityVersion, W.pm.id, requestId])).rows[0].id as string;
+    for (const l of lines)
+        await c.query(`INSERT INTO work_allocation_lines(tenant_id,object_id,work_id,version_id,execution_unit_id,portion_id,quantity,unit) VALUES($1,$2,$3,$4,$5,$6,$7,'м²')`, [W.pm.tenantId, W.object.id, workId, al, l.unit.unit.id, l.portion?.id ?? null, l.qty]);
+    if (previous) await c.query('UPDATE work_current_allocation SET version_id=$1 WHERE work_id=$2', [al, workId]);
+    else await c.query('INSERT INTO work_current_allocation(tenant_id,object_id,work_id,version_id) VALUES($1,$2,$3,$4)', [W.pm.tenantId, W.object.id, workId, al]);
+    return al;
+}
+const unitAndPortion = (u: any, q: number) => [{ unit: u, qty: q }, { unit: u, qty: q, portion: u.portions[0] }];
+const snapshotOf = (units: { unit: any; qty: number }[]) => ({ expectedVersionId: null, units: units.map(u => ({ executionUnitId: u.unit.unit.id, quantity: String(u.qty), portions: [{ portionId: u.unit.portions[0].id, quantity: String(u.qty) }] })) });
+
+test('R07-REV-05 the original four-statement attack (DELETE + INSERT of the quantity pointer under a real RP fact) is refused; the pointer and the fact are untouched', async () => {
+    const W = await world();
+    const w = await mkWork(W, 'R07REV05 pointer', 1000, [{ quantity: 1000, portions: [1000] }]);
+    const fact = await reportFactHttp(W, w.units[0].portions[0].id, 800); assert.ok(fact.status < 300, JSON.stringify(fact.body));
+    const source = await currentVersion(w.work.id);
+    const pointerBefore = await row('SELECT * FROM work_current_quantity WHERE work_id=$1', [w.work.id]);
+    let step = 'start';
+    const attack = await directSql(async c => {
+        step = 'DELETE'; await c.query('DELETE FROM work_current_quantity WHERE work_id=$1', [w.work.id]);
+        step = 'INSERT draft request';
+        const draft = (await c.query(`INSERT INTO gpr2_quantity_requests(tenant_id,object_id,work_id,proposed_quantity,quantity_version_id,reason,author_id) VALUES($1,$2,$3,300,$4,'REV-05 draft only',$5) RETURNING id`, [W.pm.tenantId, W.object.id, w.work.id, source, W.pm.id])).rows[0].id;
+        step = 'INSERT version'; const v = await forgeVersion(c, W, w.work.id, 2, 300, draft, source);
+        step = 'INSERT pointer'; await c.query('INSERT INTO work_current_quantity(tenant_id,object_id,work_id,approved_version_id,created_by) VALUES($1,$2,$3,$4,$5)', [W.pm.tenantId, W.object.id, w.work.id, v, W.pm.id]);
+    });
+    assert.equal(attack.committed, false, 'the original probe committed 1000 -> 300 under a fact of 800'); assert.equal(step, 'DELETE', 'refused at the first statement');
+    assert.match(String(attack.error), /the current quantity pointer is never deleted/);
+    assert.deepEqual(await row('SELECT * FROM work_current_quantity WHERE work_id=$1', [w.work.id]), pointerBefore, 'the pointer row is byte-identical');
+    assert.equal(await currentQuantity(w.work.id), '1000.0000');
+    assert.deepEqual((await rpFacts(w.units[0].portions[0].id)).map((x: any) => x.quantity), ['800.0000'], 'the real RP fact is untouched');
+    assert.equal((await row("SELECT count(*)::int AS n FROM gpr2_quantity_requests WHERE reason='REV-05 draft only' AND work_id=$1", [w.work.id])).n, 0, 'nothing of the attack survived');
+});
+
+test('R07-REV-05 variants: a second pointer row, an upsert, a rollback to the initial version, an identity change and a no-op update are all refused', async () => {
+    const W = await world();
+    const w = await mkWork(W, 'R07REV05 variants', 1000);
+    const v1 = await currentVersion(w.work.id); const decider = await deciderId(W);
+    const ok = await submitted(W, w.work.id, '900'); assert.equal((await approve(W, ok)).status, 200);
+    const v2 = await currentVersion(w.work.id); assert.notEqual(v1, v2);
+    const attempt = (steps: (c: any) => Promise<void>) => directSql(steps);
+    // a second row for the same Work: the primary key refuses it
+    const dup = await attempt(c => c.query('INSERT INTO work_current_quantity(tenant_id,object_id,work_id,approved_version_id,created_by) VALUES($1,$2,$3,$4,$5)', [W.pm.tenantId, W.object.id, w.work.id, v1, W.pm.id]));
+    assert.equal(dup.committed, false); assert.match(String(dup.error), /duplicate key|never created|initial version/);
+    // an upsert that would turn the pointer back to the INITIAL version (a rollback of an approved quantity): refused by the lifecycle guard
+    const upsertBack = await attempt(c => c.query(`INSERT INTO work_current_quantity(tenant_id,object_id,work_id,approved_version_id,created_by) VALUES($1,$2,$3,$4,$5)
+        ON CONFLICT (tenant_id,object_id,work_id) DO UPDATE SET approved_version_id=EXCLUDED.approved_version_id`, [W.pm.tenantId, W.object.id, w.work.id, v1, W.pm.id]));
+    assert.equal(upsertBack.committed, false); assert.match(String(upsertBack.error), /created only for the initial version of its Work/);
+    // an upsert that moves the pointer to a forged later version
+    const upsertForward = await attempt(async c => {
+        const id = await history(c, W, w.work.id, v2, 300, decider); const v = await forgeVersion(c, W, w.work.id, 3, 300, id, v2);
+        await c.query(`INSERT INTO work_current_quantity(tenant_id,object_id,work_id,approved_version_id,created_by) VALUES($1,$2,$3,$4,$5)
+            ON CONFLICT (tenant_id,object_id,work_id) DO UPDATE SET approved_version_id=EXCLUDED.approved_version_id`, [W.pm.tenantId, W.object.id, w.work.id, v, W.pm.id]);
+    });
+    assert.equal(upsertForward.committed, false); assert.match(String(upsertForward.error), /created only for the initial version of its Work/);
+    // a plain UPDATE back to the initial version: the existing UPDATE guard refuses it
+    const back = await attempt(c => movePointer(c, w.work.id, v1));
+    assert.equal(back.committed, false); assert.match(String(back.error), /quantity pointer requires approved request/);
+    // the identity of the row cannot be changed
+    const identity = await attempt(c => c.query('UPDATE work_current_quantity SET work_id=$2 WHERE work_id=$1', [w.work.id, randomUUID()]));
+    assert.equal(identity.committed, false); assert.match(String(identity.error), /pointer identity is immutable/);
+    const objectMove = await attempt(c => c.query('UPDATE work_current_quantity SET object_id=$2 WHERE work_id=$1', [w.work.id, randomUUID()]));
+    assert.equal(objectMove.committed, false); assert.match(String(objectMove.error), /pointer identity is immutable/);
+    // a no-op update of the pointer is refused too (fail closed; the service never does it)
+    const noop = await attempt(c => c.query('UPDATE work_current_quantity SET approved_version_id=approved_version_id WHERE work_id=$1', [w.work.id]));
+    assert.equal(noop.committed, false);
+    assert.equal(await currentVersion(w.work.id), v2); assert.equal(await currentQuantity(w.work.id), '900.0000');
+});
+
+test('R07-REV-05 baseline: a Work without a pointer is initialised only with its initial version (R06a / legacy baseline), and then approves like any other', async () => {
+    const W = await world();
+    // the R06a legacy fixture: a Work row with no origin, no version, no pointer
+    const type = await row('SELECT id, unit FROM work_types WHERE tenant_id=$1 LIMIT 1', [W.pm.tenantId]);
+    const legacy = (await pool.query(`INSERT INTO works(tenant_id,object_id,work_type_id,name,unit,planned_quantity) VALUES($1,$2,$3,'R07REV05 legacy baseline',$4,9.5000) RETURNING id`, [W.pm.tenantId, W.object.id, type.id, type.unit])).rows[0].id as string;
+    const decider = await deciderId(W);
+    // (1) a pointer to a LATER version cannot be the first pointer, however the chain behind it was built
+    const bad = await directSql(async c => {
+        await c.query(`INSERT INTO work_quantity_origins(tenant_id,object_id,work_id,source_kind,provenance_status,observed_current_quantity,unit,created_by) VALUES($1,$2,$3,'LEGACY_UNVERIFIED','UNKNOWN_LEGACY',9.5,$4,$5)`, [W.pm.tenantId, W.object.id, legacy, type.unit, W.pm.id]);
+        const v1 = (await c.query(`INSERT INTO work_quantity_versions(tenant_id,object_id,work_id,sequence,quantity,unit,source_kind,created_by) VALUES($1,$2,$3,1,9.5,$4,'OBSERVED_LEGACY',$5) RETURNING id`, [W.pm.tenantId, W.object.id, legacy, type.unit, W.pm.id])).rows[0].id;
+        const id = await history(c, W, legacy, v1, 1, decider);
+        const v2 = (await c.query(`INSERT INTO work_quantity_versions(tenant_id,object_id,work_id,sequence,quantity,unit,source_kind,approved_request_id,previous_id,created_by) VALUES($1,$2,$3,2,1,$4,'APPROVED_REQUEST',$5,$6,$7) RETURNING id`, [W.pm.tenantId, W.object.id, legacy, type.unit, id, v1, W.pm.id])).rows[0].id;
+        await c.query('INSERT INTO work_current_quantity(tenant_id,object_id,work_id,approved_version_id,created_by) VALUES($1,$2,$3,$4,$5)', [W.pm.tenantId, W.object.id, legacy, v2, W.pm.id]);
+    });
+    assert.equal(bad.committed, false); assert.match(String(bad.error), /created only for the initial version of its Work/);
+    assert.equal((await row('SELECT count(*)::int AS n FROM work_current_quantity WHERE work_id=$1', [legacy])).n, 0);
+    // (2) the baseline initialisation itself is accepted: origin, initial OBSERVED_LEGACY version, pointer
+    const init = await directSql(async c => {
+        await c.query(`INSERT INTO work_quantity_origins(tenant_id,object_id,work_id,source_kind,provenance_status,observed_current_quantity,unit,created_by) VALUES($1,$2,$3,'LEGACY_UNVERIFIED','UNKNOWN_LEGACY',9.5,$4,$5)`, [W.pm.tenantId, W.object.id, legacy, type.unit, W.pm.id]);
+        const v1 = (await c.query(`INSERT INTO work_quantity_versions(tenant_id,object_id,work_id,sequence,quantity,unit,source_kind,created_by) VALUES($1,$2,$3,1,9.5,$4,'OBSERVED_LEGACY',$5) RETURNING id`, [W.pm.tenantId, W.object.id, legacy, type.unit, W.pm.id])).rows[0].id;
+        await c.query('INSERT INTO work_current_quantity(tenant_id,object_id,work_id,approved_version_id,created_by) VALUES($1,$2,$3,$4,$5)', [W.pm.tenantId, W.object.id, legacy, v1, W.pm.id]);
+    });
+    assert.equal(init.committed, true, String(init.error)); assert.equal(await currentQuantity(legacy), '9.5000');
+    // (3) the initialised Work then goes through the real approval like any other, and its pointer cannot be deleted
+    const r = await submitted(W, legacy, '8'); assert.equal((await approve(W, r)).status, 200);
+    assert.equal(await currentQuantity(legacy), '8.0000');
+    await assert.rejects(pool.query('DELETE FROM work_current_quantity WHERE work_id=$1', [legacy]), /pointer is never deleted/);
+});
+
+test('R07-REV-05 two serial approvals through the API, two valid hops in one transaction, a skipped hop and a no-op are handled exactly', async () => {
+    const W = await world();
+    const w = await mkWork(W, 'R07REV05 serial', 1000, [{ quantity: 500, portions: [500] }, { quantity: 500, portions: [500] }]);
+    const r1 = await submitted(W, w.work.id, '700', { allocation: allocationFor(w.units, [[400], [300]]) });
+    assert.equal((await approve(W, r1)).status, 200);
+    const al1 = (await row('SELECT version_id FROM work_current_allocation WHERE work_id=$1', [w.work.id])).version_id as string;
+    const alloc2: any = allocationFor(w.units, [[300], [300]]); alloc2.expectedVersionId = al1;
+    const r2 = await submitted(W, w.work.id, '600', { allocation: alloc2 });
+    assert.equal((await approve(W, r2)).status, 200, 'the next legitimate approval uses a NEW request and replaces the allocation');
+    assert.equal(await currentQuantity(w.work.id), '600.0000');
+    assert.deepEqual((await all('SELECT sequence FROM work_quantity_versions WHERE work_id=$1 ORDER BY sequence', [w.work.id])).map((x: any) => x.sequence), [1, 2, 3]);
+    assert.deepEqual((await all('SELECT sequence FROM work_allocation_versions WHERE work_id=$1 ORDER BY sequence', [w.work.id])).map((x: any) => x.sequence), [1, 2]);
+    // two valid hops in one transaction, direct SQL with a complete history each: committed
+    const decider = await deciderId(W);
+    const two = await mkWork(W, 'R07REV05 two hops', 1000); const t1 = await currentVersion(two.work.id);
+    const hops = await directSql(async c => { const a = await history(c, W, two.work.id, t1, 900, decider); const v2 = await advance(c, W, two.work.id, a, t1, 900);
+        const b = await history(c, W, two.work.id, v2, 800, decider); await advance(c, W, two.work.id, b, v2, 800, 3); });
+    assert.equal(hops.committed, true, String(hops.error)); assert.equal(await currentQuantity(two.work.id), '800.0000');
+    // a skipped hop is refused
+    const skip = await mkWork(W, 'R07REV05 skip', 1000); const s1 = await currentVersion(skip.work.id);
+    const skipped = await directSql(async c => { const a = await history(c, W, skip.work.id, s1, 900, decider); const v2 = await forgeVersion(c, W, skip.work.id, 2, 900, a, s1);
+        const b = await history(c, W, skip.work.id, v2, 800, decider); await advance(c, W, skip.work.id, b, v2, 800, 3); });
+    assert.equal(skipped.committed, false); assert.match(String(skipped.error), /advance the pointer being replaced by one/);
+    assert.equal(await currentVersion(skip.work.id), s1);
+});
+
+test('R07-REV-05 two connections race for the pointer of ONE Work: the row lock serialises them and the loser is refused as stale; the API race ends in 200 + 409', async () => {
+    const W = await world();
+    const decider = await deciderId(W);
+    // --- database level: two real sessions, two complete forged histories on the same source version
+    const w = await mkWork(W, 'R07REV05 race db', 1000); const v1 = await currentVersion(w.work.id);
+    const A = await Session.open(db.url, 'r07-rev05-A'), B = await Session.open(db.url, 'r07-rev05-B');
+    try {
+        await A.begin(); await B.begin();
+        const ra = await history(A.client, W, w.work.id, v1, 900, decider); const va = await forgeVersion(A.client, W, w.work.id, 2, 900, ra, v1);
+        const rb = await history(B.client, W, w.work.id, v1, 800, decider); const vb = await forgeVersion(B.client, W, w.work.id, 3, 800, rb, v1);
+        await A.query('UPDATE work_current_quantity SET approved_version_id=$1 WHERE work_id=$2', [va, w.work.id]);
+        const bUpdate = settle(B.query('UPDATE work_current_quantity SET approved_version_id=$1 WHERE work_id=$2', [vb, w.work.id]));
+        await until(async () => isBlockedOnLock(observer.client, B.pid), 'the second session to wait for the pointer row lock held by the first');
+        await A.commit();
+        assert.equal((await bUpdate).ok, true, 'the waiting UPDATE proceeds once the first session commits');
+        const bCommit = await settle(B.commit());
+        assert.equal(bCommit.ok, false, 'the loser is refused at COMMIT'); assert.match(String((bCommit as any).error), /advance the pointer being replaced by one/);
+    } finally { await A.rollback().catch(() => undefined); await B.rollback().catch(() => undefined); await A.close(); await B.close(); }
+    assert.equal(await currentVersion(w.work.id), (await row('SELECT id FROM work_quantity_versions WHERE work_id=$1 AND sequence=2', [w.work.id])).id); assert.equal(await currentQuantity(w.work.id), '900.0000');
+    // --- API level: two requests on the same source, both approved concurrently, the second queued behind the EXCLUSIVE lock
+    const x = await mkWork(W, 'R07REV05 race api', 1000);
+    const r1 = await submitted(W, x.work.id, '900'); const r2 = await submitted(W, x.work.id, '800');
+    const blocker = await Session.open(db.url, 'r07-rev05-blocker'); let first: Promise<any>, second: Promise<any>;
+    try {
+        await blocker.begin(); await blocker.query('SELECT id FROM works WHERE id=$1 FOR UPDATE', [x.work.id]);
+        const key = coordinationKey(W.pm.tenantId, W.object.id);
+        first = settle(approve(W, r1));
+        await until(async () => { const e = (await advisoryHolders(observer.client, key)).find(h => h.granted && /Exclusive/.test(h.mode)); return !!e && await isBlockedOnLock(observer.client, e.pid); }, 'the first approval to hold the EXCLUSIVE lock');
+        second = settle(approve(W, r2));
+        await until(async () => (await advisoryHolders(observer.client, key)).some(h => !h.granted && /Exclusive/.test(h.mode)), 'the second approval to queue behind it');
+        await blocker.rollback();
+    } finally { await blocker.rollback().catch(() => undefined); await blocker.close(); }
+    const [a, b] = [await first, await second];
+    assert.equal(a.ok && a.value.status, 200); assert.equal(b.ok && b.value.status, 409, JSON.stringify((b as any).value?.body)); assert.equal((b as any).value.body.code, 'STALE_SOURCE_VERSION');
+    assert.equal(await currentQuantity(x.work.id), '900.0000'); assert.equal((await row('SELECT count(*)::int AS n FROM work_quantity_versions WHERE work_id=$1', [x.work.id])).n, 2);
+    assert.equal((await row("SELECT state FROM gpr2_quantity_requests WHERE id=$1", [r2.id])).state, 'SUBMITTED', 'the loser stays SUBMITTED, nothing partial');
+});
+
+test('R07-REV-06 a genuinely approved request cannot be replayed for another allocation: same request refused by the index, a different allocation refused by the snapshot', async () => {
+    const W = await world();
+    const w = await mkWork(W, 'R07REV06 replay', 1000, [{ quantity: 500, portions: [500] }, { quantity: 500, portions: [500] }]);
+    const decider = await deciderId(W);
+    const r = await submitted(W, w.work.id, '700', { allocation: allocationFor(w.units, [[400], [300]]) });
+    assert.equal((await approve(W, r)).status, 200);
+    const linesOf = async (version: string) => (await all('SELECT execution_unit_id, portion_id, quantity::text AS q FROM work_allocation_lines WHERE version_id=$1 ORDER BY execution_unit_id, portion_id NULLS FIRST', [version]));
+    const al1 = (await row('SELECT version_id, (SELECT sequence FROM work_allocation_versions WHERE id=a.version_id) AS sequence FROM work_current_allocation a WHERE work_id=$1', [w.work.id]));
+    const linesBefore = await linesOf(al1.version_id); const qv = await currentVersion(w.work.id);
+    // PROBE-E, as the reviewer ran it: a second allocation version under the SAME request, lines 350/350
+    const replay = await directSql(async c => { await installAllocation(c, W, w.work.id, qv, r.id, [...unitAndPortion(w.units[0], 350), ...unitAndPortion(w.units[1], 350)], al1.sequence + 1, al1.version_id); });
+    assert.equal(replay.committed, false); assert.match(String(replay.error), /gpr2_r07_one_allocation_per_work_request/);
+    // the same request cannot be consumed by a second allocation in any other way either: the lines of the installed version are immutable, the pointer cannot be deleted
+    await assert.rejects(pool.query('UPDATE work_allocation_lines SET quantity=1 WHERE version_id=$1', [al1.version_id]), /immutable|R06B/i);
+    await assert.rejects(pool.query('DELETE FROM work_allocation_lines WHERE version_id=$1', [al1.version_id]), /immutable|R06B/i);
+    await assert.rejects(pool.query('DELETE FROM work_current_allocation WHERE work_id=$1', [w.work.id]), /immutable|R06B|never/i);
+    assert.deepEqual(await linesOf((await row('SELECT version_id FROM work_current_allocation WHERE work_id=$1', [w.work.id])).version_id), linesBefore, 'the approved 400/300 allocation is still the current one');
+    // the index is NOT what protects a different request id: a fully approved request whose snapshot says 400/300 but whose lines say 350/350 is refused by the snapshot check
+    const other = await mkWork(W, 'R07REV06 snapshot', 1000, [{ quantity: 500, portions: [500] }, { quantity: 500, portions: [500] }]); const src = await currentVersion(other.work.id);
+    const approvedSnapshot = snapshotOf([{ unit: other.units[0], qty: 400 }, { unit: other.units[1], qty: 300 }]);
+    const mismatch = await directSql(async c => { const id = await history(c, W, other.work.id, src, 700, decider, { allocation: approvedSnapshot }); const v = await advance(c, W, other.work.id, id, src, 700);
+        await installAllocation(c, W, other.work.id, v, id, [...unitAndPortion(other.units[0], 350), ...unitAndPortion(other.units[1], 350)], 1, null); });
+    assert.equal(mismatch.committed, false); assert.match(String(mismatch.error), /allocation differs from the approved snapshot of its request/);
+    // one line more, one line fewer, a different unit: all differ from the snapshot
+    for (const [label, lines] of [['an extra unit line', [...unitAndPortion(other.units[0], 400), ...unitAndPortion(other.units[1], 300), { unit: other.units[1], qty: 1 }]],
+        ['a missing portion line', [...unitAndPortion(other.units[0], 400), { unit: other.units[1], qty: 300 }]],
+        ['the units swapped', [...unitAndPortion(other.units[0], 300), ...unitAndPortion(other.units[1], 400)]]] as [string, any[]][]) {
+        const s2 = await mkWork(W, 'R07REV06 ' + label, 1000, [{ quantity: 500, portions: [500] }, { quantity: 500, portions: [500] }]); const sv = await currentVersion(s2.work.id);
+        const snap = snapshotOf([{ unit: s2.units[0], qty: 400 }, { unit: s2.units[1], qty: 300 }]);
+        const out = await directSql(async c => { const id = await history(c, W, s2.work.id, sv, 700, decider, { allocation: snap }); const v = await advance(c, W, s2.work.id, id, sv, 700);
+            await installAllocation(c, W, s2.work.id, v, id, lines.map(l => ({ ...l, unit: l.unit === other.units[0] ? s2.units[0] : l.unit === other.units[1] ? s2.units[1] : l.unit })), 1, null); });
+        assert.equal(out.committed, false, label); assert.match(String(out.error), /allocation differs from the approved snapshot|portion is allocated below|unit/i, label);
+    }
+    // a request whose approved snapshot carries NO allocation cannot carry one
+    const bare = await mkWork(W, 'R07REV06 no allocation in snapshot', 1000, [{ quantity: 500, portions: [500] }]); const bs = await currentVersion(bare.work.id);
+    const none = await directSql(async c => { const id = await history(c, W, bare.work.id, bs, 800, decider); const v = await advance(c, W, bare.work.id, id, bs, 800);
+        await installAllocation(c, W, bare.work.id, v, id, unitAndPortion(bare.units[0], 500), 1, null); });
+    assert.equal(none.committed, false); assert.match(String(none.error), /needs an allocation in the approved snapshot/);
+    // positive: the next legitimate approval, with a NEW request id, may replace the allocation (this is PROBE-H of the review)
+    const alloc2: any = allocationFor(w.units, [[300], [300]]); alloc2.expectedVersionId = al1.version_id;
+    const next = await submitted(W, w.work.id, '600', { allocation: alloc2 }); assert.notEqual(next.id, r.id);
+    assert.equal((await approve(W, next)).status, 200); assert.equal(await currentQuantity(w.work.id), '600.0000');
+    assert.equal((await row('SELECT count(*)::int AS n FROM work_allocation_versions WHERE work_id=$1 AND approved_request_id IS NOT NULL', [w.work.id])).n, 2);
+});
+
+test('R07-REV-07 isolated: a submitted snapshot that differs from the request, and SUBMIT / APPROVE events written by the wrong actor, are each refused by their own check', async () => {
+    const W = await world();
+    const decider = await deciderId(W);
+    const stranger = (await all('SELECT id FROM users WHERE tenant_id=$1 AND id NOT IN ($2,$3) ORDER BY created_at LIMIT 1', [W.pm.tenantId, W.pm.id, decider]))[0].id as string;
+    const attempt = async (label: string, o: Parameters<typeof history>[6], quantity = 700) => {
+        const w = await mkWork(W, 'R07REV07 ' + label, 1000); const src = await currentVersion(w.work.id);
+        const out = await directSql(async c => { const id = await history(c, W, w.work.id, src, quantity, decider, o); await advance(c, W, w.work.id, id, src, quantity); });
+        assert.equal(await currentVersion(w.work.id), src, label + ': the pointer did not move'); return out;
+    };
+    // M12 — the immutable snapshot says one thing and the request another
+    for (const [label, mutate, re] of [
+        ['snapshot quantity 900, request 700', (p: any) => { p.newQuantity = '900'; }, /submitted snapshot does not match the request/],
+        ['snapshot names another Work', (p: any) => { p.workId = randomUUID(); }, /submitted snapshot does not match the request/],
+        ['snapshot names another source version', (p: any) => { p.quantityVersionId = randomUUID(); }, /submitted snapshot does not match the request/],
+        ['snapshot carries an allocation the request has not', (p: any) => { p.allocation = { expectedVersionId: null, units: [] }; }, /submitted snapshot does not match the request/]] as [string, (p: any) => void, RegExp][]) {
+        const out = await attempt('M12 ' + label, { snapshot: mutate }); assert.equal(out.committed, false, label); assert.match(String(out.error), re, label);
+    }
+    // M14 — the SUBMIT event was written by someone who is not the submitter; M15 — the APPROVE event by someone who is not the decider
+    const m14 = await attempt('M14 submit event actor', { submitEventActor: stranger }); assert.equal(m14.committed, false); assert.match(String(m14.error), /no SUBMIT \/ APPROVE event of this submission/);
+    const m15 = await attempt('M15 approve event actor', { approveEventActor: stranger }); assert.equal(m15.committed, false); assert.match(String(m15.error), /no SUBMIT \/ APPROVE event of this submission/);
+    // control: the same helper with every property right IS accepted, so each refusal above is caused by the one property that was broken
+    const good = await mkWork(W, 'R07REV07 control', 1000); const gs = await currentVersion(good.work.id);
+    const control = await directSql(async c => { const id = await history(c, W, good.work.id, gs, 700, decider); await advance(c, W, good.work.id, id, gs, 700); });
+    assert.equal(control.committed, true, String(control.error)); assert.equal(await currentQuantity(good.work.id), '700.0000');
+});
+
+test('R07-REV-07 isolated: the function-level check that the decider is neither author nor submitter holds even when the lifecycle trigger is switched off (owner capability, rolled back)', async () => {
+    const W = await world();
+    const w = await mkWork(W, 'R07REV07 M16', 1000); const src = await currentVersion(w.work.id); const decider = await deciderId(W);
+    const out = await directSql(async c => {
+        // the trigger that normally refuses "approved by the author" is disabled INSIDE this transaction only (DDL is transactional); the pointer guard is the layer under test
+        await c.query('ALTER TABLE gpr2_quantity_requests DISABLE TRIGGER gpr2_quantity_requests_guard');
+        const id = await history(c, W, w.work.id, src, 700, decider, { decidedBy: W.pm.id, approveEventActor: W.pm.id });
+        await advance(c, W, w.work.id, id, src, 700);
+    });
+    assert.equal(out.committed, false); assert.match(String(out.error), /request provenance incomplete \(state, submission or decision\)/);
+    assert.equal(await currentVersion(w.work.id), src);
+    assert.equal((await row("SELECT tgenabled FROM pg_trigger WHERE tgname='gpr2_quantity_requests_guard'")).tgenabled, 'O', 'the trigger is enabled again: the DDL was rolled back with the transaction');
+});
+
+test('R07-REV-07 isolated: the per-portion floor refuses a portion line OMITTED after a fact (a missing line counts as zero), one below an RP fact, and one below CUSTOMER-ACCEPTED evidence', async () => {
+    const W = await world();
+    const decider = await deciderId(W);
+    // M18 — INTERNAL_SC 600 on portion A, and an allocation that has no line for A at all (probe J of the review)
+    const j = await mkWork(W, 'R07REV07 M18', 1000, [{ quantity: 600, portions: [600] }, { quantity: 400, portions: [400] }]); const [ja, jb] = j.units; const js = await currentVersion(j.work.id);
+    await pool.query(`INSERT INTO portion_quantity_confirmations(tenant_id,portion_id,source,quantity,recorded_by) VALUES($1,$2,'INTERNAL_SC',600,$3)`, [W.pm.tenantId, ja.portions[0].id, W.pm.id]);
+    const omitted = await directSql(async c => { const snap = snapshotOf([{ unit: jb, qty: 400 }]); const id = await history(c, W, j.work.id, js, 700, decider, { allocation: snap }); const v = await advance(c, W, j.work.id, id, js, 700);
+        await installAllocation(c, W, j.work.id, v, id, unitAndPortion(jb, 400), 1, null); });
+    assert.equal(omitted.committed, false); assert.match(String(omitted.error), /a portion is allocated below its own protected evidence/);
+    // M20 — an RP fact of 600 (through the real route) on portion A: a FRESH, fully documented request, so the one-allocation-per-request index and the snapshot check
+    // do not stand in front of the portion floor (the original R07-REV-03c test reuses an already consumed request and is shielded by the REV-06 index since 038 was amended)
+    const r = await mkWork(W, 'R07REV07 M20', 1000, [{ quantity: 600, portions: [600] }, { quantity: 400, portions: [400] }]); const [ra, rb] = r.units; const rs = await currentVersion(r.work.id);
+    assert.ok((await reportFactHttp(W, ra.portions[0].id, 600)).status < 300);
+    const rpBelow = await directSql(async c => { const snap = snapshotOf([{ unit: ra, qty: 500 }, { unit: rb, qty: 200 }]); const id = await history(c, W, r.work.id, rs, 700, decider, { allocation: snap }); const v = await advance(c, W, r.work.id, id, rs, 700);
+        await installAllocation(c, W, r.work.id, v, id, [...unitAndPortion(ra, 500), ...unitAndPortion(rb, 200)], 1, null); });
+    assert.equal(rpBelow.committed, false); assert.match(String(rpBelow.error), /a portion is allocated below its own protected evidence/);
+    // M19 — CUSTOMER-ACCEPTED evidence of 600 on portion A and nothing else (no RP fact, no SC): synthetic fixture = package + CUSTOMER_SC confirmation + accepted row
+    const k = await mkWork(W, 'R07REV07 M19', 1000, [{ quantity: 600, portions: [600] }, { quantity: 400, portions: [400] }]); const [ka, kb] = k.units; const ks = await currentVersion(k.work.id);
+    const pkg = (await pool.query(`INSERT INTO documentation_packages(tenant_id,object_id,object_work_id,responsible_user_id,created_by) VALUES($1,$2,$3,$4,$4) RETURNING id`, [W.pm.tenantId, W.object.id, k.work.id, W.pm.id])).rows[0].id;
+    const conf = (await pool.query(`INSERT INTO portion_quantity_confirmations(tenant_id,portion_id,source,quantity,recorded_by) VALUES($1,$2,'CUSTOMER_SC',600,$3) RETURNING id`, [W.pm.tenantId, ka.portions[0].id, W.pm.id])).rows[0].id;
+    await pool.query(`INSERT INTO documentation_customer_accepted_quantities(tenant_id,documentation_package_id,quantity_portion_id,quantity,confirmation_id,recorded_by) VALUES($1,$2,$3,600,$4,$5)`, [W.pm.tenantId, pkg, ka.portions[0].id, conf, W.pm.id]);
+    assert.equal((await rpFacts(ka.portions[0].id)).length, 0, 'the only evidence on this portion is the customer-accepted row');
+    const below = await directSql(async c => { const snap = snapshotOf([{ unit: ka, qty: 500 }, { unit: kb, qty: 200 }]); const id = await history(c, W, k.work.id, ks, 700, decider, { allocation: snap }); const v = await advance(c, W, k.work.id, id, ks, 700);
+        await installAllocation(c, W, k.work.id, v, id, [...unitAndPortion(ka, 500), ...unitAndPortion(kb, 200)], 1, null); });
+    assert.equal(below.committed, false); assert.match(String(below.error), /a portion is allocated below its own protected evidence/);
+    // control: the same shape at exactly the customer-accepted quantity is accepted by the database
+    const kc = await mkWork(W, 'R07REV07 M19 control', 1000, [{ quantity: 600, portions: [600] }, { quantity: 400, portions: [400] }]); const [ca, cb] = kc.units; const cs = await currentVersion(kc.work.id);
+    const pkg2 = (await pool.query(`INSERT INTO documentation_packages(tenant_id,object_id,object_work_id,responsible_user_id,created_by) VALUES($1,$2,$3,$4,$4) RETURNING id`, [W.pm.tenantId, W.object.id, kc.work.id, W.pm.id])).rows[0].id;
+    const conf2 = (await pool.query(`INSERT INTO portion_quantity_confirmations(tenant_id,portion_id,source,quantity,recorded_by) VALUES($1,$2,'CUSTOMER_SC',600,$3) RETURNING id`, [W.pm.tenantId, ca.portions[0].id, W.pm.id])).rows[0].id;
+    await pool.query(`INSERT INTO documentation_customer_accepted_quantities(tenant_id,documentation_package_id,quantity_portion_id,quantity,confirmation_id,recorded_by) VALUES($1,$2,$3,600,$4,$5)`, [W.pm.tenantId, pkg2, ca.portions[0].id, conf2, W.pm.id]);
+    const exact = await directSql(async c => { const snap = snapshotOf([{ unit: ca, qty: 600 }, { unit: cb, qty: 100 }]); const id = await history(c, W, kc.work.id, cs, 700, decider, { allocation: snap }); const v = await advance(c, W, kc.work.id, id, cs, 700);
+        await installAllocation(c, W, kc.work.id, v, id, [...unitAndPortion(ca, 600), ...unitAndPortion(cb, 100)], 1, null); });
+    assert.equal(exact.committed, true, String(exact.error));
 });
 
 // ------------------------------------------------------------------------------------------------------------------------------------------------
