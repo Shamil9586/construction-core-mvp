@@ -14,6 +14,28 @@ after(async () => { await g?.h.close(); });
 const path = () => `/v2/objects/${p.object.id}/quantity-change-requests`;
 const call = (token:string,method:string,suffix:string,body:any) => g.call(token,method,path()+suffix,{body,headers:{'Idempotency-Key':uuid()}});
 const row = async (sql:string,args:any[]=[]) => (await db.pool.query(sql,args)).rows[0];
+/**
+ * R07-REV-03a (migration 038): a bare `state='APPROVED'` is no longer enough for the database, so a test that wants to show a DIFFERENT database guard
+ * (the protected floor, the coherent allocation snapshot) must give the forged request a complete, consistent history first — the strongest forgery a writer
+ * with the application role can make. Both helpers do exactly what the service does, row for row, minus the checks.
+ */
+const deciderId = async () => (await row("SELECT id FROM users WHERE tenant_id=$1 AND role='DEPUTY_DIRECTOR' AND is_active=true ORDER BY created_at LIMIT 1",[p.pm.tenantId])).id as string;
+// The pool of the PGlite harness is one connection: the decider is looked up BEFORE a client transaction is opened, never inside it.
+const approveBySql = async (client:any,requestId:string,d:string) => {
+    const r=(await client.query('SELECT tenant_id,object_id,submission_number FROM gpr2_quantity_requests WHERE id=$1',[requestId])).rows[0];
+    await client.query("UPDATE gpr2_quantity_requests SET state='APPROVED',decided_by=$2 WHERE id=$1",[requestId,d]);
+    await client.query("INSERT INTO gpr2_quantity_events(tenant_id,object_id,request_id,submission_number,action,actor_id) VALUES($1,$2,$3,$4,'APPROVE',$5)",[r.tenant_id,r.object_id,requestId,r.submission_number,d]);
+};
+const fabricateApproved = async (client:any,workId:string,source:string,quantity:number,d:string) => {
+    const id=(await client.query(`INSERT INTO gpr2_quantity_requests(tenant_id,object_id,work_id,proposed_quantity,quantity_version_id,reason,author_id)
+        VALUES($1,$2,$3,$4,$5,'direct SQL negative',$6) RETURNING id`,[p.pm.tenantId,p.object.id,workId,quantity,source,p.pm.id])).rows[0].id as string;
+    await client.query(`INSERT INTO gpr2_quantity_submissions(tenant_id,object_id,request_id,number,payload,submitted_by) VALUES($1,$2,$3,1,$4::jsonb,$5)`,
+        [p.pm.tenantId,p.object.id,id,JSON.stringify({workId,newQuantity:String(quantity),quantityVersionId:source,reason:'direct SQL negative'}),p.pm.id]);
+    await client.query("INSERT INTO gpr2_quantity_events(tenant_id,object_id,request_id,submission_number,action,actor_id) VALUES($1,$2,$3,1,'SUBMIT',$4)",[p.pm.tenantId,p.object.id,id,p.pm.id]);
+    await client.query("UPDATE gpr2_quantity_requests SET state='SUBMITTED',submitter_id=$2,submission_number=1 WHERE id=$1",[id,p.pm.id]);
+    await approveBySql(client,id,d);
+    return id;
+};
 
 test('request submission is immutable; Deputy approves exact current source, quantity and event atomically',async()=>{
     const work = p.plasterWork.work.id;
@@ -61,12 +83,11 @@ test('protected 850 refuses 800, protected 800 permits 800; direct SQL cannot ad
     const allowed=await call(deputy,'POST',`/${id}/approve`,body);
     assert.equal(allowed.status,200,JSON.stringify(allowed.body));
     const current=await row('SELECT approved_version_id FROM work_current_quantity WHERE work_id=$1',[w.id]);
+    const decider=await deciderId();
     const client=await db.pool.connect();
     try {
         await client.query('BEGIN');
-        const forged=(await client.query(`INSERT INTO gpr2_quantity_requests(tenant_id,object_id,work_id,state,proposed_quantity,quantity_version_id,reason,author_id)
-            VALUES($1,$2,$3,'APPROVED',700,$4,'direct SQL negative',$5) RETURNING id`,
-            [p.pm.tenantId,p.object.id,w.id,current.approved_version_id,p.pm.id])).rows[0].id;
+        const forged=await fabricateApproved(client,w.id,current.approved_version_id,700,decider);
         const v=(await client.query(`INSERT INTO work_quantity_versions(tenant_id,object_id,work_id,sequence,quantity,unit,source_kind,approved_request_id,previous_id,created_by)
             VALUES($1,$2,$3,3,700,$4,'APPROVED_REQUEST',$5,$6,$7) RETURNING id`,
             [p.pm.tenantId,p.object.id,w.id,w.unit,forged,current.approved_version_id,p.pm.id])).rows[0].id;
@@ -93,10 +114,11 @@ test('reduction below persisted WEU plans requires an explicit allocation; forge
     assert.equal(reject.status,422,JSON.stringify(reject.body)); assert.equal(reject.body.code,'BELOW_PROTECTED_QUANTITY');
     assert.equal((await row('SELECT approved_version_id FROM work_current_quantity WHERE work_id=$1',[w.id])).approved_version_id,prior.approved_version_id);
     // The same check is enforced at commit even when someone writes a new version through SQL.
+    const decider=await deciderId();
     const client=await db.pool.connect();
     try {
         await client.query('BEGIN');
-        await client.query("UPDATE gpr2_quantity_requests SET state='APPROVED' WHERE id=$1",[id]);
+        await approveBySql(client,id,decider);
         const v=(await client.query(`INSERT INTO work_quantity_versions(tenant_id,object_id,work_id,sequence,quantity,unit,source_kind,approved_request_id,previous_id,created_by)
             VALUES($1,$2,$3,2,800,$4,'APPROVED_REQUEST',$5,$6,$7) RETURNING id`,[p.pm.tenantId,p.object.id,w.id,w.unit,id,prior.approved_version_id,p.pm.id])).rows[0].id;
         await client.query('UPDATE work_current_quantity SET approved_version_id=$1 WHERE work_id=$2',[v,w.id]);
@@ -315,4 +337,57 @@ test('R07-REV-02b an exclusion never writes RP_FACT: a real reported fact stays 
     // The check is not vacuous: the approval did write its own rows (quantity decision, event, invalidation) while the fact tables stayed still.
     assert.equal((await row("SELECT count(*)::int AS n FROM gpr2_quantity_events WHERE request_id=$1 AND action='APPROVE'",[ok.id])).n,1);
     assert.equal((await row('SELECT count(*)::int AS n FROM gpr2_schedule_basis_invalidations WHERE request_id=$1',[ok.id])).n,1);
+});
+
+test('R07-REV-03a structure: a request cannot skip its lifecycle, be approved by its author, be edited after submission, or carry a pointer without its events',async()=>{
+    await g.h.as(p.pm);
+    const w=await g.h.req('works',{objectId:p.object.id,workTypeId:p.plaster.id,contractorId:p.contractors[0].id,
+        responsibleUserId:p.pm.id,name:'R07 lifecycle structure',unit:'м²',plannedQuantity:1000,plannedStartDate:'2026-03-01',plannedFinishDate:'2026-04-30',estimatedCost:'100000'});
+    const source=(await row('SELECT approved_version_id FROM work_current_quantity WHERE work_id=$1',[w.id])).approved_version_id as string;
+    const scope=await row('SELECT scope_version FROM work_scope_state WHERE tenant_id=$1 AND object_id=$2',[p.pm.tenantId,p.object.id]);
+    const mk=async(quantity:string,fp:string)=>{
+        const c=await call(pm,'POST','',{expectedScopeVersion:String(scope.scope_version),payload:{workId:w.id,newQuantity:quantity,reason:'структура '+quantity,inputFingerprint:fp.repeat(64),expectedSourceVersions:{quantity:source}}});
+        assert.equal(c.status,200,JSON.stringify(c.body)); return c.body.resultIds[0] as string;
+    };
+    const submit=async(id:string,fp:string)=>assert.equal((await call(pm,'POST',`/${id}/submit`,{expectedVersion:'1',expectedScopeVersion:String(scope.scope_version),payload:{inputFingerprint:fp.repeat(64),expectedSourceVersions:{quantity:source}}})).status,200);
+    const params=[p.pm.tenantId,p.object.id,w.id,900,source,p.pm.id];
+    const insert=`INSERT INTO gpr2_quantity_requests(tenant_id,object_id,work_id,state,proposed_quantity,quantity_version_id,reason,author_id,submission_number,submitter_id,decided_by) VALUES($1,$2,$3,$7,$4,$5,'direct',$6,$8,$9,$10)`;
+    // a request is born an undecided DRAFT, whatever else is true
+    await assert.rejects(db.pool.query(insert,[...params,'APPROVED',0,null,null]),/starts as an undecided DRAFT/);
+    await assert.rejects(db.pool.query(insert,[...params,'SUBMITTED',1,p.pm.id,null]),/starts as an undecided DRAFT/);
+    await assert.rejects(db.pool.query(insert,[...params,'DRAFT',0,null,await deciderId()]),/starts as an undecided DRAFT/);
+    // DRAFT -> SUBMITTED needs the author's snapshot of the next number
+    const draft=await mk('900','1');
+    await assert.rejects(db.pool.query("UPDATE gpr2_quantity_requests SET state='SUBMITTED',submitter_id=author_id,submission_number=1 WHERE id=$1",[draft]),/needs the author's submission snapshot/);
+    await assert.rejects(db.pool.query("UPDATE gpr2_quantity_requests SET state='APPROVED',decided_by=$2 WHERE id=$1",[draft,await deciderId()]),/invalid quantity request transition DRAFT -> APPROVED/);
+    // a snapshot is taken only by the author, in sequence, from a DRAFT
+    await assert.rejects(db.pool.query(`INSERT INTO gpr2_quantity_submissions(tenant_id,object_id,request_id,number,payload,submitted_by) VALUES($1,$2,$3,2,'{}',$4)`,[p.pm.tenantId,p.object.id,draft,p.pm.id]),/only from the author's DRAFT, in sequence/);
+    await assert.rejects(db.pool.query(`INSERT INTO gpr2_quantity_submissions(tenant_id,object_id,request_id,number,payload,submitted_by) VALUES($1,$2,$3,1,'{}',$4)`,[p.pm.tenantId,p.object.id,draft,await deciderId()]),/only from the author's DRAFT, in sequence/);
+    await submit(draft,'1');
+    // SUBMITTED: no edit, no skipped decision, no approval by the author or submitter, no step back
+    const decider=await deciderId();
+    await assert.rejects(db.pool.query("UPDATE gpr2_quantity_requests SET proposed_quantity=1 WHERE id=$1",[draft]),/a submitted request is not edited/);
+    await assert.rejects(db.pool.query("UPDATE gpr2_quantity_requests SET state='APPROVED' WHERE id=$1",[draft]),/needs the submitted snapshot and a decider/);
+    await assert.rejects(db.pool.query("UPDATE gpr2_quantity_requests SET state='APPROVED',decided_by=author_id WHERE id=$1",[draft]),/author or submitter cannot approve/);
+    await assert.rejects(db.pool.query("UPDATE gpr2_quantity_requests SET state='DRAFT' WHERE id=$1",[draft]),/invalid quantity request transition SUBMITTED -> DRAFT/);
+    await assert.rejects(db.pool.query("UPDATE gpr2_quantity_requests SET work_id=$2 WHERE id=$1",[draft,p.plasterWork.work.id]),/identity and source version are immutable/);
+    // decided by somebody else but WITHOUT the APPROVE event: the pointer guard refuses at COMMIT
+    const client=await db.pool.connect();
+    try {
+        await client.query('BEGIN');
+        await client.query("UPDATE gpr2_quantity_requests SET state='APPROVED',decided_by=$2 WHERE id=$1",[draft,decider]);
+        const v=(await client.query(`INSERT INTO work_quantity_versions(tenant_id,object_id,work_id,sequence,quantity,unit,source_kind,approved_request_id,previous_id,created_by)
+            VALUES($1,$2,$3,2,900,$4,'APPROVED_REQUEST',$5,$6,$7) RETURNING id`,[p.pm.tenantId,p.object.id,w.id,w.unit,draft,source,p.pm.id])).rows[0].id;
+        await client.query('UPDATE work_current_quantity SET approved_version_id=$1 WHERE work_id=$2',[v,w.id]);
+        await assert.rejects(client.query('COMMIT'),/provenance incomplete \(no SUBMIT \/ APPROVE event/);
+    } finally { await client.query('ROLLBACK').catch(()=>undefined); client.release(); }
+    assert.equal((await row('SELECT approved_version_id FROM work_current_quantity WHERE work_id=$1',[w.id])).approved_version_id,source);
+    assert.equal((await row('SELECT state FROM gpr2_quantity_requests WHERE id=$1',[draft])).state,'SUBMITTED');
+    // the real approval still works, and an APPROVED request is final
+    const saved=await row('SELECT payload FROM gpr2_quantity_submissions WHERE request_id=$1',[draft]);
+    const done=await call(deputy,'POST',`/${draft}/approve`,{expectedVersion:'2',expectedScopeVersion:String(scope.scope_version),payload:{inputFingerprint:contentHash(saved.payload),expectedSourceVersions:{quantity:source}}});
+    assert.equal(done.status,200,JSON.stringify(done.body));
+    await assert.rejects(db.pool.query("UPDATE gpr2_quantity_requests SET reason='после' WHERE id=$1",[draft]),/a submitted request is not edited/);
+    await assert.rejects(db.pool.query("UPDATE gpr2_quantity_requests SET version=version+1 WHERE id=$1",[draft]),/invalid quantity request transition APPROVED -> APPROVED/);
+    await assert.rejects(db.pool.query("UPDATE gpr2_quantity_requests SET state='DRAFT' WHERE id=$1",[draft]),/invalid quantity request transition APPROVED -> DRAFT/);
 });
