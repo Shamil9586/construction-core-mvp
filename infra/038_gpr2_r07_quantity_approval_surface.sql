@@ -65,9 +65,12 @@ CREATE TRIGGER gpr2_quantity_events_immutable BEFORE UPDATE OR DELETE ON gpr2_qu
 -- R07-REV-03a. The request lifecycle is structural, not only a service convention (DRAFT -> SUBMITTED -> APPROVED | RETURNED -> DRAFT; APPROVED is final).
 -- A request is born as an undecided DRAFT; a submission snapshot is taken only from the author's DRAFT, in sequence; SUBMITTED needs that snapshot;
 -- APPROVED needs a decision by somebody other than the author / submitter; nothing changes once submitted. TRUST BOUNDARY (not removed by this file):
--- the application uses ONE database role, so these checks make a forgery by a single INSERT / UPDATE impossible, but a writer with the same role can still
--- fabricate a complete and consistent history (it is permanent and immutable, hence detectable). Making the database authoritative about WHO decided needs
--- separate roles / privileges / SECURITY DEFINER, an architecture change that this migration does not make.
+-- the application uses ONE database role. The guards in this file are triggers and constraints, and they stop ordinary DML by that role: a forgery by a few
+-- INSERT / UPDATE / DELETE statements, including the replacement of a current pointer. They do NOT stop a role that can switch triggers off (the table owner
+-- with ALTER TABLE ... DISABLE TRIGGER, or a superuser with SET session_replication_role = 'replica'), and the application role is the owner of these tables.
+-- Such a role can also fabricate a complete, consistent history, and the history tables are append-only only because of triggers, so their rows are no
+-- tamper-evidence against it. The database cannot tell WHO decided: that identity is an uuid supplied by the service. Making the database authoritative
+-- needs separate roles / privileges / SECURITY DEFINER, an architecture change that this migration does not make.
 CREATE FUNCTION gpr2_r07_request_guard() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
     IF TG_OP='INSERT' THEN
@@ -160,6 +163,10 @@ ALTER TABLE work_allocation_versions ADD COLUMN approved_request_id uuid;
 ALTER TABLE work_allocation_versions ADD CONSTRAINT gpr2_r07_allocation_approval_fk
     FOREIGN KEY(tenant_id,object_id,work_id,approved_request_id)
     REFERENCES gpr2_quantity_requests(tenant_id,object_id,work_id,id) DEFERRABLE INITIALLY DEFERRED;
+-- R07-REV-06: an approval is consumed by ONE allocation version, as it already is by one quantity version. Without this a genuinely approved request could be
+-- replayed for a different allocation (400/300 approved, 350/350 installed under the same approval). Versions without a request (R06b) are not affected.
+CREATE UNIQUE INDEX gpr2_r07_one_allocation_per_work_request ON work_allocation_versions(tenant_id,object_id,work_id,approved_request_id)
+    WHERE approved_request_id IS NOT NULL;
 
 -- At commit, a new current pointer is legal only for an approved request and only above the protected evidence floor.
 -- The checks are also invoked for direct SQL. Facts on disjoint portions add; different evidence kinds on one portion overlap by max.
@@ -202,6 +209,40 @@ BEGIN
         WHERE f.floor>0 AND coalesce((SELECT sum(l.quantity) FROM work_allocation_lines l WHERE l.tenant_id=f.tenant_id AND l.object_id=p_object
               AND l.work_id=p_work AND l.version_id=p_version AND l.portion_id=f.id),0) < f.floor) THEN
         RAISE EXCEPTION 'R07: BELOW_PROTECTED_QUANTITY (a portion is allocated below its own protected evidence)' USING ERRCODE='23514';
+    END IF;
+END $$;
+
+-- R07-REV-06. The lines of a request-bound allocation version must be exactly the allocation the Deputy approved: the immutable submitted snapshot of that
+-- request (unit lines and portion lines, quantities compared as numbers, same number of lines). The one-version-per-request index stops a replay of the same
+-- approval; this check stops a DIFFERENT allocation from being installed under a request that never contained it.
+CREATE FUNCTION gpr2_r07_assert_allocation_snapshot(p_tenant uuid,p_object uuid,p_work uuid,p_version uuid,p_request uuid) RETURNS void LANGUAGE plpgsql AS $$
+DECLARE snap jsonb; n_exp int; n_act int; n_diff int;
+BEGIN
+    SELECT s.payload->'allocation' INTO snap FROM gpr2_quantity_requests r JOIN gpr2_quantity_submissions s
+      ON s.tenant_id=r.tenant_id AND s.object_id=r.object_id AND s.request_id=r.id AND s.number=r.submission_number
+      WHERE r.tenant_id=p_tenant AND r.object_id=p_object AND r.id=p_request;
+    IF snap IS NULL OR jsonb_typeof(snap)<>'object' OR jsonb_typeof(snap->'units')<>'array' THEN
+        RAISE EXCEPTION 'R07: an allocation version needs an allocation in the approved snapshot of its request' USING ERRCODE='23514';
+    END IF;
+    SELECT (SELECT count(*) FROM (SELECT (u->>'executionUnitId')::uuid AS eu, NULL::uuid AS portion, (u->>'quantity')::numeric AS q FROM jsonb_array_elements(snap->'units') u
+                  UNION ALL SELECT (u->>'executionUnitId')::uuid, (pt->>'portionId')::uuid, (pt->>'quantity')::numeric
+                  FROM jsonb_array_elements(snap->'units') u CROSS JOIN LATERAL jsonb_array_elements(coalesce(u->'portions','[]'::jsonb)) pt) e1),
+           (SELECT count(*) FROM work_allocation_lines l WHERE l.tenant_id=p_tenant AND l.object_id=p_object AND l.work_id=p_work AND l.version_id=p_version),
+           (SELECT count(*) FROM (
+               (SELECT * FROM (SELECT (u->>'executionUnitId')::uuid AS eu, NULL::uuid AS portion, (u->>'quantity')::numeric AS q FROM jsonb_array_elements(snap->'units') u
+                  UNION ALL SELECT (u->>'executionUnitId')::uuid, (pt->>'portionId')::uuid, (pt->>'quantity')::numeric
+                  FROM jsonb_array_elements(snap->'units') u CROSS JOIN LATERAL jsonb_array_elements(coalesce(u->'portions','[]'::jsonb)) pt) e2
+                EXCEPT SELECT l.execution_unit_id, l.portion_id, l.quantity::numeric FROM work_allocation_lines l
+                  WHERE l.tenant_id=p_tenant AND l.object_id=p_object AND l.work_id=p_work AND l.version_id=p_version)
+               UNION ALL
+               (SELECT l.execution_unit_id, l.portion_id, l.quantity::numeric FROM work_allocation_lines l
+                  WHERE l.tenant_id=p_tenant AND l.object_id=p_object AND l.work_id=p_work AND l.version_id=p_version
+                EXCEPT SELECT * FROM (SELECT (u->>'executionUnitId')::uuid AS eu, NULL::uuid AS portion, (u->>'quantity')::numeric AS q FROM jsonb_array_elements(snap->'units') u
+                  UNION ALL SELECT (u->>'executionUnitId')::uuid, (pt->>'portionId')::uuid, (pt->>'quantity')::numeric
+                  FROM jsonb_array_elements(snap->'units') u CROSS JOIN LATERAL jsonb_array_elements(coalesce(u->'portions','[]'::jsonb)) pt) e3)) d)
+      INTO n_exp, n_act, n_diff;
+    IF n_exp<>n_act OR n_diff<>0 THEN
+        RAISE EXCEPTION 'R07: allocation differs from the approved snapshot of its request' USING ERRCODE='23514';
     END IF;
 END $$;
 
@@ -250,6 +291,35 @@ END $$;
 CREATE CONSTRAINT TRIGGER gpr2_r07_quantity_pointer AFTER UPDATE OF approved_version_id ON work_current_quantity
   DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION gpr2_r07_quantity_pointer_guard();
 
+-- R07-REV-05. The guard above only sees an UPDATE of the pointer. A DELETE of the row followed by an INSERT of a new one replaced the
+-- pointer without any check: 1000 -> 300 under a real RP fact of 800 with a request that was never decided. The row now has a closed lifecycle: it is
+-- created once, for the Work's initial version (R06a, or a later baseline initialisation of a legacy Work), it is never deleted, its identity never
+-- changes, and it moves only through the UPDATE that the guard above checks. NOT covered here: emptying the whole table with the bulk-delete statement that
+-- is not a row DELETE. The R03d additive gate refuses that statement's keyword anywhere in an additive migration, so a trigger for it cannot be written in
+-- this file; it needs the table-owner privilege, the same class of capability as switching triggers off (see the trust boundary above). The accepted baseline needs nothing else: the repository has one INSERT
+-- (R06a recordInitialWorkQuantity), one UPDATE (R07 approval) and no DELETE of this table, quantity versions are immutable and a Work with an
+-- origin cannot be deleted (ON DELETE RESTRICT), so the pointer has no legitimate reason to disappear. R06b already treats its allocation pointer this way.
+CREATE FUNCTION gpr2_r07_pointer_lifecycle_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF TG_OP='DELETE' THEN
+        RAISE EXCEPTION 'R07: the current quantity pointer is never deleted' USING ERRCODE='23514';
+    END IF;
+    IF TG_OP='INSERT' THEN
+        IF NOT EXISTS(SELECT 1 FROM work_quantity_versions v WHERE v.tenant_id=NEW.tenant_id AND v.object_id=NEW.object_id AND v.work_id=NEW.work_id
+                      AND v.id=NEW.approved_version_id AND v.sequence=1 AND v.previous_id IS NULL AND v.source_kind<>'APPROVED_REQUEST')
+           OR EXISTS(SELECT 1 FROM work_quantity_versions v WHERE v.tenant_id=NEW.tenant_id AND v.object_id=NEW.object_id AND v.work_id=NEW.work_id AND v.sequence>1) THEN
+            RAISE EXCEPTION 'R07: a current quantity pointer is created only for the initial version of its Work' USING ERRCODE='23514';
+        END IF;
+        RETURN NEW;
+    END IF;
+    IF (NEW.tenant_id,NEW.object_id,NEW.work_id) IS DISTINCT FROM (OLD.tenant_id,OLD.object_id,OLD.work_id) THEN
+        RAISE EXCEPTION 'R07: current quantity pointer identity is immutable' USING ERRCODE='23514';
+    END IF;
+    RETURN NEW;
+END $$;
+CREATE TRIGGER gpr2_r07_quantity_pointer_lifecycle BEFORE INSERT OR UPDATE OR DELETE ON work_current_quantity
+    FOR EACH ROW EXECUTE FUNCTION gpr2_r07_pointer_lifecycle_guard();
+
 -- Replace R06b's conservative post-fact freeze with a request-bound R07 path. No request: old freeze stays effective.
 CREATE OR REPLACE FUNCTION r06b_pointer_guard() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE v record; current_q record; approved text;
@@ -273,6 +343,7 @@ BEGIN
             RAISE EXCEPTION 'R07: allocation pointer requires approved quantity request' USING ERRCODE='23514';
         END IF;
         PERFORM gpr2_r07_assert_request_provenance(NEW.tenant_id,NEW.object_id,v.approved_request_id);
+        PERFORM gpr2_r07_assert_allocation_snapshot(NEW.tenant_id,NEW.object_id,NEW.work_id,NEW.version_id,v.approved_request_id);
         PERFORM gpr2_r07_assert_floor(NEW.tenant_id,NEW.object_id,NEW.work_id,current_q.quantity);
         PERFORM gpr2_r07_assert_portion_floor(NEW.tenant_id,NEW.object_id,NEW.work_id,NEW.version_id);
     ELSIF EXISTS(SELECT 1 FROM works w WHERE w.tenant_id=NEW.tenant_id AND w.object_id=NEW.object_id AND w.id=NEW.work_id AND
