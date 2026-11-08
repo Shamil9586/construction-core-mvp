@@ -221,7 +221,9 @@ BEGIN
     SELECT s.payload->'allocation' INTO snap FROM gpr2_quantity_requests r JOIN gpr2_quantity_submissions s
       ON s.tenant_id=r.tenant_id AND s.object_id=r.object_id AND s.request_id=r.id AND s.number=r.submission_number
       WHERE r.tenant_id=p_tenant AND r.object_id=p_object AND r.id=p_request;
-    IF snap IS NULL OR jsonb_typeof(snap)<>'object' OR jsonb_typeof(snap->'units')<>'array' THEN
+    -- R07-REV-12: NULL-safe. A snapshot object WITHOUT the key 'units' makes jsonb_typeof(snap->'units') NULL, and NULL <> 'array' is NULL, not TRUE, so the
+    -- exception used to be skipped and such a snapshot (equal to an empty allocation) passed. IS DISTINCT FROM treats an absent or mistyped part as a mismatch.
+    IF snap IS NULL OR jsonb_typeof(snap) IS DISTINCT FROM 'object' OR jsonb_typeof(snap->'units') IS DISTINCT FROM 'array' THEN
         RAISE EXCEPTION 'R07: an allocation version needs an allocation in the approved snapshot of its request' USING ERRCODE='23514';
     END IF;
     SELECT (SELECT count(*) FROM (SELECT (u->>'executionUnitId')::uuid AS eu, NULL::uuid AS portion, (u->>'quantity')::numeric AS q FROM jsonb_array_elements(snap->'units') u
